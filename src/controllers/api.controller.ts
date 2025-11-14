@@ -3,19 +3,20 @@ import {
   Get,
   Post,
   Body,
-  Param,
-  Delete,
   ValidationPipe,
   UsePipes,
   HttpStatus,
   HttpCode,
-  HttpException,
+  Req,
 } from '@nestjs/common';
+import { Request } from 'express';
 import { WebhookService } from '../services/webhook.service';
 import { CrawlingService } from '../services/crawling.service';
 import { NotificationService } from '../services/notification.service';
 import { RecaptchaService } from '../services/recaptcha.service';
 import { CreateWebhookDto } from '../dto/create-webhook.dto';
+import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
+import { ApiResponseUtils } from '../utils/api-response.utils';
 
 @Controller('api')
 export class ApiController {
@@ -28,55 +29,55 @@ export class ApiController {
 
   @Post('webhooks')
   @HttpCode(HttpStatus.CREATED)
-  @UsePipes(new ValidationPipe({ whitelist: true }))
-  async createWebhook(@Body() createWebhookDto: CreateWebhookDto) {
-    // reCAPTCHA 검증
-    const isRecaptchaValid = await this.recaptchaService.verifyToken(
-      createWebhookDto.recaptchaToken,
-    );
+  @UsePipes(
+    new ValidationPipe(WebhookValidationUtils.getValidationPipeOptions()),
+  )
+  async createWebhook(
+    @Body() createWebhookDto: CreateWebhookDto,
+    @Req() req: Request,
+  ) {
+    try {
+      // URL 유효성 검증
+      WebhookValidationUtils.validateDiscordWebhookUrl(createWebhookDto.url);
 
-    if (!isRecaptchaValid) {
-      throw new HttpException(
-        'reCAPTCHA verification failed',
-        HttpStatus.BAD_REQUEST,
+      // reCAPTCHA 검증
+      const clientIp = WebhookValidationUtils.extractClientIp(req);
+      const isRecaptchaValid = await this.recaptchaService.verifyToken(
+        createWebhookDto.recaptchaToken,
+        clientIp,
       );
-    }
 
-    const webhook = await this.webhookService.create({
-      url: createWebhookDto.url,
-    });
+      if (!isRecaptchaValid) {
+        throw ApiResponseUtils.createRecaptchaFailedException();
+      }
 
-    // 웹훅 테스트 전송 및 실패 체크
-    const testResult = await this.notificationService.testWebhook(webhook.url);
+      // 웹훅 생성
+      const webhook = await this.webhookService.create({
+        url: createWebhookDto.url,
+      });
 
-    if (!testResult.success && testResult.shouldDelete) {
-      // 테스트 실패시 자동 삭제
-      await this.webhookService.remove(webhook.id);
-      throw new HttpException(
-        'Webhook test failed - invalid or inaccessible webhook URL',
-        HttpStatus.BAD_REQUEST,
+      // 웹훅 테스트
+      const testResult = await this.notificationService.testWebhook(
+        webhook.url,
       );
-    }
 
-    return {
-      success: true,
-      message: testResult.success
-        ? '웹훅이 성공적으로 등록되고 테스트되었습니다'
-        : '웹훅은 등록되었지만 테스트에 실패했습니다 (일시적 오류)',
-      testResult: {
-        success: testResult.success,
-        error: testResult.error?.message || null,
-      },
-    };
+      if (!testResult.success && testResult.shouldDelete) {
+        await this.webhookService.remove(webhook.id);
+        throw ApiResponseUtils.createWebhookTestFailedException(
+          testResult.error?.message,
+        );
+      }
+
+      return ApiResponseUtils.webhookSuccess(testResult);
+    } catch (error) {
+      ApiResponseUtils.handleError(error, '웹훅 등록');
+    }
   }
 
   @Get('notices/recent')
   async getRecentNotices() {
     const notices = this.crawlingService.getRecentNotices(20);
-    return {
-      success: true,
-      data: notices,
-    };
+    return ApiResponseUtils.success(notices);
   }
 
   @Get('stats')
@@ -86,21 +87,17 @@ export class ApiController {
       this.crawlingService.getCacheInfo(),
     ]);
 
-    return {
-      success: true,
-      data: {
-        webhooks: webhookStats,
-        cache: cacheInfo,
-      },
-    };
+    return ApiResponseUtils.success({
+      webhooks: webhookStats,
+      cache: cacheInfo,
+    });
   }
 
   @Get('health')
   getHealth() {
-    return {
-      success: true,
-      message: 'LawCast API is healthy',
-      timestamp: new Date().toISOString(),
-    };
+    return ApiResponseUtils.success(
+      { timestamp: new Date().toISOString() },
+      'LawCast API is healthy',
+    );
   }
 }

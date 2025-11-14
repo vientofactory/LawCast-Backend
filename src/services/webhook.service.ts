@@ -11,23 +11,49 @@ export class WebhookService {
   ) {}
 
   async create(webhookData: { url: string }): Promise<Webhook> {
-    // 중복 URL 체크
+    // URL 정규화
+    const normalizedUrl = this.normalizeWebhookUrl(webhookData.url);
+
+    // 중복 URL 체크 (정규화된 URL로)
     const existingWebhook = await this.webhookRepository.findOne({
-      where: { url: webhookData.url },
+      where: { url: normalizedUrl },
     });
 
     if (existingWebhook) {
       throw new HttpException(
-        'Webhook URL already exists',
+        {
+          success: false,
+          message: '이미 등록된 웹훅 URL입니다.',
+        },
         HttpStatus.CONFLICT,
       );
     }
 
     const webhook = this.webhookRepository.create({
-      url: webhookData.url,
+      url: normalizedUrl,
     });
 
     return this.webhookRepository.save(webhook);
+  }
+
+  private normalizeWebhookUrl(url: string): string {
+    // URL 끝의 슬래시 제거 및 쿼리 파라미터 정리
+    try {
+      const parsed = new URL(url);
+      // 쿼리 파라미터 제거 (웹훅 URL에는 불필요)
+      parsed.search = '';
+      parsed.hash = '';
+
+      let normalizedPath = parsed.pathname;
+      // 끝의 슬래시 제거
+      if (normalizedPath.endsWith('/') && normalizedPath.length > 1) {
+        normalizedPath = normalizedPath.slice(0, -1);
+      }
+
+      return `${parsed.protocol}//${parsed.host}${normalizedPath}`;
+    } catch {
+      return url; // 파싱 실패 시 원본 반환
+    }
   }
 
   async findAll(): Promise<Webhook[]> {
