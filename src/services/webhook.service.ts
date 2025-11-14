@@ -2,7 +2,6 @@ import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Webhook } from '../entities/webhook.entity';
-import { CreateWebhookDto } from '../dto/create-webhook.dto';
 
 @Injectable()
 export class WebhookService {
@@ -11,13 +10,10 @@ export class WebhookService {
     private webhookRepository: Repository<Webhook>,
   ) {}
 
-  async create(createWebhookDto: CreateWebhookDto): Promise<Webhook> {
-    // TODO: reCAPTCHA 검증 로직 추가
-    await this.verifyRecaptcha(createWebhookDto.recaptchaToken);
-
+  async create(webhookData: { url: string }): Promise<Webhook> {
     // 중복 URL 체크
     const existingWebhook = await this.webhookRepository.findOne({
-      where: { url: createWebhookDto.url },
+      where: { url: webhookData.url },
     });
 
     if (existingWebhook) {
@@ -28,8 +24,7 @@ export class WebhookService {
     }
 
     const webhook = this.webhookRepository.create({
-      url: createWebhookDto.url,
-      description: createWebhookDto.description,
+      url: webhookData.url,
     });
 
     return this.webhookRepository.save(webhook);
@@ -87,16 +82,5 @@ export class WebhookService {
       active,
       inactive: total - active,
     };
-  }
-
-  private async verifyRecaptcha(token: string): Promise<void> {
-    // TODO: Google reCAPTCHA 검증 구현
-    // 현재는 단순히 토큰이 존재하는지만 확인
-    if (!token || token.trim() === '') {
-      throw new HttpException(
-        'Invalid reCAPTCHA token',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
   }
 }

@@ -14,6 +14,7 @@ import {
 import { WebhookService } from '../services/webhook.service';
 import { CrawlingService } from '../services/crawling.service';
 import { NotificationService } from '../services/notification.service';
+import { RecaptchaService } from '../services/recaptcha.service';
 import { CreateWebhookDto } from '../dto/create-webhook.dto';
 
 @Controller('api')
@@ -22,13 +23,28 @@ export class ApiController {
     private readonly webhookService: WebhookService,
     private readonly crawlingService: CrawlingService,
     private readonly notificationService: NotificationService,
+    private readonly recaptchaService: RecaptchaService,
   ) {}
 
   @Post('webhooks')
   @HttpCode(HttpStatus.CREATED)
   @UsePipes(new ValidationPipe({ whitelist: true }))
   async createWebhook(@Body() createWebhookDto: CreateWebhookDto) {
-    const webhook = await this.webhookService.create(createWebhookDto);
+    // reCAPTCHA 검증
+    const isRecaptchaValid = await this.recaptchaService.verifyToken(
+      createWebhookDto.recaptchaToken,
+    );
+
+    if (!isRecaptchaValid) {
+      throw new HttpException(
+        'reCAPTCHA verification failed',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const webhook = await this.webhookService.create({
+      url: createWebhookDto.url,
+    });
 
     // 웹훅 테스트 전송 및 실패 체크
     const testResult = await this.notificationService.testWebhook(webhook.url);
@@ -45,47 +61,12 @@ export class ApiController {
     return {
       success: true,
       message: testResult.success
-        ? 'Webhook registered and tested successfully'
-        : 'Webhook registered but test failed (temporary error)',
-      data: {
-        id: webhook.id,
-        url: webhook.url,
-        description: webhook.description,
-        createdAt: webhook.createdAt,
-      },
+        ? '웹훅이 성공적으로 등록되고 테스트되었습니다'
+        : '웹훅은 등록되었지만 테스트에 실패했습니다 (일시적 오류)',
       testResult: {
         success: testResult.success,
         error: testResult.error?.message || null,
       },
-    };
-  }
-
-  @Get('webhooks')
-  async getWebhooks() {
-    const webhooks = await this.webhookService.findAll();
-    return {
-      success: true,
-      data: webhooks.map((webhook) => ({
-        id: webhook.id,
-        description: webhook.description,
-        createdAt: webhook.createdAt,
-      })),
-    };
-  }
-
-  @Delete('webhooks/:id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  async removeWebhook(@Param('id') id: string) {
-    await this.webhookService.remove(+id);
-  }
-
-  @Post('check')
-  async manualCheck() {
-    const newNotices = await this.crawlingService.manualCheck();
-    return {
-      success: true,
-      message: `Found ${newNotices.length} new notices`,
-      data: newNotices,
     };
   }
 

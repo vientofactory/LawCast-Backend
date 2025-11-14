@@ -9,6 +9,7 @@ import { WebhookService } from './services/webhook.service';
 import { CrawlingService } from './services/crawling.service';
 import { NotificationService } from './services/notification.service';
 import { CacheService } from './services/cache.service';
+import { RecaptchaService } from './services/recaptcha.service';
 import { Webhook } from './entities/webhook.entity';
 
 @Module({
@@ -32,6 +33,7 @@ import { Webhook } from './entities/webhook.entity';
     CrawlingService,
     NotificationService,
     CacheService,
+    RecaptchaService,
   ],
 })
 export class AppModule {}

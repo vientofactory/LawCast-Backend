@@ -17,9 +17,6 @@ export class Webhook {
   @Column({ default: true })
   isActive: boolean;
 
-  @Column({ nullable: true })
-  description?: string;
-
   @CreateDateColumn()
   createdAt: Date;
 

@@ -6,6 +6,7 @@ export class CacheService {
   private readonly logger = new Logger(CacheService.name);
   private recentNoticesCache: ITableData[] = [];
   private lastUpdated: Date | null = null;
+  private isInitialized = false;
   private readonly MAX_CACHE_SIZE = 50; // 최대 50개의 최근 입법예고 캐시
 
   /**
@@ -15,6 +16,23 @@ export class CacheService {
     return this.recentNoticesCache.slice(
       0,
       Math.min(limit, this.MAX_CACHE_SIZE),
+    );
+  }
+
+  /**
+   * 초기화용 캐시 업데이트 (알림 없이)
+   */
+  initializeCache(allNotices: ITableData[]): void {
+    // 최신 순으로 정렬 (num이 높을수록 최신)
+    const sortedNotices = [...allNotices].sort((a, b) => b.num - a.num);
+
+    // 최대 캐시 크기만큼만 저장
+    this.recentNoticesCache = sortedNotices.slice(0, this.MAX_CACHE_SIZE);
+    this.lastUpdated = new Date();
+    this.isInitialized = true;
+
+    this.logger.log(
+      `Cache initialized with ${this.recentNoticesCache.length} notices`,
     );
   }
 
@@ -38,6 +56,11 @@ export class CacheService {
    * 새로운 입법예고들을 찾습니다.
    */
   findNewNotices(crawledData: ITableData[]): ITableData[] {
+    if (!this.isInitialized) {
+      // 초기화되지 않은 상태에서는 새로운 항목이 없다고 반환
+      return [];
+    }
+
     const existingNums = new Set(
       this.recentNoticesCache.map((notice) => notice.num),
     );
@@ -52,6 +75,7 @@ export class CacheService {
       size: this.recentNoticesCache.length,
       lastUpdated: this.lastUpdated,
       maxSize: this.MAX_CACHE_SIZE,
+      isInitialized: this.isInitialized,
     };
   }
 
@@ -61,6 +85,7 @@ export class CacheService {
   clearCache(): void {
     this.recentNoticesCache = [];
     this.lastUpdated = null;
+    this.isInitialized = false;
     this.logger.log('Cache cleared');
   }
 }

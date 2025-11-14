@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PalCrawl, type ITableData } from 'pal-crawl';
 import { WebhookService } from './webhook.service';
@@ -6,9 +6,10 @@ import { NotificationService } from './notification.service';
 import { CacheService } from './cache.service';
 
 @Injectable()
-export class CrawlingService {
+export class CrawlingService implements OnModuleInit {
   private readonly logger = new Logger(CrawlingService.name);
   private isProcessing = false;
+  private isInitialized = false;
 
   constructor(
     private webhookService: WebhookService,
@@ -16,8 +17,27 @@ export class CrawlingService {
     private cacheService: CacheService,
   ) {}
 
+  /**
+   * 서버 시작 시 초기 데이터 캐싱
+   */
+  async onModuleInit() {
+    this.logger.log('Initializing cache with recent legislative notices...');
+    try {
+      await this.initializeCache();
+      this.isInitialized = true;
+      this.logger.log('Cache initialization completed successfully');
+    } catch (error) {
+      this.logger.error('Failed to initialize cache:', error);
+    }
+  }
+
   @Cron(CronExpression.EVERY_10_MINUTES)
   async handleCron() {
+    if (!this.isInitialized) {
+      this.logger.warn('Cache not initialized yet, skipping cron job');
+      return;
+    }
+
     if (this.isProcessing) {
       this.logger.warn(
         'Previous crawling process is still running, skipping...',
@@ -37,19 +57,21 @@ export class CrawlingService {
     }
   }
 
-  async manualCheck(): Promise<ITableData[]> {
-    if (this.isProcessing) {
-      throw new Error('Crawling process is already running');
+  /**
+   * 초기 캐시 로드 (알림 전송 없이)
+   */
+  private async initializeCache(): Promise<void> {
+    const palCrawl = new PalCrawl();
+    const crawledData = await palCrawl.get();
+
+    if (!crawledData || crawledData.length === 0) {
+      this.logger.warn('No data received from crawler during initialization');
+      return;
     }
 
-    this.logger.log('Manual check initiated');
-    this.isProcessing = true;
-
-    try {
-      return await this.performCrawlingAndNotification();
-    } finally {
-      this.isProcessing = false;
-    }
+    // 초기 캐시 업데이트 (새로운 알림 전송 없이)
+    this.cacheService.initializeCache(crawledData);
+    this.logger.log(`Initialized cache with ${crawledData.length} notices`);
   }
 
   /**
