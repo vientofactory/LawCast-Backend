@@ -19,7 +19,7 @@ import { Webhook } from './entities/webhook.entity';
     }),
     TypeOrmModule.forRoot({
       type: 'sqlite',
-      database: 'lawcast.db',
+      database: process.env.DATABASE_PATH || 'lawcast.db',
       entities: [Webhook],
       synchronize: true,
     }),
