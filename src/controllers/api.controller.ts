@@ -16,7 +16,8 @@ import { NotificationService } from '../services/notification.service';
 import { RecaptchaService } from '../services/recaptcha.service';
 import { CreateWebhookDto } from '../dto/create-webhook.dto';
 import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
-import { ApiResponseUtils } from '../utils/api-response.utils';
+import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
+import { APP_CONSTANTS } from '../config/app.config';
 
 @Controller('api')
 export class ApiController {
@@ -70,13 +71,15 @@ export class ApiController {
 
       return ApiResponseUtils.webhookSuccess(testResult);
     } catch (error) {
-      ApiResponseUtils.handleError(error, '웹훅 등록');
+      ApiResponseUtils.handleError(error, ErrorContext.WEBHOOK_REGISTRATION);
     }
   }
 
   @Get('notices/recent')
   async getRecentNotices() {
-    const notices = this.crawlingService.getRecentNotices(20);
+    const notices = this.crawlingService.getRecentNotices(
+      APP_CONSTANTS.CACHE.NOTICES_RECENT_LIMIT,
+    );
     return ApiResponseUtils.success(notices);
   }
 

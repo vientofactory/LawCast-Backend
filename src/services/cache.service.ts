@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { type ITableData } from 'pal-crawl';
+import { APP_CONSTANTS } from '../config/app.config';
 
 @Injectable()
 export class CacheService {
@@ -7,12 +8,14 @@ export class CacheService {
   private recentNoticesCache: ITableData[] = [];
   private lastUpdated: Date | null = null;
   private isInitialized = false;
-  private readonly MAX_CACHE_SIZE = 50; // 최대 50개의 최근 입법예고 캐시
+  private readonly MAX_CACHE_SIZE = APP_CONSTANTS.CACHE.MAX_SIZE;
 
   /**
    * 캐시된 최근 입법예고 목록을 반환합니다.
    */
-  getRecentNotices(limit: number = 10): ITableData[] {
+  getRecentNotices(
+    limit: number = APP_CONSTANTS.CACHE.DEFAULT_LIMIT,
+  ): ITableData[] {
     return this.recentNoticesCache.slice(
       0,
       Math.min(limit, this.MAX_CACHE_SIZE),

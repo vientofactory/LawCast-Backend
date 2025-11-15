@@ -4,6 +4,7 @@ import { PalCrawl, type ITableData } from 'pal-crawl';
 import { WebhookService } from './webhook.service';
 import { NotificationService } from './notification.service';
 import { CacheService } from './cache.service';
+import { APP_CONSTANTS } from '../config/app.config';
 
 @Injectable()
 export class CrawlingService implements OnModuleInit {
@@ -45,7 +46,6 @@ export class CrawlingService implements OnModuleInit {
       return;
     }
 
-    this.logger.log('Starting legislative notice check...');
     this.isProcessing = true;
 
     try {
@@ -93,10 +93,7 @@ export class CrawlingService implements OnModuleInit {
     const newNotices = this.cacheService.findNewNotices(crawledData);
 
     if (newNotices.length > 0) {
-      this.logger.log(`Found ${newNotices.length} new notices`);
       await this.sendNotifications(newNotices);
-    } else {
-      this.logger.log('No new notices found');
     }
 
     return newNotices;
@@ -135,13 +132,14 @@ export class CrawlingService implements OnModuleInit {
     });
 
     await Promise.all(notificationPromises);
-    this.logger.log(`Sent notifications for ${notices.length} notices`);
   }
 
   /**
    * 캐시에서 최근 입법예고를 반환
    */
-  getRecentNotices(limit: number = 10): ITableData[] {
+  getRecentNotices(
+    limit: number = APP_CONSTANTS.CACHE.DEFAULT_LIMIT,
+  ): ITableData[] {
     return this.cacheService.getRecentNotices(limit);
   }
 

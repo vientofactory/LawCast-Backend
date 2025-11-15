@@ -1,5 +1,5 @@
 import { HttpException, HttpStatus, BadRequestException } from '@nestjs/common';
-import { ApiResponseUtils } from '../utils/api-response.utils';
+import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
 
 describe('ApiResponseUtils', () => {
   describe('success', () => {
@@ -119,7 +119,7 @@ describe('ApiResponseUtils', () => {
       const exception = new BadRequestException('Bad request');
 
       expect(() => {
-        ApiResponseUtils.handleError(exception, 'Test');
+        ApiResponseUtils.handleError(exception, ErrorContext.DEFAULT);
       }).toThrow(BadRequestException);
     });
 
@@ -130,7 +130,7 @@ describe('ApiResponseUtils', () => {
       );
 
       expect(() => {
-        ApiResponseUtils.handleError(exception, 'Test');
+        ApiResponseUtils.handleError(exception, ErrorContext.DEFAULT);
       }).toThrow(HttpException);
     });
 
@@ -138,11 +138,11 @@ describe('ApiResponseUtils', () => {
       const error = new Error('Unknown error');
 
       expect(() => {
-        ApiResponseUtils.handleError(error, 'Test');
+        ApiResponseUtils.handleError(error, ErrorContext.DEFAULT);
       }).toThrow(HttpException);
 
       try {
-        ApiResponseUtils.handleError(error, 'Test');
+        ApiResponseUtils.handleError(error, ErrorContext.DEFAULT);
       } catch (e) {
         expect(e).toBeInstanceOf(HttpException);
         expect((e as HttpException).getStatus()).toBe(
@@ -150,7 +150,7 @@ describe('ApiResponseUtils', () => {
         );
         expect((e as HttpException).getResponse()).toMatchObject({
           success: false,
-          message: 'Test 중 오류가 발생했습니다.',
+          message: '작업 중 오류가 발생했습니다.',
           error: 'Unknown error',
         });
       }
@@ -160,12 +160,12 @@ describe('ApiResponseUtils', () => {
       const error = { unknown: 'error' };
 
       try {
-        ApiResponseUtils.handleError(error, 'Test');
+        ApiResponseUtils.handleError(error, ErrorContext.DEFAULT);
       } catch (e) {
         expect(e).toBeInstanceOf(HttpException);
         expect((e as HttpException).getResponse()).toMatchObject({
           success: false,
-          message: 'Test 중 오류가 발생했습니다.',
+          message: '작업 중 오류가 발생했습니다.',
           error: '알 수 없는 오류',
         });
       }
@@ -179,6 +179,18 @@ describe('ApiResponseUtils', () => {
       } catch (e) {
         expect((e as HttpException).getResponse()).toMatchObject({
           message: '작업 중 오류가 발생했습니다.',
+        });
+      }
+    });
+
+    it('should use enum context correctly', () => {
+      const error = new Error('Test error');
+
+      try {
+        ApiResponseUtils.handleError(error, ErrorContext.WEBHOOK_REGISTRATION);
+      } catch (e) {
+        expect((e as HttpException).getResponse()).toMatchObject({
+          message: '웹훅 등록 중 오류가 발생했습니다.',
         });
       }
     });

@@ -147,6 +147,7 @@ describe('WebhookValidationUtils', () => {
       const options = WebhookValidationUtils.getValidationPipeOptions();
       const mockErrors = [
         {
+          property: 'url',
           constraints: {
             isString: 'must be a string',
             isNotEmpty: 'should not be empty',

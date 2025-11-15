@@ -2,8 +2,6 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
 import { ApiController } from './controllers/api.controller';
 import { WebhookService } from './services/webhook.service';
 import { CrawlingService } from './services/crawling.service';
@@ -37,9 +35,8 @@ import appConfig from './config/app.config';
     TypeOrmModule.forFeature([Webhook]),
     ScheduleModule.forRoot(),
   ],
-  controllers: [AppController, ApiController],
+  controllers: [ApiController],
   providers: [
-    AppService,
     WebhookService,
     CrawlingService,
     NotificationService,

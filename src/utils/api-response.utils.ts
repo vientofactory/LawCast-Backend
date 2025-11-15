@@ -1,5 +1,15 @@
 import { HttpException, HttpStatus, BadRequestException } from '@nestjs/common';
 
+export enum ErrorContext {
+  WEBHOOK_REGISTRATION = '웹훅 등록',
+  WEBHOOK_TEST = '웹훅 테스트',
+  CRAWLING = '크롤링',
+  NOTIFICATION = '알림',
+  CACHE = '캐시',
+  DATABASE = '데이터베이스',
+  DEFAULT = '작업',
+}
+
 export interface ApiResponse<T = any> {
   success: boolean;
   message?: string;
@@ -58,7 +68,10 @@ export class ApiResponseUtils {
   /**
    * 알려진 예외를 다시 던집니다. 알려지지 않은 예외는 내부 서버 오류로 처리합니다.
    */
-  static handleError(error: unknown, context: string = '작업'): never {
+  static handleError(
+    error: unknown,
+    context: ErrorContext = ErrorContext.DEFAULT,
+  ): never {
     if (
       error instanceof BadRequestException ||
       error instanceof HttpException

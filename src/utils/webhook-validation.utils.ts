@@ -1,4 +1,5 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ValidationPipeOptions } from '@nestjs/common';
+import { APP_CONSTANTS } from '../config/app.config';
 
 export class WebhookValidationUtils {
   /**
@@ -56,7 +57,11 @@ export class WebhookValidationUtils {
   private static validateWebhookIdAndToken(pathname: string): void {
     const pathParts = pathname.split('/');
 
-    if (pathParts.length < 5 || !pathParts[3] || !pathParts[4]) {
+    if (
+      pathParts.length < APP_CONSTANTS.DISCORD.WEBHOOK.PATH_PARTS_MIN ||
+      !pathParts[3] ||
+      !pathParts[4]
+    ) {
       throw new BadRequestException({
         success: false,
         message: '웹훅 URL에 필요한 정보가 누락되었습니다.',
@@ -87,14 +92,18 @@ export class WebhookValidationUtils {
    * Discord Snowflake ID 형식을 검증합니다.
    */
   private static isValidSnowflakeId(id: string): boolean {
-    return /^\d{17,20}$/.test(id);
+    const { MIN, MAX } = APP_CONSTANTS.DISCORD.WEBHOOK.SNOWFLAKE_ID_LENGTH;
+    const regex = new RegExp(`^\\d{${MIN},${MAX}}$`);
+    return regex.test(id);
   }
 
   /**
    * Discord 웹훅 토큰 형식을 검증합니다.
    */
   private static isValidWebhookToken(token: string): boolean {
-    return /^[a-zA-Z0-9_-]{64,68}$/.test(token);
+    const { MIN, MAX } = APP_CONSTANTS.DISCORD.WEBHOOK.TOKEN_LENGTH;
+    const regex = new RegExp(`^[a-zA-Z0-9_-]{${MIN},${MAX}}$`);
+    return regex.test(token);
   }
 
   /**
@@ -112,7 +121,7 @@ export class WebhookValidationUtils {
   /**
    * ValidationPipe 설정을 반환합니다.
    */
-  static getValidationPipeOptions() {
+  static getValidationPipeOptions(): ValidationPipeOptions {
     return {
       whitelist: true,
       forbidNonWhitelisted: true,

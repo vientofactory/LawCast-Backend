@@ -16,8 +16,40 @@ export interface AppConfig {
   };
 }
 
+// Application Constants
+export const APP_CONSTANTS = {
+  DEFAULT_PORT: 3001,
+  CACHE: {
+    MAX_SIZE: 50,
+    DEFAULT_LIMIT: 10,
+    NOTICES_RECENT_LIMIT: 20,
+  },
+  DISCORD: {
+    WEBHOOK: {
+      URL_MAX_LENGTH: 500,
+      SNOWFLAKE_ID_LENGTH: { MIN: 17, MAX: 20 },
+      TOKEN_LENGTH: { MIN: 64, MAX: 68 },
+      PATH_PARTS_MIN: 5,
+    },
+    API: {
+      ERROR_CODES: {
+        NOT_FOUND: 404,
+        UNAUTHORIZED: 401,
+        FORBIDDEN: 403,
+        INTERNAL_SERVER_ERROR: 500,
+      },
+    },
+  },
+  COLORS: {
+    DISCORD: {
+      PRIMARY: 0x3b82f6, // Blue
+      SUCCESS: 0x10b981, // Green
+    },
+  },
+} as const;
+
 export default (): AppConfig => ({
-  port: parseInt(process.env.PORT, 10) || 3001,
+  port: parseInt(process.env.PORT, 10) || APP_CONSTANTS.DEFAULT_PORT,
   nodeEnv: process.env.NODE_ENV || 'development',
   database: {
     type: 'sqlite',

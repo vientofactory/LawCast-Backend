@@ -5,6 +5,7 @@ import {
 } from 'discord-webhook-node';
 import { type ITableData } from 'pal-crawl';
 import { Webhook } from '../entities/webhook.entity';
+import { APP_CONSTANTS } from '../config/app.config';
 
 @Injectable()
 export class NotificationService {
@@ -22,7 +23,6 @@ export class NotificationService {
         discordWebhook.setUsername('LawCast 알리미');
 
         await discordWebhook.send(embed);
-        this.logger.log(`Notification sent to webhook ${webhook.id}`);
       } catch (error) {
         this.logger.error(
           `Failed to send notification to webhook ${webhook.id}:`,
@@ -47,7 +47,6 @@ export class NotificationService {
         discordWebhook.setUsername('LawCast 알리미');
 
         await discordWebhook.send(embed);
-        this.logger.log(`Notification sent to webhook ${webhook.id}`);
         return { webhookId: webhook.id, success: true };
       } catch (error) {
         this.logger.error(
@@ -84,7 +83,7 @@ export class NotificationService {
       .addField('🏢 소관위원회', notice.committee, true)
       .addField('💬 의견 수', notice.numComments.toString(), true)
       .addField('🔗 자세히 보기', `[링크 바로가기](${notice.link})`, false)
-      .setColor(0x3b82f6) // Blue color
+      .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
       .setTimestamp()
       .setFooter('LawCast 알림 서비스', '');
   }
@@ -94,12 +93,13 @@ export class NotificationService {
    */
   private shouldDeleteWebhook(error: any): boolean {
     // Discord API 에러 코드를 확인
-    if (error.response) {
+    if (error.response?.status) {
       const status = error.response.status;
+      const { NOT_FOUND, UNAUTHORIZED, FORBIDDEN } =
+        APP_CONSTANTS.DISCORD.API.ERROR_CODES;
+
       // 404: 웹훅이 삭제됨, 401: 권한 없음, 403: 차단됨
-      if ([404, 401, 403].includes(status)) {
-        return true;
-      }
+      return [NOT_FOUND, UNAUTHORIZED, FORBIDDEN].includes(status);
     }
 
     // 네트워크 오류나 일시적 오류는 삭제하지 않음
@@ -116,12 +116,11 @@ export class NotificationService {
       const testEmbed = new MessageBuilder()
         .setTitle('🧪 LawCast 웹훅 테스트')
         .setDescription('웹훅이 정상적으로 설정되었습니다!')
-        .setColor(0x10b981) // Green color
+        .setColor(APP_CONSTANTS.COLORS.DISCORD.SUCCESS)
         .setTimestamp()
         .setFooter('LawCast 알림 서비스', '');
 
       await discordWebhook.send(testEmbed);
-      this.logger.log('Test webhook notification sent successfully');
       return { success: true, shouldDelete: false };
     } catch (error) {
       this.logger.error('Failed to send test webhook notification:', error);
