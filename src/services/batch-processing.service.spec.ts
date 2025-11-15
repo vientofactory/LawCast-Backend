@@ -156,4 +156,101 @@ describe('BatchProcessingService', () => {
       await expect(promise).resolves.toBeUndefined();
     });
   });
+
+  describe('Graceful Shutdown', () => {
+    it('should reject new jobs when shutting down', async () => {
+      // Start shutdown process
+      const shutdownPromise = service.gracefulShutdown();
+
+      // Try to execute a new batch job
+      const mockJobs = [() => Promise.resolve('test')];
+
+      await expect(service.executeBatch(mockJobs)).rejects.toThrow(
+        'Service is shutting down, cannot process new jobs',
+      );
+
+      await shutdownPromise;
+    });
+
+    it('should reject new notification batches when shutting down', async () => {
+      // Start shutdown process
+      const shutdownPromise = service.gracefulShutdown();
+
+      const mockNotices = [
+        {
+          subject: 'Test Notice',
+          proposerCategory: 'Test',
+          committee: 'Test',
+          numComments: 0,
+          link: 'http://test.com',
+        },
+      ];
+
+      await expect(
+        service.processNotificationBatch(mockNotices as any),
+      ).rejects.toThrow(
+        'Service is shutting down, cannot process new notifications',
+      );
+
+      await shutdownPromise;
+    });
+
+    it('should wait for ongoing jobs during shutdown', async () => {
+      let jobResolve: () => void;
+      const longRunningJob = () =>
+        new Promise<string>((resolve) => {
+          jobResolve = () => resolve('completed');
+        });
+
+      // Start a long-running job
+      const jobPromise = service.executeBatch([longRunningJob]);
+
+      // Start shutdown
+      const shutdownStartTime = Date.now();
+      const shutdownPromise = service.gracefulShutdown();
+
+      // Wait a bit then resolve the job
+      setTimeout(() => {
+        jobResolve();
+      }, 100);
+
+      await shutdownPromise;
+      const results = await jobPromise;
+
+      expect(results[0].success).toBe(true);
+      expect(results[0].data).toBe('completed');
+      expect(Date.now() - shutdownStartTime).toBeGreaterThan(100);
+    });
+
+    it('should implement OnApplicationShutdown interface', async () => {
+      const shutdownSpy = jest
+        .spyOn(service, 'gracefulShutdown')
+        .mockResolvedValue();
+
+      await service.onApplicationShutdown('SIGTERM');
+
+      expect(shutdownSpy).toHaveBeenCalledTimes(1);
+      shutdownSpy.mockRestore();
+    });
+
+    it('should provide detailed batch job status', () => {
+      const status = service.getDetailedBatchJobStatus();
+
+      expect(status).toHaveProperty('jobCount');
+      expect(status).toHaveProperty('jobIds');
+      expect(status).toHaveProperty('isShuttingDown');
+      expect(status).toHaveProperty('activeTimeouts');
+      expect(typeof status.isShuttingDown).toBe('boolean');
+      expect(typeof status.activeTimeouts).toBe('number');
+    });
+
+    it('should force shutdown and clear all resources', () => {
+      service.forceShutdown();
+
+      expect(service.isServiceShuttingDown()).toBe(true);
+
+      const status = service.getBatchJobStatus();
+      expect(status.jobCount).toBe(0);
+    });
+  });
 });

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { type ITableData } from 'pal-crawl';
 import { WebhookService } from './webhook.service';
 import { NotificationService } from './notification.service';
@@ -18,10 +18,12 @@ export interface BatchProcessingOptions {
 }
 
 @Injectable()
-export class BatchProcessingService {
+export class BatchProcessingService implements OnApplicationShutdown {
   private readonly logger = new Logger(BatchProcessingService.name);
   private readonly jobQueue = new Map<string, Promise<any>>();
   private readonly activeTimeouts = new Set<NodeJS.Timeout>();
+  private isShuttingDown = false;
+  private readonly shutdownTimeout = 25000; // 25초 (main.ts의 30초보다 짧게)
 
   constructor(
     private webhookService: WebhookService,
@@ -35,6 +37,12 @@ export class BatchProcessingService {
     jobs: Array<() => Promise<T>>,
     options: BatchProcessingOptions = {},
   ): Promise<BatchJobResult<T>[]> {
+    // 종료 중인 경우 새로운 작업 거부
+    if (this.isShuttingDown) {
+      this.logger.warn('Rejecting new batch job - service is shutting down');
+      throw new Error('Service is shutting down, cannot process new jobs');
+    }
+
     const {
       concurrency = 10,
       timeout = 30000,
@@ -98,6 +106,16 @@ export class BatchProcessingService {
     notices: ITableData[],
     options: BatchProcessingOptions = {},
   ): Promise<void> {
+    // 종료 중인 경우 새로운 작업 거부
+    if (this.isShuttingDown) {
+      this.logger.warn(
+        'Rejecting new notification batch - service is shutting down',
+      );
+      throw new Error(
+        'Service is shutting down, cannot process new notifications',
+      );
+    }
+
     const jobId = `notification_batch_${Date.now()}`;
     this.logger.log(
       `Starting notification batch processing for ${notices.length} notices`,
@@ -281,5 +299,104 @@ export class BatchProcessingService {
       clearTimeout(timeoutId);
     });
     this.activeTimeouts.clear();
+  }
+
+  /**
+   * NestJS OnApplicationShutdown hook
+   */
+  async onApplicationShutdown(signal?: string): Promise<void> {
+    this.logger.log(`Application shutdown signal received: ${signal}`);
+    await this.gracefulShutdown();
+  }
+
+  /**
+   * Graceful shutdown 시작
+   */
+  async gracefulShutdown(): Promise<void> {
+    this.logger.log('Starting batch processing service graceful shutdown...');
+    this.isShuttingDown = true;
+
+    const startTime = Date.now();
+    const jobStatus = this.getBatchJobStatus();
+
+    if (jobStatus.jobCount === 0) {
+      this.logger.log('No active batch jobs, shutdown completed immediately');
+      this.clearAllTimeouts();
+      return;
+    }
+
+    this.logger.log(
+      `Waiting for ${jobStatus.jobCount} active batch jobs to complete...`,
+    );
+    this.logger.debug(`Active job IDs: ${jobStatus.jobIds.join(', ')}`);
+
+    try {
+      // 타임아웃과 함께 모든 배치 작업 완료 대기
+      await Promise.race([
+        this.waitForAllBatchJobs(),
+        this.createShutdownTimeoutPromise(),
+      ]);
+
+      const duration = Date.now() - startTime;
+      this.logger.log(`All batch jobs completed gracefully in ${duration}ms`);
+    } catch (error) {
+      this.logger.error('Error during batch jobs completion:', error);
+      throw error;
+    } finally {
+      // 모든 활성 타이머 정리
+      this.clearAllTimeouts();
+      this.logger.log('Batch processing service shutdown completed');
+    }
+  }
+
+  /**
+   * Shutdown 상태 확인
+   */
+  isServiceShuttingDown(): boolean {
+    return this.isShuttingDown;
+  }
+
+  /**
+   * 강제 종료 (긴급 상황용)
+   */
+  forceShutdown(): void {
+    this.logger.warn('Force shutdown initiated - canceling all active jobs');
+    this.isShuttingDown = true;
+    this.clearAllTimeouts();
+    this.jobQueue.clear();
+  }
+
+  /**
+   * Shutdown 타임아웃 Promise 생성
+   */
+  private createShutdownTimeoutPromise(): Promise<never> {
+    return new Promise<never>((_, reject) => {
+      const timeoutId = setTimeout(() => {
+        this.activeTimeouts.delete(timeoutId);
+        reject(
+          new Error(
+            `Batch jobs shutdown timed out after ${this.shutdownTimeout}ms`,
+          ),
+        );
+      }, this.shutdownTimeout);
+      this.activeTimeouts.add(timeoutId);
+    });
+  }
+
+  /**
+   * 상세한 배치 작업 상태 반환 (모니터링용)
+   */
+  getDetailedBatchJobStatus(): {
+    jobCount: number;
+    jobIds: string[];
+    isShuttingDown: boolean;
+    activeTimeouts: number;
+  } {
+    return {
+      jobCount: this.jobQueue.size,
+      jobIds: Array.from(this.jobQueue.keys()),
+      isShuttingDown: this.isShuttingDown,
+      activeTimeouts: this.activeTimeouts.size,
+    };
   }
 }

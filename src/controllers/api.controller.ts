@@ -102,7 +102,7 @@ export class ApiController {
 
   @Get('batch/status')
   async getBatchStatus() {
-    const status = this.batchProcessingService.getBatchJobStatus();
+    const status = this.batchProcessingService.getDetailedBatchJobStatus();
     return ApiResponseUtils.success(
       status,
       'Batch processing status retrieved successfully',
