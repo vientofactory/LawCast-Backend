@@ -47,6 +47,16 @@ export const APP_CONSTANTS = {
       SUCCESS: 0x10b981, // Green
     },
   },
+  CRAWLING: {
+    USER_AGENT: 'LawCast/1.0 (Legislative Notice Crawler)',
+    TIMEOUT: 15000, // 15초 타임아웃
+    RETRY_COUNT: 3, // 3회 재시도
+    HEADERS: {
+      'Accept-Language': 'ko-KR,ko;q=0.9',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Cache-Control': 'no-cache',
+    },
+  },
 } as const;
 
 export default (): AppConfig => ({
