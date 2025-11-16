@@ -33,7 +33,7 @@
     "discord-webhook-node": "^1.1.8",
     "node-cache": "^5.1.2",
     "pal-crawl": "^1.2.0",
-    "reflect-metadata": "^0.1.13",
+    "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1",
     "sqlite3": "^5.1.7",
     "typeorm": "^0.3.27"
