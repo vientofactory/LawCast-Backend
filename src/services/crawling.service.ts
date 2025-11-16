@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Cron } from '@nestjs/schedule';
 import { PalCrawl, type ITableData, type PalCrawlConfig } from 'pal-crawl';
 import { CacheService } from './cache.service';
 import { BatchProcessingService } from './batch-processing.service';
@@ -39,7 +39,7 @@ export class CrawlingService implements OnModuleInit {
     }
   }
 
-  @Cron(CronExpression.EVERY_10_MINUTES)
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK)
   async handleCron() {
     if (!this.isInitialized) {
       this.logger.warn('Cache not initialized yet, skipping cron job');
@@ -115,11 +115,11 @@ export class CrawlingService implements OnModuleInit {
         `Successfully crawled ${crawledData.length} legislative notices`,
       );
 
-      // 캐시 업데이트
-      this.cacheService.updateCache(crawledData);
-
       // 새로운 입법예고 찾기
       const newNotices = this.cacheService.findNewNotices(crawledData);
+
+      // 캐시 업데이트
+      this.cacheService.updateCache(crawledData);
 
       if (newNotices.length > 0) {
         this.logger.log(`Found ${newNotices.length} new legislative notices`);

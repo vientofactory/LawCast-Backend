@@ -43,18 +43,41 @@ export class CacheService {
 
   /**
    * 새로운 데이터로 캐시를 업데이트합니다.
+   * 기존 캐시와 새 데이터를 병합하여 최신 순으로 유지합니다.
    */
-  updateCache(allNotices: ITableData[]): void {
-    // 최신 순으로 정렬 (num이 높을수록 최신)
-    const sortedNotices = [...allNotices].sort((a, b) => b.num - a.num);
+  updateCache(newNotices: ITableData[]): void {
+    if (!this.isInitialized) {
+      // 초기화되지 않은 상태라면 초기화 메서드 사용
+      this.initializeCache(newNotices);
+      return;
+    }
 
-    // 최대 캐시 크기만큼만 저장
-    this.recentNoticesCache = sortedNotices.slice(0, this.MAX_CACHE_SIZE);
+    // 새로운 데이터를 최신 순으로 정렬 (num이 높을수록 최신)
+    const sortedNewNotices = [...newNotices].sort((a, b) => b.num - a.num);
+
+    // 기존 캐시된 항목들의 num을 Set으로 저장 (중복 체크용)
+    const existingNums = new Set(
+      this.recentNoticesCache.map((notice) => notice.num),
+    );
+
+    // 새로운 항목들만 필터링 (기존에 없는 것들)
+    const actuallyNewNotices = sortedNewNotices.filter(
+      (notice) => !existingNums.has(notice.num),
+    );
+
+    // 기존 캐시와 새 데이터를 병합
+    const mergedNotices = [...actuallyNewNotices, ...this.recentNoticesCache];
+
+    // 전체를 다시 최신 순으로 정렬하고 최대 캐시 크기만큼만 유지
+    this.recentNoticesCache = mergedNotices
+      .sort((a, b) => b.num - a.num)
+      .slice(0, this.MAX_CACHE_SIZE);
+
     this.lastUpdated = new Date();
 
     LoggerUtils.logDev(
       this.logger,
-      `Cache updated with ${this.recentNoticesCache.length} notices`,
+      `Cache updated: ${actuallyNewNotices.length} new notices added, total ${this.recentNoticesCache.length} notices`,
     );
   }
 
