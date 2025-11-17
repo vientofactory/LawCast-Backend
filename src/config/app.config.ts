@@ -36,7 +36,7 @@ export const APP_CONSTANTS = {
   CACHE: {
     MAX_SIZE: 50,
     DEFAULT_LIMIT: 10,
-    NOTICES_RECENT_LIMIT: 20,
+    NOTICES_RECENT_LIMIT: 50,
   },
   DISCORD: {
     WEBHOOK: {
