@@ -1,73 +1,108 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="200" alt="Nest Logo" /></a>
-</p>
+# LawCast 백엔드
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+LawCast 서비스의 백엔드 API 서버입니다. NestJS 프레임워크를 기반으로 구축되었으며, 국회 입법예고 데이터를 크롤링하고 웹훅을 통해 디스코드 알림을 전송하는 기능을 제공합니다.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## 기능
 
-## Description
+- **크롤링 서비스**: 국회 입법예고 데이터를 주기적으로 수집
+- **웹훅 관리**: 디스코드 웹훅 등록 및 관리
+- **알림 서비스**: 입법예고 변동사항을 웹훅으로 전송
+- **캐시 서비스**: 데이터 캐싱으로 성능 최적화
+- **배치 처리**: 대량 데이터 처리 기능
+- **reCAPTCHA 검증**: 웹훅 등록 시 봇 방지
+- **스케줄링**: 정기적인 작업 자동화
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## 기술 스택
 
-## Installation
+- **프레임워크**: NestJS
+- **언어**: TypeScript
+- **데이터베이스**: SQLite (TypeORM)
+- **크롤링**: [pal-crawl](https://github.com/vientorepublic/pal-crawl)
+- **알림**: [discord-webhook-node](https://github.com/matthew1232/discord-webhook-node)
+- **스케줄링**: @nestjs/schedule
 
-```bash
-$ npm install
-```
+## 설치 및 실행
 
-## Running the app
+### 사전 요구사항
+
+- Node.js (버전 18 이상)
+- npm 또는 yarn
+
+### 설치
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm install
 ```
 
-## Test
+### 환경 설정
+
+프로젝트 루트에 `.env` 파일을 생성하고 다음 변수를 설정하세요:
+
+```env
+# 서버 설정
+PORT=3001
+NODE_ENV=production
+
+# 데이터베이스 설정
+DATABASE_PATH=lawcast.db
+
+# reCAPTCHA 설정
+RECAPTCHA_SECRET_KEY=your-recaptcha-secret-jey
+
+# 크론 작업 시간대
+CRON_TIMEZONE=Asia/Seoul
+
+# CORS 허용 도메인 (쉼표로 구분)
+FRONTEND_URL=http://localhost:5173,http://localhost:3002
+
+```
+
+### 실행
 
 ```bash
-# unit tests
-$ npm run test
+# 개발 모드
+npm run start:dev
 
-# e2e tests
-$ npm run test:e2e
+# 프로덕션 모드
+npm run start:prod
 
-# test coverage
-$ npm run test:cov
+# 디버그 모드
+npm run start:debug
 ```
 
-## Support
+## 테스트
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+```bash
+# 단위 테스트
+npm run test
 
-## Stay in touch
+# E2E 테스트
+npm run test:e2e
 
-- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+# 테스트 커버리지
+npm run test:cov
+```
 
-## License
+## API 엔드포인트
 
-Nest is [MIT licensed](LICENSE).
+- `GET /api/notices` - 최근 입법예고 목록 조회
+- `POST /api/webhooks` - 웹훅 등록
+- `DELETE /api/webhooks/:id` - 웹훅 삭제
+- `GET /api/stats` - 시스템 통계 조회
+
+## 프로젝트 구조
+
+```
+src/
+├── config/          # 설정 파일
+├── controllers/     # API 컨트롤러
+├── services/        # 비즈니스 로직 서비스
+├── entities/        # 데이터베이스 엔티티
+├── dto/            # 데이터 전송 객체
+├── types/          # 타입 정의
+└── utils/          # 유틸리티 함수
+```
+
+## 라이선스
+
+MIT License
