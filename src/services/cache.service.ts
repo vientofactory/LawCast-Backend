@@ -37,7 +37,7 @@ export class CacheService implements OnModuleDestroy {
         this.CACHE_KEYS.RECENT_NOTICES,
       );
 
-      if (!cachedNotices) {
+      if (!cachedNotices || cachedNotices.length === 0) {
         LoggerUtils.logDev(this.logger, 'No cached notices found');
         return [];
       }
@@ -51,217 +51,88 @@ export class CacheService implements OnModuleDestroy {
   }
 
   /**
-   * 초기화용 캐시 업데이트 (알림 없이)
+   * 캐시를 초기화하거나 업데이트합니다.
+   * 기존 데이터와 새 데이터를 병합하여 최신 순으로 유지합니다.
    */
-  async initializeCache(allNotices: ITableData[]): Promise<void> {
+  async updateCache(notices: ITableData[]): Promise<void> {
     try {
-      // 기존 캐시 데이터 확인
-      const existingNotices = await this.cacheManager.get<ITableData[]>(
-        this.CACHE_KEYS.RECENT_NOTICES,
-      );
+      // 최신 순으로 정렬
+      const sortedNotices = [...notices].sort((a, b) => b.num - a.num);
 
-      if (existingNotices && existingNotices.length > 0) {
-        LoggerUtils.logDev(
-          this.logger,
-          `Existing cache data found during initialization (${existingNotices.length} notices) - updating cache state only`,
-        );
-
-        // 기존 데이터가 있으면 상태만 초기화됨으로 업데이트
-        await this.updateCacheInfo({
-          size: existingNotices.length,
-          lastUpdated: new Date(),
-          maxSize: this.MAX_CACHE_SIZE,
-          isInitialized: true,
-        });
-
-        return;
-      }
-
-      // 기존 데이터가 없는 경우에만 새로 초기화
-      LoggerUtils.logDev(
-        this.logger,
-        'No existing cache data found - performing fresh initialization',
-      );
-
-      // 최신 순으로 정렬 (num이 높을수록 최신)
-      const sortedNotices = [...allNotices].sort((a, b) => b.num - a.num);
-
-      // 최대 캐시 크기만큼만 저장
-      const limitedNotices = sortedNotices.slice(0, this.MAX_CACHE_SIZE);
-
-      // Redis에 캐시 저장
-      await Promise.all([
-        this.cacheManager.set(this.CACHE_KEYS.RECENT_NOTICES, limitedNotices),
-        this.updateCacheInfo({
-          size: limitedNotices.length,
-          lastUpdated: new Date(),
-          maxSize: this.MAX_CACHE_SIZE,
-          isInitialized: true,
-        }),
-        // 중복 체크를 위한 num 배열 저장
-        this.cacheManager.set(
-          this.CACHE_KEYS.NEW_NOTICES_SET,
-          limitedNotices.map((notice) => notice.num),
-        ),
-      ]);
-
-      LoggerUtils.logDev(
-        this.logger,
-        `Redis cache initialized with ${limitedNotices.length} notices`,
-      );
-    } catch (error) {
-      this.logger.error('Error initializing Redis cache:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * 새로운 데이터로 캐시를 업데이트합니다.
-   * 기존 캐시와 새 데이터를 병합하여 최신 순으로 유지합니다.
-   */
-  async updateCache(newNotices: ITableData[]): Promise<void> {
-    try {
-      const cacheInfo = await this.getCacheInfo();
-
-      if (!cacheInfo.isInitialized) {
-        // 초기화되지 않은 상태라면 초기화 메서드 사용
-        await this.initializeCache(newNotices);
-        return;
-      }
-
-      // 새로운 데이터를 최신 순으로 정렬 (num이 높을수록 최신)
-      const sortedNewNotices = [...newNotices].sort((a, b) => b.num - a.num);
-
-      // 기존 캐시된 데이터 가져오기
+      // 기존 캐시 데이터 가져오기
       const existingNotices =
         (await this.cacheManager.get<ITableData[]>(
           this.CACHE_KEYS.RECENT_NOTICES,
         )) || [];
-      const existingNumsArray =
-        (await this.cacheManager.get<number[]>(
-          this.CACHE_KEYS.NEW_NOTICES_SET,
-        )) || [];
 
-      // 배열을 Set으로 변환
-      const existingNumsSet = new Set(existingNumsArray);
+      // 기존 데이터와 새 데이터를 병합
+      const mergedNotices = [...sortedNotices, ...existingNotices];
 
-      // 새로운 항목들만 필터링 (기존에 없는 것들)
-      const actuallyNewNotices = sortedNewNotices.filter(
-        (notice) => !existingNumsSet.has(notice.num),
-      );
-
-      if (actuallyNewNotices.length === 0) {
-        LoggerUtils.logDev(this.logger, 'No new notices to add to cache');
-        return;
-      }
-
-      // 기존 캐시와 새 데이터를 병합
-      const mergedNotices = [...actuallyNewNotices, ...existingNotices];
-
-      // 전체를 다시 최신 순으로 정렬하고 최대 캐시 크기만큼만 유지
-      const finalNotices = mergedNotices
+      // 중복 제거 및 최신 순 정렬
+      const uniqueNotices = mergedNotices
+        .filter(
+          (notice, index, self) =>
+            index === self.findIndex((n) => n.num === notice.num),
+        )
         .sort((a, b) => b.num - a.num)
         .slice(0, this.MAX_CACHE_SIZE);
 
-      // 업데이트된 num 배열 생성
-      const updatedNumsArray = finalNotices.map((notice) => notice.num);
-
-      // Redis에 업데이트된 데이터 저장
-      await Promise.all([
-        this.cacheManager.set(this.CACHE_KEYS.RECENT_NOTICES, finalNotices),
-        this.cacheManager.set(
-          this.CACHE_KEYS.NEW_NOTICES_SET,
-          updatedNumsArray,
-        ),
-        this.updateCacheInfo({
-          size: finalNotices.length,
-          lastUpdated: new Date(),
-          maxSize: this.MAX_CACHE_SIZE,
-          isInitialized: true,
-        }),
-      ]);
+      // 캐시 저장 (TTL 없음)
+      await this.cacheManager.set(
+        this.CACHE_KEYS.RECENT_NOTICES,
+        uniqueNotices,
+      );
 
       LoggerUtils.logDev(
         this.logger,
-        `Redis cache updated: ${actuallyNewNotices.length} new notices added, total ${finalNotices.length} notices`,
+        `Cache updated: ${uniqueNotices.length} notices stored`,
       );
     } catch (error) {
-      this.logger.error('Error updating Redis cache:', error);
+      this.logger.error('Error updating cache:', error);
       throw error;
     }
   }
 
   /**
    * 새로운 입법예고들을 찾습니다.
+   * 더 엄격한 비교 로직으로 가짜 긍정을 방지합니다.
    */
   async findNewNotices(crawledData: ITableData[]): Promise<ITableData[]> {
     try {
-      const cacheInfo = await this.getCacheInfo();
-
-      if (!cacheInfo.isInitialized) {
-        // 초기화되지 않은 상태에서 기존 캐시 데이터 확인
-        const existingNotices = await this.cacheManager.get<ITableData[]>(
+      const existingNotices =
+        (await this.cacheManager.get<ITableData[]>(
           this.CACHE_KEYS.RECENT_NOTICES,
-        );
+        )) || [];
 
-        if (existingNotices && existingNotices.length > 0) {
-          // 기존 데이터가 있으면 서버 재시작 상황으로 간주 - 알림 중복 방지
-          LoggerUtils.logDev(
-            this.logger,
-            `Cache not marked as initialized but existing data found: ${existingNotices.length} notices`,
-          );
-
-          // 기존 데이터와 비교하여 실제 새로운 데이터만 반환
-          const existingNums = new Set(existingNotices.map((n) => n.num));
-          const actualNewNotices = crawledData.filter(
-            (item) => !existingNums.has(item.num),
-          );
-
-          // 캐시 상태를 초기화됨으로 복구
-          await this.updateCacheInfo({
-            size: existingNotices.length,
-            lastUpdated: new Date(),
-            maxSize: this.MAX_CACHE_SIZE,
-            isInitialized: true,
-          });
-
-          LoggerUtils.logDev(
-            this.logger,
-            `Found ${actualNewNotices.length} truly new notices after server restart`,
-          );
-
-          return actualNewNotices;
-        }
-
-        // 처음 시작이거나 캐시가 완전히 비어있는 경우
+      if (existingNotices.length === 0) {
         LoggerUtils.logDev(
           this.logger,
-          'Cache not initialized and no existing data found',
+          'Cache is empty, all crawled data considered new',
         );
         return crawledData;
       }
 
-      const existingNumsArray =
-        (await this.cacheManager.get<number[]>(
-          this.CACHE_KEYS.NEW_NOTICES_SET,
-        )) || [];
+      // 기존 데이터의 num 집합 생성
+      const existingNums = new Set(existingNotices.map((notice) => notice.num));
 
-      // 배열을 Set으로 변환
-      const existingNumsSet = new Set(existingNumsArray);
-
+      // 새로운 데이터만 필터링 (num 기준)
       const newNotices = crawledData.filter(
-        (item) => !existingNumsSet.has(item.num),
+        (item) => !existingNums.has(item.num),
       );
 
       LoggerUtils.logDev(
         this.logger,
-        `Found ${newNotices.length} new notices out of ${crawledData.length} crawled`,
+        `Found ${newNotices.length} new notices out of ${crawledData.length} crawled (cache has ${existingNotices.length})`,
       );
 
       return newNotices;
     } catch (error) {
       this.logger.error('Error finding new notices:', error);
-      return crawledData;
+      LoggerUtils.logDev(
+        this.logger,
+        'Error in findNewNotices, returning empty array to prevent false notifications',
+      );
+      return [];
     }
   }
 
@@ -270,26 +141,17 @@ export class CacheService implements OnModuleDestroy {
    */
   async getCacheInfo(): Promise<CacheInfo> {
     try {
-      const cacheInfo = await this.cacheManager.get<CacheInfo>(
-        this.CACHE_KEYS.CACHE_INFO,
-      );
+      const cachedNotices =
+        (await this.cacheManager.get<ITableData[]>(
+          this.CACHE_KEYS.RECENT_NOTICES,
+        )) || [];
 
-      if (!cacheInfo) {
-        // 기본값 반환
-        const defaultInfo: CacheInfo = {
-          size: 0,
-          lastUpdated: null,
-          maxSize: this.MAX_CACHE_SIZE,
-          isInitialized: false,
-        };
-
-        // 기본값을 캐시에 저장
-        await this.cacheManager.set(this.CACHE_KEYS.CACHE_INFO, defaultInfo);
-
-        return defaultInfo;
-      }
-
-      return cacheInfo;
+      return {
+        size: cachedNotices.length,
+        lastUpdated: cachedNotices.length > 0 ? new Date() : null,
+        maxSize: this.MAX_CACHE_SIZE,
+        isInitialized: cachedNotices.length > 0,
+      };
     } catch (error) {
       this.logger.error('Error getting cache info:', error);
       return {
@@ -302,76 +164,15 @@ export class CacheService implements OnModuleDestroy {
   }
 
   /**
-   * 캐시 정보를 업데이트합니다.
-   */
-  private async updateCacheInfo(info: CacheInfo): Promise<void> {
-    try {
-      await this.cacheManager.set(this.CACHE_KEYS.CACHE_INFO, info);
-    } catch (error) {
-      this.logger.error('Error updating cache info:', error);
-    }
-  }
-
-  /**
    * 캐시를 완전히 초기화합니다.
    */
   async clearCache(): Promise<void> {
     try {
-      await Promise.all([
-        this.cacheManager.del(this.CACHE_KEYS.RECENT_NOTICES),
-        this.cacheManager.del(this.CACHE_KEYS.NEW_NOTICES_SET),
-        this.cacheManager.del(this.CACHE_KEYS.CACHE_INFO),
-      ]);
-
-      // 초기화된 상태의 캐시 정보 저장
-      await this.updateCacheInfo({
-        size: 0,
-        lastUpdated: null,
-        maxSize: this.MAX_CACHE_SIZE,
-        isInitialized: false,
-      });
-
+      await this.cacheManager.del(this.CACHE_KEYS.RECENT_NOTICES);
       LoggerUtils.logDev(this.logger, 'Redis cache cleared');
     } catch (error) {
       this.logger.error('Error clearing Redis cache:', error);
       throw error;
-    }
-  }
-
-  /**
-   * 기존 TTL이 설정된 캐시 데이터를 TTL 없이 다시 저장합니다.
-   * 서버 시작 시 TTL 제거를 위해 사용됩니다.
-   */
-  async migrateCacheToNoTTL(): Promise<void> {
-    try {
-      const [existingNotices, existingNumsArray, existingCacheInfo] =
-        await Promise.all([
-          this.cacheManager.get<ITableData[]>(this.CACHE_KEYS.RECENT_NOTICES),
-          this.cacheManager.get<number[]>(this.CACHE_KEYS.NEW_NOTICES_SET),
-          this.cacheManager.get<any>(this.CACHE_KEYS.CACHE_INFO),
-        ]);
-
-      // 데이터가 있는 경우에만 TTL 없이 다시 저장
-      if (existingNotices && existingNumsArray && existingCacheInfo) {
-        await Promise.all([
-          this.cacheManager.set(
-            this.CACHE_KEYS.RECENT_NOTICES,
-            existingNotices,
-          ),
-          this.cacheManager.set(
-            this.CACHE_KEYS.NEW_NOTICES_SET,
-            existingNumsArray,
-          ),
-          this.cacheManager.set(this.CACHE_KEYS.CACHE_INFO, existingCacheInfo),
-        ]);
-
-        LoggerUtils.logDev(
-          this.logger,
-          'Successfully migrated cache data to remove TTL',
-        );
-      }
-    } catch (error) {
-      this.logger.error('Error migrating cache to no-TTL:', error);
     }
   }
 

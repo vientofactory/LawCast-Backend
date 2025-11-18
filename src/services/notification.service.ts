@@ -56,13 +56,19 @@ export class NotificationService {
         await discordWebhook.send(embed);
         return { webhookId: webhook.id, success: true };
       } catch (error) {
-        this.logger.error(
-          `Failed to send notification to webhook ${webhook.id}:`,
-          error,
-        );
-
-        // Discord 웹훅 에러 상태를 확인하여 삭제 여부 결정
+        // 에러 로깅 최소화 - 영구 실패만 경고, 일시적 실패는 디버그
         const shouldDelete = this.shouldDeleteWebhook(error);
+
+        if (shouldDelete) {
+          this.logger.warn(
+            `Webhook ${webhook.id} permanently failed (404/401/403) - will be deleted`,
+          );
+        } else {
+          // 일시적 실패는 디버그 레벨로 로깅
+          this.logger.debug(
+            `Webhook ${webhook.id} temporarily failed: ${error.message}`,
+          );
+        }
 
         return {
           webhookId: webhook.id,

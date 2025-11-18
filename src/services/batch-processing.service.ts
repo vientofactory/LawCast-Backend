@@ -157,19 +157,30 @@ export class BatchProcessingService implements OnApplicationShutdown {
     notices: ITableData[],
     options: BatchProcessingOptions,
   ): Promise<BatchJobResult[]> {
-    const webhooks = await this.webhookService.findAll();
-
-    if (webhooks.length === 0) {
-      this.logger.warn('No active webhooks found');
-      return [];
-    }
-
     // 각 입법예고별로 배치 작업 생성
     const notificationJobs = notices.map((notice) => async () => {
+      // 각 알림마다 최신 웹훅 리스트를 독립적으로 가져옴
+      const currentWebhooks = await this.webhookService.findAll();
+
+      if (currentWebhooks.length === 0) {
+        LoggerUtils.logDev(
+          this.logger,
+          'No active webhooks available for notification',
+        );
+        return {
+          notice: notice.subject,
+          totalWebhooks: 0,
+          successCount: 0,
+          failedCount: 0,
+          permanentlyDeleted: 0,
+          temporaryFailures: 0,
+        };
+      }
+
       const results =
         await this.notificationService.sendDiscordNotificationBatch(
           notice,
-          webhooks,
+          currentWebhooks,
         );
 
       // 영구적으로 삭제해야 할 웹훅들과 일시적으로 실패한 웹훅들 분리
@@ -185,23 +196,29 @@ export class BatchProcessingService implements OnApplicationShutdown {
         const permanentFailureIds = permanentFailures.map(
           (result) => result.webhookId,
         );
-        await this.webhookService.removeFailedWebhooks(permanentFailureIds);
-        this.logger.warn(
-          `Permanently deleted ${permanentFailures.length} failed webhooks for notice: ${notice.subject}`,
+
+        const deletedCount =
+          await this.webhookService.removeFailedWebhooks(permanentFailureIds);
+
+        this.logger.log(
+          `Deleted ${deletedCount} permanently failed webhooks for notice: ${notice.subject}`,
         );
       }
 
-      // 일시적 실패는 로그만 남김
+      // 일시적 실패는 로그 최소화
       if (temporaryFailures.length > 0) {
-        this.logger.warn(
+        LoggerUtils.logDev(
+          this.logger,
           `${temporaryFailures.length} webhooks failed temporarily for notice: ${notice.subject}`,
         );
       }
 
+      const successCount = results.filter((r) => r.success).length;
+
       return {
         notice: notice.subject,
-        totalWebhooks: webhooks.length,
-        successCount: results.filter((r) => r.success).length,
+        totalWebhooks: currentWebhooks.length,
+        successCount,
         failedCount: permanentFailures.length + temporaryFailures.length,
         permanentlyDeleted: permanentFailures.length,
         temporaryFailures: temporaryFailures.length,

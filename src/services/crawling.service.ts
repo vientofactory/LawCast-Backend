@@ -32,14 +32,18 @@ export class CrawlingService implements OnModuleInit {
   async onModuleInit() {
     this.logger.log('Initializing cache with recent legislative notices...');
     try {
-      // 기존 TTL이 설정된 캐시 데이터를 TTL 없이 마이그레이션
-      await this.cacheService.migrateCacheToNoTTL();
+      // 초기화 중 플래그 설정
+      this.isInitialized = false;
 
       await this.initializeCache();
+
+      // 초기화 완료 후 플래그 설정
       this.isInitialized = true;
       this.logger.log('Cache initialization completed successfully');
     } catch (error) {
       this.logger.error('Failed to initialize cache:', error);
+      this.isInitialized = true;
+      throw error;
     }
   }
 
@@ -82,8 +86,8 @@ export class CrawlingService implements OnModuleInit {
         return;
       }
 
-      // 초기 캐시 업데이트 (새로운 알림 전송 없이)
-      await this.cacheService.initializeCache(crawledData);
+      // 초기 캐시 업데이트
+      await this.cacheService.updateCache(crawledData);
       this.logger.log(
         `Initialized Redis cache with ${crawledData.length} notices`,
       );
@@ -138,10 +142,16 @@ export class CrawlingService implements OnModuleInit {
           );
         } catch (notificationError) {
           this.logger.error(
-            'Notification sending failed, cache not updated:',
+            'Notification sending failed, but updating cache anyway to prevent repeated notifications:',
             notificationError,
           );
-          // 알림 실패 시 캐시를 업데이트하지 않음 - 다음 주기에 재시도 가능
+          // 알림 실패 시에도 캐시 업데이트
+          try {
+            await this.cacheService.updateCache(crawledData);
+            this.logger.log('Cache updated despite notification failure');
+          } catch (cacheError) {
+            this.logger.error('Cache update also failed:', cacheError);
+          }
           throw notificationError;
         }
       } else {
@@ -186,8 +196,8 @@ export class CrawlingService implements OnModuleInit {
         `Started notification batch processing for ${notices.length} notices (job: ${jobId})`,
       );
 
-      // 배치 작업 완료 대기 - 타입 오류 해결을 위해 any로 캐스팅
-      await (this.batchProcessingService as any).waitForAllBatchJobs();
+      // 특정 배치 작업 완료 대기
+      await this.batchProcessingService.waitForBatchJob(jobId);
 
       this.logger.log(
         `Notification batch processing completed for ${notices.length} notices`,
