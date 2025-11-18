@@ -379,21 +379,20 @@ export class NotificationService {
    */
   private async updateRateLimitTimestamp(webhookId: number): Promise<void> {
     const now = Date.now();
-    const ttl = 60 * 60; // 1시간 TTL
 
     try {
       // 글로벌 타임스탬프 업데이트
       await this.cacheService['cacheManager'].set(
         this.RATE_LIMIT_KEYS.GLOBAL,
         now,
-        ttl,
+        0,
       );
 
       // 웹훅별 타임스탬프 업데이트
       await this.cacheService['cacheManager'].set(
         this.RATE_LIMIT_KEYS.WEBHOOK(webhookId),
         now,
-        ttl,
+        0,
       );
     } catch (error) {
       this.logger.error(

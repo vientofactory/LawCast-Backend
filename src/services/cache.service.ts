@@ -77,10 +77,11 @@ export class CacheService implements OnModuleDestroy {
         .sort((a, b) => b.num - a.num)
         .slice(0, this.MAX_CACHE_SIZE);
 
-      // 캐시 저장 (TTL 없음)
+      // 캐시 저장
       await this.cacheManager.set(
         this.CACHE_KEYS.RECENT_NOTICES,
         uniqueNotices,
+        0,
       );
 
       LoggerUtils.logDev(
