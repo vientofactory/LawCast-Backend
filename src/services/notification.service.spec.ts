@@ -1,13 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { NotificationService } from '../services/notification.service';
+import { CacheService } from '../services/cache.service';
 import { Webhook } from '../entities/webhook.entity';
 import {
   MessageBuilder,
   Webhook as DiscordWebhook,
 } from 'discord-webhook-node';
 
-// discord-webhook-node를 모킹합니다
 jest.mock('discord-webhook-node');
 const MockedDiscordWebhook = DiscordWebhook as jest.MockedClass<
   typeof DiscordWebhook
@@ -22,6 +23,9 @@ describe('NotificationService', () => {
   let mockMessageBuilder: jest.Mocked<MessageBuilder>;
 
   beforeEach(async () => {
+    // Jest 타이머 모킹 활성화
+    jest.useFakeTimers();
+
     // MessageBuilder 모킹
     mockMessageBuilder = {
       setTitle: jest.fn().mockReturnThis(),
@@ -42,7 +46,19 @@ describe('NotificationService', () => {
     MockedDiscordWebhook.mockImplementation(() => mockDiscordWebhook);
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [NotificationService],
+      providers: [
+        NotificationService,
+        CacheService,
+        {
+          provide: CACHE_MANAGER,
+          useValue: {
+            set: jest.fn(),
+            get: jest.fn(),
+            del: jest.fn(),
+            reset: jest.fn(),
+          },
+        },
+      ],
     }).compile();
 
     service = module.get<NotificationService>(NotificationService);
@@ -53,7 +69,12 @@ describe('NotificationService', () => {
   });
 
   afterEach(() => {
+    // 모든 모킹 정리
     jest.clearAllMocks();
+    // 모든 pending 타이머 정리
+    jest.clearAllTimers();
+    // Jest 타이머 모킹 비활성화
+    jest.useRealTimers();
   });
 
   describe('sendDiscordNotification', () => {

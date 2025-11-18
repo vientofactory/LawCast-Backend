@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { WebhookCleanupService } from '../services/webhook-cleanup.service';
-import { CrawlingService } from '../services/crawling.service';
+import { NotificationService } from '../services/notification.service';
 import { APP_CONSTANTS } from '../config/app.config';
 
 @Injectable()
@@ -10,7 +10,7 @@ export class CronJobsService {
 
   constructor(
     private readonly webhookCleanupService: WebhookCleanupService,
-    private readonly crawlingService: CrawlingService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   /**
@@ -52,14 +52,16 @@ export class CronJobsService {
   }
 
   /**
-   * 10분마다 크롤링 및 알림 수행
+   * 매시간 레이트 리밋 추적 기록 정리
    */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK)
-  async handleCrawlingCheck(): Promise<void> {
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.RATE_LIMIT_CLEANUP)
+  async handleRateLimitCleanup(): Promise<void> {
     try {
-      await this.crawlingService.handleCron();
+      this.logger.debug('Starting scheduled rate limit cleanup...');
+      await this.notificationService['cleanupRateLimitTracking']();
+      this.logger.debug('Rate limit cleanup completed');
     } catch (error) {
-      this.logger.error('Scheduled crawling check failed:', error);
+      this.logger.error('Scheduled rate limit cleanup failed:', error);
     }
   }
 }

@@ -68,6 +68,13 @@ export const APP_CONSTANTS = {
         TOO_MANY_REQUESTS: 429,
         INTERNAL_SERVER_ERROR: 500,
       },
+      RATE_LIMITS: {
+        GLOBAL_PER_SECOND: 30, // 초당 30개 메시지 (글로벌)
+        PER_WEBHOOK_PER_MINUTE: 60, // 웹훅별 분당 60개 메시지
+        RETRY_AFTER_HEADER: 'Retry-After',
+        RESET_HEADER: 'X-RateLimit-Reset',
+        REMAINING_HEADER: 'X-RateLimit-Remaining',
+      },
     },
   },
   COLORS: {
@@ -92,6 +99,7 @@ export const APP_CONSTANTS = {
       WEBHOOK_CLEANUP: '0 0 0 * * *', // 매일 자정
       WEBHOOK_OPTIMIZATION: '0 0 2 * * *', // 매일 새벽 2시
       SYSTEM_MONITORING: '0 0 * * * *', // 매시간
+      RATE_LIMIT_CLEANUP: '0 0 * * * *', // 매시간
     },
   },
 } as const;

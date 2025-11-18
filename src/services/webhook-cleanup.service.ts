@@ -145,9 +145,6 @@ export class WebhookCleanupService {
     }
   }
 
-  /**
-   * 시스템 자가 진단 및 자동 복구
-   */
   async performSelfDiagnostics(): Promise<{
     systemHealth: 'excellent' | 'good' | 'fair' | 'poor' | 'critical';
     autoActionsPerformed: string[];

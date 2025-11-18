@@ -6,10 +6,21 @@ import {
 import { type ITableData } from 'pal-crawl';
 import { Webhook } from '../entities/webhook.entity';
 import { APP_CONSTANTS } from '../config/app.config';
+import { CacheService } from './cache.service';
 
 @Injectable()
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
+
+  // 레이트 리밋 키
+  private readonly RATE_LIMIT_KEYS = {
+    GLOBAL: 'rate_limit:global',
+    WEBHOOK: (webhookId: number) => `rate_limit:webhook:${webhookId}`,
+  };
+
+  constructor(private cacheService: CacheService) {
+    // 주기적인 레이트 리밋 정리 작업은 WebhookCleanupService에서 수행
+  }
 
   async sendDiscordNotification(
     notice: ITableData,
@@ -48,19 +59,38 @@ export class NotificationService {
   > {
     const embed = this.createNotificationEmbed(notice);
     const failedWebhooks = new Set<number>();
+    const results: Array<{
+      webhookId: number;
+      success: boolean;
+      error?: any;
+      shouldDelete?: boolean;
+    }> = [];
 
-    const promises = webhooks.map(async (webhook) => {
+    // Discord 레이트 리밋을 준수하며 순차적으로 처리
+    for (const webhook of webhooks) {
       // 이미 같은 배치에서 실패한 웹훅은 건너뜀
       if (failedWebhooks.has(webhook.id)) {
-        return { webhookId: webhook.id, success: false, shouldDelete: true };
+        results.push({
+          webhookId: webhook.id,
+          success: false,
+          shouldDelete: true,
+        });
+        continue;
       }
+
+      // 레이트 리밋 준수를 위한 대기
+      await this.waitForRateLimit(webhook.id);
 
       try {
         const discordWebhook = new DiscordWebhook(webhook.url);
         discordWebhook.setUsername('LawCast 알리미');
 
         await discordWebhook.send(embed);
-        return { webhookId: webhook.id, success: true };
+
+        // 성공 시 마지막 전송 시간 기록
+        await this.updateRateLimitTimestamp(webhook.id);
+
+        results.push({ webhookId: webhook.id, success: true });
       } catch (error) {
         const shouldDelete = this.shouldDeleteWebhook(error);
 
@@ -77,16 +107,16 @@ export class NotificationService {
           );
         }
 
-        return {
+        results.push({
           webhookId: webhook.id,
           success: false,
           error: error,
           shouldDelete,
-        };
+        });
       }
-    });
+    }
 
-    return Promise.all(promises);
+    return results;
   }
 
   /**
@@ -271,5 +301,121 @@ export class NotificationService {
     }
 
     return 'UNKNOWN_ERROR';
+  }
+
+  /**
+   * Discord 레이트 리밋을 준수하기 위해 필요한 대기 시간을 계산하고 대기
+   */
+  private async waitForRateLimit(webhookId: number): Promise<void> {
+    const now = Date.now();
+    const { GLOBAL_PER_SECOND, PER_WEBHOOK_PER_MINUTE } =
+      APP_CONSTANTS.DISCORD.API.RATE_LIMITS;
+
+    // Redis에서 글로벌 마지막 전송 시간 가져오기
+    const lastGlobalSend = await this.getGlobalLastSendTime();
+    const timeSinceLastGlobal = now - lastGlobalSend;
+    const globalWaitTime = Math.max(
+      0,
+      1000 / GLOBAL_PER_SECOND - timeSinceLastGlobal,
+    );
+
+    // Redis에서 웹훅별 마지막 전송 시간 가져오기
+    const lastWebhookSend = await this.getWebhookLastSendTime(webhookId);
+    const timeSinceLastWebhook = now - lastWebhookSend;
+    const webhookWaitTime = Math.max(
+      0,
+      (60 * 1000) / PER_WEBHOOK_PER_MINUTE - timeSinceLastWebhook,
+    );
+
+    // 더 긴 대기 시간 적용
+    const waitTime = Math.max(globalWaitTime, webhookWaitTime);
+
+    if (waitTime > 0) {
+      this.logger.debug(
+        `Rate limit wait: ${waitTime}ms for webhook ${webhookId} (global: ${globalWaitTime}ms, webhook: ${webhookWaitTime}ms)`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+    }
+  }
+
+  /**
+   * Redis에서 글로벌 마지막 전송 시간을 가져옴
+   */
+  private async getGlobalLastSendTime(): Promise<number> {
+    try {
+      const lastSend = await this.cacheService['cacheManager'].get<number>(
+        this.RATE_LIMIT_KEYS.GLOBAL,
+      );
+      return lastSend || 0;
+    } catch (error) {
+      this.logger.warn(
+        'Failed to get global rate limit timestamp from Redis:',
+        error,
+      );
+      return 0;
+    }
+  }
+
+  /**
+   * Redis에서 웹훅별 마지막 전송 시간을 가져옴
+   */
+  private async getWebhookLastSendTime(webhookId: number): Promise<number> {
+    try {
+      const lastSend = await this.cacheService['cacheManager'].get<number>(
+        this.RATE_LIMIT_KEYS.WEBHOOK(webhookId),
+      );
+      return lastSend || 0;
+    } catch (error) {
+      this.logger.warn(
+        `Failed to get webhook ${webhookId} rate limit timestamp from Redis:`,
+        error,
+      );
+      return 0;
+    }
+  }
+
+  /**
+   * 레이트 리밋 타임스탬프를 Redis에 업데이트
+   */
+  private async updateRateLimitTimestamp(webhookId: number): Promise<void> {
+    const now = Date.now();
+    const ttl = 60 * 60; // 1시간 TTL
+
+    try {
+      // 글로벌 타임스탬프 업데이트
+      await this.cacheService['cacheManager'].set(
+        this.RATE_LIMIT_KEYS.GLOBAL,
+        now,
+        ttl,
+      );
+
+      // 웹훅별 타임스탬프 업데이트
+      await this.cacheService['cacheManager'].set(
+        this.RATE_LIMIT_KEYS.WEBHOOK(webhookId),
+        now,
+        ttl,
+      );
+    } catch (error) {
+      this.logger.error(
+        'Failed to update rate limit timestamps in Redis:',
+        error,
+      );
+      // Redis 실패 시에도 계속 진행 (메모리 기반 폴백은 제거)
+    }
+  }
+
+  /**
+   * 오래된 레이트 리밋 추적 기록을 정리 (Redis TTL로 자동 관리되므로 최소한의 정리만 수행)
+   */
+  private async cleanupRateLimitTracking(): Promise<void> {
+    try {
+      // Redis TTL로 자동 관리되므로 별도 정리 불필요
+      // 필요시 주기적으로 정리할 수 있지만 현재는 생략
+      this.logger.debug(
+        'Rate limit tracking cleanup completed (Redis TTL managed)',
+      );
+    } catch (error) {
+      this.logger.error('Failed to cleanup rate limit tracking:', error);
+    }
   }
 }
