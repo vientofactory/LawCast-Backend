@@ -403,19 +403,4 @@ export class NotificationService {
       // Redis 실패 시에도 계속 진행 (메모리 기반 폴백은 제거)
     }
   }
-
-  /**
-   * 오래된 레이트 리밋 추적 기록을 정리 (Redis TTL로 자동 관리되므로 최소한의 정리만 수행)
-   */
-  private async cleanupRateLimitTracking(): Promise<void> {
-    try {
-      // Redis TTL로 자동 관리되므로 별도 정리 불필요
-      // 필요시 주기적으로 정리할 수 있지만 현재는 생략
-      this.logger.debug(
-        'Rate limit tracking cleanup completed (Redis TTL managed)',
-      );
-    } catch (error) {
-      this.logger.error('Failed to cleanup rate limit tracking:', error);
-    }
-  }
 }
