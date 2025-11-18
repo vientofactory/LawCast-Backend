@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
+import { CacheModule } from '@nestjs/cache-manager';
+import { createKeyv } from '@keyv/redis';
 import { ApiController } from './controllers/api.controller';
 import { WebhookService } from './services/webhook.service';
 import { CrawlingService } from './services/crawling.service';
@@ -24,6 +26,24 @@ import appConfig from './config/app.config';
         '.env.development',
         '.env.production',
       ],
+    }),
+    CacheModule.registerAsync({
+      isGlobal: true,
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        const redisUrl = configService.get<string>('redis.url');
+        const keyPrefix = configService.get<string>('redis.keyPrefix');
+        const ttl = configService.get<number>('redis.ttl') * 1000;
+
+        return {
+          stores: [
+            createKeyv(redisUrl, {
+              namespace: keyPrefix,
+            }),
+          ],
+          ttl,
+        };
+      },
     }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],

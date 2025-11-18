@@ -5,6 +5,7 @@ import { CacheService } from './cache.service';
 import { BatchProcessingService } from './batch-processing.service';
 import { APP_CONSTANTS } from '../config/app.config';
 import { LoggerUtils } from '../utils/logger.utils';
+import { type CacheInfo } from '../types/cache.types';
 
 @Injectable()
 export class CrawlingService implements OnModuleInit {
@@ -79,8 +80,10 @@ export class CrawlingService implements OnModuleInit {
       }
 
       // 초기 캐시 업데이트 (새로운 알림 전송 없이)
-      this.cacheService.initializeCache(crawledData);
-      this.logger.log(`Initialized cache with ${crawledData.length} notices`);
+      await this.cacheService.initializeCache(crawledData);
+      this.logger.log(
+        `Initialized Redis cache with ${crawledData.length} notices`,
+      );
     } catch (error) {
       this.logger.error('Failed to crawl data during initialization:', error);
       if (error.message?.includes('timeout')) {
@@ -116,10 +119,10 @@ export class CrawlingService implements OnModuleInit {
       );
 
       // 새로운 입법예고 찾기
-      const newNotices = this.cacheService.findNewNotices(crawledData);
+      const newNotices = await this.cacheService.findNewNotices(crawledData);
 
       // 캐시 업데이트
-      this.cacheService.updateCache(crawledData);
+      await this.cacheService.updateCache(crawledData);
 
       if (newNotices.length > 0) {
         this.logger.log(`Found ${newNotices.length} new legislative notices`);
@@ -164,16 +167,35 @@ export class CrawlingService implements OnModuleInit {
   /**
    * 캐시에서 최근 입법예고를 반환
    */
-  getRecentNotices(
+  async getRecentNotices(
     limit: number = APP_CONSTANTS.CACHE.DEFAULT_LIMIT,
-  ): ITableData[] {
-    return this.cacheService.getRecentNotices(limit);
+  ): Promise<ITableData[]> {
+    return await this.cacheService.getRecentNotices(limit);
   }
 
   /**
    * 캐시 정보를 반환
    */
-  getCacheInfo() {
-    return this.cacheService.getCacheInfo();
+  async getCacheInfo(): Promise<CacheInfo> {
+    return await this.cacheService.getCacheInfo();
+  }
+
+  /**
+   * Redis 연결 상태 확인
+   */
+  async isRedisConnected(): Promise<boolean> {
+    return await this.cacheService.isRedisConnected();
+  }
+
+  /**
+   * Redis 상태 및 성능 정보를 상세히 확인
+   */
+  async getRedisStatus(): Promise<{
+    connected: boolean;
+    responseTime?: number;
+    cacheInfo: CacheInfo;
+    error?: string;
+  }> {
+    return await this.cacheService.getRedisStatus();
   }
 }

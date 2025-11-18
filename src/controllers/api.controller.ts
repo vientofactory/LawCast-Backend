@@ -95,7 +95,7 @@ export class ApiController {
 
   @Get('notices/recent')
   async getRecentNotices() {
-    const notices = this.crawlingService.getRecentNotices(
+    const notices = await this.crawlingService.getRecentNotices(
       APP_CONSTANTS.CACHE.NOTICES_RECENT_LIMIT,
     );
     return ApiResponseUtils.success(notices);
@@ -126,9 +126,18 @@ export class ApiController {
   }
 
   @Get('health')
-  getHealth() {
+  async getHealth() {
+    const isRedisConnected = await this.crawlingService.isRedisConnected();
+    const cacheInfo = await this.crawlingService.getCacheInfo();
+
     return ApiResponseUtils.success(
-      { timestamp: new Date().toISOString() },
+      {
+        timestamp: new Date().toISOString(),
+        redis: {
+          connected: isRedisConnected,
+          cache: cacheInfo,
+        },
+      },
       'LawCast API is healthy',
     );
   }
@@ -155,6 +164,30 @@ export class ApiController {
         status: efficiency >= 70 ? 'healthy' : 'needs_optimization',
       },
       'System health status retrieved successfully',
+    );
+  }
+
+  @Get('redis/status')
+  async getRedisStatus() {
+    const redisStatus = await this.crawlingService.getRedisStatus();
+
+    const message = redisStatus.connected
+      ? `Redis is connected (${redisStatus.responseTime}ms response time)`
+      : `Redis connection failed: ${redisStatus.error}`;
+
+    return ApiResponseUtils.success(redisStatus, message);
+  }
+
+  @Get('redis/connection')
+  async checkRedisConnection() {
+    const isConnected = await this.crawlingService.isRedisConnected();
+
+    return ApiResponseUtils.success(
+      {
+        connected: isConnected,
+        timestamp: new Date().toISOString(),
+      },
+      isConnected ? 'Redis is connected' : 'Redis connection failed',
     );
   }
 }

@@ -5,6 +5,11 @@ export interface AppConfig {
     type: 'sqlite';
     path: string;
   };
+  redis: {
+    url: string;
+    keyPrefix: string;
+    ttl: number;
+  };
   recaptcha: {
     secretKey?: string;
   };
@@ -37,6 +42,16 @@ export const APP_CONSTANTS = {
     MAX_SIZE: 50,
     DEFAULT_LIMIT: 10,
     NOTICES_RECENT_LIMIT: 50,
+    TTL: {
+      NOTICES: 30 * 60 * 1000, // 30분 (밀리초)
+      CACHE_INFO: 60 * 1000, // 1분 (밀리초)
+      STATS: 5 * 60 * 1000, // 5분 (밀리초)
+    },
+    KEYS: {
+      RECENT_NOTICES: 'recent_notices',
+      CACHE_INFO: 'cache_info',
+      NEW_NOTICES_SET: 'new_notices_set',
+    },
   },
   DISCORD: {
     WEBHOOK: {
@@ -87,6 +102,11 @@ export default (): AppConfig => ({
   database: {
     type: 'sqlite',
     path: process.env.DATABASE_PATH || 'lawcast.db',
+  },
+  redis: {
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    keyPrefix: process.env.REDIS_KEY_PREFIX || 'lawcast:',
+    ttl: parseInt(process.env.REDIS_TTL, 10) || 30 * 60, // 30분 (초 단위)
   },
   recaptcha: {
     secretKey: process.env.RECAPTCHA_SECRET_KEY,
