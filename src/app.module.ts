@@ -11,7 +11,7 @@ import { NotificationService } from './services/notification.service';
 import { CacheService } from './services/cache.service';
 import { RecaptchaService } from './services/recaptcha.service';
 import { BatchProcessingService } from './services/batch-processing.service';
-import { WebhookCleanupService } from './services/webhook-cleanup.service';
+import { CronJobsModule } from './cronjobs/cronjobs.module';
 import { Webhook } from './entities/webhook.entity';
 import appConfig from './config/app.config';
 
@@ -56,6 +56,7 @@ import appConfig from './config/app.config';
     }),
     TypeOrmModule.forFeature([Webhook]),
     ScheduleModule.forRoot(),
+    CronJobsModule,
   ],
   controllers: [ApiController],
   providers: [
@@ -65,7 +66,6 @@ import appConfig from './config/app.config';
     CacheService,
     RecaptchaService,
     BatchProcessingService,
-    WebhookCleanupService,
   ],
 })
 export class AppModule {}

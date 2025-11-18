@@ -15,7 +15,6 @@ import { CrawlingService } from '../services/crawling.service';
 import { NotificationService } from '../services/notification.service';
 import { RecaptchaService } from '../services/recaptcha.service';
 import { BatchProcessingService } from '../services/batch-processing.service';
-import { WebhookCleanupService } from '../services/webhook-cleanup.service';
 import { CreateWebhookDto } from '../dto/create-webhook.dto';
 import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
 import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
@@ -29,7 +28,6 @@ export class ApiController {
     private readonly notificationService: NotificationService,
     private readonly recaptchaService: RecaptchaService,
     private readonly batchProcessingService: BatchProcessingService,
-    private readonly webhookCleanupService: WebhookCleanupService,
   ) {}
 
   @Post('webhooks')
@@ -62,12 +60,6 @@ export class ApiController {
       );
       if (existingWebhook) {
         throw ApiResponseUtils.createDuplicateWebhookException();
-      }
-
-      // 웹훅 개수 제한 체크
-      const webhookStats = await this.webhookService.getDetailedStats();
-      if (webhookStats.active >= 100) {
-        throw ApiResponseUtils.createWebhookLimitExceededException();
       }
 
       // 웹훅 테스트

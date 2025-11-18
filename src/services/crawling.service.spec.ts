@@ -22,6 +22,7 @@ describe('CrawlingService', () => {
       committee: '법제사법위원회',
       numComments: 5,
       link: '/test/link/1',
+      attachments: { pdfFile: '', hwpFile: '' },
     },
     {
       num: 2,
@@ -30,6 +31,7 @@ describe('CrawlingService', () => {
       committee: '국정감사위원회',
       numComments: 3,
       link: '/test/link/2',
+      attachments: { pdfFile: '', hwpFile: '' },
     },
   ];
 
@@ -49,7 +51,6 @@ describe('CrawlingService', () => {
         {
           provide: CacheService,
           useValue: {
-            initializeCache: jest.fn(),
             updateCache: jest.fn(),
             findNewNotices: jest.fn(),
             getRecentNotices: jest.fn(),
@@ -113,7 +114,7 @@ describe('CrawlingService', () => {
       await service.onModuleInit();
 
       expect(mockPalCrawl.get).toHaveBeenCalledTimes(1);
-      expect(cacheService.initializeCache).toHaveBeenCalledWith(mockTableData);
+      expect(cacheService.updateCache).toHaveBeenCalledWith(mockTableData);
     });
 
     it('should handle empty data during initialization', async () => {
@@ -122,7 +123,7 @@ describe('CrawlingService', () => {
       await service.onModuleInit();
 
       expect(mockPalCrawl.get).toHaveBeenCalledTimes(1);
-      expect(cacheService.initializeCache).not.toHaveBeenCalled();
+      expect(cacheService.updateCache).not.toHaveBeenCalled();
     });
 
     it('should handle null data during initialization', async () => {
@@ -131,47 +132,47 @@ describe('CrawlingService', () => {
       await service.onModuleInit();
 
       expect(mockPalCrawl.get).toHaveBeenCalledTimes(1);
-      expect(cacheService.initializeCache).not.toHaveBeenCalled();
+      expect(cacheService.updateCache).not.toHaveBeenCalled();
     });
 
     it('should handle crawling errors during initialization gracefully', async () => {
       const error = new Error('Network timeout');
       mockPalCrawl.get.mockRejectedValue(error);
 
-      // onModuleInit은 에러를 catch하므로 throw하지 않음
-      await expect(service.onModuleInit()).resolves.toBeUndefined();
-      expect(cacheService.initializeCache).not.toHaveBeenCalled();
+      // onModuleInit은 에러를 catch하고 다시 throw함
+      await expect(service.onModuleInit()).rejects.toThrow('Network timeout');
+      expect(cacheService.updateCache).not.toHaveBeenCalled();
     });
 
     it('should handle timeout errors specifically during initialization gracefully', async () => {
       const timeoutError = new Error('Request timeout');
       mockPalCrawl.get.mockRejectedValue(timeoutError);
 
-      // onModuleInit은 에러를 catch하므로 throw하지 않음
-      await expect(service.onModuleInit()).resolves.toBeUndefined();
+      // onModuleInit은 에러를 catch하고 다시 throw함
+      await expect(service.onModuleInit()).rejects.toThrow('Request timeout');
     });
   });
 
   describe('getRecentNotices', () => {
-    it('should return recent notices from cache', () => {
+    it('should return recent notices from cache', async () => {
       const expectedNotices = mockTableData.slice(0, 2);
-      (cacheService.getRecentNotices as jest.Mock).mockReturnValue(
+      (cacheService.getRecentNotices as jest.Mock).mockResolvedValue(
         expectedNotices,
       );
 
-      const result = service.getRecentNotices(2);
+      const result = await service.getRecentNotices(2);
 
       expect(cacheService.getRecentNotices).toHaveBeenCalledWith(2);
       expect(result).toEqual(expectedNotices);
     });
 
-    it('should use default limit when no limit provided', () => {
+    it('should use default limit when no limit provided', async () => {
       const expectedNotices = mockTableData;
-      (cacheService.getRecentNotices as jest.Mock).mockReturnValue(
+      (cacheService.getRecentNotices as jest.Mock).mockResolvedValue(
         expectedNotices,
       );
 
-      const result = service.getRecentNotices();
+      const result = await service.getRecentNotices();
 
       expect(cacheService.getRecentNotices).toHaveBeenCalledWith(10); // APP_CONSTANTS.CACHE.DEFAULT_LIMIT
       expect(result).toEqual(expectedNotices);
@@ -179,13 +180,13 @@ describe('CrawlingService', () => {
   });
 
   describe('getCacheInfo', () => {
-    it('should return cache information', () => {
-      const expectedCacheInfo = { size: 5, lastUpdate: new Date() };
-      (cacheService.getCacheInfo as jest.Mock).mockReturnValue(
+    it('should return cache information', async () => {
+      const expectedCacheInfo = { size: 5, lastUpdated: new Date() };
+      (cacheService.getCacheInfo as jest.Mock).mockResolvedValue(
         expectedCacheInfo,
       );
 
-      const result = service.getCacheInfo();
+      const result = await service.getCacheInfo();
 
       expect(cacheService.getCacheInfo).toHaveBeenCalled();
       expect(result).toEqual(expectedCacheInfo);
@@ -197,16 +198,20 @@ describe('CrawlingService', () => {
       const networkError = new Error('Network error during request');
       mockPalCrawl.get.mockRejectedValue(networkError);
 
-      // onModuleInit은 에러를 catch하므로 gracefully handle함
-      await expect(service.onModuleInit()).resolves.toBeUndefined();
+      // onModuleInit은 에러를 catch하고 다시 throw함
+      await expect(service.onModuleInit()).rejects.toThrow(
+        'Network error during request',
+      );
     });
 
     it('should provide specific timeout error messages', async () => {
       const timeoutError = new Error('Request timeout after 15000ms');
       mockPalCrawl.get.mockRejectedValue(timeoutError);
 
-      // onModuleInit은 에러를 catch하므로 gracefully handle함
-      await expect(service.onModuleInit()).resolves.toBeUndefined();
+      // onModuleInit은 에러를 catch하고 다시 throw함
+      await expect(service.onModuleInit()).rejects.toThrow(
+        'Request timeout after 15000ms',
+      );
     });
   });
 });

@@ -1,7 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { WebhookService } from './webhook.service';
-import { APP_CONSTANTS } from '../config/app.config';
 
 @Injectable()
 export class WebhookCleanupService {
@@ -13,7 +11,6 @@ export class WebhookCleanupService {
    * 매일 자정에 웹훅 정리 수행
    * 시스템 효율성을 자동으로 평가하고 필요시 정리 실행
    */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP)
   async intelligentWebhookCleanup(): Promise<void> {
     try {
       this.logger.log('Starting intelligent webhook cleanup analysis...');
@@ -78,7 +75,6 @@ export class WebhookCleanupService {
   /**
    * 매일 새벽 2시에 심층 시스템 최적화 수행
    */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION)
   async weeklySystemOptimization(): Promise<void> {
     try {
       this.logger.log('Starting weekly system optimization...');
@@ -121,7 +117,6 @@ export class WebhookCleanupService {
   /**
    * 매시간 실시간 시스템 모니터링 및 자가 치유
    */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING)
   async realTimeSystemMonitoring(): Promise<void> {
     try {
       const stats = await this.webhookService.getDetailedStats();

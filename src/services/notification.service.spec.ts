@@ -64,6 +64,7 @@ describe('NotificationService', () => {
       committee: '법제사법위원회',
       numComments: 5,
       link: 'https://example.com/notice/1',
+      attachments: { pdfFile: '', hwpFile: '' },
     };
 
     const mockWebhooks: Webhook[] = [
@@ -131,6 +132,7 @@ describe('NotificationService', () => {
       committee: '법제사법위원회',
       numComments: 5,
       link: 'https://example.com/notice/1',
+      attachments: { pdfFile: '', hwpFile: '' },
     };
 
     const mockWebhooks: Webhook[] = [

@@ -9,6 +9,12 @@ export interface BatchJobResult<T = any> {
   data?: T;
   error?: Error;
   duration: number;
+  notice?: string;
+  totalWebhooks?: number;
+  successCount?: number;
+  failedCount?: number;
+  deactivated?: number;
+  temporaryFailures?: number;
 }
 
 export interface BatchProcessingOptions {
@@ -172,7 +178,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
           totalWebhooks: 0,
           successCount: 0,
           failedCount: 0,
-          permanentlyDeleted: 0,
+          deactivated: 0,
           temporaryFailures: 0,
         };
       }
@@ -191,17 +197,26 @@ export class BatchProcessingService implements OnApplicationShutdown {
         (result) => !result.success && !result.shouldDelete,
       );
 
-      // 영구적으로 실패한 웹훅들은 DB에서 완전히 삭제
+      // 영구적으로 실패한 웹훅들은 비활성화
       if (permanentFailures.length > 0) {
         const permanentFailureIds = permanentFailures.map(
           (result) => result.webhookId,
         );
 
-        const deletedCount =
-          await this.webhookService.removeFailedWebhooks(permanentFailureIds);
+        // 각 웹훅을 개별적으로 비활성화
+        for (const webhookId of permanentFailureIds) {
+          try {
+            await this.webhookService.remove(webhookId);
+          } catch (error) {
+            this.logger.error(
+              `Failed to deactivate webhook ${webhookId}:`,
+              error,
+            );
+          }
+        }
 
         this.logger.log(
-          `Deleted ${deletedCount} permanently failed webhooks for notice: ${notice.subject}`,
+          `Deactivated ${permanentFailures.length} permanently failed webhooks for notice: ${notice.subject}`,
         );
       }
 
@@ -220,7 +235,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
         totalWebhooks: currentWebhooks.length,
         successCount,
         failedCount: permanentFailures.length + temporaryFailures.length,
-        permanentlyDeleted: permanentFailures.length,
+        deactivated: permanentFailures.length,
         temporaryFailures: temporaryFailures.length,
       };
     });

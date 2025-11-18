@@ -1,5 +1,4 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { PalCrawl, type ITableData, type PalCrawlConfig } from 'pal-crawl';
 import { CacheService } from './cache.service';
 import { BatchProcessingService } from './batch-processing.service';
@@ -47,7 +46,6 @@ export class CrawlingService implements OnModuleInit {
     }
   }
 
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK)
   async handleCron() {
     if (!this.isInitialized) {
       this.logger.warn('Cache not initialized yet, skipping cron job');
