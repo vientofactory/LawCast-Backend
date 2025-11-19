@@ -1,13 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { WebhookCleanupService } from '../services/webhook-cleanup.service';
+import { CrawlingService } from '../services/crawling.service';
 import { APP_CONSTANTS } from '../config/app.config';
 
 @Injectable()
 export class CronJobsService {
   private readonly logger = new Logger(CronJobsService.name);
 
-  constructor(private readonly webhookCleanupService: WebhookCleanupService) {}
+  constructor(
+    private readonly webhookCleanupService: WebhookCleanupService,
+    private readonly crawlingService: CrawlingService,
+  ) {}
 
   /**
    * 공통 실행 메서드
@@ -52,6 +56,16 @@ export class CronJobsService {
   async handleSystemMonitoring(): Promise<void> {
     await this.execute('system monitoring', () =>
       this.webhookCleanupService.realTimeSystemMonitoring(),
+    );
+  }
+
+  /**
+   * 10분마다 새로운 입법예고 크롤링 및 알림 전송
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK)
+  async handleCrawlingCheck(): Promise<void> {
+    await this.execute('crawling and notification', () =>
+      this.crawlingService.handleCron(),
     );
   }
 }
