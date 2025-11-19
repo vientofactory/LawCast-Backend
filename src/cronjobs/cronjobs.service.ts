@@ -10,9 +10,9 @@ export class CronJobsService {
   constructor(private readonly webhookCleanupService: WebhookCleanupService) {}
 
   /**
-   * 공통 로깅 헬퍼 메서드
+   * 공통 실행 메서드
    */
-  private async executeWithLogging(
+  private async execute(
     taskName: string,
     task: () => Promise<void>,
   ): Promise<void> {
@@ -30,7 +30,7 @@ export class CronJobsService {
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP)
   async handleWebhookCleanup(): Promise<void> {
-    await this.executeWithLogging('webhook cleanup', () =>
+    await this.execute('webhook cleanup', () =>
       this.webhookCleanupService.intelligentWebhookCleanup(),
     );
   }
@@ -40,7 +40,7 @@ export class CronJobsService {
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION)
   async handleWebhookOptimization(): Promise<void> {
-    await this.executeWithLogging('webhook optimization', () =>
+    await this.execute('webhook optimization', () =>
       this.webhookCleanupService.weeklySystemOptimization(),
     );
   }
@@ -50,7 +50,7 @@ export class CronJobsService {
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING)
   async handleSystemMonitoring(): Promise<void> {
-    await this.executeWithLogging('system monitoring', () =>
+    await this.execute('system monitoring', () =>
       this.webhookCleanupService.realTimeSystemMonitoring(),
     );
   }
