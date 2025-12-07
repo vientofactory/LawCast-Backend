@@ -22,9 +22,15 @@ export class CronJobsService {
     task: () => Promise<void>,
   ): Promise<void> {
     try {
-      LoggerUtils.debugDev(this.logger, `Starting scheduled ${taskName}...`);
+      LoggerUtils.debugDev(
+        CronJobsService.name,
+        `Starting scheduled ${taskName}...`,
+      );
       await task();
-      LoggerUtils.debugDev(this.logger, `Completed scheduled ${taskName}.`);
+      LoggerUtils.debugDev(
+        CronJobsService.name,
+        `Completed scheduled ${taskName}.`,
+      );
     } catch (error) {
       this.logger.error(`Scheduled ${taskName} failed:`, error);
     }

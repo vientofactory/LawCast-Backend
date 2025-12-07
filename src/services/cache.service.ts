@@ -20,7 +20,10 @@ export class CacheService implements OnModuleDestroy {
   async onModuleDestroy() {
     try {
       await this.clearCache();
-      LoggerUtils.logDev(this.logger, 'Cache service destroyed and cleared');
+      LoggerUtils.logDev(
+        CacheService.name,
+        'Cache service destroyed and cleared',
+      );
     } catch (error) {
       this.logger.error('Error during cache service destruction:', error);
     }
@@ -38,7 +41,7 @@ export class CacheService implements OnModuleDestroy {
       );
 
       if (!cachedNotices || cachedNotices.length === 0) {
-        LoggerUtils.logDev(this.logger, 'No cached notices found');
+        LoggerUtils.logDev(CacheService.name, 'No cached notices found');
         return [];
       }
 
@@ -85,7 +88,7 @@ export class CacheService implements OnModuleDestroy {
       );
 
       LoggerUtils.logDev(
-        this.logger,
+        CacheService.name,
         `Cache updated: ${uniqueNotices.length} notices stored`,
       );
     } catch (error) {
@@ -96,7 +99,6 @@ export class CacheService implements OnModuleDestroy {
 
   /**
    * 새로운 입법예고들을 찾습니다.
-   * 더 엄격한 비교 로직으로 가짜 긍정을 방지합니다.
    */
   async findNewNotices(crawledData: ITableData[]): Promise<ITableData[]> {
     try {
@@ -107,7 +109,7 @@ export class CacheService implements OnModuleDestroy {
 
       if (existingNotices.length === 0) {
         LoggerUtils.logDev(
-          this.logger,
+          CacheService.name,
           'Cache is empty, all crawled data considered new',
         );
         return crawledData;
@@ -122,7 +124,7 @@ export class CacheService implements OnModuleDestroy {
       );
 
       LoggerUtils.logDev(
-        this.logger,
+        CacheService.name,
         `Found ${newNotices.length} new notices out of ${crawledData.length} crawled (cache has ${existingNotices.length})`,
       );
 
@@ -130,7 +132,7 @@ export class CacheService implements OnModuleDestroy {
     } catch (error) {
       this.logger.error('Error finding new notices:', error);
       LoggerUtils.logDev(
-        this.logger,
+        CacheService.name,
         'Error in findNewNotices, returning empty array to prevent false notifications',
       );
       return [];
@@ -170,7 +172,7 @@ export class CacheService implements OnModuleDestroy {
   async clearCache(): Promise<void> {
     try {
       await this.cacheManager.del(this.CACHE_KEYS.RECENT_NOTICES);
-      LoggerUtils.logDev(this.logger, 'Redis cache cleared');
+      LoggerUtils.logDev(CacheService.name, 'Redis cache cleared');
     } catch (error) {
       this.logger.error('Error clearing Redis cache:', error);
       throw error;
@@ -213,7 +215,7 @@ export class CacheService implements OnModuleDestroy {
 
       if (retrievedValue === 'performance_test') {
         LoggerUtils.logDev(
-          this.logger,
+          CacheService.name,
           `Redis health check passed (${responseTime}ms)`,
         );
 

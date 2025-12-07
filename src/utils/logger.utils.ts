@@ -1,23 +1,34 @@
 import { Logger } from '@nestjs/common';
 
 /**
- * 개발 환경 전용 로거 유틸리티
- * 프로덕션 환경에서 불필요한 로그 노이즈를 방지합니다.
+ * 환경별 로거 유틸리티
  */
 export class LoggerUtils {
   private static readonly isDevelopment =
     process.env.NODE_ENV === 'development';
   private static readonly isProduction = process.env.NODE_ENV === 'production';
+  private static readonly loggers = new Map<string, Logger>();
+
+  /**
+   * 컨텍스트별 로거 인스턴스를 가져오거나 생성합니다.
+   */
+  private static getLogger(context: string): Logger {
+    if (!this.loggers.has(context)) {
+      this.loggers.set(context, new Logger(context));
+    }
+    return this.loggers.get(context)!;
+  }
 
   /**
    * 개발 환경에서만 디버그 로그를 출력합니다.
    */
   static debugDev(
-    logger: Logger,
-    message: string,
+    context: string,
+    message?: any,
     ...optionalParams: any[]
   ): void {
     if (this.isDevelopment) {
+      const logger = this.getLogger(context);
       logger.debug(message, ...optionalParams);
     }
   }
@@ -26,27 +37,37 @@ export class LoggerUtils {
    * 개발 환경에서만 일반 로그를 출력합니다.
    */
   static logDev(
-    logger: Logger,
-    message: string,
+    context: string,
+    message?: any,
     ...optionalParams: any[]
   ): void {
     if (this.isDevelopment) {
+      const logger = this.getLogger(context);
       logger.log(message, ...optionalParams);
     }
   }
 
   /**
-   * 프로덕션에서는 중요한 정보만, 개발에서는 상세 정보를 출력합니다.
+   * 모든 환경에서 일반 로그를 출력합니다.
+   */
+  static log(context: string, message?: any, ...optionalParams: any[]): void {
+    const logger = this.getLogger(context);
+    logger.log(message, ...optionalParams);
+  }
+
+  /**
+   * 프로덕션과 개발 환경에서 다른 메시지를 출력합니다.
    */
   static logConditional(
-    logger: Logger,
-    productionMessage: string,
-    developmentMessage?: string,
+    context: string,
+    productionMessage: any,
+    developmentMessage?: any,
     ...optionalParams: any[]
   ): void {
+    const logger = this.getLogger(context);
     if (this.isProduction) {
       logger.log(productionMessage, ...optionalParams);
-    } else if (this.isDevelopment && developmentMessage) {
+    } else if (this.isDevelopment && developmentMessage !== undefined) {
       logger.log(developmentMessage, ...optionalParams);
     } else {
       logger.log(productionMessage, ...optionalParams);
@@ -54,18 +75,39 @@ export class LoggerUtils {
   }
 
   /**
-   * 환경에 관계없이 경고/에러 로그는 항상 출력합니다.
+   * 환경에 관계없이 경고 로그를 출력합니다.
    */
-  static warn(logger: Logger, message: string, ...optionalParams: any[]): void {
+  static warn(context: string, message?: any, ...optionalParams: any[]): void {
+    const logger = this.getLogger(context);
     logger.warn(message, ...optionalParams);
   }
 
-  static error(
-    logger: Logger,
-    message: string,
+  /**
+   * 환경에 관계없이 에러 로그를 출력합니다.
+   */
+  static error(context: string, message?: any, ...optionalParams: any[]): void {
+    const logger = this.getLogger(context);
+    logger.error(message, ...optionalParams);
+  }
+
+  /**
+   * 환경에 관계없이 상세(verbose) 로그를 출력합니다.
+   */
+  static verbose(
+    context: string,
+    message?: any,
     ...optionalParams: any[]
   ): void {
-    logger.error(message, ...optionalParams);
+    const logger = this.getLogger(context);
+    logger.verbose(message, ...optionalParams);
+  }
+
+  /**
+   * 환경에 관계없이 디버그 로그를 출력합니다.
+   */
+  static debug(context: string, message?: any, ...optionalParams: any[]): void {
+    const logger = this.getLogger(context);
+    logger.debug(message, ...optionalParams);
   }
 
   /**
@@ -80,5 +122,12 @@ export class LoggerUtils {
    */
   static get isProd(): boolean {
     return this.isProduction;
+  }
+
+  /**
+   * 특정 컨텍스트의 로거를 직접 반환합니다.
+   */
+  static getContextLogger(context: string): Logger {
+    return this.getLogger(context);
   }
 }

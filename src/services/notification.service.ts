@@ -104,7 +104,7 @@ export class NotificationService {
           this.permanentlyFailedWebhooks.add(webhook.id);
 
           LoggerUtils.debugDev(
-            this.logger,
+            NotificationService.name,
             `Webhook ${webhook.id} permanently failed on first attempt (${error.response?.status || 'unknown'}) - marked for immediate deactivation`,
           );
         } else {

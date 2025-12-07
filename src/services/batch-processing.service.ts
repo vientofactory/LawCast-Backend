@@ -70,7 +70,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
 
       for (const jobBatch of jobBatches) {
         LoggerUtils.logDev(
-          this.logger,
+          BatchProcessingService.name,
           `Processing batch of ${jobBatch.length} jobs (${results.length}/${jobs.length} completed)`,
         );
 
@@ -177,7 +177,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
 
     const jobId = `notification_batch_${Date.now()}`;
     LoggerUtils.logDev(
-      this.logger,
+      BatchProcessingService.name,
       `Starting notification batch processing for ${notices.length} notices`,
     );
 
@@ -200,10 +200,16 @@ export class BatchProcessingService implements OnApplicationShutdown {
       })
       .finally(() => {
         this.jobQueue.delete(jobId);
-        LoggerUtils.logDev(this.logger, `Batch job ${jobId} cleaned up`);
+        LoggerUtils.logDev(
+          BatchProcessingService.name,
+          `Batch job ${jobId} cleaned up`,
+        );
       });
 
-    LoggerUtils.logDev(this.logger, `Notification batch job ${jobId} started`);
+    LoggerUtils.logDev(
+      BatchProcessingService.name,
+      `Notification batch job ${jobId} started`,
+    );
 
     return jobId;
   }
@@ -222,7 +228,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
 
       if (currentWebhooks.length === 0) {
         LoggerUtils.logDev(
-          this.logger,
+          BatchProcessingService.name,
           'No active webhooks available for notification',
         );
         return {
@@ -263,7 +269,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
             this.notificationService.clearPermanentFailureFlag(webhookId);
 
             LoggerUtils.debugDev(
-              this.logger,
+              BatchProcessingService.name,
               `Webhook ${webhookId} immediately deactivated after first failure for notice: ${notice.subject}`,
             );
           } catch (error) {
@@ -275,7 +281,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
         }
 
         LoggerUtils.debugDev(
-          this.logger,
+          BatchProcessingService.name,
           `Immediately deactivated ${permanentFailures.length} webhooks that failed on first attempt`,
         );
       }
@@ -283,7 +289,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
       // 일시적 실패는 로그 최소화
       if (temporaryFailures.length > 0) {
         LoggerUtils.logDev(
-          this.logger,
+          BatchProcessingService.name,
           `${temporaryFailures.length} webhooks failed temporarily for notice: ${notice.subject}`,
         );
       }
@@ -441,7 +447,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
     );
 
     LoggerUtils.debugDev(
-      this.logger,
+      BatchProcessingService.name,
       `Active job IDs: ${jobStatus.jobIds.join(', ')}`,
     );
 

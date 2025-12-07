@@ -111,7 +111,7 @@ export class CrawlingService implements OnModuleInit {
 
     try {
       LoggerUtils.debugDev(
-        this.logger,
+        CrawlingService.name,
         'Starting crawling process with enhanced configuration...',
       );
       const crawledData = await palCrawl.get();
@@ -122,7 +122,7 @@ export class CrawlingService implements OnModuleInit {
       }
 
       LoggerUtils.debugDev(
-        this.logger,
+        CrawlingService.name,
         `Successfully crawled ${crawledData.length} legislative notices`,
       );
 
@@ -156,7 +156,7 @@ export class CrawlingService implements OnModuleInit {
           throw notificationError;
         }
       } else {
-        LoggerUtils.debugDev(this.logger, 'No new notices found');
+        LoggerUtils.debugDev(CrawlingService.name, 'No new notices found');
         // 새 데이터가 없어도 전체 캐시는 업데이트 (기존 데이터 정렬 및 크기 관리)
         await this.cacheService.updateCache(crawledData);
       }

@@ -39,11 +39,15 @@ export class RecaptchaService {
 
       const { success, score, action } = response.data;
 
-      LoggerUtils.debugDev(this.logger, `reCAPTCHA verification result:`, {
-        success,
-        score,
-        action,
-      });
+      LoggerUtils.debugDev(
+        RecaptchaService.name,
+        `reCAPTCHA verification result:`,
+        {
+          success,
+          score,
+          action,
+        },
+      );
 
       return success;
     } catch (error) {
