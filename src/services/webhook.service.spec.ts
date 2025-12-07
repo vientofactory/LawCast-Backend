@@ -38,28 +38,25 @@ describe('WebhookService', () => {
   });
 
   describe('create', () => {
-    const validWebhookData = {
-      url: 'https://discord.com/api/webhooks/123456789/token123',
-    };
-
+    const validWebhookUrl =
+      'https://discord.com/api/webhooks/123456789/token123';
     it('should successfully create a new webhook', async () => {
-      const mockWebhook = { id: 1, url: validWebhookData.url, isActive: true };
+      const mockWebhook = { id: 1, url: validWebhookUrl, isActive: true };
 
       mockRepository.create.mockReturnValue(mockWebhook);
       mockRepository.save.mockResolvedValue(mockWebhook);
 
-      const result = await service.create(validWebhookData);
+      const result = await service.create(validWebhookUrl);
 
       expect(result).toEqual(mockWebhook);
       expect(mockRepository.create).toHaveBeenCalledWith({
-        url: validWebhookData.url,
+        url: validWebhookUrl,
       });
     });
 
     it('should normalize URL', async () => {
-      const urlWithTrailingSlash = {
-        url: 'https://discord.com/api/webhooks/123456789/token123/',
-      };
+      const urlWithTrailingSlash =
+        'https://discord.com/api/webhooks/123456789/token123/';
       const normalizedUrl =
         'https://discord.com/api/webhooks/123456789/token123';
 
@@ -74,9 +71,8 @@ describe('WebhookService', () => {
     });
 
     it('should remove query parameters', async () => {
-      const urlWithQuery = {
-        url: 'https://discord.com/api/webhooks/123456789/token123?wait=true',
-      };
+      const urlWithQuery =
+        'https://discord.com/api/webhooks/123456789/token123?wait=true';
       const normalizedUrl =
         'https://discord.com/api/webhooks/123456789/token123';
 
@@ -91,12 +87,12 @@ describe('WebhookService', () => {
     });
 
     it('should handle invalid URL format', async () => {
-      const invalidUrlData = { url: 'invalid-url' };
+      const invalidUrl = 'invalid-url';
 
       mockRepository.create.mockReturnValue({});
       mockRepository.save.mockResolvedValue({});
 
-      await service.create(invalidUrlData);
+      await service.create(invalidUrl);
 
       // 파싱 실패 시 원본 URL이 사용되어야 함
       expect(mockRepository.create).toHaveBeenCalledWith({
