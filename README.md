@@ -64,32 +64,6 @@ FRONTEND_URL=http://localhost:5173,http://localhost:3002
 
 ```
 
-### Redis 설치 및 실행
-
-**macOS (Homebrew):**
-
-```bash
-brew install redis
-brew services start redis
-```
-
-**Ubuntu/Debian:**
-
-```bash
-sudo apt update
-sudo apt install redis-server
-sudo systemctl start redis-server
-```
-
-**Windows:**
-Redis 공식 사이트에서 Windows용 설치 파일을 다운로드하거나 WSL을 사용하세요.
-
-**Docker:**
-
-```bash
-docker run -d -p 6379:6379 --name redis redis:latest
-```
-
 ### 실행
 
 ```bash
