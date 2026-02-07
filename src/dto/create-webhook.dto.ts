@@ -24,6 +24,6 @@ export class CreateWebhookDto {
 
   @IsString({ message: 'reCAPTCHA 토큰은 문자열이어야 합니다.' })
   @IsNotEmpty({ message: 'reCAPTCHA 인증이 필요합니다.' })
-  @MaxLength(2000, { message: 'reCAPTCHA 토큰이 너무 깁니다.' })
+  @MaxLength(3000, { message: 'reCAPTCHA 토큰이 너무 깁니다.' })
   recaptchaToken: string;
 }
