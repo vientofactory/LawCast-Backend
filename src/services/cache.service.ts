@@ -81,11 +81,10 @@ export class CacheService implements OnModuleDestroy {
         .slice(0, this.MAX_CACHE_SIZE);
 
       // 캐시 저장
-      await this.cacheManager.set(
-        this.CACHE_KEYS.RECENT_NOTICES,
-        uniqueNotices,
-        0,
-      );
+      await Promise.all([
+        this.cacheManager.set(this.CACHE_KEYS.RECENT_NOTICES, uniqueNotices, 0),
+        this.cacheManager.set(this.CACHE_KEYS.LAST_UPDATED, new Date(), 0),
+      ]);
 
       LoggerUtils.logDev(
         CacheService.name,
@@ -148,10 +147,14 @@ export class CacheService implements OnModuleDestroy {
         (await this.cacheManager.get<ITableData[]>(
           this.CACHE_KEYS.RECENT_NOTICES,
         )) || [];
+      const lastUpdated =
+        (await this.cacheManager.get<Date | string>(
+          this.CACHE_KEYS.LAST_UPDATED,
+        )) || null;
 
       return {
         size: cachedNotices.length,
-        lastUpdated: cachedNotices.length > 0 ? new Date() : null,
+        lastUpdated: lastUpdated ? new Date(lastUpdated) : null,
         maxSize: this.MAX_CACHE_SIZE,
         isInitialized: cachedNotices.length > 0,
       };
@@ -171,7 +174,10 @@ export class CacheService implements OnModuleDestroy {
    */
   async clearCache(): Promise<void> {
     try {
-      await this.cacheManager.del(this.CACHE_KEYS.RECENT_NOTICES);
+      await Promise.all([
+        this.cacheManager.del(this.CACHE_KEYS.RECENT_NOTICES),
+        this.cacheManager.del(this.CACHE_KEYS.LAST_UPDATED),
+      ]);
       LoggerUtils.logDev(CacheService.name, 'Redis cache cleared');
     } catch (error) {
       this.logger.error('Error clearing Redis cache:', error);

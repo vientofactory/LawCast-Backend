@@ -51,6 +51,7 @@ export const APP_CONSTANTS = {
       RECENT_NOTICES: 'recent_notices',
       CACHE_INFO: 'cache_info',
       NEW_NOTICES_SET: 'new_notices_set',
+      LAST_UPDATED: 'last_updated',
     },
   },
   BATCH: {
