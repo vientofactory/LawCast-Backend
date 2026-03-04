@@ -338,7 +338,7 @@ export class NotificationService {
 
     if (waitTime > 0) {
       this.logger.debug(
-        `Rate limit wait: ${waitTime}ms for webhook ${webhookId} (global: ${globalWaitTime}ms, webhook: ${webhookWaitTime}ms)`,
+        `Rate limit wait: ${waitTime.toFixed(2)}ms for webhook ${webhookId} (global: ${globalWaitTime.toFixed(2)}ms, webhook: ${webhookWaitTime.toFixed(2)}ms)`,
       );
       await new Promise((resolve) => setTimeout(resolve, waitTime));
     }
