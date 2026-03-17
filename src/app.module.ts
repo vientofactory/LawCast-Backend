@@ -9,7 +9,7 @@ import { WebhookService } from './services/webhook.service';
 import { CrawlingService } from './services/crawling.service';
 import { NotificationService } from './services/notification.service';
 import { CacheService } from './services/cache.service';
-import { RecaptchaService } from './services/recaptcha.service';
+import { HashguardService } from './services/hashguard.service';
 import { BatchProcessingService } from './services/batch-processing.service';
 import { CronJobsModule } from './cronjobs/cronjobs.module';
 import { Webhook } from './entities/webhook.entity';
@@ -61,7 +61,7 @@ import appConfig from './config/app.config';
     CrawlingService,
     NotificationService,
     CacheService,
-    RecaptchaService,
+    HashguardService,
     BatchProcessingService,
   ],
 })

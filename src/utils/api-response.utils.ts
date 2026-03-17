@@ -90,12 +90,12 @@ export class ApiResponseUtils {
   }
 
   /**
-   * reCAPTCHA 검증 실패 예외를 생성합니다.
+   * PoW 검증 실패 예외를 생성합니다.
    */
-  static createRecaptchaFailedException(): BadRequestException {
+  static createPoWFailedException(): BadRequestException {
     return new BadRequestException({
       success: false,
-      message: 'reCAPTCHA 인증에 실패했습니다. 다시 시도해주세요.',
+      message: '작업증명 검증에 실패했습니다. 잠시 후 다시 시도해주세요.',
     });
   }
 

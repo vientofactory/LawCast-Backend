@@ -13,7 +13,7 @@ import { Request } from 'express';
 import { WebhookService } from '../services/webhook.service';
 import { CrawlingService } from '../services/crawling.service';
 import { NotificationService } from '../services/notification.service';
-import { RecaptchaService } from '../services/recaptcha.service';
+import { HashguardService } from '../services/hashguard.service';
 import { BatchProcessingService } from '../services/batch-processing.service';
 import { CreateWebhookDto } from '../dto/create-webhook.dto';
 import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
@@ -26,7 +26,7 @@ export class ApiController {
     private readonly webhookService: WebhookService,
     private readonly crawlingService: CrawlingService,
     private readonly notificationService: NotificationService,
-    private readonly recaptchaService: RecaptchaService,
+    private readonly hashguardService: HashguardService,
     private readonly batchProcessingService: BatchProcessingService,
   ) {}
 
@@ -43,15 +43,15 @@ export class ApiController {
       // URL 유효성 검증
       WebhookValidationUtils.validateDiscordWebhookUrl(createWebhookDto.url);
 
-      // reCAPTCHA 검증
+      // PoW 검증
       const clientIp = WebhookValidationUtils.extractClientIp(req);
-      const isRecaptchaValid = await this.recaptchaService.verifyToken(
-        createWebhookDto.recaptchaToken,
+      const isProofValid = await this.hashguardService.verifyProof(
+        createWebhookDto.proof,
         clientIp,
       );
 
-      if (!isRecaptchaValid) {
-        throw ApiResponseUtils.createRecaptchaFailedException();
+      if (!isProofValid) {
+        throw ApiResponseUtils.createPoWFailedException();
       }
 
       // 중복 웹훅 URL 체크

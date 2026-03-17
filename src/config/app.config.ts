@@ -10,8 +10,8 @@ export interface AppConfig {
     keyPrefix: string;
     ttl: number;
   };
-  recaptcha: {
-    secretKey?: string;
+  hashguard: {
+    apiUrl: string;
   };
   frontend: {
     urls: string[];
@@ -122,8 +122,8 @@ export default (): AppConfig => ({
     keyPrefix: process.env.REDIS_KEY_PREFIX || 'lawcast:',
     ttl: parseInt(process.env.REDIS_TTL, 10) || 30 * 60, // 30분 (초 단위)
   },
-  recaptcha: {
-    secretKey: process.env.RECAPTCHA_SECRET_KEY,
+  hashguard: {
+    apiUrl: process.env.HASHGUARD_API_URL || 'https://hashguard.viento.me',
   },
   frontend: {
     urls: process.env.FRONTEND_URL

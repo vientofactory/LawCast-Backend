@@ -10,7 +10,7 @@ import { BatchProcessingService } from '../services/batch-processing.service';
 import { CrawlingService } from '../services/crawling.service';
 import { WebhookService } from '../services/webhook.service';
 import { NotificationService } from '../services/notification.service';
-import { RecaptchaService } from '../services/recaptcha.service';
+import { HashguardService } from '../services/hashguard.service';
 import { WebhookCleanupService } from '../services/webhook-cleanup.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
@@ -56,8 +56,8 @@ describe('HTTP-Batch Processing Isolation', () => {
       isRedisConnected: jest.fn().mockReturnValue(true),
     };
 
-    const mockRecaptchaService = {
-      verifyToken: jest.fn().mockResolvedValue(true),
+    const mockHashguardService = {
+      verifyProof: jest.fn().mockResolvedValue(true),
     };
 
     const mockWebhookCleanupService = {
@@ -77,7 +77,7 @@ describe('HTTP-Batch Processing Isolation', () => {
         { provide: WebhookService, useValue: mockWebhookService },
         { provide: NotificationService, useValue: mockNotificationService },
         { provide: CrawlingService, useValue: mockCrawlingService },
-        { provide: RecaptchaService, useValue: mockRecaptchaService },
+        { provide: HashguardService, useValue: mockHashguardService },
         { provide: WebhookCleanupService, useValue: mockWebhookCleanupService },
       ],
     }).compile();
