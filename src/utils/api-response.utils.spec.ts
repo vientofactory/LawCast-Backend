@@ -51,6 +51,14 @@ describe('ApiResponseUtils', () => {
       expect(result).toEqual({
         success: true,
         message: '웹훅이 성공적으로 등록되고 테스트되었습니다',
+        data: {
+          success: true,
+          message: '웹훅이 성공적으로 등록되고 테스트되었습니다',
+          testResult: {
+            success: true,
+            error: null,
+          },
+        },
         testResult: {
           success: true,
           error: null,
@@ -68,6 +76,14 @@ describe('ApiResponseUtils', () => {
       expect(result).toEqual({
         success: true,
         message: '웹훅은 등록되었지만 테스트에 실패했습니다 (일시적 오류)',
+        data: {
+          success: true,
+          message: '웹훅은 등록되었지만 테스트에 실패했습니다 (일시적 오류)',
+          testResult: {
+            success: false,
+            error: 'Connection failed',
+          },
+        },
         testResult: {
           success: false,
           error: 'Connection failed',
@@ -82,6 +98,14 @@ describe('ApiResponseUtils', () => {
       expect(result).toEqual({
         success: true,
         message: '웹훅은 등록되었지만 테스트에 실패했습니다 (일시적 오류)',
+        data: {
+          success: true,
+          message: '웹훅은 등록되었지만 테스트에 실패했습니다 (일시적 오류)',
+          testResult: {
+            success: false,
+            error: null,
+          },
+        },
         testResult: {
           success: false,
           error: null,
@@ -196,14 +220,14 @@ describe('ApiResponseUtils', () => {
     });
   });
 
-  describe('createRecaptchaFailedException', () => {
-    it('should create reCAPTCHA failure exception', () => {
-      const exception = ApiResponseUtils.createRecaptchaFailedException();
+  describe('createPoWFailedException', () => {
+    it('should create PoW failure exception', () => {
+      const exception = ApiResponseUtils.createPoWFailedException();
 
       expect(exception).toBeInstanceOf(BadRequestException);
       expect(exception.getResponse()).toEqual({
         success: false,
-        message: 'reCAPTCHA 인증에 실패했습니다. 다시 시도해주세요.',
+        message: '작업증명 검증에 실패했습니다. 잠시 후 다시 시도해주세요.',
       });
     });
   });

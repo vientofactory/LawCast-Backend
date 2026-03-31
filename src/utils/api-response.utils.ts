@@ -42,15 +42,25 @@ export class ApiResponseUtils {
     success: boolean;
     error?: Error | null;
   }): ApiResponse {
+    const message = testResult.success
+      ? '웹훅이 성공적으로 등록되고 테스트되었습니다'
+      : '웹훅은 등록되었지만 테스트에 실패했습니다 (일시적 오류)';
+
+    const normalizedTestResult = {
+      success: testResult.success,
+      error: testResult.error?.message || null,
+    };
+
     return {
       success: true,
-      message: testResult.success
-        ? '웹훅이 성공적으로 등록되고 테스트되었습니다'
-        : '웹훅은 등록되었지만 테스트에 실패했습니다 (일시적 오류)',
-      testResult: {
-        success: testResult.success,
-        error: testResult.error?.message || null,
+      message,
+      data: {
+        success: true,
+        message,
+        testResult: normalizedTestResult,
       },
+      // Backward compatibility for clients that read testResult from top level
+      testResult: normalizedTestResult,
     };
   }
 
