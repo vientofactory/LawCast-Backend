@@ -167,7 +167,6 @@ export class WebhookService {
         .getMany();
 
       if (webhooksToDelete.length === 0) {
-        hasMore = false;
         break;
       }
 
