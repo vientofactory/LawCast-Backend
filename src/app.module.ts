@@ -13,6 +13,7 @@ import { HashguardService } from './services/hashguard.service';
 import { BatchProcessingService } from './services/batch-processing.service';
 import { CronJobsModule } from './cronjobs/cronjobs.module';
 import { Webhook } from './entities/webhook.entity';
+import { OllamaModule } from './modules/ollama/ollama.module';
 import appConfig from './config/app.config';
 
 @Module({
@@ -54,6 +55,7 @@ import appConfig from './config/app.config';
     TypeOrmModule.forFeature([Webhook]),
     ScheduleModule.forRoot(),
     CronJobsModule,
+    OllamaModule,
   ],
   controllers: [ApiController],
   providers: [

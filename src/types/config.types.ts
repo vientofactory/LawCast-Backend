@@ -10,6 +10,9 @@ declare global {
       RECAPTCHA_SECRET_KEY?: string;
       CRON_TIMEZONE?: string;
       FRONTEND_URL?: string;
+      OLLAMA_API_URL?: string;
+      OLLAMA_MODEL?: string;
+      OLLAMA_TIMEOUT?: string;
     }
   }
 }
