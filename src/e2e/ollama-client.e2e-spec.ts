@@ -50,6 +50,7 @@ describe('OllamaClientService (e2e)', () => {
         content.proposalReason,
       );
 
+      console.debug('[INPUT]', content);
       console.debug('[OUTPUT]', summary);
 
       expect(summary).toBeTruthy();
