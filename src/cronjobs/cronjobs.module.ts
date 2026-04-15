@@ -8,9 +8,10 @@ import { BatchProcessingService } from '../services/batch-processing.service';
 import { NotificationService } from '../services/notification.service';
 import { Webhook } from '../entities/webhook.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { OllamaModule } from '../modules/ollama/ollama.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Webhook])],
+  imports: [TypeOrmModule.forFeature([Webhook]), OllamaModule],
   providers: [
     CronJobsService,
     WebhookCleanupService,
