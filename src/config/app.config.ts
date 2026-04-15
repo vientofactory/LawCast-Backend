@@ -13,6 +13,11 @@ export interface AppConfig {
   hashguard: {
     apiUrl: string;
   };
+  ollama: {
+    apiUrl: string;
+    model: string;
+    timeout: number;
+  };
   frontend: {
     urls: string[];
   };
@@ -124,6 +129,11 @@ export default (): AppConfig => ({
   },
   hashguard: {
     apiUrl: process.env.HASHGUARD_API_URL || 'https://hashguard.viento.me',
+  },
+  ollama: {
+    apiUrl: process.env.OLLAMA_API_URL || 'http://localhost:11434',
+    model: process.env.OLLAMA_MODEL || 'gemma3:4b',
+    timeout: parseInt(process.env.OLLAMA_TIMEOUT, 10) || 10000,
   },
   frontend: {
     urls: process.env.FRONTEND_URL

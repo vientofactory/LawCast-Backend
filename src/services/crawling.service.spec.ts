@@ -3,6 +3,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import { CrawlingService } from './crawling.service';
 import { CacheService } from './cache.service';
 import { BatchProcessingService } from './batch-processing.service';
+import { OllamaClientService } from '../modules/ollama/ollama-client.service';
 import { PalCrawl, type ITableData } from 'pal-crawl';
 
 // pal-crawl 모듈을 모킹
@@ -22,6 +23,7 @@ describe('CrawlingService', () => {
       committee: '법제사법위원회',
       numComments: 5,
       link: '/test/link/1',
+      contentId: null,
       attachments: { pdfFile: '', hwpFile: '' },
     },
     {
@@ -31,6 +33,7 @@ describe('CrawlingService', () => {
       committee: '국정감사위원회',
       numComments: 3,
       link: '/test/link/2',
+      contentId: null,
       attachments: { pdfFile: '', hwpFile: '' },
     },
   ];
@@ -61,6 +64,12 @@ describe('CrawlingService', () => {
           provide: BatchProcessingService,
           useValue: {
             processNotificationBatch: jest.fn(),
+          },
+        },
+        {
+          provide: OllamaClientService,
+          useValue: {
+            summarizeProposal: jest.fn(),
           },
         },
         {
@@ -114,7 +123,13 @@ describe('CrawlingService', () => {
       await service.onModuleInit();
 
       expect(mockPalCrawl.get).toHaveBeenCalledTimes(1);
-      expect(cacheService.updateCache).toHaveBeenCalledWith(mockTableData);
+      expect(cacheService.updateCache).toHaveBeenCalledWith(
+        mockTableData.map((notice) => ({
+          ...notice,
+          aiSummary: null,
+          aiSummaryStatus: 'not_supported',
+        })),
+      );
     });
 
     it('should handle empty data during initialization', async () => {
