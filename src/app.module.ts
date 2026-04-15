@@ -11,7 +11,8 @@ import { NotificationService } from './services/notification.service';
 import { CacheService } from './services/cache.service';
 import { HashguardService } from './services/hashguard.service';
 import { BatchProcessingService } from './services/batch-processing.service';
-import { CronJobsModule } from './cronjobs/cronjobs.module';
+import { CronJobsService } from './cronjobs/cronjobs.service';
+import { WebhookCleanupService } from './services/webhook-cleanup.service';
 import { Webhook } from './entities/webhook.entity';
 import { OllamaModule } from './modules/ollama/ollama.module';
 import appConfig from './config/app.config';
@@ -54,7 +55,6 @@ import appConfig from './config/app.config';
     }),
     TypeOrmModule.forFeature([Webhook]),
     ScheduleModule.forRoot(),
-    CronJobsModule,
     OllamaModule,
   ],
   controllers: [ApiController],
@@ -65,6 +65,8 @@ import appConfig from './config/app.config';
     CacheService,
     HashguardService,
     BatchProcessingService,
+    WebhookCleanupService,
+    CronJobsService,
   ],
 })
 export class AppModule {}

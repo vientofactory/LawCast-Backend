@@ -3,6 +3,8 @@ import {
   Get,
   Post,
   Body,
+  Param,
+  ParseIntPipe,
   ValidationPipe,
   UsePipes,
   HttpStatus,
@@ -89,6 +91,12 @@ export class ApiController {
       APP_CONSTANTS.CACHE.NOTICES_RECENT_LIMIT,
     );
     return ApiResponseUtils.success(notices);
+  }
+
+  @Get('notices/:num/detail')
+  async getNoticeDetail(@Param('num', ParseIntPipe) num: number) {
+    const detail = await this.crawlingService.getNoticeDetail(num);
+    return ApiResponseUtils.success(detail);
   }
 
   @Get('stats')

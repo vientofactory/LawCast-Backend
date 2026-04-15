@@ -4,7 +4,7 @@ import { Cache } from 'cache-manager';
 import { type ITableData } from 'pal-crawl';
 import { APP_CONSTANTS } from '../config/app.config';
 import { LoggerUtils } from '../utils/logger.utils';
-import { type CacheInfo } from '../types/cache.types';
+import { type CacheInfo, type CachedNotice } from '../types/cache.types';
 
 @Injectable()
 export class CacheService implements OnModuleDestroy {
@@ -34,9 +34,9 @@ export class CacheService implements OnModuleDestroy {
    */
   async getRecentNotices(
     limit: number = APP_CONSTANTS.CACHE.DEFAULT_LIMIT,
-  ): Promise<ITableData[]> {
+  ): Promise<CachedNotice[]> {
     try {
-      const cachedNotices = await this.cacheManager.get<ITableData[]>(
+      const cachedNotices = await this.cacheManager.get<CachedNotice[]>(
         this.CACHE_KEYS.RECENT_NOTICES,
       );
 
@@ -57,26 +57,39 @@ export class CacheService implements OnModuleDestroy {
    * 캐시를 초기화하거나 업데이트합니다.
    * 기존 데이터와 새 데이터를 병합하여 최신 순으로 유지합니다.
    */
-  async updateCache(notices: ITableData[]): Promise<void> {
+  async updateCache(notices: CachedNotice[]): Promise<void> {
     try {
       // 최신 순으로 정렬
       const sortedNotices = [...notices].sort((a, b) => b.num - a.num);
 
       // 기존 캐시 데이터 가져오기
       const existingNotices =
-        (await this.cacheManager.get<ITableData[]>(
+        (await this.cacheManager.get<CachedNotice[]>(
           this.CACHE_KEYS.RECENT_NOTICES,
         )) || [];
 
       // 기존 데이터와 새 데이터를 병합
       const mergedNotices = [...sortedNotices, ...existingNotices];
 
-      // 중복 제거 및 최신 순 정렬
-      const uniqueNotices = mergedNotices
-        .filter(
-          (notice, index, self) =>
-            index === self.findIndex((n) => n.num === notice.num),
-        )
+      // 중복 제거 중 기존 요약(aiSummary)은 보존
+      const dedupedNotices = new Map<number, CachedNotice>();
+      for (const notice of mergedNotices) {
+        const existingNotice = dedupedNotices.get(notice.num);
+
+        if (!existingNotice) {
+          dedupedNotices.set(notice.num, notice);
+          continue;
+        }
+
+        if (!existingNotice.aiSummary && notice.aiSummary) {
+          dedupedNotices.set(notice.num, {
+            ...existingNotice,
+            aiSummary: notice.aiSummary,
+          });
+        }
+      }
+
+      const uniqueNotices = Array.from(dedupedNotices.values())
         .sort((a, b) => b.num - a.num)
         .slice(0, this.MAX_CACHE_SIZE);
 
@@ -102,7 +115,7 @@ export class CacheService implements OnModuleDestroy {
   async findNewNotices(crawledData: ITableData[]): Promise<ITableData[]> {
     try {
       const existingNotices =
-        (await this.cacheManager.get<ITableData[]>(
+        (await this.cacheManager.get<CachedNotice[]>(
           this.CACHE_KEYS.RECENT_NOTICES,
         )) || [];
 
@@ -144,7 +157,7 @@ export class CacheService implements OnModuleDestroy {
   async getCacheInfo(): Promise<CacheInfo> {
     try {
       const cachedNotices =
-        (await this.cacheManager.get<ITableData[]>(
+        (await this.cacheManager.get<CachedNotice[]>(
           this.CACHE_KEYS.RECENT_NOTICES,
         )) || [];
       const lastUpdated =

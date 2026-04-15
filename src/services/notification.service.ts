@@ -108,6 +108,10 @@ export class NotificationService {
 
         results.push({ webhookId: webhook.id, success: true });
       } catch (error) {
+        const webhookError = error as {
+          response?: { status?: number };
+          message?: string;
+        };
         const shouldDelete = this.shouldDeleteWebhook(error);
 
         if (shouldDelete) {
@@ -116,11 +120,11 @@ export class NotificationService {
 
           LoggerUtils.debugDev(
             NotificationService.name,
-            `Webhook ${webhook.id} permanently failed on first attempt (${error.response?.status || 'unknown'}) - marked for immediate deactivation`,
+            `Webhook ${webhook.id} permanently failed on first attempt (${webhookError.response?.status || 'unknown'}) - marked for immediate deactivation`,
           );
         } else {
           this.logger.debug(
-            `Webhook ${webhook.id} temporarily failed: ${error.message}`,
+            `Webhook ${webhook.id} temporarily failed: ${webhookError.message || 'unknown error'}`,
           );
         }
 
@@ -171,6 +175,18 @@ export class NotificationService {
   private async buildProposalSummary(
     notice: ITableData,
   ): Promise<string | null> {
+    const precomputedSummary = (
+      notice as ITableData & { aiSummary?: string | null }
+    ).aiSummary;
+
+    if (precomputedSummary?.trim()) {
+      return precomputedSummary.trim();
+    }
+
+    if (!notice.contentId) {
+      return null;
+    }
+
     try {
       const palCrawl = new PalCrawl(this.crawlConfig);
       const content = await palCrawl.getContent(notice.contentId);
@@ -183,8 +199,9 @@ export class NotificationService {
         content.proposalReason,
       );
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(
-        `Failed to build summary for contentId ${notice.contentId}: ${error.message}`,
+        `Failed to build summary for contentId ${notice.contentId}: ${message}`,
       );
       return null;
     }
