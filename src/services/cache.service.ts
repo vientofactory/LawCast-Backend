@@ -85,6 +85,19 @@ export class CacheService implements OnModuleDestroy {
           dedupedNotices.set(notice.num, {
             ...existingNotice,
             aiSummary: notice.aiSummary,
+            aiSummaryStatus: notice.aiSummaryStatus ?? 'ready',
+          });
+          continue;
+        }
+
+        if (
+          existingNotice.aiSummaryStatus !== 'ready' &&
+          notice.aiSummaryStatus === 'ready'
+        ) {
+          dedupedNotices.set(notice.num, {
+            ...existingNotice,
+            aiSummaryStatus: 'ready',
+            aiSummary: notice.aiSummary ?? existingNotice.aiSummary ?? null,
           });
         }
       }
@@ -248,6 +261,7 @@ export class CacheService implements OnModuleDestroy {
       }
     } catch (error) {
       this.logger.error('Redis status check failed:', error);
+      const message = error instanceof Error ? error.message : String(error);
 
       return {
         connected: false,
@@ -258,7 +272,7 @@ export class CacheService implements OnModuleDestroy {
           maxSize: this.MAX_CACHE_SIZE,
           isInitialized: false,
         },
-        error: error.message || 'Unknown Redis error',
+        error: message || 'Unknown Redis error',
       };
     }
   }

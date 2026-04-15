@@ -14,7 +14,11 @@ import {
 import { APP_CONSTANTS } from '../config/app.config';
 import { LoggerUtils } from '../utils/logger.utils';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
-import { type CacheInfo, type CachedNotice } from '../types/cache.types';
+import {
+  type AISummaryStatus,
+  type CacheInfo,
+  type CachedNotice,
+} from '../types/cache.types';
 
 @Injectable()
 export class CrawlingService implements OnModuleInit {
@@ -164,20 +168,43 @@ export class CrawlingService implements OnModuleInit {
       const existingNotices = await this.cacheService.getRecentNotices(
         APP_CONSTANTS.CACHE.MAX_SIZE,
       );
-      const summaryByNum = this.buildSummaryMap(existingNotices);
+      const existingNoticeMap = this.buildNoticeMap(existingNotices);
 
       if (newNotices.length > 0) {
         this.logger.log(`Found ${newNotices.length} new legislative notices`);
 
         const newNoticesWithSummary = await this.enrichNoticesWithSummary(
           newNotices,
-          summaryByNum,
+          existingNoticeMap,
         );
-        const newNoticeSummaryMap = this.buildSummaryMap(newNoticesWithSummary);
-        const noticesWithSummary = crawledData.map((notice) => ({
-          ...notice,
-          aiSummary: newNoticeSummaryMap.get(notice.num) ?? null,
-        }));
+        const newNoticeMap = this.buildNoticeMap(newNoticesWithSummary);
+        const noticesWithSummary = crawledData.map((notice) => {
+          const newNotice = newNoticeMap.get(notice.num);
+          if (newNotice) {
+            return {
+              ...notice,
+              aiSummary: newNotice.aiSummary ?? null,
+              aiSummaryStatus: newNotice.aiSummaryStatus ?? 'not_requested',
+            };
+          }
+
+          const existingNotice = existingNoticeMap.get(notice.num);
+          if (existingNotice) {
+            return {
+              ...notice,
+              aiSummary: existingNotice.aiSummary ?? null,
+              aiSummaryStatus:
+                existingNotice.aiSummaryStatus ??
+                this.resolveSummaryStatus(existingNotice.aiSummary),
+            };
+          }
+
+          return {
+            ...notice,
+            aiSummary: null,
+            aiSummaryStatus: 'not_requested' as AISummaryStatus,
+          };
+        });
 
         try {
           // 알림 전송 먼저 시도
@@ -204,8 +231,28 @@ export class CrawlingService implements OnModuleInit {
         }
       } else {
         LoggerUtils.debugDev(CrawlingService.name, 'No new notices found');
-        // 새 데이터가 없어도 전체 캐시는 업데이트 (기존 데이터 정렬 및 크기 관리)
-        await this.cacheService.updateCache(crawledData);
+        // 새 데이터가 없어도 기존 요약 상태를 보존하며 전체 캐시 업데이트
+        const noticesWithExistingSummary = crawledData.map((notice) => {
+          const existingNotice = existingNoticeMap.get(notice.num);
+
+          if (!existingNotice) {
+            return {
+              ...notice,
+              aiSummary: null,
+              aiSummaryStatus: 'not_requested' as AISummaryStatus,
+            };
+          }
+
+          return {
+            ...notice,
+            aiSummary: existingNotice.aiSummary ?? null,
+            aiSummaryStatus:
+              existingNotice.aiSummaryStatus ??
+              this.resolveSummaryStatus(existingNotice.aiSummary),
+          };
+        });
+
+        await this.cacheService.updateCache(noticesWithExistingSummary);
       }
 
       return newNotices;
@@ -336,26 +383,27 @@ export class CrawlingService implements OnModuleInit {
     }
   }
 
-  private buildSummaryMap(notices: CachedNotice[]): Map<number, string> {
-    return new Map(
-      notices
-        .filter((notice) => !!notice.aiSummary)
-        .map((notice) => [notice.num, notice.aiSummary!.trim()]),
-    );
+  private buildNoticeMap(notices: CachedNotice[]): Map<number, CachedNotice> {
+    return new Map(notices.map((notice) => [notice.num, notice]));
+  }
+
+  private resolveSummaryStatus(summary?: string | null): AISummaryStatus {
+    return summary?.trim() ? 'ready' : 'unavailable';
   }
 
   private async enrichNoticesWithSummary(
     notices: ITableData[],
-    existingSummaries: Map<number, string> = new Map(),
+    existingNotices: Map<number, CachedNotice> = new Map(),
     options: { logOllamaActivity?: boolean; phase?: string } = {},
   ): Promise<CachedNotice[]> {
     const { logOllamaActivity = false, phase = 'runtime' } = options;
 
     return Promise.all(
       notices.map(async (notice, index) => {
-        const cachedSummary = existingSummaries.get(notice.num);
+        const existingNotice = existingNotices.get(notice.num);
+        const cachedSummary = existingNotice?.aiSummary;
 
-        if (cachedSummary) {
+        if (cachedSummary?.trim()) {
           if (logOllamaActivity) {
             this.logOllama(
               `Skipping notice ${index + 1}/${notices.length} (cache hit: num=${notice.num})`,
@@ -366,10 +414,11 @@ export class CrawlingService implements OnModuleInit {
           return {
             ...notice,
             aiSummary: cachedSummary,
+            aiSummaryStatus: 'ready',
           };
         }
 
-        const aiSummary = await this.generateSummaryForNotice(notice, {
+        const summaryResult = await this.generateSummaryForNotice(notice, {
           logOllamaActivity,
           phase,
           index,
@@ -378,7 +427,8 @@ export class CrawlingService implements OnModuleInit {
 
         return {
           ...notice,
-          aiSummary,
+          aiSummary: summaryResult.aiSummary,
+          aiSummaryStatus: summaryResult.aiSummaryStatus,
         };
       }),
     );
@@ -392,7 +442,7 @@ export class CrawlingService implements OnModuleInit {
       index?: number;
       total?: number;
     } = {},
-  ): Promise<string | null> {
+  ): Promise<{ aiSummary: string | null; aiSummaryStatus: AISummaryStatus }> {
     const {
       logOllamaActivity = false,
       phase = 'runtime',
@@ -413,7 +463,10 @@ export class CrawlingService implements OnModuleInit {
         );
       }
 
-      return null;
+      return {
+        aiSummary: null,
+        aiSummaryStatus: 'not_supported',
+      };
     }
 
     try {
@@ -428,7 +481,10 @@ export class CrawlingService implements OnModuleInit {
           );
         }
 
-        return null;
+        return {
+          aiSummary: null,
+          aiSummaryStatus: 'not_supported',
+        };
       }
 
       if (logOllamaActivity) {
@@ -450,7 +506,10 @@ export class CrawlingService implements OnModuleInit {
         );
       }
 
-      return summary;
+      return {
+        aiSummary: summary,
+        aiSummaryStatus: summary ? 'ready' : 'unavailable',
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
 
@@ -464,7 +523,10 @@ export class CrawlingService implements OnModuleInit {
       this.logger.warn(
         `Failed to generate summary for contentId ${notice.contentId}: ${message}`,
       );
-      return null;
+      return {
+        aiSummary: null,
+        aiSummaryStatus: 'unavailable',
+      };
     }
   }
 

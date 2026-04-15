@@ -124,7 +124,11 @@ describe('CrawlingService', () => {
 
       expect(mockPalCrawl.get).toHaveBeenCalledTimes(1);
       expect(cacheService.updateCache).toHaveBeenCalledWith(
-        mockTableData.map((notice) => ({ ...notice, aiSummary: null })),
+        mockTableData.map((notice) => ({
+          ...notice,
+          aiSummary: null,
+          aiSummaryStatus: 'not_supported',
+        })),
       );
     });
 
