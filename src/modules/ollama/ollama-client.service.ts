@@ -3,7 +3,21 @@ import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
 
 interface OllamaGenerateResponse {
-  response?: string;
+  // Basic response fields
+  model: string;
+  created_at: string;
+  response: string;
+
+  // Below fields may not be available when response is streamed
+  done?: boolean;
+  done_reason?: string;
+  context?: number[];
+  total_duration?: number;
+  load_duration?: number;
+  prompt_eval_count?: number;
+  prompt_eval_duration?: number;
+  eval_count?: number;
+  eval_duration?: number;
 }
 
 @Injectable()
@@ -11,12 +25,16 @@ export class OllamaClientService {
   private readonly logger = new Logger(OllamaClientService.name);
   private readonly client: AxiosInstance;
   private readonly model: string;
+  private readonly modelTemperature = 0.2;
+  private readonly modelNumPredict = 220;
 
   constructor(private configService: ConfigService) {
     const apiUrl = this.configService.get<string>('ollama.apiUrl');
     const timeout = this.configService.get<number>('ollama.timeout', 10000);
 
     this.model = this.configService.get<string>('ollama.model', 'gemma3:1b');
+
+    // Base HTTP Client for Ollama REST API
     this.client = axios.create({
       baseURL: apiUrl,
       timeout,
@@ -40,21 +58,24 @@ export class OllamaClientService {
     ].join('\n');
 
     try {
+      const payload = {
+        model: this.model,
+        prompt,
+        stream: false,
+        options: {
+          temperature: this.modelTemperature,
+          num_predict: this.modelNumPredict,
+        },
+      };
+
+      // Generate response
       const response = await this.client.post<OllamaGenerateResponse>(
         '/api/generate',
-        {
-          model: this.model,
-          prompt,
-          stream: false,
-          options: {
-            temperature: 0.2,
-            num_predict: 220,
-          },
-        },
+        payload,
       );
 
-      const summary = response.data?.response?.trim();
-      return summary || null;
+      const summary = response.data.response.trim();
+      return summary;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Failed to summarize proposal with Ollama: ${message}`);

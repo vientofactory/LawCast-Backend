@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Logger } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { ConfigService } from '@nestjs/config';
 import { NotificationService } from '../services/notification.service';
 import { CacheService } from '../services/cache.service';
 import { Webhook } from '../entities/webhook.entity';
@@ -75,6 +76,17 @@ describe('NotificationService', () => {
         {
           provide: OllamaClientService,
           useValue: mockOllamaClientService,
+        },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn((key: string) => {
+              if (key === 'frontend.urls') {
+                return ['http://localhost:5173'];
+              }
+              return undefined;
+            }),
+          },
         },
       ],
     }).compile();
@@ -161,6 +173,11 @@ describe('NotificationService', () => {
         true,
       );
       expect(mockMessageBuilder.setColor).toHaveBeenCalledWith(0x3b82f6);
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '자세히 보기',
+        '[링크 바로가기](http://localhost:5173/notices/1)',
+        false,
+      );
     });
 
     it('should summarize hardcoded full proposal content and include it in embed', async () => {

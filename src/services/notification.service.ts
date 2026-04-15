@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   MessageBuilder,
   Webhook as DiscordWebhook,
@@ -33,6 +34,7 @@ export class NotificationService {
   constructor(
     private cacheService: CacheService,
     private ollamaClientService: OllamaClientService,
+    private configService: ConfigService,
   ) {}
 
   async sendDiscordNotification(
@@ -167,7 +169,8 @@ export class NotificationService {
       );
     }
 
-    embed.addField('자세히 보기', `[링크 바로가기](${notice.link})`, false);
+    const detailUrl = this.buildFrontendNoticeDetailUrl(notice);
+    embed.addField('자세히 보기', `[입법예고 전문](${detailUrl})`, false);
 
     return embed;
   }
@@ -179,7 +182,7 @@ export class NotificationService {
       notice as ITableData & { aiSummary?: string | null }
     ).aiSummary;
 
-    if (precomputedSummary?.trim()) {
+    if (precomputedSummary) {
       return precomputedSummary.trim();
     }
 
@@ -190,7 +193,7 @@ export class NotificationService {
     try {
       const palCrawl = new PalCrawl(this.crawlConfig);
       const content = await palCrawl.getContent(notice.contentId);
-      if (!content?.proposalReason?.trim()) {
+      if (!content.proposalReason) {
         return null;
       }
 
@@ -215,25 +218,34 @@ export class NotificationService {
     return `${value.slice(0, maxLength - 3)}...`;
   }
 
+  private buildFrontendNoticeDetailUrl(notice: ITableData): string {
+    const frontendUrls =
+      this.configService.get<string[]>('frontend.urls') || [];
+    const primaryFrontendUrl = frontendUrls.find((url) => !!url?.trim());
+
+    if (!primaryFrontendUrl) {
+      return notice.link;
+    }
+
+    const normalizedBaseUrl = primaryFrontendUrl.replace(/\/+$/, '');
+    return `${normalizedBaseUrl}/notices/${notice.num}`;
+  }
+
   /**
    * 웹훅 에러를 분석하여 삭제 여부를 결정
    */
   private shouldDeleteWebhook(error: any): boolean {
-    // Discord API 에러 코드를 확인
     if (error.response?.status) {
       const status = error.response.status;
       const { NOT_FOUND, UNAUTHORIZED, FORBIDDEN } =
         APP_CONSTANTS.DISCORD.API.ERROR_CODES;
 
-      // 404: 웹훅이 삭제됨, 401: 권한 없음, 403: 차단됨
       return [NOT_FOUND, UNAUTHORIZED, FORBIDDEN].includes(status);
     }
 
-    // discord-webhook-node 라이브러리의 에러 메시지에서 status code 추출
     if (error.message && typeof error.message === 'string') {
       const message = error.message;
 
-      // "404 status code" 패턴 확인
       const statusMatch = message.match(/(\d{3}) status code/);
       if (statusMatch) {
         const status = parseInt(statusMatch[1]);
@@ -247,7 +259,6 @@ export class NotificationService {
         );
       }
 
-      // Discord API 에러 코드 확인 (응답 JSON에서)
       const codeMatch = message.match(/"code":\s*(\d+)/);
       if (codeMatch) {
         const code = parseInt(codeMatch[1]);
@@ -257,7 +268,6 @@ export class NotificationService {
       }
     }
 
-    // 네트워크 오류나 일시적 오류는 삭제하지 않음
     return false;
   }
 
