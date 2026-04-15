@@ -11,6 +11,7 @@ import { WebhookService } from './webhook.service';
 import { NotificationService } from './notification.service';
 import { CacheService } from './cache.service';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
+import { NoticeArchiveService } from './notice-archive.service';
 
 describe('Non-blocking Architecture Verification', () => {
   let batchService: BatchProcessingService;
@@ -39,6 +40,11 @@ describe('Non-blocking Architecture Verification', () => {
       summarizeProposal: jest.fn().mockResolvedValue(null),
     };
 
+    const mockNoticeArchiveService = {
+      existsByNoticeNum: jest.fn().mockResolvedValue(false),
+      upsertNoticeArchive: jest.fn(),
+    };
+
     module = await Test.createTestingModule({
       providers: [
         BatchProcessingService,
@@ -47,6 +53,7 @@ describe('Non-blocking Architecture Verification', () => {
         { provide: NotificationService, useValue: mockNotificationService },
         { provide: CacheService, useValue: mockCacheService },
         { provide: OllamaClientService, useValue: mockOllamaClientService },
+        { provide: NoticeArchiveService, useValue: mockNoticeArchiveService },
       ],
     }).compile();
 

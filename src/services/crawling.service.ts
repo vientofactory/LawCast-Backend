@@ -19,6 +19,7 @@ import {
   type CacheInfo,
   type CachedNotice,
 } from '../types/cache.types';
+import { NoticeArchiveService } from './notice-archive.service';
 
 @Injectable()
 export class CrawlingService implements OnModuleInit {
@@ -34,6 +35,7 @@ export class CrawlingService implements OnModuleInit {
     private cacheService: CacheService,
     private batchProcessingService: BatchProcessingService,
     private ollamaClientService: OllamaClientService,
+    private noticeArchiveService: NoticeArchiveService,
   ) {
     this.crawlConfig = {
       userAgent: APP_CONSTANTS.CRAWLING.USER_AGENT,
@@ -124,6 +126,16 @@ export class CrawlingService implements OnModuleInit {
         `Summary generation completed: ${summarizedCount}/${noticesWithSummary.length}`,
       );
 
+      const missingArchiveNotices =
+        await this.filterAlreadyArchivedNotices(noticesWithSummary);
+
+      if (missingArchiveNotices.length > 0) {
+        await this.archiveNotices(missingArchiveNotices);
+        this.logger.log(
+          `Archived ${missingArchiveNotices.length} missing notices during bootstrap initialization`,
+        );
+      }
+
       // 초기 캐시 업데이트
       await this.cacheService.updateCache(noticesWithSummary);
       this.logger.log(
@@ -165,7 +177,10 @@ export class CrawlingService implements OnModuleInit {
       );
 
       // 새로운 입법예고 찾기
-      const newNotices = await this.cacheService.findNewNotices(crawledData);
+      const cacheDiffNotices =
+        await this.cacheService.findNewNotices(crawledData);
+      const newNotices =
+        await this.filterAlreadyArchivedNotices(cacheDiffNotices);
       const existingNotices = await this.cacheService.getRecentNotices(
         APP_CONSTANTS.CACHE.MAX_SIZE,
       );
@@ -178,6 +193,9 @@ export class CrawlingService implements OnModuleInit {
           newNotices,
           existingNoticeMap,
         );
+
+        await this.archiveNotices(newNoticesWithSummary);
+
         const newNoticeMap = this.buildNoticeMap(newNoticesWithSummary);
         const noticesWithSummary = crawledData.map((notice) => {
           const newNotice = newNoticeMap.get(notice.num);
@@ -382,6 +400,70 @@ export class CrawlingService implements OnModuleInit {
         '원문 조회 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.',
       );
     }
+  }
+
+  private async filterAlreadyArchivedNotices<T extends ITableData>(
+    notices: T[],
+  ): Promise<T[]> {
+    if (notices.length === 0) {
+      return [];
+    }
+
+    const archiveCheckResults = await Promise.all(
+      notices.map(async (notice) => {
+        const exists = await this.noticeArchiveService.existsByNoticeNum(
+          notice.num,
+        );
+        return { notice, exists };
+      }),
+    );
+
+    return archiveCheckResults
+      .filter((result) => !result.exists)
+      .map((result) => result.notice);
+  }
+
+  private async archiveNotices(notices: CachedNotice[]): Promise<void> {
+    if (notices.length === 0) {
+      return;
+    }
+
+    const palCrawl = new PalCrawl(this.crawlConfig);
+
+    await Promise.all(
+      notices.map(async (notice) => {
+        let proposalReason = '';
+        let sourceTitle: string | null = notice.subject;
+
+        if (notice.contentId) {
+          try {
+            const content = await palCrawl.getContent(notice.contentId);
+            proposalReason = content?.proposalReason?.trim() || '';
+            sourceTitle = content?.title?.trim() || notice.subject;
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            this.logger.warn(
+              `Failed to fetch original content for archive notice ${notice.num}: ${message}`,
+            );
+          }
+        }
+
+        try {
+          await this.noticeArchiveService.upsertNoticeArchive(notice, {
+            proposalReason,
+            title: sourceTitle,
+          });
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `Failed to archive notice ${notice.num}: ${message}`,
+            error,
+          );
+        }
+      }),
+    );
   }
 
   private buildNoticeMap(notices: CachedNotice[]): Map<number, CachedNotice> {
