@@ -38,6 +38,8 @@ describe('CrawlingService', () => {
     },
   ];
 
+  const flushPromises = () => new Promise((resolve) => setImmediate(resolve));
+
   beforeEach(async () => {
     // PalCrawl 모킹
     mockPalCrawl = {
@@ -100,6 +102,7 @@ describe('CrawlingService', () => {
       mockPalCrawl.get.mockResolvedValue(mockTableData);
 
       await service.onModuleInit();
+      await flushPromises();
 
       // PalCrawl이 적절한 설정으로 생성되었는지 확인
       expect(PalCrawl).toHaveBeenCalledWith({
@@ -117,10 +120,33 @@ describe('CrawlingService', () => {
   });
 
   describe('onModuleInit', () => {
+    it('should not block module startup while initializing cache', async () => {
+      let resolveCrawler: ((value: ITableData[]) => void) | undefined;
+      mockPalCrawl.get.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveCrawler = resolve;
+          }),
+      );
+
+      const startTime = Date.now();
+      await service.onModuleInit();
+      const elapsed = Date.now() - startTime;
+
+      expect(elapsed).toBeLessThan(50);
+
+      resolveCrawler?.(mockTableData);
+      await flushPromises();
+      await flushPromises();
+
+      expect(cacheService.updateCache).toHaveBeenCalled();
+    });
+
     it('should initialize cache successfully', async () => {
       mockPalCrawl.get.mockResolvedValue(mockTableData);
 
       await service.onModuleInit();
+      await flushPromises();
 
       expect(mockPalCrawl.get).toHaveBeenCalledTimes(1);
       expect(cacheService.updateCache).toHaveBeenCalledWith(
@@ -136,6 +162,7 @@ describe('CrawlingService', () => {
       mockPalCrawl.get.mockResolvedValue([]);
 
       await service.onModuleInit();
+      await flushPromises();
 
       expect(mockPalCrawl.get).toHaveBeenCalledTimes(1);
       expect(cacheService.updateCache).not.toHaveBeenCalled();
@@ -145,6 +172,7 @@ describe('CrawlingService', () => {
       mockPalCrawl.get.mockResolvedValue(null as any);
 
       await service.onModuleInit();
+      await flushPromises();
 
       expect(mockPalCrawl.get).toHaveBeenCalledTimes(1);
       expect(cacheService.updateCache).not.toHaveBeenCalled();
@@ -154,8 +182,8 @@ describe('CrawlingService', () => {
       const error = new Error('Network timeout');
       mockPalCrawl.get.mockRejectedValue(error);
 
-      // onModuleInit은 에러를 catch하고 다시 throw함
-      await expect(service.onModuleInit()).rejects.toThrow('Network timeout');
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
+      await flushPromises();
       expect(cacheService.updateCache).not.toHaveBeenCalled();
     });
 
@@ -163,8 +191,8 @@ describe('CrawlingService', () => {
       const timeoutError = new Error('Request timeout');
       mockPalCrawl.get.mockRejectedValue(timeoutError);
 
-      // onModuleInit은 에러를 catch하고 다시 throw함
-      await expect(service.onModuleInit()).rejects.toThrow('Request timeout');
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
+      await flushPromises();
     });
   });
 
@@ -213,20 +241,16 @@ describe('CrawlingService', () => {
       const networkError = new Error('Network error during request');
       mockPalCrawl.get.mockRejectedValue(networkError);
 
-      // onModuleInit은 에러를 catch하고 다시 throw함
-      await expect(service.onModuleInit()).rejects.toThrow(
-        'Network error during request',
-      );
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
+      await flushPromises();
     });
 
     it('should provide specific timeout error messages', async () => {
       const timeoutError = new Error('Request timeout after 15000ms');
       mockPalCrawl.get.mockRejectedValue(timeoutError);
 
-      // onModuleInit은 에러를 catch하고 다시 throw함
-      await expect(service.onModuleInit()).rejects.toThrow(
-        'Request timeout after 15000ms',
-      );
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
+      await flushPromises();
     });
   });
 });

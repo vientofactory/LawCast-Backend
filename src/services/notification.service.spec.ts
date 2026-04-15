@@ -175,7 +175,7 @@ describe('NotificationService', () => {
       expect(mockMessageBuilder.setColor).toHaveBeenCalledWith(0x3b82f6);
       expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
         '자세히 보기',
-        '[링크 바로가기](http://localhost:5173/notices/1)',
+        '[입법예고 전문](http://localhost:5173/notices/1)',
         false,
       );
     });

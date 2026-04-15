@@ -47,20 +47,21 @@ export class CrawlingService implements OnModuleInit {
    * 서버 시작 시 초기 데이터 캐싱
    */
   async onModuleInit() {
+    this.isInitialized = false;
+    this.logger.log('Scheduling cache initialization in background...');
+
+    void this.initializeCacheInBackground();
+  }
+
+  private async initializeCacheInBackground(): Promise<void> {
     this.logger.log('Initializing cache with recent legislative notices...');
     try {
-      // 초기화 중 플래그 설정
-      this.isInitialized = false;
-
       await this.initializeCache();
-
-      // 초기화 완료 후 플래그 설정
-      this.isInitialized = true;
       this.logger.log('Cache initialization completed successfully');
     } catch (error) {
       this.logger.error('Failed to initialize cache:', error);
+    } finally {
       this.isInitialized = true;
-      throw error;
     }
   }
 
