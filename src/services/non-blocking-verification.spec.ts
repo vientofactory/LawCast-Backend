@@ -183,7 +183,7 @@ describe('Non-blocking Architecture Verification', () => {
 
       // 동시성 제어로 인해 순차 실행보다는 빨라야 하지만
       // 모든 작업을 동시에 실행하는 것보다는 느려야 함
-      expect(totalTime).toBeGreaterThan(40); // 최소 4번의 배치 (20/5)
+      expect(totalTime).toBeGreaterThanOrEqual(40); // 최소 4번의 배치 (20/5)
       expect(totalTime).toBeLessThan(500); // 하지만 충분히 빨라야 함
 
       console.log(`✅ 20 jobs with concurrency=5 completed in ${totalTime}ms`);
