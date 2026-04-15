@@ -3,11 +3,12 @@ import {
   MessageBuilder,
   Webhook as DiscordWebhook,
 } from 'discord-webhook-node';
-import { type ITableData } from 'pal-crawl';
+import { PalCrawl, type ITableData, type PalCrawlConfig } from 'pal-crawl';
 import { Webhook } from '../entities/webhook.entity';
 import { APP_CONSTANTS } from '../config/app.config';
 import { CacheService } from './cache.service';
 import { LoggerUtils } from '../utils/logger.utils';
+import { OllamaClientService } from '../modules/ollama/ollama-client.service';
 
 @Injectable()
 export class NotificationService {
@@ -22,13 +23,23 @@ export class NotificationService {
   // 영구적으로 실패한 웹훅들을 추적하여 중복 시도 방지
   private readonly permanentlyFailedWebhooks = new Set<number>();
 
-  constructor(private cacheService: CacheService) {}
+  private readonly crawlConfig: PalCrawlConfig = {
+    userAgent: APP_CONSTANTS.CRAWLING.USER_AGENT,
+    timeout: APP_CONSTANTS.CRAWLING.TIMEOUT,
+    retryCount: APP_CONSTANTS.CRAWLING.RETRY_COUNT,
+    customHeaders: APP_CONSTANTS.CRAWLING.HEADERS,
+  };
+
+  constructor(
+    private cacheService: CacheService,
+    private ollamaClientService: OllamaClientService,
+  ) {}
 
   async sendDiscordNotification(
     notice: ITableData,
     webhooks: Webhook[],
   ): Promise<void> {
-    const embed = this.createNotificationEmbed(notice);
+    const embed = await this.createNotificationEmbed(notice);
 
     for (const webhook of webhooks) {
       try {
@@ -59,7 +70,7 @@ export class NotificationService {
       shouldDelete?: boolean;
     }>
   > {
-    const embed = this.createNotificationEmbed(notice);
+    const embed = await this.createNotificationEmbed(notice);
     const results: Array<{
       webhookId: number;
       success: boolean;
@@ -97,6 +108,10 @@ export class NotificationService {
 
         results.push({ webhookId: webhook.id, success: true });
       } catch (error) {
+        const webhookError = error as {
+          response?: { status?: number };
+          message?: string;
+        };
         const shouldDelete = this.shouldDeleteWebhook(error);
 
         if (shouldDelete) {
@@ -105,11 +120,11 @@ export class NotificationService {
 
           LoggerUtils.debugDev(
             NotificationService.name,
-            `Webhook ${webhook.id} permanently failed on first attempt (${error.response?.status || 'unknown'}) - marked for immediate deactivation`,
+            `Webhook ${webhook.id} permanently failed on first attempt (${webhookError.response?.status || 'unknown'}) - marked for immediate deactivation`,
           );
         } else {
           this.logger.debug(
-            `Webhook ${webhook.id} temporarily failed: ${error.message}`,
+            `Webhook ${webhook.id} temporarily failed: ${webhookError.message || 'unknown error'}`,
           );
         }
 
@@ -128,8 +143,11 @@ export class NotificationService {
   /**
    * 알림 임베드 메시지를 생성
    */
-  private createNotificationEmbed(notice: ITableData): MessageBuilder {
-    return new MessageBuilder()
+  private async createNotificationEmbed(
+    notice: ITableData,
+  ): Promise<MessageBuilder> {
+    const summary = await this.buildProposalSummary(notice);
+    const embed = new MessageBuilder()
       .setTitle('새로운 국회 입법예고')
       .setDescription(
         '새로운 입법예고가 감지되었습니다. 아래 정보를 확인하세요.',
@@ -137,10 +155,64 @@ export class NotificationService {
       .addField('법률안명', notice.subject, false)
       .addField('제안자 구분', notice.proposerCategory, true)
       .addField('소관위원회', notice.committee, true)
-      .addField('자세히 보기', `[링크 바로가기](${notice.link})`, false)
       .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
       .setTimestamp()
       .setFooter('LawCast 알림 서비스', '');
+
+    if (summary) {
+      embed.addField(
+        '핵심 내용 AI 요약',
+        this.truncateForEmbed(summary),
+        false,
+      );
+    }
+
+    embed.addField('자세히 보기', `[링크 바로가기](${notice.link})`, false);
+
+    return embed;
+  }
+
+  private async buildProposalSummary(
+    notice: ITableData,
+  ): Promise<string | null> {
+    const precomputedSummary = (
+      notice as ITableData & { aiSummary?: string | null }
+    ).aiSummary;
+
+    if (precomputedSummary?.trim()) {
+      return precomputedSummary.trim();
+    }
+
+    if (!notice.contentId) {
+      return null;
+    }
+
+    try {
+      const palCrawl = new PalCrawl(this.crawlConfig);
+      const content = await palCrawl.getContent(notice.contentId);
+      if (!content?.proposalReason?.trim()) {
+        return null;
+      }
+
+      return await this.ollamaClientService.summarizeProposal(
+        content.title,
+        content.proposalReason,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `Failed to build summary for contentId ${notice.contentId}: ${message}`,
+      );
+      return null;
+    }
+  }
+
+  private truncateForEmbed(value: string, maxLength = 1024): string {
+    if (value.length <= maxLength) {
+      return value;
+    }
+
+    return `${value.slice(0, maxLength - 3)}...`;
   }
 
   /**

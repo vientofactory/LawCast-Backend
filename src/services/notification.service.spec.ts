@@ -4,23 +4,29 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { NotificationService } from '../services/notification.service';
 import { CacheService } from '../services/cache.service';
 import { Webhook } from '../entities/webhook.entity';
+import { OllamaClientService } from '../modules/ollama/ollama-client.service';
+import { PalCrawl } from 'pal-crawl';
 import {
   MessageBuilder,
   Webhook as DiscordWebhook,
 } from 'discord-webhook-node';
 
 jest.mock('discord-webhook-node');
+jest.mock('pal-crawl');
 const MockedDiscordWebhook = DiscordWebhook as jest.MockedClass<
   typeof DiscordWebhook
 >;
 const MockedMessageBuilder = MessageBuilder as jest.MockedClass<
   typeof MessageBuilder
 >;
+const MockedPalCrawl = PalCrawl as jest.MockedClass<typeof PalCrawl>;
 
 describe('NotificationService', () => {
   let service: NotificationService;
   let mockDiscordWebhook: jest.Mocked<DiscordWebhook>;
   let mockMessageBuilder: jest.Mocked<MessageBuilder>;
+  let mockPalCrawl: { getContent: jest.Mock };
+  let mockOllamaClientService: { summarizeProposal: jest.Mock };
 
   beforeEach(async () => {
     // Jest 타이머 모킹 활성화
@@ -44,6 +50,14 @@ describe('NotificationService', () => {
 
     MockedMessageBuilder.mockImplementation(() => mockMessageBuilder);
     MockedDiscordWebhook.mockImplementation(() => mockDiscordWebhook);
+    mockPalCrawl = {
+      getContent: jest.fn(),
+    };
+    MockedPalCrawl.mockImplementation(() => mockPalCrawl as any);
+
+    mockOllamaClientService = {
+      summarizeProposal: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -57,6 +71,10 @@ describe('NotificationService', () => {
             del: jest.fn(),
             reset: jest.fn(),
           },
+        },
+        {
+          provide: OllamaClientService,
+          useValue: mockOllamaClientService,
         },
       ],
     }).compile();
@@ -85,6 +103,7 @@ describe('NotificationService', () => {
       committee: '법제사법위원회',
       numComments: 5,
       link: 'https://example.com/notice/1',
+      contentId: null,
       attachments: { pdfFile: '', hwpFile: '' },
     };
 
@@ -143,6 +162,53 @@ describe('NotificationService', () => {
       );
       expect(mockMessageBuilder.setColor).toHaveBeenCalledWith(0x3b82f6);
     });
+
+    it('should summarize hardcoded full proposal content and include it in embed', async () => {
+      const hardcodedContent = {
+        title: '[2218288] 조세특례제한법 일부개정법률안(윤한홍의원 등 10인)',
+        proposalReason:
+          '소형모듈원자로(SMR)는 글로벌 에너지 전환과 미래 전력수요 증가에 대응할 핵심 저탄소 기술로 부상하고 있고, 우리나라는 「소형모듈원자로 개발 촉진 및 지원에 관한 특별법」 제정 등 연구개발, 실증, 특구 조성 등 제도적 기반을 마련하여 국가 차원의 전략적 육성을 추진 중임. 그러나 소형모듈원자로 산업의 상용화와 수출 경쟁력 확보를 위해 필수적인 제조 공급망의 설비투자와 전문기술 확보를 뒷받침할 세제 지원 체계는 아직 충분히 구축되지 못한 상황임. 현재 소형모듈원자로 관련 핵심 기술은 국가전략기술로 규정되어 있지 않아, 시설투자 및 연구ㆍ인력개발에 적용되는 세액공제율이 중소ㆍ중견기업의 선제적 투자 결정을 이끌기에는 제한적이고, 특히 소형모듈원자로 산업은 높은 초기 설비투자와 국제적 인증 충족이 필수임에도 수주가 확정되기 전까지 기업이 자체적으로 감당해야 하는 위험이 크기 때문에 공급망 내 기업들의 투자가 지연되는 구조적 문제가 지속되고 있음. 이에 국가전략기술의 범위에 소형모듈원자로를 추가해 세액공제율을 실질적으로 확대함으로써 수요 불확실성 하에서도 설비 확충ㆍ기술 고도화ㆍ전문인력 확보가 가능한 환경을 조성하여 글로벌 시장에서의 경쟁력을 강화하는 한편, 국가전략기술의 사업화시설 투자비용에 대한 세액공제의 일몰기한을 삭제하려는 것임(안 제10조제1항제2호 및 제24조제1항제2호).',
+      };
+      const summarized =
+        'SMR를 국가전략기술에 포함해 세액공제 지원을 확대하고, 사업화시설 투자 세액공제 일몰기한을 삭제해 공급망 설비투자와 기술·인력 확보를 촉진하려는 내용입니다.';
+
+      mockPalCrawl.getContent.mockResolvedValue(hardcodedContent);
+      mockOllamaClientService.summarizeProposal.mockResolvedValue(summarized);
+      mockDiscordWebhook.send.mockResolvedValue(undefined);
+
+      await service.sendDiscordNotification(
+        {
+          num: 1,
+          subject: '테스트 법률안',
+          proposerCategory: '정부',
+          committee: '법제사법위원회',
+          numComments: 5,
+          link: 'https://example.com/notice/1',
+          contentId: 'PRC_W2W6V0D4D0B9C1B4B4Z6V2W0U7V2T9',
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        [
+          {
+            id: 1,
+            url: 'https://discord.com/api/webhooks/1/token1',
+            isActive: true,
+          } as Webhook,
+        ],
+      );
+
+      expect(mockPalCrawl.getContent).toHaveBeenCalledWith(
+        'PRC_W2W6V0D4D0B9C1B4B4Z6V2W0U7V2T9',
+      );
+      expect(mockOllamaClientService.summarizeProposal).toHaveBeenCalledWith(
+        hardcodedContent.title,
+        hardcodedContent.proposalReason,
+      );
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '핵심 내용 AI 요약',
+        summarized,
+        false,
+      );
+    });
   });
 
   describe('sendDiscordNotificationBatch', () => {
@@ -153,6 +219,7 @@ describe('NotificationService', () => {
       committee: '법제사법위원회',
       numComments: 5,
       link: 'https://example.com/notice/1',
+      contentId: null,
       attachments: { pdfFile: '', hwpFile: '' },
     };
 
