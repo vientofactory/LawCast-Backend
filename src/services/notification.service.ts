@@ -162,7 +162,7 @@ export class NotificationService {
 
     if (summary) {
       embed.addField(
-        '제안이유·주요내용 핵심',
+        '핵심 내용 AI 요약',
         this.truncateForEmbed(summary),
         false,
       );
