@@ -10,11 +10,6 @@ import { CacheService } from './cache.service';
 import { LoggerUtils } from '../utils/logger.utils';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
 
-interface IContentData {
-  title: string;
-  proposalReason: string | null;
-}
-
 @Injectable()
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
@@ -176,17 +171,9 @@ export class NotificationService {
   private async buildProposalSummary(
     notice: ITableData,
   ): Promise<string | null> {
-    const contentId = this.getNoticeContentId(notice);
-    if (!contentId) {
-      return null;
-    }
-
     try {
       const palCrawl = new PalCrawl(this.crawlConfig);
-      const content = (await palCrawl.getContent(
-        contentId,
-      )) as IContentData | null;
-
+      const content = await palCrawl.getContent(notice.contentId);
       if (!content?.proposalReason?.trim()) {
         return null;
       }
@@ -197,21 +184,10 @@ export class NotificationService {
       );
     } catch (error) {
       this.logger.warn(
-        `Failed to build summary for contentId ${contentId}: ${error.message}`,
+        `Failed to build summary for contentId ${notice.contentId}: ${error.message}`,
       );
       return null;
     }
-  }
-
-  private getNoticeContentId(notice: ITableData): string | null {
-    const value = (notice as ITableData & { contentId?: unknown }).contentId;
-
-    if (typeof value !== 'string') {
-      return null;
-    }
-
-    const contentId = value.trim();
-    return contentId.length > 0 ? contentId : null;
   }
 
   private truncateForEmbed(value: string, maxLength = 1024): string {
