@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ILike, Repository } from 'typeorm';
+import { ILike, In, Repository } from 'typeorm';
 import { type AISummaryStatus, type CachedNotice } from '../types/cache.types';
 import { NoticeArchive } from '../entities/notice-archive.entity';
 
@@ -35,6 +35,11 @@ export interface ArchiveDetailResult {
     title: string;
     proposalReason: string;
   };
+}
+
+export interface ArchiveSummaryState {
+  aiSummary: string | null;
+  aiSummaryStatus: AISummaryStatus;
 }
 
 @Injectable()
@@ -157,6 +162,38 @@ export class NoticeArchiveService {
 
   async getArchiveCount(): Promise<number> {
     return this.archiveRepository.count();
+  }
+
+  async getSummaryStateByNoticeNums(
+    noticeNums: number[],
+  ): Promise<Map<number, ArchiveSummaryState>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+
+    if (uniqueNums.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.archiveRepository.find({
+      where: {
+        noticeNum: In(uniqueNums),
+      },
+      select: {
+        noticeNum: true,
+        aiSummary: true,
+        aiSummaryStatus: true,
+      },
+    });
+
+    return new Map(
+      rows.map((row) => [
+        row.noticeNum,
+        {
+          aiSummary: row.aiSummary ?? null,
+          aiSummaryStatus: (row.aiSummaryStatus ||
+            'not_requested') as AISummaryStatus,
+        },
+      ]),
+    );
   }
 
   private mapArchiveEntityToNoticeItem(row: NoticeArchive): ArchiveNoticeItem {

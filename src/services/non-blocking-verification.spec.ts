@@ -43,6 +43,7 @@ describe('Non-blocking Architecture Verification', () => {
     const mockNoticeArchiveService = {
       existsByNoticeNum: jest.fn().mockResolvedValue(false),
       upsertNoticeArchive: jest.fn(),
+      getSummaryStateByNoticeNums: jest.fn().mockResolvedValue(new Map()),
     };
 
     module = await Test.createTestingModule({

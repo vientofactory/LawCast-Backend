@@ -81,6 +81,7 @@ describe('HTTP-Batch Processing Isolation', () => {
         search: '',
       }),
       getArchivedNoticeDetail: jest.fn().mockResolvedValue(null),
+      getArchiveCount: jest.fn().mockResolvedValue(0),
     };
 
     module = await Test.createTestingModule({
