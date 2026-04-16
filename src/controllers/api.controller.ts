@@ -12,10 +12,12 @@ import {
   HttpStatus,
   HttpCode,
   Req,
+  Res,
   NotFoundException,
+  StreamableFile,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { WebhookService } from '../services/webhook.service';
 import { CrawlingService } from '../services/crawling.service';
 import { NotificationService } from '../services/notification.service';
@@ -31,6 +33,7 @@ import {
   sanitizeSearchQuery,
 } from '../utils/api-controller.utils';
 import { APP_CONSTANTS } from '../config/app.config';
+import JSZip from 'jszip';
 
 @Controller('api')
 export class ApiController {
@@ -170,6 +173,44 @@ export class ApiController {
     }
 
     return ApiResponseUtils.success(detail);
+  }
+
+  @Get('notices/:num/export')
+  async exportNoticeArchive(
+    @Param('num', ParseIntPipe) num: number,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const archiveExport =
+      await this.noticeArchiveService.buildArchiveExportFile(num);
+
+    if (!archiveExport) {
+      throw new NotFoundException(
+        `의안번호 ${num}에 해당하는 아카이브 입법예고를 찾을 수 없습니다.`,
+      );
+    }
+
+    const zip = this.createZipInstance();
+    zip.file(archiveExport.jsonFileName, archiveExport.jsonContent);
+    zip.file(archiveExport.integrityFileName, archiveExport.integrityContent);
+
+    const zipBuffer = await zip.generateAsync({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 9 },
+    });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${archiveExport.zipFileName}"`,
+    );
+    res.setHeader('Cache-Control', 'no-store');
+
+    return new StreamableFile(zipBuffer);
+  }
+
+  private createZipInstance() {
+    return new JSZip();
   }
 
   @Get('stats')

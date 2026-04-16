@@ -92,6 +92,14 @@ export interface ArchiveSummaryState {
   aiSummaryStatus: AISummaryStatus;
 }
 
+export interface ArchiveExportResult {
+  zipFileName: string;
+  jsonFileName: string;
+  jsonContent: string;
+  integrityFileName: string;
+  integrityContent: string;
+}
+
 export interface ArchiveHttpMetadata {
   requestUrl?: string;
   responseUrl?: string;
@@ -298,6 +306,57 @@ export class NoticeArchiveService {
     };
   }
 
+  async buildArchiveExportFile(
+    noticeNum: number,
+  ): Promise<ArchiveExportResult | null> {
+    const row = await this.archiveRepository.findOne({
+      where: { noticeNum },
+    });
+
+    if (!row) {
+      return null;
+    }
+
+    const integrity = await this.verifyAndRefreshIntegrity(row);
+    const httpMetadata = this.parseHttpMetadata(row.httpMetadataJson);
+    const generatedAt = new Date();
+
+    const exportPayload = {
+      exportMeta: {
+        generatedAt,
+        formatVersion: '1.0',
+        recordType: 'lawcast_notice_archive',
+        noticeNum,
+      },
+      dbRecord: this.mapArchiveEntityToRawRecord(row),
+      integritySnapshot: {
+        checkedAt: integrity.checkedAt,
+        passed: integrity.passed,
+        storedSha256: row.sourceHtmlSha256,
+        calculatedSha256: integrity.calculatedSha256,
+      },
+      httpMetadata,
+    };
+
+    const fileStamp = generatedAt.toISOString().replace(/[:.]/g, '-');
+    const baseFileName = `lawcast-archive-${noticeNum}-${fileStamp}`;
+    const integrityContent = this.buildIntegrityMetadataText({
+      noticeNum,
+      generatedAt,
+      row,
+      integrity,
+      httpMetadata,
+    });
+
+    return {
+      zipFileName: `${baseFileName}.zip`,
+      jsonFileName: `${baseFileName}.json`,
+      jsonContent: JSON.stringify(exportPayload, null, 2),
+      integrityFileName: `${baseFileName}.integrity.txt`,
+      integrityContent,
+    };
+  }
+
   async existsByNoticeNum(noticeNum: number): Promise<boolean> {
     return this.archiveRepository.exists({ where: { noticeNum } });
   }
@@ -389,6 +448,73 @@ export class NoticeArchiveService {
       archiveStartedAt: row.archiveStartedAt,
       lastUpdatedAt: row.lastUpdatedAt,
     };
+  }
+
+  private mapArchiveEntityToRawRecord(row: NoticeArchive) {
+    return {
+      id: row.id,
+      noticeNum: row.noticeNum,
+      subject: row.subject,
+      proposerCategory: row.proposerCategory,
+      committee: row.committee,
+      assemblyLink: row.assemblyLink,
+      contentId: row.contentId,
+      proposalReason: row.proposalReason,
+      sourceTitle: row.sourceTitle,
+      aiSummary: row.aiSummary,
+      aiSummaryStatus: row.aiSummaryStatus,
+      attachmentPdfFile: row.attachmentPdfFile,
+      attachmentHwpFile: row.attachmentHwpFile,
+      archivedAt: row.archivedAt,
+      sourceHtml: row.sourceHtml,
+      sourceHtmlSha256: row.sourceHtmlSha256,
+      integrityVerifiedAt: row.integrityVerifiedAt,
+      integrityCheckPassed: row.integrityCheckPassed,
+      httpMetadataJson: row.httpMetadataJson,
+      httpFetchedAt: row.httpFetchedAt,
+      httpStatusCode: row.httpStatusCode,
+      httpContentType: row.httpContentType,
+      httpEtag: row.httpEtag,
+      httpLastModified: row.httpLastModified,
+      archiveStartedAt: row.archiveStartedAt,
+      lastUpdatedAt: row.lastUpdatedAt,
+    };
+  }
+
+  private buildIntegrityMetadataText(params: {
+    noticeNum: number;
+    generatedAt: Date;
+    row: NoticeArchive;
+    integrity: {
+      checkedAt: Date | null;
+      passed: boolean | null;
+      calculatedSha256: string | null;
+    };
+    httpMetadata: ArchiveHttpMetadata;
+  }): string {
+    const { noticeNum, generatedAt, row, integrity, httpMetadata } = params;
+
+    const lines = [
+      'LawCast Archive Integrity Metadata',
+      '=================================',
+      `noticeNum: ${noticeNum}`,
+      `generatedAt: ${generatedAt.toISOString()}`,
+      `archivedAt: ${row.archivedAt?.toISOString() ?? 'N/A'}`,
+      `sourceHtmlSizeBytes: ${row.sourceHtml ? Buffer.byteLength(row.sourceHtml, 'utf8') : 0}`,
+      `storedSha256: ${row.sourceHtmlSha256 ?? 'N/A'}`,
+      `calculatedSha256: ${integrity.calculatedSha256 ?? 'N/A'}`,
+      `integrityPassed: ${integrity.passed === null ? 'N/A' : integrity.passed ? 'true' : 'false'}`,
+      `integrityCheckedAt: ${integrity.checkedAt?.toISOString() ?? 'N/A'}`,
+      `httpFetchedAt: ${row.httpFetchedAt?.toISOString() ?? 'N/A'}`,
+      `httpStatusCode: ${row.httpStatusCode ?? 'N/A'}`,
+      `httpContentType: ${row.httpContentType ?? 'N/A'}`,
+      `httpEtag: ${row.httpEtag ?? 'N/A'}`,
+      `httpLastModified: ${row.httpLastModified ?? 'N/A'}`,
+      `httpRequestUrl: ${typeof httpMetadata.requestUrl === 'string' ? httpMetadata.requestUrl : 'N/A'}`,
+      `httpResponseUrl: ${typeof httpMetadata.responseUrl === 'string' ? httpMetadata.responseUrl : 'N/A'}`,
+    ];
+
+    return `${lines.join('\n')}\n`;
   }
 
   private normalizeSortOrder(sortOrder?: 'asc' | 'desc'): 'asc' | 'desc' {

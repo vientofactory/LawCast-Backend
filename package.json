@@ -35,6 +35,7 @@
     "cron": "^4.3.4",
     "discord-webhook-node": "^1.1.8",
     "hashguard-client": "^1.5.0",
+    "jszip": "^3.10.1",
     "keyv": "^5.5.4",
     "node-cache": "^5.1.2",
     "pal-crawl": "^1.5.0",
