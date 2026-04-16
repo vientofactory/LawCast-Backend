@@ -21,11 +21,11 @@ import { NotificationService } from '../services/notification.service';
 import { HashguardService } from '../services/hashguard.service';
 import { BatchProcessingService } from '../services/batch-processing.service';
 import { NoticeArchiveService } from '../services/notice-archive.service';
+import { NoticesQueryService } from '../services/notices-query.service';
 import { CreateWebhookDto } from '../dto/create-webhook.dto';
 import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
 import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
 import { APP_CONSTANTS } from '../config/app.config';
-import { type CachedNotice } from '../types/cache.types';
 
 @Controller('api')
 export class ApiController {
@@ -36,6 +36,7 @@ export class ApiController {
     private readonly hashguardService: HashguardService,
     private readonly batchProcessingService: BatchProcessingService,
     private readonly noticeArchiveService: NoticeArchiveService,
+    private readonly noticesQueryService: NoticesQueryService,
   ) {}
 
   @Post('webhooks')
@@ -105,83 +106,13 @@ export class ApiController {
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('search') search?: string,
   ) {
-    const safePage = Math.max(1, page);
-    const safeLimit = Math.min(50, Math.max(1, limit));
-    const normalizedSearch = (search || '').trim();
-
-    const cachedNotices = await this.crawlingService.getRecentNotices(
-      APP_CONSTANTS.CACHE.MAX_SIZE,
-    );
-
-    const filteredCached = normalizedSearch
-      ? cachedNotices.filter((notice) =>
-          this.matchesSearchKeyword(notice, normalizedSearch),
-        )
-      : cachedNotices;
-
-    const cachedNoticeMap = new Map(
-      filteredCached.map((notice) => [notice.num, notice]),
-    );
-
-    const existingArchivedNums =
-      await this.noticeArchiveService.getExistingNoticeNumSet(
-        filteredCached.map((notice) => notice.num),
-      );
-
-    const cacheOnlyItems = filteredCached
-      .filter((notice) => !existingArchivedNums.has(notice.num))
-      .map((notice) => this.mapCachedNoticeToListItem(notice));
-
-    const cacheOnlyCount = cacheOnlyItems.length;
-    const globalStart = (safePage - 1) * safeLimit;
-    const globalEnd = globalStart + safeLimit;
-
-    const cacheSliceStart = Math.min(globalStart, cacheOnlyCount);
-    const cacheSliceEnd = Math.min(globalEnd, cacheOnlyCount);
-    const cacheSlice = cacheOnlyItems.slice(cacheSliceStart, cacheSliceEnd);
-
-    const remainingTake = Math.max(0, safeLimit - cacheSlice.length);
-    const archiveSkip = Math.max(0, globalStart - cacheOnlyCount);
-
-    const archivePageResult =
-      await this.noticeArchiveService.getArchiveNoticesByOffset({
-        skip: archiveSkip,
-        take: remainingTake,
-        search: normalizedSearch,
-      });
-
-    const archiveItems = archivePageResult.items.map((item) => {
-      const cached = cachedNoticeMap.get(item.num);
-
-      if (!cached) {
-        return item;
-      }
-
-      return {
-        ...item,
-        aiSummary: cached.aiSummary ?? item.aiSummary,
-        aiSummaryStatus:
-          cached.aiSummaryStatus ?? item.aiSummaryStatus ?? 'not_requested',
-      };
+    const archiveResult = await this.noticesQueryService.getArchivedNotices({
+      page,
+      limit,
+      search,
     });
 
-    const items = [...cacheSlice, ...archiveItems];
-    const total = cacheOnlyCount + archivePageResult.total;
-
-    return ApiResponseUtils.success({
-      items,
-      page: safePage,
-      limit: safeLimit,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
-      search: normalizedSearch,
-      stats: {
-        cacheCount: cachedNotices.length,
-        matchedCacheCount: filteredCached.length,
-        archiveCount: archivePageResult.total,
-        mergedCount: total,
-      },
-    });
+    return ApiResponseUtils.success(archiveResult);
   }
 
   @Get('notices/:num/detail')
@@ -290,39 +221,5 @@ export class ApiController {
       },
       isConnected ? 'Redis is connected' : 'Redis connection failed',
     );
-  }
-
-  private mapCachedNoticeToListItem(notice: CachedNotice) {
-    return {
-      num: notice.num,
-      subject: notice.subject,
-      proposerCategory: notice.proposerCategory,
-      committee: notice.committee,
-      numComments: notice.numComments,
-      link: notice.link,
-      contentId: notice.contentId ?? null,
-      aiSummary: notice.aiSummary ?? null,
-      aiSummaryStatus: notice.aiSummaryStatus ?? 'not_requested',
-      attachments: {
-        pdfFile: notice.attachments?.pdfFile ?? '',
-        hwpFile: notice.attachments?.hwpFile ?? '',
-      },
-      archiveStartedAt: null,
-      lastUpdatedAt: null,
-    };
-  }
-
-  private matchesSearchKeyword(notice: CachedNotice, search: string): boolean {
-    const keyword = search.toLowerCase();
-    const target = [
-      notice.subject,
-      notice.proposerCategory,
-      notice.committee,
-      notice.aiSummary || '',
-    ]
-      .join(' ')
-      .toLowerCase();
-
-    return target.includes(keyword);
   }
 }
