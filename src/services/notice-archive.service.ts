@@ -155,6 +155,10 @@ export class NoticeArchiveService {
     return this.archiveRepository.exists({ where: { noticeNum } });
   }
 
+  async getArchiveCount(): Promise<number> {
+    return this.archiveRepository.count();
+  }
+
   private mapArchiveEntityToNoticeItem(row: NoticeArchive): ArchiveNoticeItem {
     return {
       num: row.noticeNum,

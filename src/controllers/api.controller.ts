@@ -170,15 +170,20 @@ export class ApiController {
 
   @Get('stats')
   async getStats() {
-    const [webhookStats, cacheInfo, batchStatus] = await Promise.all([
-      this.webhookService.getDetailedStats(),
-      this.crawlingService.getCacheInfo(),
-      this.batchProcessingService.getBatchJobStatus(),
-    ]);
+    const [webhookStats, cacheInfo, batchStatus, archiveCount] =
+      await Promise.all([
+        this.webhookService.getDetailedStats(),
+        this.crawlingService.getCacheInfo(),
+        this.batchProcessingService.getBatchJobStatus(),
+        this.noticeArchiveService.getArchiveCount(),
+      ]);
 
     return ApiResponseUtils.success({
       webhooks: webhookStats,
       cache: cacheInfo,
+      archive: {
+        count: archiveCount,
+      },
       batchProcessing: batchStatus,
     });
   }
