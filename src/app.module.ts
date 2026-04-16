@@ -14,7 +14,9 @@ import { BatchProcessingService } from './services/batch-processing.service';
 import { CronJobsService } from './cronjobs/cronjobs.service';
 import { WebhookCleanupService } from './services/webhook-cleanup.service';
 import { Webhook } from './entities/webhook.entity';
+import { NoticeArchive } from './entities/notice-archive.entity';
 import { OllamaModule } from './modules/ollama/ollama.module';
+import { NoticeArchiveService } from './services/notice-archive.service';
 import appConfig from './config/app.config';
 
 @Module({
@@ -49,11 +51,11 @@ import appConfig from './config/app.config';
       useFactory: (configService: ConfigService) => ({
         type: 'sqlite',
         database: configService.get<string>('database.path'),
-        entities: [Webhook],
+        entities: [Webhook, NoticeArchive],
         synchronize: true,
       }),
     }),
-    TypeOrmModule.forFeature([Webhook]),
+    TypeOrmModule.forFeature([Webhook, NoticeArchive]),
     ScheduleModule.forRoot(),
     OllamaModule,
   ],
@@ -65,6 +67,7 @@ import appConfig from './config/app.config';
     CacheService,
     HashguardService,
     BatchProcessingService,
+    NoticeArchiveService,
     WebhookCleanupService,
     CronJobsService,
   ],

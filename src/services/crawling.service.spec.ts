@@ -4,6 +4,7 @@ import { CrawlingService } from './crawling.service';
 import { CacheService } from './cache.service';
 import { BatchProcessingService } from './batch-processing.service';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
+import { NoticeArchiveService } from './notice-archive.service';
 import { PalCrawl, type ITableData } from 'pal-crawl';
 
 // pal-crawl 모듈을 모킹
@@ -38,7 +39,7 @@ describe('CrawlingService', () => {
     },
   ];
 
-  const flushPromises = () => new Promise((resolve) => setImmediate(resolve));
+  const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   beforeEach(async () => {
     // PalCrawl 모킹
@@ -72,6 +73,13 @@ describe('CrawlingService', () => {
           provide: OllamaClientService,
           useValue: {
             summarizeProposal: jest.fn(),
+          },
+        },
+        {
+          provide: NoticeArchiveService,
+          useValue: {
+            existsByNoticeNum: jest.fn().mockResolvedValue(false),
+            upsertNoticeArchive: jest.fn(),
           },
         },
         {

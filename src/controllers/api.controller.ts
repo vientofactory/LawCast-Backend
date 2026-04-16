@@ -4,12 +4,15 @@ import {
   Post,
   Body,
   Param,
+  Query,
+  DefaultValuePipe,
   ParseIntPipe,
   ValidationPipe,
   UsePipes,
   HttpStatus,
   HttpCode,
   Req,
+  NotFoundException,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { WebhookService } from '../services/webhook.service';
@@ -17,10 +20,12 @@ import { CrawlingService } from '../services/crawling.service';
 import { NotificationService } from '../services/notification.service';
 import { HashguardService } from '../services/hashguard.service';
 import { BatchProcessingService } from '../services/batch-processing.service';
+import { NoticeArchiveService } from '../services/notice-archive.service';
 import { CreateWebhookDto } from '../dto/create-webhook.dto';
 import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
 import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
 import { APP_CONSTANTS } from '../config/app.config';
+import { type CachedNotice } from '../types/cache.types';
 
 @Controller('api')
 export class ApiController {
@@ -30,6 +35,7 @@ export class ApiController {
     private readonly notificationService: NotificationService,
     private readonly hashguardService: HashguardService,
     private readonly batchProcessingService: BatchProcessingService,
+    private readonly noticeArchiveService: NoticeArchiveService,
   ) {}
 
   @Post('webhooks')
@@ -93,23 +99,91 @@ export class ApiController {
     return ApiResponseUtils.success(notices);
   }
 
+  @Get('notices/archive')
+  async getArchivedNotices(
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('search') search?: string,
+  ) {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(50, Math.max(1, limit));
+    const normalizedSearch = (search || '').trim();
+
+    const [cachedNotices, archiveItems] = await Promise.all([
+      this.crawlingService.getRecentNotices(APP_CONSTANTS.CACHE.MAX_SIZE),
+      this.noticeArchiveService.listArchiveNotices(normalizedSearch),
+    ]);
+
+    const filteredCached = normalizedSearch
+      ? cachedNotices.filter((notice) =>
+          this.matchesSearchKeyword(notice, normalizedSearch),
+        )
+      : cachedNotices;
+
+    const mergedByNoticeNum = new Map<number, (typeof archiveItems)[number]>();
+
+    for (const notice of filteredCached) {
+      mergedByNoticeNum.set(notice.num, this.mapCachedNoticeToListItem(notice));
+    }
+
+    for (const notice of archiveItems) {
+      if (!mergedByNoticeNum.has(notice.num)) {
+        mergedByNoticeNum.set(notice.num, notice);
+      }
+    }
+
+    const mergedItems = Array.from(mergedByNoticeNum.values()).sort(
+      (a, b) => b.num - a.num,
+    );
+    const total = mergedItems.length;
+    const startIndex = (safePage - 1) * safeLimit;
+    const items = mergedItems.slice(startIndex, startIndex + safeLimit);
+
+    return ApiResponseUtils.success({
+      items,
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+      search: normalizedSearch,
+      stats: {
+        cacheCount: cachedNotices.length,
+        matchedCacheCount: filteredCached.length,
+        archiveCount: archiveItems.length,
+        mergedCount: total,
+      },
+    });
+  }
+
   @Get('notices/:num/detail')
   async getNoticeDetail(@Param('num', ParseIntPipe) num: number) {
-    const detail = await this.crawlingService.getNoticeDetail(num);
+    const detail = await this.noticeArchiveService.getArchivedNoticeDetail(num);
+
+    if (!detail) {
+      throw new NotFoundException(
+        `의안번호 ${num}에 해당하는 아카이브 입법예고를 찾을 수 없습니다.`,
+      );
+    }
+
     return ApiResponseUtils.success(detail);
   }
 
   @Get('stats')
   async getStats() {
-    const [webhookStats, cacheInfo, batchStatus] = await Promise.all([
-      this.webhookService.getDetailedStats(),
-      this.crawlingService.getCacheInfo(),
-      this.batchProcessingService.getBatchJobStatus(),
-    ]);
+    const [webhookStats, cacheInfo, batchStatus, archiveCount] =
+      await Promise.all([
+        this.webhookService.getDetailedStats(),
+        this.crawlingService.getCacheInfo(),
+        this.batchProcessingService.getBatchJobStatus(),
+        this.noticeArchiveService.getArchiveCount(),
+      ]);
 
     return ApiResponseUtils.success({
       webhooks: webhookStats,
       cache: cacheInfo,
+      archive: {
+        count: archiveCount,
+      },
       batchProcessing: batchStatus,
     });
   }
@@ -187,5 +261,39 @@ export class ApiController {
       },
       isConnected ? 'Redis is connected' : 'Redis connection failed',
     );
+  }
+
+  private mapCachedNoticeToListItem(notice: CachedNotice) {
+    return {
+      num: notice.num,
+      subject: notice.subject,
+      proposerCategory: notice.proposerCategory,
+      committee: notice.committee,
+      numComments: notice.numComments,
+      link: notice.link,
+      contentId: notice.contentId ?? null,
+      aiSummary: notice.aiSummary ?? null,
+      aiSummaryStatus: notice.aiSummaryStatus ?? 'not_requested',
+      attachments: {
+        pdfFile: notice.attachments?.pdfFile ?? '',
+        hwpFile: notice.attachments?.hwpFile ?? '',
+      },
+      archiveStartedAt: null,
+      lastUpdatedAt: null,
+    };
+  }
+
+  private matchesSearchKeyword(notice: CachedNotice, search: string): boolean {
+    const keyword = search.toLowerCase();
+    const target = [
+      notice.subject,
+      notice.proposerCategory,
+      notice.committee,
+      notice.aiSummary || '',
+    ]
+      .join(' ')
+      .toLowerCase();
+
+    return target.includes(keyword);
   }
 }

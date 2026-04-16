@@ -44,9 +44,9 @@ export const APP_CONSTANTS = {
     },
   },
   CACHE: {
-    MAX_SIZE: 50,
+    MAX_SIZE: 10,
     DEFAULT_LIMIT: 10,
-    NOTICES_RECENT_LIMIT: 50,
+    NOTICES_RECENT_LIMIT: 10,
     TTL: {
       NOTICES: 30 * 60 * 1000, // 30분 (밀리초)
       CACHE_INFO: 60 * 1000, // 1분 (밀리초)

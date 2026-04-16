@@ -12,6 +12,7 @@ import { WebhookService } from '../services/webhook.service';
 import { NotificationService } from '../services/notification.service';
 import { HashguardService } from '../services/hashguard.service';
 import { WebhookCleanupService } from '../services/webhook-cleanup.service';
+import { NoticeArchiveService } from '../services/notice-archive.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;
@@ -70,6 +71,18 @@ describe('HTTP-Batch Processing Isolation', () => {
       }),
     };
 
+    const mockNoticeArchiveService = {
+      getArchiveNotices: jest.fn().mockResolvedValue({
+        items: [],
+        page: 1,
+        limit: 10,
+        total: 0,
+        totalPages: 1,
+        search: '',
+      }),
+      getArchivedNoticeDetail: jest.fn().mockResolvedValue(null),
+    };
+
     module = await Test.createTestingModule({
       controllers: [ApiController],
       providers: [
@@ -79,6 +92,7 @@ describe('HTTP-Batch Processing Isolation', () => {
         { provide: CrawlingService, useValue: mockCrawlingService },
         { provide: HashguardService, useValue: mockHashguardService },
         { provide: WebhookCleanupService, useValue: mockWebhookCleanupService },
+        { provide: NoticeArchiveService, useValue: mockNoticeArchiveService },
       ],
     }).compile();
 
