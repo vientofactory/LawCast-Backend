@@ -80,6 +80,7 @@ describe('CrawlingService', () => {
           useValue: {
             existsByNoticeNum: jest.fn().mockResolvedValue(false),
             upsertNoticeArchive: jest.fn(),
+            getSummaryStateByNoticeNums: jest.fn().mockResolvedValue(new Map()),
           },
         },
         {

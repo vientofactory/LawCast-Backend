@@ -20,6 +20,7 @@ import {
   type CachedNotice,
 } from '../types/cache.types';
 import { NoticeArchiveService } from './notice-archive.service';
+import { type ArchiveSummaryState } from './notice-archive.service';
 
 @Injectable()
 export class CrawlingService implements OnModuleInit {
@@ -109,9 +110,15 @@ export class CrawlingService implements OnModuleInit {
         `Starting summary generation for ${crawledData.length} notices`,
       );
 
+      const archiveSummaryStates =
+        await this.noticeArchiveService.getSummaryStateByNoticeNums(
+          crawledData.map((notice) => notice.num),
+        );
+
       const noticesWithSummary = await this.enrichNoticesWithSummary(
         crawledData,
         new Map(),
+        archiveSummaryStates,
         {
           logOllamaActivity: true,
           phase: 'init-cache',
@@ -192,6 +199,7 @@ export class CrawlingService implements OnModuleInit {
         const newNoticesWithSummary = await this.enrichNoticesWithSummary(
           newNotices,
           existingNoticeMap,
+          new Map(),
         );
 
         await this.archiveNotices(newNoticesWithSummary);
@@ -477,6 +485,7 @@ export class CrawlingService implements OnModuleInit {
   private async enrichNoticesWithSummary(
     notices: ITableData[],
     existingNotices: Map<number, CachedNotice> = new Map(),
+    archiveSummaryStates: Map<number, ArchiveSummaryState> = new Map(),
     options: { logOllamaActivity?: boolean; phase?: string } = {},
   ): Promise<CachedNotice[]> {
     const { logOllamaActivity = false, phase = 'runtime' } = options;
@@ -498,6 +507,23 @@ export class CrawlingService implements OnModuleInit {
             ...notice,
             aiSummary: cachedSummary,
             aiSummaryStatus: 'ready',
+          };
+        }
+
+        const archivedSummaryState = archiveSummaryStates.get(notice.num);
+
+        if (archivedSummaryState) {
+          if (logOllamaActivity) {
+            this.logOllama(
+              `Skipping notice ${index + 1}/${notices.length} (archive hit: num=${notice.num})`,
+              phase,
+            );
+          }
+
+          return {
+            ...notice,
+            aiSummary: archivedSummaryState.aiSummary,
+            aiSummaryStatus: archivedSummaryState.aiSummaryStatus,
           };
         }
 
