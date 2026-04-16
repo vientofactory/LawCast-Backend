@@ -13,6 +13,7 @@ import { NotificationService } from '../services/notification.service';
 import { HashguardService } from '../services/hashguard.service';
 import { WebhookCleanupService } from '../services/webhook-cleanup.service';
 import { NoticeArchiveService } from '../services/notice-archive.service';
+import { NoticesQueryService } from '../services/notices-query.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;
@@ -84,6 +85,24 @@ describe('HTTP-Batch Processing Isolation', () => {
       getArchiveCount: jest.fn().mockResolvedValue(0),
     };
 
+    const mockNoticesQueryService = {
+      getArchivedNotices: jest.fn().mockResolvedValue({
+        items: [],
+        page: 1,
+        limit: 10,
+        total: 0,
+        totalPages: 1,
+        search: '',
+        stats: {
+          cacheCount: 0,
+          matchedCacheCount: 0,
+          archiveCount: 0,
+          totalArchiveCount: 0,
+          mergedCount: 0,
+        },
+      }),
+    };
+
     module = await Test.createTestingModule({
       controllers: [ApiController],
       providers: [
@@ -94,6 +113,7 @@ describe('HTTP-Batch Processing Isolation', () => {
         { provide: HashguardService, useValue: mockHashguardService },
         { provide: WebhookCleanupService, useValue: mockWebhookCleanupService },
         { provide: NoticeArchiveService, useValue: mockNoticeArchiveService },
+        { provide: NoticesQueryService, useValue: mockNoticesQueryService },
       ],
     }).compile();
 

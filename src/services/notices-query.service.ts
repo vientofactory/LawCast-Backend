@@ -108,7 +108,6 @@ export class NoticesQueryService {
       subject: notice.subject,
       proposerCategory: notice.proposerCategory,
       committee: notice.committee,
-      numComments: notice.numComments,
       link: notice.link,
       contentId: notice.contentId ?? null,
       aiSummary: notice.aiSummary ?? null,

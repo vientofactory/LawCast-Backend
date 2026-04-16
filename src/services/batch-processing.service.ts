@@ -1,9 +1,9 @@
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
-import { type ITableData } from 'pal-crawl';
 import { WebhookService } from './webhook.service';
 import { NotificationService } from './notification.service';
 import { LoggerUtils } from '../utils/logger.utils';
 import { APP_CONSTANTS } from '../config/app.config';
+import { type CachedNotice } from '../types/cache.types';
 
 const { BATCH } = APP_CONSTANTS;
 
@@ -162,7 +162,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
    * 입법예고 알림 배치 처리
    */
   async processNotificationBatch(
-    notices: ITableData[],
+    notices: CachedNotice[],
     options: BatchProcessingOptions = {},
   ): Promise<string> {
     // 종료 중인 경우 새로운 작업 거부
@@ -218,7 +218,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
    * 실제 알림 배치 실행
    */
   private async executeNotificationBatch(
-    notices: ITableData[],
+    notices: CachedNotice[],
     options: BatchProcessingOptions,
   ): Promise<BatchJobResult[]> {
     const activeWebhooks = (await this.webhookService.findAll()) ?? [];

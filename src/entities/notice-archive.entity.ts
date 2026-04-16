@@ -26,9 +26,6 @@ export class NoticeArchive {
   @Column({ type: 'varchar', length: 200 })
   committee: string;
 
-  @Column({ type: 'integer', default: 0 })
-  numComments: number;
-
   @Column({ type: 'text' })
   assemblyLink: string;
 
