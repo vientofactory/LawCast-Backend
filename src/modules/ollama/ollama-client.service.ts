@@ -130,7 +130,8 @@ export class OllamaClientService {
     }
 
     if (title && normalized.includes(title)) {
-      normalized = normalized.replace(title, '').trim();
+      normalized = normalized.split(title).join('').trim();
+      normalized = normalized.replace(/^(은|는|이|가)\s*/, '').trim();
     }
 
     normalized = collapseWhitespace(normalized);
