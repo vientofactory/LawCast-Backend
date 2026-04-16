@@ -110,11 +110,36 @@ npm run test:cov
 ## API 엔드포인트
 
 - `GET /api/notices/recent` - 최근 입법예고 목록 조회 (Redis 캐시 활용)
+- `GET /api/notices/archive` - 전체 입법예고 목록 조회 (검색/날짜 필터/정렬/페이지네이션)
 - `GET /api/notices/:num/detail` - 특정 법률안 상세 조회 (원문: 제안이유 및 주요내용 포함)
 - `POST /api/webhooks` - 웹훅 등록
 - `DELETE /api/webhooks/:id` - 웹훅 삭제
 - `GET /api/stats` - 시스템 통계 및 Redis 캐시 정보 조회
 - `GET /api/health` - 서버 상태 및 Redis 연결 상태 확인
+
+### 전체 입법예고 목록 조회 파라미터
+
+`GET /api/notices/archive`
+
+지원 쿼리 파라미터:
+
+- `page` : 페이지 번호 (기본값 `1`)
+- `limit` : 페이지 크기 (기본값 `10`, 최대 `50`)
+- `search` : 키워드 검색 (법률안명, 소관위원회, 원문 텍스트 일부)
+- `startDate` : 시작일 (`YYYY-MM-DD`)
+- `endDate` : 종료일 (`YYYY-MM-DD`)
+- `sortOrder` : 의안번호 정렬 (`desc` 기본값, `asc` 지원)
+
+예시:
+
+```http
+GET /api/notices/archive?page=1&limit=10&search=교육&startDate=2026-04-01&endDate=2026-04-17&sortOrder=desc
+```
+
+참고:
+
+- `startDate` / `endDate` 형식이 유효하지 않으면 해당 조건은 무시됩니다.
+- 날짜 범위가 역순이어도 서버에서 내부적으로 범위를 보정해 조회합니다.
 
 ### 상세 조회 응답 예시
 
