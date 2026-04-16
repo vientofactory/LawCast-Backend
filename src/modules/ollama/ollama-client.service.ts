@@ -27,6 +27,8 @@ export class OllamaClientService {
   private readonly model: string;
   private readonly modelTemperature = 0.2;
   private readonly modelNumPredict = 220;
+  private readonly fallbackSummary =
+    '핵심 정책 변화와 예상 영향이 확인되지만 제공된 정보만으로 구체 내용을 확정하기 어렵습니다.';
 
   constructor(private configService: ConfigService) {
     const apiUrl = this.configService.get<string>('ollama.apiUrl');
@@ -49,12 +51,19 @@ export class OllamaClientService {
     proposalReason: string,
   ): Promise<string | null> {
     const prompt = [
-      '당신은 국회 입법예고 요약 도우미입니다.',
-      '1. 다음 법률안의 "제안이유 및 주요내용"을 한국어로 한 문장으로 요약하세요.',
-      '2. 출력에는 마크다운 문법을 쓰지 말고, 핵심 정책 변화와 영향을 간결하게 포함하세요.',
-      '3. 법률안명을 그대로 작성하지 마세요.',
-      '4. 줄바꿈을 사용하지 마세요.',
-      '5. 요약된 문장만 출력하세요.',
+      '당신은 국회 입법예고 요약 도우미입니다. 아래 규칙을 위반하지 마세요.',
+      '',
+      '[출력 규칙]',
+      '1) 한국어 한 문장만 출력합니다.',
+      '2) 줄바꿈 없이 평문으로만 출력합니다.',
+      '3) "요약:", "설명:", "참고:" 같은 머리말을 금지합니다.',
+      '4) 목록 기호, 마크다운, 따옴표, 코드블록을 금지합니다.',
+      '5) 법률안명은 반복하지 말고 핵심 정책 변화와 영향만 씁니다.',
+      '6) 입력에 근거가 부족하면 아래 문장만 그대로 출력합니다.',
+      `   ${this.fallbackSummary}`,
+      '',
+      '[출력 형식]',
+      '반드시 요약 문장 하나만 출력',
       '',
       `법률안명: ${title}`,
       `제안이유 및 주요내용: ${proposalReason}`,
@@ -77,12 +86,60 @@ export class OllamaClientService {
         payload,
       );
 
-      const summary = response.data.response.trim();
+      const summary = this.normalizeSummary(response.data.response, title);
       return summary;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Failed to summarize proposal with Ollama: ${message}`);
       return null;
     }
+  }
+
+  private normalizeSummary(rawSummary: string, title: string): string | null {
+    if (!rawSummary) {
+      return null;
+    }
+
+    const collapseWhitespace = (value: string): string =>
+      value
+        .replace(/[\r\n]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    let normalized = collapseWhitespace(rawSummary)
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/^[#>*\-\d.\s]+/, '')
+      .replace(/^(요약|설명|참고)\s*[:：]\s*/i, '')
+      .replace(/[*_~()[\]]/g, '')
+      .replace(/["'`]/g, '')
+      .trim();
+
+    if (!normalized) {
+      return null;
+    }
+
+    const sentenceParts = normalized
+      .split(/(?<=[.!?。])\s+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    normalized = sentenceParts[0] ?? normalized;
+
+    if (!normalized) {
+      return null;
+    }
+
+    if (title && normalized.includes(title)) {
+      normalized = normalized.split(title).join('').trim();
+      normalized = normalized.replace(/^(은|는|이|가)\s*/, '').trim();
+    }
+
+    normalized = collapseWhitespace(normalized);
+
+    if (!normalized) {
+      return null;
+    }
+
+    return normalized;
   }
 }
