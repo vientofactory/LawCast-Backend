@@ -172,6 +172,7 @@ export class ApiController {
     const safeCacheInfo = isProduction
       ? {
           size: cacheInfo.size,
+          lastUpdated: cacheInfo.lastUpdated,
           maxSize: cacheInfo.maxSize,
           isInitialized: cacheInfo.isInitialized,
         }
