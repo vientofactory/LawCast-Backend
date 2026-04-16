@@ -121,20 +121,42 @@ export class ApiController {
     )
     limit: number,
     @Query('search') search?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('sortOrder') sortOrder?: string,
   ) {
     const safePage = Math.max(APP_CONSTANTS.API.PAGINATION.MIN_PAGE, page);
     const safeLimit = Math.min(
       APP_CONSTANTS.API.PAGINATION.MAX_LIMIT,
       Math.max(APP_CONSTANTS.API.PAGINATION.MIN_LIMIT, limit),
     );
+    const safeSortOrder = sortOrder === 'asc' ? 'asc' : 'desc';
+    const safeStartDate = this.sanitizeDateQuery(startDate);
+    const safeEndDate = this.sanitizeDateQuery(endDate);
 
     const archiveResult = await this.noticesQueryService.getArchivedNotices({
       page: safePage,
       limit: safeLimit,
       search: sanitizeSearchQuery(search, APP_CONSTANTS.API.SEARCH.MAX_LENGTH),
+      startDate: safeStartDate,
+      endDate: safeEndDate,
+      sortOrder: safeSortOrder,
     });
 
     return ApiResponseUtils.success(archiveResult);
+  }
+
+  private sanitizeDateQuery(rawDate?: string): string | undefined {
+    if (!rawDate) {
+      return undefined;
+    }
+
+    const normalized = rawDate.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+      return undefined;
+    }
+
+    return normalized;
   }
 
   @Get('notices/:num/detail')

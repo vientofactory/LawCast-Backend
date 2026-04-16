@@ -1,6 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ILike, In, Repository } from 'typeorm';
+import {
+  Between,
+  FindOptionsWhere,
+  FindOperator,
+  ILike,
+  In,
+  LessThan,
+  LessThanOrEqual,
+  MoreThan,
+  MoreThanOrEqual,
+  Repository,
+} from 'typeorm';
 import { type AISummaryStatus, type CachedNotice } from '../types/cache.types';
 import { NoticeArchive } from '../entities/notice-archive.entity';
 
@@ -8,12 +19,26 @@ export interface ArchiveListQuery {
   page: number;
   limit: number;
   search?: string;
+  startDate?: Date;
+  endDate?: Date;
+  sortOrder?: 'asc' | 'desc';
 }
 
 export interface ArchiveOffsetQuery {
   skip: number;
   take: number;
   search?: string;
+  startDate?: Date;
+  endDate?: Date;
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface ArchiveNumCompareCountQuery {
+  num: number;
+  operator: 'gt' | 'lt';
+  search?: string;
+  startDate?: Date;
+  endDate?: Date;
 }
 
 export interface ArchiveNoticeItem {
@@ -91,19 +116,17 @@ export class NoticeArchiveService {
     const limit = Math.min(50, Math.max(1, query.limit || 10));
     const skip = (page - 1) * limit;
     const search = (query.search || '').trim();
-
-    const where = search
-      ? [
-          { subject: ILike(`%${search}%`) },
-          { proposalReason: ILike(`%${search}%`) },
-          { committee: ILike(`%${search}%`) },
-        ]
-      : undefined;
+    const where = this.buildArchiveWhereConditions({
+      search,
+      startDate: query.startDate,
+      endDate: query.endDate,
+    });
+    const sortOrder = this.normalizeSortOrder(query.sortOrder);
 
     const [rows, total] = await this.archiveRepository.findAndCount({
       where,
       order: {
-        noticeNum: 'DESC',
+        noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',
       },
       skip,
       take: limit,
@@ -121,13 +144,9 @@ export class NoticeArchiveService {
 
   async listArchiveNotices(search?: string): Promise<ArchiveNoticeItem[]> {
     const normalizedSearch = (search || '').trim();
-    const where = normalizedSearch
-      ? [
-          { subject: ILike(`%${normalizedSearch}%`) },
-          { proposalReason: ILike(`%${normalizedSearch}%`) },
-          { committee: ILike(`%${normalizedSearch}%`) },
-        ]
-      : undefined;
+    const where = this.buildArchiveWhereConditions({
+      search: normalizedSearch,
+    });
 
     const rows = await this.archiveRepository.find({
       where,
@@ -147,13 +166,12 @@ export class NoticeArchiveService {
     const skip = Math.max(0, query.skip || 0);
     const take = Math.max(0, query.take || 0);
     const search = (query.search || '').trim();
-    const where = search
-      ? [
-          { subject: ILike(`%${search}%`) },
-          { proposalReason: ILike(`%${search}%`) },
-          { committee: ILike(`%${search}%`) },
-        ]
-      : undefined;
+    const where = this.buildArchiveWhereConditions({
+      search,
+      startDate: query.startDate,
+      endDate: query.endDate,
+    });
+    const sortOrder = this.normalizeSortOrder(query.sortOrder);
 
     const total = await this.archiveRepository.count({ where });
 
@@ -168,7 +186,7 @@ export class NoticeArchiveService {
     const rows = await this.archiveRepository.find({
       where,
       order: {
-        noticeNum: 'DESC',
+        noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',
       },
       skip,
       take,
@@ -229,6 +247,20 @@ export class NoticeArchiveService {
     return this.archiveRepository.count();
   }
 
+  async countByNoticeNumComparison(
+    query: ArchiveNumCompareCountQuery,
+  ): Promise<number> {
+    const where = this.buildArchiveWhereConditions({
+      search: query.search,
+      startDate: query.startDate,
+      endDate: query.endDate,
+      noticeNumCondition:
+        query.operator === 'gt' ? MoreThan(query.num) : LessThan(query.num),
+    });
+
+    return this.archiveRepository.count({ where });
+  }
+
   async getSummaryStateByNoticeNums(
     noticeNums: number[],
   ): Promise<Map<number, ArchiveSummaryState>> {
@@ -279,5 +311,47 @@ export class NoticeArchiveService {
       archiveStartedAt: row.archiveStartedAt,
       lastUpdatedAt: row.lastUpdatedAt,
     };
+  }
+
+  private normalizeSortOrder(sortOrder?: 'asc' | 'desc'): 'asc' | 'desc' {
+    return sortOrder === 'asc' ? 'asc' : 'desc';
+  }
+
+  private buildArchiveWhereConditions(params: {
+    search?: string;
+    startDate?: Date;
+    endDate?: Date;
+    noticeNumCondition?: FindOperator<number>;
+  }):
+    | FindOptionsWhere<NoticeArchive>
+    | FindOptionsWhere<NoticeArchive>[]
+    | undefined {
+    const normalizedSearch = (params.search || '').trim();
+    const baseWhere: FindOptionsWhere<NoticeArchive> = {};
+
+    if (params.noticeNumCondition) {
+      baseWhere.noticeNum = params.noticeNumCondition;
+    }
+
+    if (params.startDate && params.endDate) {
+      baseWhere.archiveStartedAt =
+        params.startDate <= params.endDate
+          ? Between(params.startDate, params.endDate)
+          : Between(params.endDate, params.startDate);
+    } else if (params.startDate) {
+      baseWhere.archiveStartedAt = MoreThanOrEqual(params.startDate);
+    } else if (params.endDate) {
+      baseWhere.archiveStartedAt = LessThanOrEqual(params.endDate);
+    }
+
+    if (!normalizedSearch) {
+      return Object.keys(baseWhere).length > 0 ? baseWhere : undefined;
+    }
+
+    return [
+      { ...baseWhere, subject: ILike(`%${normalizedSearch}%`) },
+      { ...baseWhere, proposalReason: ILike(`%${normalizedSearch}%`) },
+      { ...baseWhere, committee: ILike(`%${normalizedSearch}%`) },
+    ];
   }
 }

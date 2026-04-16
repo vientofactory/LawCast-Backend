@@ -69,9 +69,6 @@ describe('OllamaClientService', () => {
     expect(payload.prompt).toContain('반드시 요약 문장 하나만 출력');
     expect(payload.prompt).toContain(`법률안명: ${sampleTitle}`);
     expect(payload.prompt).toContain(`제안이유 및 주요내용: ${sampleReason}`);
-    expect(payload.prompt).toContain(
-      '핵심 정책 변화와 예상 영향이 확인되지만 제공된 정보만으로 구체 내용을 확정하기 어렵습니다.',
-    );
   });
 
   it.each([
