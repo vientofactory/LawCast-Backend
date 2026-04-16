@@ -10,6 +10,12 @@ export interface ArchiveListQuery {
   search?: string;
 }
 
+export interface ArchiveOffsetQuery {
+  skip: number;
+  take: number;
+  search?: string;
+}
+
 export interface ArchiveNoticeItem {
   num: number;
   subject: string;
@@ -135,6 +141,48 @@ export class NoticeArchiveService {
     return rows.map((row) => this.mapArchiveEntityToNoticeItem(row));
   }
 
+  async getArchiveNoticesByOffset(query: ArchiveOffsetQuery): Promise<{
+    items: ArchiveNoticeItem[];
+    total: number;
+    search: string;
+  }> {
+    const skip = Math.max(0, query.skip || 0);
+    const take = Math.max(0, query.take || 0);
+    const search = (query.search || '').trim();
+    const where = search
+      ? [
+          { subject: ILike(`%${search}%`) },
+          { proposalReason: ILike(`%${search}%`) },
+          { committee: ILike(`%${search}%`) },
+        ]
+      : undefined;
+
+    const total = await this.archiveRepository.count({ where });
+
+    if (take === 0) {
+      return {
+        items: [],
+        total,
+        search,
+      };
+    }
+
+    const rows = await this.archiveRepository.find({
+      where,
+      order: {
+        noticeNum: 'DESC',
+      },
+      skip,
+      take,
+    });
+
+    return {
+      items: rows.map((row) => this.mapArchiveEntityToNoticeItem(row)),
+      total,
+      search,
+    };
+  }
+
   async getArchivedNoticeDetail(
     noticeNum: number,
   ): Promise<ArchiveDetailResult | null> {
@@ -158,6 +206,25 @@ export class NoticeArchiveService {
 
   async existsByNoticeNum(noticeNum: number): Promise<boolean> {
     return this.archiveRepository.exists({ where: { noticeNum } });
+  }
+
+  async getExistingNoticeNumSet(noticeNums: number[]): Promise<Set<number>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+
+    if (uniqueNums.length === 0) {
+      return new Set();
+    }
+
+    const rows = await this.archiveRepository.find({
+      where: {
+        noticeNum: In(uniqueNums),
+      },
+      select: {
+        noticeNum: true,
+      },
+    });
+
+    return new Set(rows.map((row) => row.noticeNum));
   }
 
   async getArchiveCount(): Promise<number> {
