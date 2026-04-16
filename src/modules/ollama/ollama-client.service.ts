@@ -27,8 +27,6 @@ export class OllamaClientService {
   private readonly model: string;
   private readonly modelTemperature = 0.2;
   private readonly modelNumPredict = 220;
-  private readonly fallbackSummary =
-    '핵심 정책 변화와 예상 영향이 확인되지만 제공된 정보만으로 구체 내용을 확정하기 어렵습니다.';
 
   constructor(private configService: ConfigService) {
     const apiUrl = this.configService.get<string>('ollama.apiUrl');
@@ -46,46 +44,36 @@ export class OllamaClientService {
     });
   }
 
+  /**
+   * Summarizes a legislative proposal using the Ollama model.
+   * @param title The title of the legislative proposal.
+   * @param proposalReason The reason and main content of the proposal.
+   * @returns A summary sentence or null if summarization fails.
+   */
   async summarizeProposal(
     title: string,
     proposalReason: string,
   ): Promise<string | null> {
-    const prompt = [
-      '당신은 국회 입법예고 요약 도우미입니다. 아래 규칙을 위반하지 마세요.',
-      '',
-      '[출력 규칙]',
-      '1) 한국어 한 문장만 출력합니다.',
-      '2) 줄바꿈 없이 평문으로만 출력합니다.',
-      '3) "요약:", "설명:", "참고:" 같은 머리말을 금지합니다.',
-      '4) 목록 기호, 마크다운, 따옴표, 코드블록을 금지합니다.',
-      '5) 법률안명은 반복하지 말고 핵심 정책 변화와 영향만 씁니다.',
-      '6) 입력에 근거가 부족하면 아래 문장만 그대로 출력합니다.',
-      `   ${this.fallbackSummary}`,
-      '',
-      '[출력 형식]',
-      '반드시 요약 문장 하나만 출력',
-      '',
-      `법률안명: ${title}`,
-      `제안이유 및 주요내용: ${proposalReason}`,
-    ].join('\n');
+    const prompt = this.getSummarizationPrompt(title, proposalReason);
+
+    const payload = {
+      model: this.model,
+      prompt,
+      stream: false,
+      options: {
+        temperature: this.modelTemperature,
+        num_predict: this.modelNumPredict,
+      },
+    };
 
     try {
-      const payload = {
-        model: this.model,
-        prompt,
-        stream: false,
-        options: {
-          temperature: this.modelTemperature,
-          num_predict: this.modelNumPredict,
-        },
-      };
-
       // Generate response
       const response = await this.client.post<OllamaGenerateResponse>(
         '/api/generate',
         payload,
       );
 
+      // Normalize and return the summary
       const summary = this.normalizeSummary(response.data.response, title);
       return summary;
     } catch (error) {
@@ -95,6 +83,12 @@ export class OllamaClientService {
     }
   }
 
+  /**
+   * Normalizes the raw response from the model to extract a clean summary sentence.
+   * @param rawSummary The raw text response from the model.
+   * @param title The original proposal title, used to remove redundant mentions.
+   * @returns A cleaned summary sentence or null if it cannot be extracted.
+   */
   private normalizeSummary(rawSummary: string, title: string): string | null {
     if (!rawSummary) {
       return null;
@@ -141,5 +135,35 @@ export class OllamaClientService {
     }
 
     return normalized;
+  }
+
+  /**
+   * Constructs the prompt for the summarization model based on the proposal title and reason.
+   * @param title The title of the legislative proposal.
+   * @param proposalReason The reason and main content of the proposal.
+   * @returns A formatted prompt string to be sent to the model.
+   */
+  private getSummarizationPrompt(
+    title: string,
+    proposalReason: string,
+  ): string {
+    const prompt = [
+      '당신은 국회 입법예고 요약 도우미입니다. 아래 규칙을 위반하지 마세요.',
+      '',
+      '[출력 규칙]',
+      '1) 한국어 한 문장만 출력합니다.',
+      '2) 줄바꿈 없이 평문으로만 출력합니다.',
+      '3) "요약:", "설명:", "참고:" 같은 머리말을 금지합니다.',
+      '4) 목록 기호, 마크다운, 따옴표, 코드블록을 금지합니다.',
+      '5) 법률안명은 반복하지 말고 핵심 정책 변화와 영향만 씁니다.',
+      '',
+      '[출력 형식]',
+      '반드시 요약 문장 하나만 출력',
+      '',
+      `법률안명: ${title}`,
+      `제안이유 및 주요내용: ${proposalReason}`,
+    ].join('\n');
+
+    return prompt;
   }
 }

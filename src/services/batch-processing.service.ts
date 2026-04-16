@@ -45,7 +45,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
    * 논블로킹 병렬 배치 작업 실행
    */
   async executeBatch<T>(
-    jobs: Array<() => Promise<T>>,
+    jobs: Array<(abortSignal: AbortSignal) => Promise<T>>,
     options: BatchProcessingOptions = {},
   ): Promise<BatchJobResult<T>[]> {
     // 종료 중인 경우 새로운 작업 거부
@@ -103,7 +103,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
    * 단일 배치를 concurrency로 나누어 병렬 처리
    */
   private async processBatch<T>(
-    jobs: Array<() => Promise<T>>,
+    jobs: Array<(abortSignal: AbortSignal) => Promise<T>>,
     concurrency: number,
     timeout: number,
     retryCount: number,
@@ -231,88 +231,91 @@ export class BatchProcessingService implements OnApplicationShutdown {
     }
 
     // 각 입법예고별로 배치 작업 생성
-    const notificationJobs = notices.map((notice) => async () => {
-      const currentWebhooks = activeWebhooks;
+    const notificationJobs = notices.map(
+      (notice) => async (abortSignal: AbortSignal) => {
+        const currentWebhooks = activeWebhooks;
 
-      if (currentWebhooks.length === 0) {
-        LoggerUtils.logDev(
-          BatchProcessingService.name,
-          'No active webhooks available for notification',
-        );
-        return {
-          notice: notice.subject,
-          totalWebhooks: 0,
-          successCount: 0,
-          failedCount: 0,
-          deactivated: 0,
-          temporaryFailures: 0,
-        };
-      }
-
-      const results =
-        await this.notificationService.sendDiscordNotificationBatch(
-          notice,
-          currentWebhooks,
-        );
-
-      // 영구적으로 삭제해야 할 웹훅들과 일시적으로 실패한 웹훅들 분리
-      const permanentFailures = results.filter(
-        (result) => !result.success && result.shouldDelete,
-      );
-      const temporaryFailures = results.filter(
-        (result) => !result.success && !result.shouldDelete,
-      );
-
-      // 영구적으로 실패한 웹훅들은 첫 번째 실패에서 즉시 비활성화
-      if (permanentFailures.length > 0) {
-        const permanentFailureIds = permanentFailures.map(
-          (result) => result.webhookId,
-        );
-
-        // 각 웹훅을 개별적으로 즉시 비활성화 (재시도 없음)
-        for (const webhookId of permanentFailureIds) {
-          try {
-            await this.webhookService.remove(webhookId);
-            // NotificationService에서 실패 플래그 제거
-            this.notificationService.clearPermanentFailureFlag(webhookId);
-
-            LoggerUtils.debugDev(
-              BatchProcessingService.name,
-              `Webhook ${webhookId} immediately deactivated after first failure for notice: ${notice.subject}`,
-            );
-          } catch (error) {
-            this.logger.error(
-              `Failed to deactivate webhook ${webhookId}:`,
-              error,
-            );
-          }
+        if (currentWebhooks.length === 0) {
+          LoggerUtils.logDev(
+            BatchProcessingService.name,
+            'No active webhooks available for notification',
+          );
+          return {
+            notice: notice.subject,
+            totalWebhooks: 0,
+            successCount: 0,
+            failedCount: 0,
+            deactivated: 0,
+            temporaryFailures: 0,
+          };
         }
 
-        LoggerUtils.debugDev(
-          BatchProcessingService.name,
-          `Immediately deactivated ${permanentFailures.length} webhooks that failed on first attempt`,
+        const results =
+          await this.notificationService.sendDiscordNotificationBatch(
+            notice,
+            currentWebhooks,
+            abortSignal,
+          );
+
+        // 영구적으로 삭제해야 할 웹훅들과 일시적으로 실패한 웹훅들 분리
+        const permanentFailures = results.filter(
+          (result) => !result.success && result.shouldDelete,
         );
-      }
-
-      // 일시적 실패는 로그 최소화
-      if (temporaryFailures.length > 0) {
-        LoggerUtils.logDev(
-          BatchProcessingService.name,
-          `${temporaryFailures.length} webhooks failed temporarily for notice: ${notice.subject}`,
+        const temporaryFailures = results.filter(
+          (result) => !result.success && !result.shouldDelete,
         );
-      }
 
-      const successCount = results.filter((r) => r.success).length;
+        // 영구적으로 실패한 웹훅들은 첫 번째 실패에서 즉시 비활성화
+        if (permanentFailures.length > 0) {
+          const permanentFailureIds = permanentFailures.map(
+            (result) => result.webhookId,
+          );
 
-      return {
-        notice: notice.subject,
-        totalWebhooks: currentWebhooks.length,
-        successCount,
-        failedCount: permanentFailures.length + temporaryFailures.length,
-        deactivated: permanentFailures.length,
-        temporaryFailures: temporaryFailures.length,
-      };
-    });
+          // 각 웹훅을 개별적으로 즉시 비활성화 (재시도 없음)
+          for (const webhookId of permanentFailureIds) {
+            try {
+              await this.webhookService.remove(webhookId);
+              // NotificationService에서 실패 플래그 제거
+              this.notificationService.clearPermanentFailureFlag(webhookId);
+
+              LoggerUtils.debugDev(
+                BatchProcessingService.name,
+                `Webhook ${webhookId} immediately deactivated after first failure for notice: ${notice.subject}`,
+              );
+            } catch (error) {
+              this.logger.error(
+                `Failed to deactivate webhook ${webhookId}:`,
+                error,
+              );
+            }
+          }
+
+          LoggerUtils.debugDev(
+            BatchProcessingService.name,
+            `Immediately deactivated ${permanentFailures.length} webhooks that failed on first attempt`,
+          );
+        }
+
+        // 일시적 실패는 로그 최소화
+        if (temporaryFailures.length > 0) {
+          LoggerUtils.logDev(
+            BatchProcessingService.name,
+            `${temporaryFailures.length} webhooks failed temporarily for notice: ${notice.subject}`,
+          );
+        }
+
+        const successCount = results.filter((r) => r.success).length;
+
+        return {
+          notice: notice.subject,
+          totalWebhooks: currentWebhooks.length,
+          successCount,
+          failedCount: permanentFailures.length + temporaryFailures.length,
+          deactivated: permanentFailures.length,
+          temporaryFailures: temporaryFailures.length,
+        };
+      },
+    );
 
     return this.executeBatch(notificationJobs, options);
   }
@@ -321,7 +324,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
    * 재시도 로직이 포함된 작업 실행
    */
   private async executeJobWithRetry<T>(
-    job: () => Promise<T>,
+    job: (abortSignal: AbortSignal) => Promise<T>,
     retryCount: number,
     retryDelay: number,
     timeout: number,
@@ -330,13 +333,16 @@ export class BatchProcessingService implements OnApplicationShutdown {
     let lastError: Error;
 
     for (let attempt = 1; attempt <= retryCount + 1; attempt++) {
+      const abortController = new AbortController();
       try {
-        return await Promise.race<T>([
-          job(),
-          this.createTimeoutPromise<T>(timeout),
-        ]);
+        return await this.runJobWithTimeout(
+          () => job(abortController.signal),
+          timeout,
+          abortController,
+        );
       } catch (error) {
         lastError = error as Error;
+        abortController.abort();
 
         if (attempt <= retryCount) {
           this.logger.warn(
@@ -352,15 +358,32 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * 타임아웃 Promise 생성
+   * 타임아웃과 취소를 포함한 단일 작업 실행
    */
-  private createTimeoutPromise<T>(timeout: number): Promise<T> {
-    return new Promise<T>((_, reject) => {
+  private runJobWithTimeout<T>(
+    run: () => Promise<T>,
+    timeout: number,
+    abortController: AbortController,
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         this.activeTimeouts.delete(timeoutId);
+        abortController.abort();
         reject(new Error(`Operation timed out after ${timeout}ms`));
       }, timeout);
       this.activeTimeouts.add(timeoutId);
+
+      run()
+        .then((result) => {
+          this.activeTimeouts.delete(timeoutId);
+          clearTimeout(timeoutId);
+          resolve(result);
+        })
+        .catch((error) => {
+          this.activeTimeouts.delete(timeoutId);
+          clearTimeout(timeoutId);
+          reject(error);
+        });
     });
   }
 
