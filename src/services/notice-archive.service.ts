@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { createHash } from 'crypto';
 import {
   Between,
   FindOptionsWhere,
@@ -65,11 +66,41 @@ export interface ArchiveDetailResult {
     title: string;
     proposalReason: string;
   };
+  archiveMetadata: {
+    archivedAt: Date | null;
+    sourceHtmlSha256: string | null;
+    sourceHtmlSize: number;
+    integrity: {
+      checkedAt: Date | null;
+      passed: boolean | null;
+      calculatedSha256: string | null;
+    };
+    http: {
+      fetchedAt: Date | null;
+      statusCode: number | null;
+      contentType: string | null;
+      etag: string | null;
+      lastModified: string | null;
+      requestUrl?: string;
+      responseUrl?: string;
+    };
+  };
 }
 
 export interface ArchiveSummaryState {
   aiSummary: string | null;
   aiSummaryStatus: AISummaryStatus;
+}
+
+export interface ArchiveHttpMetadata {
+  requestUrl?: string;
+  responseUrl?: string;
+  fetchedAt?: string;
+  statusCode?: number;
+  contentType?: string;
+  etag?: string;
+  lastModified?: string;
+  [key: string]: unknown;
 }
 
 @Injectable()
@@ -84,8 +115,14 @@ export class NoticeArchiveService {
     originalContent: {
       proposalReason: string;
       title?: string | null;
+      sourceHtml?: string | null;
+      htmlSha256?: string | null;
+      archivedAt?: Date;
+      httpMetadata?: ArchiveHttpMetadata | null;
     },
   ): Promise<void> {
+    const normalizedHttpMetadata = originalContent.httpMetadata || null;
+
     const entity = this.archiveRepository.create({
       noticeNum: notice.num,
       subject: notice.subject,
@@ -99,6 +136,17 @@ export class NoticeArchiveService {
       aiSummaryStatus: notice.aiSummaryStatus ?? 'not_requested',
       attachmentPdfFile: notice.attachments?.pdfFile ?? '',
       attachmentHwpFile: notice.attachments?.hwpFile ?? '',
+      archivedAt: originalContent.archivedAt ?? new Date(),
+      sourceHtml: originalContent.sourceHtml ?? null,
+      sourceHtmlSha256: originalContent.htmlSha256 ?? null,
+      httpMetadataJson: normalizedHttpMetadata
+        ? JSON.stringify(normalizedHttpMetadata)
+        : null,
+      httpFetchedAt: this.parseOptionalDate(normalizedHttpMetadata?.fetchedAt),
+      httpStatusCode: normalizedHttpMetadata?.statusCode ?? null,
+      httpContentType: normalizedHttpMetadata?.contentType ?? null,
+      httpEtag: normalizedHttpMetadata?.etag ?? null,
+      httpLastModified: normalizedHttpMetadata?.lastModified ?? null,
     });
 
     await this.archiveRepository.upsert(entity, ['noticeNum']);
@@ -210,12 +258,42 @@ export class NoticeArchiveService {
       return null;
     }
 
+    const integrity = await this.verifyAndRefreshIntegrity(row);
+    const httpMetadata = this.parseHttpMetadata(row.httpMetadataJson);
+
     return {
       notice: this.mapArchiveEntityToNoticeItem(row),
       originalContent: {
         contentId: row.contentId ?? '',
         title: row.sourceTitle?.trim() || row.subject,
         proposalReason: row.proposalReason || '',
+      },
+      archiveMetadata: {
+        archivedAt: row.archivedAt,
+        sourceHtmlSha256: row.sourceHtmlSha256,
+        sourceHtmlSize: row.sourceHtml
+          ? Buffer.byteLength(row.sourceHtml, 'utf8')
+          : 0,
+        integrity: {
+          checkedAt: integrity.checkedAt,
+          passed: integrity.passed,
+          calculatedSha256: integrity.calculatedSha256,
+        },
+        http: {
+          fetchedAt: row.httpFetchedAt,
+          statusCode: row.httpStatusCode,
+          contentType: row.httpContentType,
+          etag: row.httpEtag,
+          lastModified: row.httpLastModified,
+          requestUrl:
+            typeof httpMetadata.requestUrl === 'string'
+              ? httpMetadata.requestUrl
+              : undefined,
+          responseUrl:
+            typeof httpMetadata.responseUrl === 'string'
+              ? httpMetadata.responseUrl
+              : undefined,
+        },
       },
     };
   }
@@ -353,5 +431,68 @@ export class NoticeArchiveService {
       { ...baseWhere, proposalReason: ILike(`%${normalizedSearch}%`) },
       { ...baseWhere, committee: ILike(`%${normalizedSearch}%`) },
     ];
+  }
+
+  private parseHttpMetadata(raw: string | null): ArchiveHttpMetadata {
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as ArchiveHttpMetadata;
+      return typeof parsed === 'object' && parsed !== null ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private parseOptionalDate(value?: string): Date | null {
+    if (!value) {
+      return null;
+    }
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  private computeSha256(input: string): string {
+    return createHash('sha256').update(input, 'utf8').digest('hex');
+  }
+
+  private async verifyAndRefreshIntegrity(row: NoticeArchive): Promise<{
+    checkedAt: Date | null;
+    passed: boolean | null;
+    calculatedSha256: string | null;
+  }> {
+    if (!row.sourceHtml || !row.sourceHtmlSha256) {
+      return {
+        checkedAt: row.integrityVerifiedAt ?? null,
+        passed: row.integrityCheckPassed ?? null,
+        calculatedSha256: null,
+      };
+    }
+
+    const calculatedSha256 = this.computeSha256(row.sourceHtml);
+    const passed = calculatedSha256 === row.sourceHtmlSha256;
+    const checkedAt = new Date();
+
+    if (row.integrityCheckPassed !== passed || !row.integrityVerifiedAt) {
+      await this.archiveRepository.update(
+        { id: row.id },
+        {
+          integrityCheckPassed: passed,
+          integrityVerifiedAt: checkedAt,
+        },
+      );
+
+      row.integrityCheckPassed = passed;
+      row.integrityVerifiedAt = checkedAt;
+    }
+
+    return {
+      checkedAt: row.integrityVerifiedAt,
+      passed,
+      calculatedSha256,
+    };
   }
 }
