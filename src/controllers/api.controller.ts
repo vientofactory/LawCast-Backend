@@ -109,10 +109,9 @@ export class ApiController {
     const safeLimit = Math.min(50, Math.max(1, limit));
     const normalizedSearch = (search || '').trim();
 
-    const [cachedNotices, archiveItems] = await Promise.all([
-      this.crawlingService.getRecentNotices(APP_CONSTANTS.CACHE.MAX_SIZE),
-      this.noticeArchiveService.listArchiveNotices(normalizedSearch),
-    ]);
+    const cachedNotices = await this.crawlingService.getRecentNotices(
+      APP_CONSTANTS.CACHE.MAX_SIZE,
+    );
 
     const filteredCached = normalizedSearch
       ? cachedNotices.filter((notice) =>
@@ -120,24 +119,54 @@ export class ApiController {
         )
       : cachedNotices;
 
-    const mergedByNoticeNum = new Map<number, (typeof archiveItems)[number]>();
-
-    for (const notice of filteredCached) {
-      mergedByNoticeNum.set(notice.num, this.mapCachedNoticeToListItem(notice));
-    }
-
-    for (const notice of archiveItems) {
-      if (!mergedByNoticeNum.has(notice.num)) {
-        mergedByNoticeNum.set(notice.num, notice);
-      }
-    }
-
-    const mergedItems = Array.from(mergedByNoticeNum.values()).sort(
-      (a, b) => b.num - a.num,
+    const cachedNoticeMap = new Map(
+      filteredCached.map((notice) => [notice.num, notice]),
     );
-    const total = mergedItems.length;
-    const startIndex = (safePage - 1) * safeLimit;
-    const items = mergedItems.slice(startIndex, startIndex + safeLimit);
+
+    const existingArchivedNums =
+      await this.noticeArchiveService.getExistingNoticeNumSet(
+        filteredCached.map((notice) => notice.num),
+      );
+
+    const cacheOnlyItems = filteredCached
+      .filter((notice) => !existingArchivedNums.has(notice.num))
+      .map((notice) => this.mapCachedNoticeToListItem(notice));
+
+    const cacheOnlyCount = cacheOnlyItems.length;
+    const globalStart = (safePage - 1) * safeLimit;
+    const globalEnd = globalStart + safeLimit;
+
+    const cacheSliceStart = Math.min(globalStart, cacheOnlyCount);
+    const cacheSliceEnd = Math.min(globalEnd, cacheOnlyCount);
+    const cacheSlice = cacheOnlyItems.slice(cacheSliceStart, cacheSliceEnd);
+
+    const remainingTake = Math.max(0, safeLimit - cacheSlice.length);
+    const archiveSkip = Math.max(0, globalStart - cacheOnlyCount);
+
+    const archivePageResult =
+      await this.noticeArchiveService.getArchiveNoticesByOffset({
+        skip: archiveSkip,
+        take: remainingTake,
+        search: normalizedSearch,
+      });
+
+    const archiveItems = archivePageResult.items.map((item) => {
+      const cached = cachedNoticeMap.get(item.num);
+
+      if (!cached) {
+        return item;
+      }
+
+      return {
+        ...item,
+        aiSummary: cached.aiSummary ?? item.aiSummary,
+        aiSummaryStatus:
+          cached.aiSummaryStatus ?? item.aiSummaryStatus ?? 'not_requested',
+      };
+    });
+
+    const items = [...cacheSlice, ...archiveItems];
+    const total = cacheOnlyCount + archivePageResult.total;
 
     return ApiResponseUtils.success({
       items,
@@ -149,7 +178,7 @@ export class ApiController {
       stats: {
         cacheCount: cachedNotices.length,
         matchedCacheCount: filteredCached.length,
-        archiveCount: archiveItems.length,
+        archiveCount: archivePageResult.total,
         mergedCount: total,
       },
     });

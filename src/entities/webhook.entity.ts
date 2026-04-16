@@ -4,9 +4,12 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  Index,
 } from 'typeorm';
 
 @Entity('webhooks')
+@Index('idx_webhooks_url_unique', ['url'], { unique: true })
+@Index('idx_webhooks_is_active_updated_at', ['isActive', 'updatedAt'])
 export class Webhook {
   @PrimaryGeneratedColumn()
   id: number;
