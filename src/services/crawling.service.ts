@@ -417,18 +417,12 @@ export class CrawlingService implements OnModuleInit {
       return [];
     }
 
-    const archiveCheckResults = await Promise.all(
-      notices.map(async (notice) => {
-        const exists = await this.noticeArchiveService.existsByNoticeNum(
-          notice.num,
-        );
-        return { notice, exists };
-      }),
-    );
+    const existingNoticeNums =
+      await this.noticeArchiveService.getExistingNoticeNumSet(
+        notices.map((notice) => notice.num),
+      );
 
-    return archiveCheckResults
-      .filter((result) => !result.exists)
-      .map((result) => result.notice);
+    return notices.filter((notice) => !existingNoticeNums.has(notice.num));
   }
 
   private async archiveNotices(notices: CachedNotice[]): Promise<void> {
@@ -437,41 +431,46 @@ export class CrawlingService implements OnModuleInit {
     }
 
     const palCrawl = new PalCrawl(this.crawlConfig);
+    const concurrency = 5;
 
-    await Promise.all(
-      notices.map(async (notice) => {
-        let proposalReason = '';
-        let sourceTitle: string | null = notice.subject;
+    for (let i = 0; i < notices.length; i += concurrency) {
+      const chunk = notices.slice(i, i + concurrency);
 
-        if (notice.contentId) {
+      await Promise.all(
+        chunk.map(async (notice) => {
+          let proposalReason = '';
+          let sourceTitle: string | null = notice.subject;
+
+          if (notice.contentId) {
+            try {
+              const content = await palCrawl.getContent(notice.contentId);
+              proposalReason = content?.proposalReason?.trim() || '';
+              sourceTitle = content?.title?.trim() || notice.subject;
+            } catch (error) {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              this.logger.warn(
+                `Failed to fetch original content for archive notice ${notice.num}: ${message}`,
+              );
+            }
+          }
+
           try {
-            const content = await palCrawl.getContent(notice.contentId);
-            proposalReason = content?.proposalReason?.trim() || '';
-            sourceTitle = content?.title?.trim() || notice.subject;
+            await this.noticeArchiveService.upsertNoticeArchive(notice, {
+              proposalReason,
+              title: sourceTitle,
+            });
           } catch (error) {
             const message =
               error instanceof Error ? error.message : String(error);
-            this.logger.warn(
-              `Failed to fetch original content for archive notice ${notice.num}: ${message}`,
+            this.logger.error(
+              `Failed to archive notice ${notice.num}: ${message}`,
+              error,
             );
           }
-        }
-
-        try {
-          await this.noticeArchiveService.upsertNoticeArchive(notice, {
-            proposalReason,
-            title: sourceTitle,
-          });
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          this.logger.error(
-            `Failed to archive notice ${notice.num}: ${message}`,
-            error,
-          );
-        }
-      }),
-    );
+        }),
+      );
+    }
   }
 
   private buildNoticeMap(notices: CachedNotice[]): Map<number, CachedNotice> {

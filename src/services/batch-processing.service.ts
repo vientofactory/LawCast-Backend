@@ -221,10 +221,18 @@ export class BatchProcessingService implements OnApplicationShutdown {
     notices: ITableData[],
     options: BatchProcessingOptions,
   ): Promise<BatchJobResult[]> {
+    const activeWebhooks = (await this.webhookService.findAll()) ?? [];
+
+    if (activeWebhooks.length === 0) {
+      LoggerUtils.logDev(
+        BatchProcessingService.name,
+        'No active webhooks available for notification batch',
+      );
+    }
+
     // 각 입법예고별로 배치 작업 생성
     const notificationJobs = notices.map((notice) => async () => {
-      // 각 알림마다 최신 웹훅 리스트를 독립적으로 가져옴
-      const currentWebhooks = await this.webhookService.findAll();
+      const currentWebhooks = activeWebhooks;
 
       if (currentWebhooks.length === 0) {
         LoggerUtils.logDev(
