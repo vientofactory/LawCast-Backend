@@ -24,6 +24,10 @@ export interface ApiResponse<T = any> {
 }
 
 export class ApiResponseUtils {
+  private static isProduction(): boolean {
+    return process.env.NODE_ENV === 'production';
+  }
+
   /**
    * 성공 응답을 생성합니다.
    */
@@ -89,11 +93,17 @@ export class ApiResponseUtils {
       throw error;
     }
 
+    const isProduction = this.isProduction();
+
     throw new HttpException(
       {
         success: false,
         message: `${context} 중 오류가 발생했습니다.`,
-        error: error instanceof Error ? error.message : '알 수 없는 오류',
+        error: isProduction
+          ? '내부 서버 오류'
+          : error instanceof Error
+            ? error.message
+            : '알 수 없는 오류',
       },
       HttpStatus.INTERNAL_SERVER_ERROR,
     );
@@ -154,10 +164,12 @@ export class ApiResponseUtils {
       detailedMessage = '네트워크 오류가 발생했습니다. 연결을 확인해주세요.';
     }
 
+    const details = this.isProduction() ? undefined : errorMessage;
+
     return new BadRequestException({
       success: false,
       message: detailedMessage,
-      details: errorMessage,
+      details,
     });
   }
 }

@@ -14,6 +14,7 @@ import {
   Req,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { WebhookService } from '../services/webhook.service';
 import { CrawlingService } from '../services/crawling.service';
@@ -25,11 +26,16 @@ import { NoticesQueryService } from '../services/notices-query.service';
 import { CreateWebhookDto } from '../dto/create-webhook.dto';
 import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
 import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
+import {
+  isProductionNodeEnv,
+  sanitizeSearchQuery,
+} from '../utils/api-controller.utils';
 import { APP_CONSTANTS } from '../config/app.config';
 
 @Controller('api')
 export class ApiController {
   constructor(
+    private readonly configService: ConfigService,
     private readonly webhookService: WebhookService,
     private readonly crawlingService: CrawlingService,
     private readonly notificationService: NotificationService,
@@ -102,14 +108,30 @@ export class ApiController {
 
   @Get('notices/archive')
   async getArchivedNotices(
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query(
+      'page',
+      new DefaultValuePipe(APP_CONSTANTS.API.PAGINATION.MIN_PAGE),
+      ParseIntPipe,
+    )
+    page: number,
+    @Query(
+      'limit',
+      new DefaultValuePipe(APP_CONSTANTS.API.PAGINATION.DEFAULT_LIMIT),
+      ParseIntPipe,
+    )
+    limit: number,
     @Query('search') search?: string,
   ) {
+    const safePage = Math.max(APP_CONSTANTS.API.PAGINATION.MIN_PAGE, page);
+    const safeLimit = Math.min(
+      APP_CONSTANTS.API.PAGINATION.MAX_LIMIT,
+      Math.max(APP_CONSTANTS.API.PAGINATION.MIN_LIMIT, limit),
+    );
+
     const archiveResult = await this.noticesQueryService.getArchivedNotices({
-      page,
-      limit,
-      search,
+      page: safePage,
+      limit: safeLimit,
+      search: sanitizeSearchQuery(search, APP_CONSTANTS.API.SEARCH.MAX_LENGTH),
     });
 
     return ApiResponseUtils.success(archiveResult);
@@ -138,19 +160,53 @@ export class ApiController {
         this.noticeArchiveService.getArchiveCount(),
       ]);
 
+    const isProduction = isProductionNodeEnv(
+      this.configService.get<string>('nodeEnv'),
+    );
+    const safeBatchStatus = isProduction
+      ? {
+          jobCount: batchStatus.jobCount,
+        }
+      : batchStatus;
+
+    const safeCacheInfo = isProduction
+      ? {
+          size: cacheInfo.size,
+          maxSize: cacheInfo.maxSize,
+          isInitialized: cacheInfo.isInitialized,
+        }
+      : cacheInfo;
+
+    const safeWebhookStats = isProduction
+      ? {
+          total: webhookStats.total,
+          active: webhookStats.active,
+          efficiency: webhookStats.efficiency,
+        }
+      : webhookStats;
+
     return ApiResponseUtils.success({
-      webhooks: webhookStats,
-      cache: cacheInfo,
+      webhooks: safeWebhookStats,
+      cache: safeCacheInfo,
       archive: {
         count: archiveCount,
       },
-      batchProcessing: batchStatus,
+      batchProcessing: safeBatchStatus,
     });
   }
 
   @Get('batch/status')
   async getBatchStatus() {
-    const status = this.batchProcessingService.getDetailedBatchJobStatus();
+    const isProduction = isProductionNodeEnv(
+      this.configService.get<string>('nodeEnv'),
+    );
+    const status = isProduction
+      ? {
+          jobCount: this.batchProcessingService.getBatchJobStatus().jobCount,
+          jobIds: [],
+        }
+      : this.batchProcessingService.getDetailedBatchJobStatus();
+
     return ApiResponseUtils.success(
       status,
       'Batch processing status retrieved successfully',
@@ -161,24 +217,42 @@ export class ApiController {
   async getHealth() {
     const isRedisConnected = await this.crawlingService.isRedisConnected();
     const cacheInfo = await this.crawlingService.getCacheInfo();
-
-    return ApiResponseUtils.success(
-      {
-        timestamp: new Date().toISOString(),
-        redis: {
-          connected: isRedisConnected,
-          cache: cacheInfo,
-        },
-      },
-      'LawCast API is healthy',
+    const isProduction = isProductionNodeEnv(
+      this.configService.get<string>('nodeEnv'),
     );
+
+    const payload = isProduction
+      ? {
+          timestamp: new Date().toISOString(),
+          status: isRedisConnected ? 'healthy' : 'degraded',
+        }
+      : {
+          timestamp: new Date().toISOString(),
+          redis: {
+            connected: isRedisConnected,
+            cache: cacheInfo,
+          },
+        };
+
+    return ApiResponseUtils.success(payload, 'LawCast API is healthy');
   }
 
   @Get('webhooks/stats/detailed')
   async getDetailedWebhookStats() {
     const stats = await this.webhookService.getDetailedStats();
+    const isProduction = isProductionNodeEnv(
+      this.configService.get<string>('nodeEnv'),
+    );
+    const safeStats = isProduction
+      ? {
+          total: stats.total,
+          active: stats.active,
+          efficiency: stats.efficiency,
+        }
+      : stats;
+
     return ApiResponseUtils.success(
-      stats,
+      safeStats,
       'Detailed webhook statistics retrieved successfully',
     );
   }
@@ -188,11 +262,21 @@ export class ApiController {
     const stats = await this.webhookService.getDetailedStats();
     const efficiency =
       stats.total > 0 ? (stats.active / stats.total) * 100 : 100;
+    const isProduction = isProductionNodeEnv(
+      this.configService.get<string>('nodeEnv'),
+    );
+    const safeStats = isProduction
+      ? {
+          total: stats.total,
+          active: stats.active,
+          efficiency: stats.efficiency,
+        }
+      : stats;
 
     return ApiResponseUtils.success(
       {
         efficiency: Number(efficiency.toFixed(1)),
-        stats,
+        stats: safeStats,
         status: efficiency >= 70 ? 'healthy' : 'needs_optimization',
       },
       'System health status retrieved successfully',
@@ -202,6 +286,22 @@ export class ApiController {
   @Get('redis/status')
   async getRedisStatus() {
     const redisStatus = await this.crawlingService.getRedisStatus();
+
+    const isProduction = isProductionNodeEnv(
+      this.configService.get<string>('nodeEnv'),
+    );
+
+    if (isProduction) {
+      return ApiResponseUtils.success(
+        {
+          connected: redisStatus.connected,
+          timestamp: new Date().toISOString(),
+        },
+        redisStatus.connected
+          ? 'Redis status is available'
+          : 'Redis is unavailable',
+      );
+    }
 
     const message = redisStatus.connected
       ? `Redis is connected (${redisStatus.responseTime}ms response time)`

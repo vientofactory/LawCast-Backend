@@ -59,6 +59,17 @@ export const APP_CONSTANTS = {
       LAST_UPDATED: 'last_updated',
     },
   },
+  API: {
+    PAGINATION: {
+      DEFAULT_LIMIT: 10,
+      MAX_LIMIT: 50,
+      MIN_LIMIT: 1,
+      MIN_PAGE: 1,
+    },
+    SEARCH: {
+      MAX_LENGTH: 120,
+    },
+  },
   BATCH: {
     CONCURRENCY: 10,
     TIMEOUT: 30000,

@@ -5,6 +5,7 @@
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { ApiController } from '../controllers/api.controller';
 import { BatchProcessingService } from '../services/batch-processing.service';
 import { CrawlingService } from '../services/crawling.service';
@@ -103,10 +104,20 @@ describe('HTTP-Batch Processing Isolation', () => {
       }),
     };
 
+    const mockConfigService = {
+      get: jest.fn((key: string) => {
+        if (key === 'nodeEnv') {
+          return 'development';
+        }
+        return undefined;
+      }),
+    };
+
     module = await Test.createTestingModule({
       controllers: [ApiController],
       providers: [
         BatchProcessingService,
+        { provide: ConfigService, useValue: mockConfigService },
         { provide: WebhookService, useValue: mockWebhookService },
         { provide: NotificationService, useValue: mockNotificationService },
         { provide: CrawlingService, useValue: mockCrawlingService },
