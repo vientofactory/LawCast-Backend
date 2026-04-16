@@ -4,12 +4,10 @@ import {
   MessageBuilder,
   Webhook as DiscordWebhook,
 } from 'discord-webhook-node';
-import { PalCrawl, type PalCrawlConfig } from 'pal-crawl';
 import { Webhook } from '../entities/webhook.entity';
 import { APP_CONSTANTS } from '../config/app.config';
 import { CacheService } from './cache.service';
 import { LoggerUtils } from '../utils/logger.utils';
-import { OllamaClientService } from '../modules/ollama/ollama-client.service';
 import { type CachedNotice } from '../types/cache.types';
 
 @Injectable()
@@ -24,17 +22,12 @@ export class NotificationService {
 
   // 영구적으로 실패한 웹훅들을 추적하여 중복 시도 방지
   private readonly permanentlyFailedWebhooks = new Set<number>();
-
-  private readonly crawlConfig: PalCrawlConfig = {
-    userAgent: APP_CONSTANTS.CRAWLING.USER_AGENT,
-    timeout: APP_CONSTANTS.CRAWLING.TIMEOUT,
-    retryCount: APP_CONSTANTS.CRAWLING.RETRY_COUNT,
-    customHeaders: APP_CONSTANTS.CRAWLING.HEADERS,
-  };
+  private globalLastSendAt = 0;
+  private readonly webhookLastSendAt = new Map<number, number>();
+  private isRateLimitStateHydrated = false;
 
   constructor(
     private cacheService: CacheService,
-    private ollamaClientService: OllamaClientService,
     private configService: ConfigService,
   ) {}
 
@@ -65,6 +58,7 @@ export class NotificationService {
   async sendDiscordNotificationBatch(
     notice: CachedNotice,
     webhooks: Webhook[],
+    abortSignal?: AbortSignal,
   ): Promise<
     Array<{
       webhookId: number;
@@ -73,6 +67,8 @@ export class NotificationService {
       shouldDelete?: boolean;
     }>
   > {
+    await this.hydrateRateLimitState();
+
     const embed = await this.createNotificationEmbed(notice);
     const results: Array<{
       webhookId: number;
@@ -83,6 +79,10 @@ export class NotificationService {
 
     // Discord 레이트 리밋을 준수하며 순차적으로 처리
     for (const webhook of webhooks) {
+      if (abortSignal?.aborted) {
+        throw new Error('Notification batch aborted');
+      }
+
       // 이미 영구적으로 실패한 웹훅은 건너뛰기
       if (this.permanentlyFailedWebhooks.has(webhook.id)) {
         results.push({
@@ -95,7 +95,7 @@ export class NotificationService {
       }
 
       // 레이트 리밋 준수를 위한 대기
-      await this.waitForRateLimit(webhook.id);
+      await this.waitForRateLimit(webhook.id, abortSignal);
 
       try {
         const discordWebhook = new DiscordWebhook(webhook.url);
@@ -149,7 +149,7 @@ export class NotificationService {
   private async createNotificationEmbed(
     notice: CachedNotice,
   ): Promise<MessageBuilder> {
-    const summary = await this.buildProposalSummary(notice);
+    const summary = this.buildProposalSummary(notice);
     const embed = new MessageBuilder()
       .setTitle('새로운 국회 입법예고')
       .setDescription(
@@ -176,37 +176,14 @@ export class NotificationService {
     return embed;
   }
 
-  private async buildProposalSummary(
-    notice: CachedNotice,
-  ): Promise<string | null> {
+  private buildProposalSummary(notice: CachedNotice): string | null {
     const precomputedSummary = notice.aiSummary;
 
     if (precomputedSummary) {
       return precomputedSummary.trim();
     }
 
-    if (!notice.contentId) {
-      return null;
-    }
-
-    try {
-      const palCrawl = new PalCrawl(this.crawlConfig);
-      const content = await palCrawl.getContent(notice.contentId);
-      if (!content.proposalReason) {
-        return null;
-      }
-
-      return await this.ollamaClientService.summarizeProposal(
-        content.title,
-        content.proposalReason,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(
-        `Failed to build summary for contentId ${notice.contentId}: ${message}`,
-      );
-      return null;
-    }
+    return null;
   }
 
   private truncateForEmbed(value: string, maxLength = 1024): string {
@@ -393,21 +370,22 @@ export class NotificationService {
   /**
    * Discord 레이트 리밋을 준수하기 위해 필요한 대기 시간을 계산하고 대기
    */
-  private async waitForRateLimit(webhookId: number): Promise<void> {
+  private async waitForRateLimit(
+    webhookId: number,
+    abortSignal?: AbortSignal,
+  ): Promise<void> {
     const now = Date.now();
     const { GLOBAL_PER_SECOND, PER_WEBHOOK_PER_MINUTE } =
       APP_CONSTANTS.DISCORD.API.RATE_LIMITS;
 
-    // Redis에서 글로벌 마지막 전송 시간 가져오기
-    const lastGlobalSend = await this.getGlobalLastSendTime();
+    const lastGlobalSend = this.globalLastSendAt;
     const timeSinceLastGlobal = now - lastGlobalSend;
     const globalWaitTime = Math.max(
       0,
       1000 / GLOBAL_PER_SECOND - timeSinceLastGlobal,
     );
 
-    // Redis에서 웹훅별 마지막 전송 시간 가져오기
-    const lastWebhookSend = await this.getWebhookLastSendTime(webhookId);
+    const lastWebhookSend = this.webhookLastSendAt.get(webhookId) ?? 0;
     const timeSinceLastWebhook = now - lastWebhookSend;
     const webhookWaitTime = Math.max(
       0,
@@ -421,43 +399,7 @@ export class NotificationService {
       this.logger.debug(
         `Rate limit wait: ${waitTime.toFixed(2)}ms for webhook ${webhookId} (global: ${globalWaitTime.toFixed(2)}ms, webhook: ${webhookWaitTime.toFixed(2)}ms)`,
       );
-      await new Promise((resolve) => setTimeout(resolve, waitTime));
-    }
-  }
-
-  /**
-   * Redis에서 글로벌 마지막 전송 시간을 가져옴
-   */
-  private async getGlobalLastSendTime(): Promise<number> {
-    try {
-      const lastSend = await this.cacheService['cacheManager'].get<number>(
-        this.RATE_LIMIT_KEYS.GLOBAL,
-      );
-      return lastSend || 0;
-    } catch (error) {
-      this.logger.warn(
-        'Failed to get global rate limit timestamp from Redis:',
-        error,
-      );
-      return 0;
-    }
-  }
-
-  /**
-   * Redis에서 웹훅별 마지막 전송 시간을 가져옴
-   */
-  private async getWebhookLastSendTime(webhookId: number): Promise<number> {
-    try {
-      const lastSend = await this.cacheService['cacheManager'].get<number>(
-        this.RATE_LIMIT_KEYS.WEBHOOK(webhookId),
-      );
-      return lastSend || 0;
-    } catch (error) {
-      this.logger.warn(
-        `Failed to get webhook ${webhookId} rate limit timestamp from Redis:`,
-        error,
-      );
-      return 0;
+      await this.waitWithAbort(waitTime, abortSignal);
     }
   }
 
@@ -466,28 +408,52 @@ export class NotificationService {
    */
   private async updateRateLimitTimestamp(webhookId: number): Promise<void> {
     const now = Date.now();
+    this.globalLastSendAt = now;
+    this.webhookLastSendAt.set(webhookId, now);
 
-    try {
-      // 글로벌 타임스탬프 업데이트
-      await this.cacheService['cacheManager'].set(
-        this.RATE_LIMIT_KEYS.GLOBAL,
-        now,
-        0,
-      );
-
-      // 웹훅별 타임스탬프 업데이트
-      await this.cacheService['cacheManager'].set(
+    await Promise.all([
+      this.cacheService.setNumber(this.RATE_LIMIT_KEYS.GLOBAL, now, 0),
+      this.cacheService.setNumber(
         this.RATE_LIMIT_KEYS.WEBHOOK(webhookId),
         now,
         0,
-      );
-    } catch (error) {
-      this.logger.error(
-        'Failed to update rate limit timestamps in Redis:',
-        error,
-      );
-      // Redis 실패 시에도 계속 진행 (메모리 기반 폴백은 제거)
+      ),
+    ]);
+  }
+
+  private async hydrateRateLimitState(): Promise<void> {
+    if (this.isRateLimitStateHydrated) {
+      return;
     }
+
+    const globalLastSend = await this.cacheService.getNumber(
+      this.RATE_LIMIT_KEYS.GLOBAL,
+    );
+
+    this.globalLastSendAt = globalLastSend ?? 0;
+    this.isRateLimitStateHydrated = true;
+  }
+
+  private waitWithAbort(ms: number, abortSignal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (abortSignal?.aborted) {
+        reject(new Error('Notification batch aborted'));
+        return;
+      }
+
+      const timeoutId = setTimeout(() => {
+        abortSignal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+
+      const onAbort = () => {
+        clearTimeout(timeoutId);
+        abortSignal?.removeEventListener('abort', onAbort);
+        reject(new Error('Notification batch aborted'));
+      };
+
+      abortSignal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
 
   /**

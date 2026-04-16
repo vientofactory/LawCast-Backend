@@ -233,29 +233,14 @@ export class CrawlingService implements OnModuleInit {
           };
         });
 
-        try {
-          // 알림 전송 먼저 시도
-          await this.sendNotifications(newNoticesWithSummary);
+        await this.cacheService.updateCache(noticesWithSummary);
+        this.logger.log(
+          `Cache updated for ${newNotices.length} new notices; notification dispatch will continue in background`,
+        );
 
-          // 알림 전송 성공 후 캐시 업데이트
-          await this.cacheService.updateCache(noticesWithSummary);
-          this.logger.log(
-            `Cache updated after successful notification for ${newNotices.length} notices`,
-          );
-        } catch (notificationError) {
-          this.logger.error(
-            'Notification sending failed, but updating cache anyway to prevent repeated notifications:',
-            notificationError,
-          );
-          // 알림 실패 시에도 캐시 업데이트
-          try {
-            await this.cacheService.updateCache(noticesWithSummary);
-            this.logger.log('Cache updated despite notification failure');
-          } catch (cacheError) {
-            this.logger.error('Cache update also failed:', cacheError);
-          }
-          throw notificationError;
-        }
+        void this.sendNotifications(newNoticesWithSummary).catch((error) => {
+          this.logger.error('Background notification dispatch failed:', error);
+        });
       } else {
         LoggerUtils.debugDev(CrawlingService.name, 'No new notices found');
         // 새 데이터가 없어도 기존 요약 상태를 보존하며 전체 캐시 업데이트
@@ -330,11 +315,8 @@ export class CrawlingService implements OnModuleInit {
         `Started notification batch processing for ${notices.length} notices (job: ${jobId})`,
       );
 
-      // 특정 배치 작업 완료 대기
-      await this.batchProcessingService.waitForBatchJob(jobId);
-
       this.logger.log(
-        `Notification batch processing completed for ${notices.length} notices`,
+        `Notification batch processing is running asynchronously for ${notices.length} notices`,
       );
     } catch (error) {
       this.logger.error('Notification batch processing failed:', error);
@@ -489,8 +471,13 @@ export class CrawlingService implements OnModuleInit {
   ): Promise<CachedNotice[]> {
     const { logOllamaActivity = false, phase = 'runtime' } = options;
 
-    return Promise.all(
-      notices.map(async (notice, index) => {
+    const summaryConcurrency = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
+    const palCrawl = new PalCrawl(this.crawlConfig);
+
+    return this.mapWithConcurrency(
+      notices,
+      summaryConcurrency,
+      async (notice, index) => {
         const existingNotice = existingNotices.get(notice.num);
         const cachedSummary = existingNotice?.aiSummary;
 
@@ -531,6 +518,7 @@ export class CrawlingService implements OnModuleInit {
           phase,
           index,
           total: notices.length,
+          palCrawl,
         });
 
         return {
@@ -538,7 +526,7 @@ export class CrawlingService implements OnModuleInit {
           aiSummary: summaryResult.aiSummary,
           aiSummaryStatus: summaryResult.aiSummaryStatus,
         };
-      }),
+      },
     );
   }
 
@@ -549,6 +537,7 @@ export class CrawlingService implements OnModuleInit {
       phase?: string;
       index?: number;
       total?: number;
+      palCrawl?: PalCrawl;
     } = {},
   ): Promise<{ aiSummary: string | null; aiSummaryStatus: AISummaryStatus }> {
     const {
@@ -556,6 +545,7 @@ export class CrawlingService implements OnModuleInit {
       phase = 'runtime',
       index,
       total,
+      palCrawl = new PalCrawl(this.crawlConfig),
     } = options;
 
     const progressLabel =
@@ -578,7 +568,6 @@ export class CrawlingService implements OnModuleInit {
     }
 
     try {
-      const palCrawl = new PalCrawl(this.crawlConfig);
       const content = await palCrawl.getContent(notice.contentId);
 
       if (!content?.proposalReason?.trim()) {
@@ -636,6 +625,39 @@ export class CrawlingService implements OnModuleInit {
         aiSummaryStatus: 'unavailable',
       };
     }
+  }
+
+  private async mapWithConcurrency<T, R>(
+    items: T[],
+    concurrency: number,
+    mapper: (item: T, index: number) => Promise<R>,
+  ): Promise<R[]> {
+    if (items.length === 0) {
+      return [];
+    }
+
+    const limit = Math.max(1, concurrency);
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+
+    const worker = async () => {
+      while (true) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+
+        if (currentIndex >= items.length) {
+          return;
+        }
+
+        results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+    );
+
+    return results;
   }
 
   /**

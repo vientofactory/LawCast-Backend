@@ -291,6 +291,27 @@ export class CacheService implements OnModuleDestroy {
     }
   }
 
+  async getNumber(key: string): Promise<number | null> {
+    try {
+      const value = await this.cacheManager.get<number>(key);
+      if (typeof value !== 'number' || Number.isNaN(value)) {
+        return null;
+      }
+      return value;
+    } catch (error) {
+      this.logger.warn(`Error reading numeric cache key (${key}):`, error);
+      return null;
+    }
+  }
+
+  async setNumber(key: string, value: number, ttl = 0): Promise<void> {
+    try {
+      await this.cacheManager.set(key, value, ttl);
+    } catch (error) {
+      this.logger.warn(`Error writing numeric cache key (${key}):`, error);
+    }
+  }
+
   private sanitizeNotice(notice: CachedNotice): CachedNotice {
     const { numComments: _numComments, ...rest } = notice as CachedNotice & {
       numComments?: number;
