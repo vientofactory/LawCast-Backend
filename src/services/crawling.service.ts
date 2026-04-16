@@ -302,7 +302,7 @@ export class CrawlingService implements OnModuleInit {
   /**
    * 알림 배치 처리를 실행하고 완료를 기다림
    */
-  private async sendNotifications(notices: ITableData[]): Promise<void> {
+  private async sendNotifications(notices: CachedNotice[]): Promise<void> {
     try {
       // 대량 알림의 경우 배치 크기 제한 적용
       const options: BatchProcessingOptions = {
@@ -410,7 +410,7 @@ export class CrawlingService implements OnModuleInit {
     }
   }
 
-  private async filterAlreadyArchivedNotices<T extends ITableData>(
+  private async filterAlreadyArchivedNotices<T extends { num: number }>(
     notices: T[],
   ): Promise<T[]> {
     if (notices.length === 0) {

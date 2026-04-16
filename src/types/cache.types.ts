@@ -13,7 +13,9 @@ export interface CacheInfo {
   isInitialized: boolean;
 }
 
-export interface CachedNotice extends ITableData {
+type CachedBaseNotice = Omit<ITableData, 'numComments'>;
+
+export interface CachedNotice extends CachedBaseNotice {
   aiSummary?: string | null;
   aiSummaryStatus?: AISummaryStatus;
 }

@@ -21,7 +21,6 @@ export interface ArchiveNoticeItem {
   subject: string;
   proposerCategory: string;
   committee: string;
-  numComments: number;
   link: string;
   contentId: string | null;
   aiSummary: string | null;
@@ -67,7 +66,6 @@ export class NoticeArchiveService {
       subject: notice.subject,
       proposerCategory: notice.proposerCategory,
       committee: notice.committee,
-      numComments: notice.numComments,
       assemblyLink: notice.link,
       contentId: notice.contentId ?? null,
       proposalReason: originalContent.proposalReason ?? '',
@@ -269,7 +267,6 @@ export class NoticeArchiveService {
       subject: row.subject,
       proposerCategory: row.proposerCategory,
       committee: row.committee,
-      numComments: row.numComments,
       link: row.assemblyLink,
       contentId: row.contentId,
       aiSummary: row.aiSummary,

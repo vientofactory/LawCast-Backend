@@ -4,12 +4,13 @@ import {
   MessageBuilder,
   Webhook as DiscordWebhook,
 } from 'discord-webhook-node';
-import { PalCrawl, type ITableData, type PalCrawlConfig } from 'pal-crawl';
+import { PalCrawl, type PalCrawlConfig } from 'pal-crawl';
 import { Webhook } from '../entities/webhook.entity';
 import { APP_CONSTANTS } from '../config/app.config';
 import { CacheService } from './cache.service';
 import { LoggerUtils } from '../utils/logger.utils';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
+import { type CachedNotice } from '../types/cache.types';
 
 @Injectable()
 export class NotificationService {
@@ -38,7 +39,7 @@ export class NotificationService {
   ) {}
 
   async sendDiscordNotification(
-    notice: ITableData,
+    notice: CachedNotice,
     webhooks: Webhook[],
   ): Promise<void> {
     const embed = await this.createNotificationEmbed(notice);
@@ -62,7 +63,7 @@ export class NotificationService {
    * 병렬로 여러 웹훅에 알림을 전송하고 결과를 반환
    */
   async sendDiscordNotificationBatch(
-    notice: ITableData,
+    notice: CachedNotice,
     webhooks: Webhook[],
   ): Promise<
     Array<{
@@ -146,7 +147,7 @@ export class NotificationService {
    * 알림 임베드 메시지를 생성
    */
   private async createNotificationEmbed(
-    notice: ITableData,
+    notice: CachedNotice,
   ): Promise<MessageBuilder> {
     const summary = await this.buildProposalSummary(notice);
     const embed = new MessageBuilder()
@@ -176,11 +177,9 @@ export class NotificationService {
   }
 
   private async buildProposalSummary(
-    notice: ITableData,
+    notice: CachedNotice,
   ): Promise<string | null> {
-    const precomputedSummary = (
-      notice as ITableData & { aiSummary?: string | null }
-    ).aiSummary;
+    const precomputedSummary = notice.aiSummary;
 
     if (precomputedSummary) {
       return precomputedSummary.trim();
@@ -218,7 +217,7 @@ export class NotificationService {
     return `${value.slice(0, maxLength - 3)}...`;
   }
 
-  private buildFrontendNoticeDetailUrl(notice: ITableData): string {
+  private buildFrontendNoticeDetailUrl(notice: CachedNotice): string {
     const frontendUrls =
       this.configService.get<string[]>('frontend.urls') || [];
     const primaryFrontendUrl = frontendUrls.find((url) => !!url?.trim());

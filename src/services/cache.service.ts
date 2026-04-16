@@ -46,7 +46,9 @@ export class CacheService implements OnModuleDestroy {
       }
 
       const actualLimit = Math.min(limit, this.MAX_CACHE_SIZE);
-      return cachedNotices.slice(0, actualLimit);
+      return cachedNotices
+        .slice(0, actualLimit)
+        .map((notice) => this.sanitizeNotice(notice));
     } catch (error) {
       this.logger.error('Error getting cached notices:', error);
       return [];
@@ -60,7 +62,9 @@ export class CacheService implements OnModuleDestroy {
   async updateCache(notices: CachedNotice[]): Promise<void> {
     try {
       // 최신 순으로 정렬
-      const sortedNotices = [...notices].sort((a, b) => b.num - a.num);
+      const sortedNotices = notices
+        .map((notice) => this.sanitizeNotice(notice))
+        .sort((a, b) => b.num - a.num);
 
       // 기존 캐시 데이터 가져오기
       const existingNotices =
@@ -68,8 +72,12 @@ export class CacheService implements OnModuleDestroy {
           this.CACHE_KEYS.RECENT_NOTICES,
         )) || [];
 
+      const normalizedExistingNotices = existingNotices.map((notice) =>
+        this.sanitizeNotice(notice),
+      );
+
       // 기존 데이터와 새 데이터를 병합
-      const mergedNotices = [...sortedNotices, ...existingNotices];
+      const mergedNotices = [...sortedNotices, ...normalizedExistingNotices];
 
       // 중복 제거 중 기존 요약(aiSummary)은 보존
       const dedupedNotices = new Map<number, CachedNotice>();
@@ -132,7 +140,11 @@ export class CacheService implements OnModuleDestroy {
           this.CACHE_KEYS.RECENT_NOTICES,
         )) || [];
 
-      if (existingNotices.length === 0) {
+      const normalizedExistingNotices = existingNotices.map((notice) =>
+        this.sanitizeNotice(notice),
+      );
+
+      if (normalizedExistingNotices.length === 0) {
         LoggerUtils.logDev(
           CacheService.name,
           'Cache is empty, all crawled data considered new',
@@ -141,7 +153,9 @@ export class CacheService implements OnModuleDestroy {
       }
 
       // 기존 데이터의 num 집합 생성
-      const existingNums = new Set(existingNotices.map((notice) => notice.num));
+      const existingNums = new Set(
+        normalizedExistingNotices.map((notice) => notice.num),
+      );
 
       // 새로운 데이터만 필터링 (num 기준)
       const newNotices = crawledData.filter(
@@ -150,7 +164,7 @@ export class CacheService implements OnModuleDestroy {
 
       LoggerUtils.logDev(
         CacheService.name,
-        `Found ${newNotices.length} new notices out of ${crawledData.length} crawled (cache has ${existingNotices.length})`,
+        `Found ${newNotices.length} new notices out of ${crawledData.length} crawled (cache has ${normalizedExistingNotices.length})`,
       );
 
       return newNotices;
@@ -275,5 +289,12 @@ export class CacheService implements OnModuleDestroy {
         error: message || 'Unknown Redis error',
       };
     }
+  }
+
+  private sanitizeNotice(notice: CachedNotice): CachedNotice {
+    const { numComments: _numComments, ...rest } = notice as CachedNotice & {
+      numComments?: number;
+    };
+    return rest;
   }
 }
