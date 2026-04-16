@@ -2,6 +2,16 @@ import { HttpException, HttpStatus, BadRequestException } from '@nestjs/common';
 import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
 
 describe('ApiResponseUtils', () => {
+  let originalNodeEnv: NodeJS.ProcessEnv['NODE_ENV'];
+
+  beforeEach(() => {
+    originalNodeEnv = process.env.NODE_ENV;
+  });
+
+  afterEach(() => {
+    process.env.NODE_ENV = originalNodeEnv;
+  });
+
   describe('success', () => {
     it('should create success response without data and message', () => {
       const result = ApiResponseUtils.success();
@@ -218,6 +228,22 @@ describe('ApiResponseUtils', () => {
         });
       }
     });
+
+    it('should hide internal error message in production', () => {
+      process.env.NODE_ENV = 'production';
+
+      try {
+        ApiResponseUtils.handleError(
+          new Error('Sensitive internal message'),
+          ErrorContext.DEFAULT,
+        );
+      } catch (e) {
+        expect((e as HttpException).getResponse()).toMatchObject({
+          message: '작업 중 오류가 발생했습니다.',
+          error: '내부 서버 오류',
+        });
+      }
+    });
   });
 
   describe('createPoWFailedException', () => {
@@ -298,6 +324,21 @@ describe('ApiResponseUtils', () => {
           details: 'Test error',
         });
       }
+    });
+
+    it('should hide details field in production', () => {
+      process.env.NODE_ENV = 'production';
+
+      const exception = ApiResponseUtils.createWebhookTestFailedException(
+        'Sensitive backend details',
+        'INVALID_WEBHOOK',
+      );
+
+      expect(exception.getResponse()).toMatchObject({
+        success: false,
+        message: '유효하지 않은 Discord 웹훅 URL입니다.',
+        details: undefined,
+      });
     });
   });
 });

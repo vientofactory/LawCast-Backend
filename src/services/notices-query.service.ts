@@ -18,8 +18,11 @@ export class NoticesQueryService {
   ) {}
 
   async getArchivedNotices({ page, limit, search }: ArchivedNoticesQuery) {
-    const safePage = Math.max(1, page);
-    const safeLimit = Math.min(50, Math.max(1, limit));
+    const safePage = Math.max(APP_CONSTANTS.API.PAGINATION.MIN_PAGE, page);
+    const safeLimit = Math.min(
+      APP_CONSTANTS.API.PAGINATION.MAX_LIMIT,
+      Math.max(APP_CONSTANTS.API.PAGINATION.MIN_LIMIT, limit),
+    );
     const normalizedSearch = (search || '').trim();
 
     const cachedNotices = await this.crawlingService.getRecentNotices(
