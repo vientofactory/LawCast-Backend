@@ -5,6 +5,7 @@ import {
   OnModuleInit,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { PalCrawl, type ITableData, type PalCrawlConfig } from 'pal-crawl';
 import { CacheService } from './cache.service';
 import {
@@ -20,7 +21,10 @@ import {
   type CachedNotice,
 } from '../types/cache.types';
 import { NoticeArchiveService } from './notice-archive.service';
-import { type ArchiveSummaryState } from './notice-archive.service';
+import {
+  type ArchiveHttpMetadata,
+  type ArchiveSummaryState,
+} from './notice-archive.service';
 
 @Injectable()
 export class CrawlingService implements OnModuleInit {
@@ -422,6 +426,10 @@ export class CrawlingService implements OnModuleInit {
         chunk.map(async (notice) => {
           let proposalReason = '';
           let sourceTitle: string | null = notice.subject;
+          let sourceHtml: string | null = null;
+          let sourceHtmlSha256: string | null = null;
+          let httpMetadata: ArchiveHttpMetadata | null = null;
+          const archivedAt = new Date();
 
           if (notice.contentId) {
             try {
@@ -438,9 +446,28 @@ export class CrawlingService implements OnModuleInit {
           }
 
           try {
+            const sourceCapture = await this.captureNoticePageSource(
+              notice.link,
+            );
+            sourceHtml = sourceCapture.html;
+            sourceHtmlSha256 = sourceCapture.sha256;
+            httpMetadata = sourceCapture.httpMetadata;
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            this.logger.warn(
+              `Failed to capture source HTML for archive notice ${notice.num}: ${message}`,
+            );
+          }
+
+          try {
             await this.noticeArchiveService.upsertNoticeArchive(notice, {
               proposalReason,
               title: sourceTitle,
+              sourceHtml,
+              htmlSha256: sourceHtmlSha256,
+              archivedAt,
+              httpMetadata,
             });
           } catch (error) {
             const message =
@@ -700,5 +727,45 @@ export class CrawlingService implements OnModuleInit {
 
   private warnOllama(message: string, phase?: string): void {
     this.logger.warn(`${this.getOllamaPrefix(phase)} ${message}`);
+  }
+
+  private computeSha256(input: string): string {
+    return createHash('sha256').update(input, 'utf8').digest('hex');
+  }
+
+  private async captureNoticePageSource(link: string): Promise<{
+    html: string;
+    sha256: string;
+    httpMetadata: ArchiveHttpMetadata;
+  }> {
+    const response = await globalThis.fetch(link, {
+      method: 'GET',
+      headers: {
+        Accept:
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'User-Agent': APP_CONSTANTS.CRAWLING.USER_AGENT,
+      },
+      redirect: 'follow',
+    });
+
+    const html = await response.text();
+
+    if (!html.trim()) {
+      throw new Error('Captured HTML is empty');
+    }
+
+    return {
+      html,
+      sha256: this.computeSha256(html),
+      httpMetadata: {
+        requestUrl: link,
+        responseUrl: response.url,
+        fetchedAt: new Date().toISOString(),
+        statusCode: response.status,
+        contentType: response.headers.get('content-type') || undefined,
+        etag: response.headers.get('etag') || undefined,
+        lastModified: response.headers.get('last-modified') || undefined,
+      },
+    };
   }
 }

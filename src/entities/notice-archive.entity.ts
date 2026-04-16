@@ -50,6 +50,54 @@ export class NoticeArchive {
   @Column({ type: 'text', default: '' })
   attachmentHwpFile: string;
 
+  @Column({ type: 'datetime', name: 'archived_at', nullable: true })
+  archivedAt: Date | null;
+
+  @Column({ type: 'text', name: 'source_html', nullable: true })
+  sourceHtml: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 64,
+    name: 'source_html_sha256',
+    nullable: true,
+  })
+  sourceHtmlSha256: string | null;
+
+  @Column({ type: 'datetime', name: 'integrity_verified_at', nullable: true })
+  integrityVerifiedAt: Date | null;
+
+  @Column({ type: 'boolean', name: 'integrity_check_passed', nullable: true })
+  integrityCheckPassed: boolean | null;
+
+  @Column({ type: 'text', name: 'http_metadata_json', nullable: true })
+  httpMetadataJson: string | null;
+
+  @Column({ type: 'datetime', name: 'http_fetched_at', nullable: true })
+  httpFetchedAt: Date | null;
+
+  @Column({ type: 'integer', name: 'http_status_code', nullable: true })
+  httpStatusCode: number | null;
+
+  @Column({
+    type: 'varchar',
+    length: 255,
+    name: 'http_content_type',
+    nullable: true,
+  })
+  httpContentType: string | null;
+
+  @Column({ type: 'varchar', length: 255, name: 'http_etag', nullable: true })
+  httpEtag: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 255,
+    name: 'http_last_modified',
+    nullable: true,
+  })
+  httpLastModified: string | null;
+
   @CreateDateColumn({ name: 'archive_started_at' })
   archiveStartedAt: Date;
 
