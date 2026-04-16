@@ -37,7 +37,7 @@
     "hashguard-client": "^1.5.0",
     "keyv": "^5.5.4",
     "node-cache": "^5.1.2",
-    "pal-crawl": "^1.4.0",
+    "pal-crawl": "^1.5.0",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1",
     "sqlite3": "^5.1.7",
