@@ -192,6 +192,9 @@ export class ApiController {
     const zip = this.createZipInstance();
     zip.file(archiveExport.jsonFileName, archiveExport.jsonContent);
     zip.file(archiveExport.integrityFileName, archiveExport.integrityContent);
+    for (const script of archiveExport.verificationScripts || []) {
+      zip.file(script.fileName, script.content);
+    }
 
     const zipBuffer = await zip.generateAsync({
       type: 'nodebuffer',

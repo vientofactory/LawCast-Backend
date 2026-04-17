@@ -15,6 +15,7 @@ import {
 } from 'typeorm';
 import { type AISummaryStatus, type CachedNotice } from '../types/cache.types';
 import { NoticeArchive } from '../entities/notice-archive.entity';
+import { buildArchiveExportArtifacts } from './archive-export.builder';
 
 export interface ArchiveListQuery {
   page: number;
@@ -98,6 +99,10 @@ export interface ArchiveExportResult {
   jsonContent: string;
   integrityFileName: string;
   integrityContent: string;
+  verificationScripts?: Array<{
+    fileName: string;
+    content: string;
+  }>;
 }
 
 export interface ArchiveHttpMetadata {
@@ -324,40 +329,14 @@ export class NoticeArchiveService {
     const httpMetadata = this.parseHttpMetadata(row.httpMetadataJson);
     const generatedAt = new Date();
 
-    const exportPayload = {
-      exportMeta: {
-        generatedAt,
-        formatVersion: '1.0',
-        recordType: 'lawcast_notice_archive',
-        noticeNum,
-      },
-      dbRecord: this.mapArchiveEntityToRawRecord(row),
-      integritySnapshot: {
-        checkedAt: integrity.checkedAt,
-        passed: integrity.passed,
-        storedSha256: row.sourceHtmlSha256,
-        calculatedSha256: integrity.calculatedSha256,
-      },
-      httpMetadata,
-    };
-
-    const fileStamp = generatedAt.toISOString().replace(/[:.]/g, '-');
-    const baseFileName = `lawcast-archive-${noticeNum}-${fileStamp}`;
-    const integrityContent = this.buildIntegrityMetadataText({
+    return buildArchiveExportArtifacts({
       noticeNum,
       generatedAt,
       row,
       integrity,
       httpMetadata,
+      dbRecord: this.mapArchiveEntityToRawRecord(row),
     });
-
-    return {
-      zipFileName: `${baseFileName}.zip`,
-      jsonFileName: `${baseFileName}.json`,
-      jsonContent: JSON.stringify(exportPayload, null, 2),
-      integrityFileName: `${baseFileName}.integrity.txt`,
-      integrityContent,
-    };
   }
 
   async existsByNoticeNum(noticeNum: number): Promise<boolean> {
@@ -504,42 +483,6 @@ export class NoticeArchiveService {
       archiveStartedAt: row.archiveStartedAt,
       lastUpdatedAt: row.lastUpdatedAt,
     };
-  }
-
-  private buildIntegrityMetadataText(params: {
-    noticeNum: number;
-    generatedAt: Date;
-    row: NoticeArchive;
-    integrity: {
-      checkedAt: Date | null;
-      passed: boolean | null;
-      calculatedSha256: string | null;
-    };
-    httpMetadata: ArchiveHttpMetadata;
-  }): string {
-    const { noticeNum, generatedAt, row, integrity, httpMetadata } = params;
-
-    const lines = [
-      'LawCast Archive Integrity Metadata',
-      '=================================',
-      `noticeNum: ${noticeNum}`,
-      `generatedAt: ${generatedAt.toISOString()}`,
-      `archivedAt: ${row.archivedAt?.toISOString() ?? 'N/A'}`,
-      `sourceHtmlSizeBytes: ${row.sourceHtml ? Buffer.byteLength(row.sourceHtml, 'utf8') : 0}`,
-      `storedSha256: ${row.sourceHtmlSha256 ?? 'N/A'}`,
-      `calculatedSha256: ${integrity.calculatedSha256 ?? 'N/A'}`,
-      `integrityPassed: ${integrity.passed === null ? 'N/A' : integrity.passed ? 'true' : 'false'}`,
-      `integrityCheckedAt: ${integrity.checkedAt?.toISOString() ?? 'N/A'}`,
-      `httpFetchedAt: ${row.httpFetchedAt?.toISOString() ?? 'N/A'}`,
-      `httpStatusCode: ${row.httpStatusCode ?? 'N/A'}`,
-      `httpContentType: ${row.httpContentType ?? 'N/A'}`,
-      `httpEtag: ${row.httpEtag ?? 'N/A'}`,
-      `httpLastModified: ${row.httpLastModified ?? 'N/A'}`,
-      `httpRequestUrl: ${typeof httpMetadata.requestUrl === 'string' ? httpMetadata.requestUrl : 'N/A'}`,
-      `httpResponseUrl: ${typeof httpMetadata.responseUrl === 'string' ? httpMetadata.responseUrl : 'N/A'}`,
-    ];
-
-    return `${lines.join('\n')}\n`;
   }
 
   private normalizeSortOrder(sortOrder?: 'asc' | 'desc'): 'asc' | 'desc' {
