@@ -182,6 +182,7 @@ export class NoticeArchiveService {
     const [rows, total] = await this.archiveRepository.findAndCount({
       where,
       order: {
+        archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
         noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',
       },
       skip,
@@ -207,6 +208,7 @@ export class NoticeArchiveService {
     const rows = await this.archiveRepository.find({
       where,
       order: {
+        archiveStartedAt: 'DESC',
         noticeNum: 'DESC',
       },
     });
@@ -242,6 +244,7 @@ export class NoticeArchiveService {
     const rows = await this.archiveRepository.find({
       where,
       order: {
+        archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
         noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',
       },
       skip,
@@ -382,6 +385,28 @@ export class NoticeArchiveService {
 
   async getArchiveCount(): Promise<number> {
     return this.archiveRepository.count();
+  }
+
+  async getArchiveStartedAtByNoticeNums(
+    noticeNums: number[],
+  ): Promise<Map<number, Date>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+
+    if (uniqueNums.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.archiveRepository.find({
+      where: {
+        noticeNum: In(uniqueNums),
+      },
+      select: {
+        noticeNum: true,
+        archiveStartedAt: true,
+      },
+    });
+
+    return new Map(rows.map((row) => [row.noticeNum, row.archiveStartedAt]));
   }
 
   async countByNoticeNumComparison(

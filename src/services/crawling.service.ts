@@ -334,7 +334,36 @@ export class CrawlingService implements OnModuleInit {
   async getRecentNotices(
     limit: number = APP_CONSTANTS.CACHE.DEFAULT_LIMIT,
   ): Promise<CachedNotice[]> {
-    return await this.cacheService.getRecentNotices(limit);
+    const safeLimit = Math.min(
+      APP_CONSTANTS.CACHE.MAX_SIZE,
+      Math.max(APP_CONSTANTS.API.PAGINATION.MIN_LIMIT, limit),
+    );
+
+    const cachedNotices = await this.cacheService.getRecentNotices(
+      APP_CONSTANTS.CACHE.MAX_SIZE,
+    );
+
+    if (cachedNotices.length === 0) {
+      return [];
+    }
+
+    const archiveStartedAtMap =
+      await this.noticeArchiveService.getArchiveStartedAtByNoticeNums(
+        cachedNotices.map((notice) => notice.num),
+      );
+
+    const sorted = [...cachedNotices].sort((left, right) => {
+      const leftTime = archiveStartedAtMap.get(left.num)?.getTime() ?? 0;
+      const rightTime = archiveStartedAtMap.get(right.num)?.getTime() ?? 0;
+
+      if (rightTime !== leftTime) {
+        return rightTime - leftTime;
+      }
+
+      return right.num - left.num;
+    });
+
+    return sorted.slice(0, safeLimit);
   }
 
   async getNoticeDetail(noticeNum: number): Promise<{

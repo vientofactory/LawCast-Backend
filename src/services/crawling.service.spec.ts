@@ -13,6 +13,7 @@ jest.mock('pal-crawl');
 describe('CrawlingService', () => {
   let service: CrawlingService;
   let cacheService: CacheService;
+  let noticeArchiveService: NoticeArchiveService;
 
   let mockPalCrawl: jest.Mocked<PalCrawl>;
 
@@ -82,6 +83,9 @@ describe('CrawlingService', () => {
             getExistingNoticeNumSet: jest.fn().mockResolvedValue(new Set()),
             upsertNoticeArchive: jest.fn(),
             getSummaryStateByNoticeNums: jest.fn().mockResolvedValue(new Map()),
+            getArchiveStartedAtByNoticeNums: jest
+              .fn()
+              .mockResolvedValue(new Map()),
           },
         },
         {
@@ -97,6 +101,8 @@ describe('CrawlingService', () => {
 
     service = module.get<CrawlingService>(CrawlingService);
     cacheService = module.get<CacheService>(CacheService);
+    noticeArchiveService =
+      module.get<NoticeArchiveService>(NoticeArchiveService);
   });
 
   afterEach(() => {
@@ -212,11 +218,19 @@ describe('CrawlingService', () => {
       (cacheService.getRecentNotices as jest.Mock).mockResolvedValue(
         expectedNotices,
       );
+      (
+        noticeArchiveService.getArchiveStartedAtByNoticeNums as jest.Mock
+      ).mockResolvedValue(new Map());
 
       const result = await service.getRecentNotices(2);
 
-      expect(cacheService.getRecentNotices).toHaveBeenCalledWith(2);
-      expect(result).toEqual(expectedNotices);
+      expect(cacheService.getRecentNotices).toHaveBeenCalledWith(10);
+      expect(
+        noticeArchiveService.getArchiveStartedAtByNoticeNums,
+      ).toHaveBeenCalledWith(expectedNotices.map((notice) => notice.num));
+      expect(result).toEqual(
+        [...expectedNotices].sort((a, b) => b.num - a.num),
+      );
     });
 
     it('should use default limit when no limit provided', async () => {
@@ -224,11 +238,16 @@ describe('CrawlingService', () => {
       (cacheService.getRecentNotices as jest.Mock).mockResolvedValue(
         expectedNotices,
       );
+      (
+        noticeArchiveService.getArchiveStartedAtByNoticeNums as jest.Mock
+      ).mockResolvedValue(new Map());
 
       const result = await service.getRecentNotices();
 
       expect(cacheService.getRecentNotices).toHaveBeenCalledWith(10); // APP_CONSTANTS.CACHE.DEFAULT_LIMIT
-      expect(result).toEqual(expectedNotices);
+      expect(result).toEqual(
+        [...expectedNotices].sort((a, b) => b.num - a.num),
+      );
     });
   });
 
