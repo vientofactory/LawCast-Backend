@@ -2,8 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { WebhookCleanupService } from '../services/webhook-cleanup.service';
 import { CrawlingService } from '../services/crawling.service';
-import { APP_CONSTANTS } from '../config/app.config';
+import appConfig, { APP_CONSTANTS } from '../config/app.config';
 import { LoggerUtils } from '../utils/logger.utils';
+
+const CRON_TIMEZONE = appConfig().cron.timezone;
 
 @Injectable()
 export class CronJobsService {
@@ -39,7 +41,9 @@ export class CronJobsService {
   /**
    * 매일 자정에 웹훅 정리 수행
    */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP)
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP, {
+    timeZone: CRON_TIMEZONE,
+  })
   async handleWebhookCleanup(): Promise<void> {
     await this.execute('webhook cleanup', () =>
       this.webhookCleanupService.intelligentWebhookCleanup(),
@@ -49,7 +53,9 @@ export class CronJobsService {
   /**
    * 매일 새벽 2시에 심층 시스템 최적화 수행
    */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION)
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION, {
+    timeZone: CRON_TIMEZONE,
+  })
   async handleWebhookOptimization(): Promise<void> {
     await this.execute('webhook optimization', () =>
       this.webhookCleanupService.runSystemOptimization(),
@@ -59,7 +65,9 @@ export class CronJobsService {
   /**
    * 매시간 실시간 시스템 모니터링 및 자가 치유
    */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING)
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING, {
+    timeZone: CRON_TIMEZONE,
+  })
   async handleSystemMonitoring(): Promise<void> {
     await this.execute('system monitoring', () =>
       this.webhookCleanupService.realTimeSystemMonitoring(),
@@ -69,7 +77,9 @@ export class CronJobsService {
   /**
    * 새로운 입법예고 크롤링 및 알림 전송
    */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK)
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK, {
+    timeZone: CRON_TIMEZONE,
+  })
   async handleCrawlingCheck(): Promise<void> {
     await this.execute('crawling and notification', () =>
       this.crawlingService.handleCron(),
