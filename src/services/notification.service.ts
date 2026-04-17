@@ -126,7 +126,8 @@ export class NotificationService {
             `Webhook ${webhook.id} permanently failed on first attempt (${webhookError.response?.status || 'unknown'}) - marked for immediate deactivation`,
           );
         } else {
-          this.logger.debug(
+          LoggerUtils.debugDev(
+            NotificationService.name,
             `Webhook ${webhook.id} temporarily failed: ${webhookError.message || 'unknown error'}`,
           );
         }
@@ -396,7 +397,8 @@ export class NotificationService {
     const waitTime = Math.max(globalWaitTime, webhookWaitTime);
 
     if (waitTime > 0) {
-      this.logger.debug(
+      LoggerUtils.debugDev(
+        NotificationService.name,
         `Rate limit wait: ${waitTime.toFixed(2)}ms for webhook ${webhookId} (global: ${globalWaitTime.toFixed(2)}ms, webhook: ${webhookWaitTime.toFixed(2)}ms)`,
       );
       await this.waitWithAbort(waitTime, abortSignal);
@@ -461,7 +463,8 @@ export class NotificationService {
    */
   clearPermanentFailureFlag(webhookId: number): void {
     this.permanentlyFailedWebhooks.delete(webhookId);
-    this.logger.debug(
+    LoggerUtils.debugDev(
+      NotificationService.name,
       `Cleared permanent failure flag for webhook ${webhookId}`,
     );
   }

@@ -119,7 +119,7 @@ export const APP_CONSTANTS = {
   },
   CRON: {
     EXPRESSIONS: {
-      CRAWLING_CHECK: '0 */10 * * * *', // 10분마다
+      CRAWLING_CHECK: '0 */5 * * * *', // 5분마다
       WEBHOOK_CLEANUP: '0 0 0 * * *', // 매일 자정
       WEBHOOK_OPTIMIZATION: '0 0 2 * * *', // 매일 새벽 2시
       SYSTEM_MONITORING: '0 0 * * * *', // 매시간
