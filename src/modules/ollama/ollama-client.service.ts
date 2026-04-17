@@ -23,16 +23,26 @@ interface OllamaGenerateResponse {
 @Injectable()
 export class OllamaClientService {
   private readonly logger = new Logger(OllamaClientService.name);
-  private readonly client: AxiosInstance;
+  private readonly client: AxiosInstance | null;
+  private readonly enabled: boolean;
   private readonly model: string;
   private readonly modelTemperature = 0.2;
   private readonly modelNumPredict = 220;
 
   constructor(private configService: ConfigService) {
+    this.enabled = !!this.configService.get<boolean>('ollama.enabled', false);
     const apiUrl = this.configService.get<string>('ollama.apiUrl');
     const timeout = this.configService.get<number>('ollama.timeout', 10000);
 
-    this.model = this.configService.get<string>('ollama.model', 'gemma3:1b');
+    this.model = this.configService.get<string>('ollama.model', '');
+
+    if (!this.enabled || !apiUrl || !this.model) {
+      this.client = null;
+      this.logger.log(
+        'Ollama summarization is disabled. Set OLLAMA_ENABLED=true with OLLAMA_API_URL and OLLAMA_MODEL to enable it.',
+      );
+      return;
+    }
 
     // Base HTTP Client for Ollama REST API
     this.client = axios.create({
@@ -54,6 +64,10 @@ export class OllamaClientService {
     title: string,
     proposalReason: string,
   ): Promise<string | null> {
+    if (!this.enabled || !this.client) {
+      return null;
+    }
+
     const prompt = this.getSummarizationPrompt(title, proposalReason);
 
     const payload = {
@@ -81,6 +95,10 @@ export class OllamaClientService {
       this.logger.warn(`Failed to summarize proposal with Ollama: ${message}`);
       return null;
     }
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
   }
 
   /**

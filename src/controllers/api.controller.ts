@@ -146,7 +146,10 @@ export class ApiController {
       sortOrder: safeSortOrder,
     });
 
-    return ApiResponseUtils.success(archiveResult);
+    return ApiResponseUtils.success({
+      ...archiveResult,
+      aiSummaryEnabled: this.crawlingService.isAiSummaryEnabled(),
+    });
   }
 
   private sanitizeDateQuery(rawDate?: string): string | undefined {
@@ -172,7 +175,10 @@ export class ApiController {
       );
     }
 
-    return ApiResponseUtils.success(detail);
+    return ApiResponseUtils.success({
+      ...detail,
+      aiSummaryEnabled: this.crawlingService.isAiSummaryEnabled(),
+    });
   }
 
   @Get('notices/:num/export')
@@ -259,6 +265,7 @@ export class ApiController {
         count: archiveCount,
       },
       batchProcessing: safeBatchStatus,
+      aiSummaryEnabled: this.crawlingService.isAiSummaryEnabled(),
     });
   }
 
