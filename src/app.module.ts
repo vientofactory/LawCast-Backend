@@ -19,6 +19,7 @@ import { NoticeArchive } from './entities/notice-archive.entity';
 import { OllamaModule } from './modules/ollama/ollama.module';
 import { NoticeArchiveService } from './services/notice-archive.service';
 import appConfig from './config/app.config';
+import { InitialSchemaMigration1744953900000 } from './migrations/202604170001-initial-schema.migration';
 
 @Module({
   imports: [
@@ -53,7 +54,10 @@ import appConfig from './config/app.config';
         type: 'sqlite',
         database: configService.get<string>('database.path'),
         entities: [Webhook, NoticeArchive],
-        synchronize: true,
+        synchronize: false,
+        migrationsRun: false,
+        migrationsTableName: 'migrations',
+        migrations: [InitialSchemaMigration1744953900000],
       }),
     }),
     TypeOrmModule.forFeature([Webhook, NoticeArchive]),

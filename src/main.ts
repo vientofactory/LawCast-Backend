@@ -3,14 +3,18 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DataSource } from 'typeorm';
 import { BatchProcessingService } from './services/batch-processing.service';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
+  const dataSource = app.get(DataSource);
   const batchProcessingService = app.get(BatchProcessingService);
   const logger = new Logger('Bootstrap');
   const frontendUrls = configService.get<string[]>('frontend.urls');
+
+  await ensureDatabaseMigrations(dataSource, logger);
 
   app.enableCors({
     origin: frontendUrls,
@@ -46,6 +50,28 @@ async function bootstrap() {
   await app.listen(port);
 
   logger.log(`LawCast Backend is running on port ${port}`);
+}
+
+async function ensureDatabaseMigrations(
+  dataSource: DataSource,
+  logger: Logger,
+): Promise<void> {
+  logger.log('Checking TypeORM migration status...');
+
+  const hasPendingMigrations = await dataSource.showMigrations();
+  if (!hasPendingMigrations) {
+    logger.log('Database migrations are up to date');
+    return;
+  }
+
+  logger.warn(
+    'Pending migrations detected. Running migrations during bootstrap...',
+  );
+
+  const result = await dataSource.runMigrations({ transaction: 'all' });
+  logger.log(
+    `Migration initialization completed (${result.length} migration(s) applied)`,
+  );
 }
 
 async function gracefulShutdown(
