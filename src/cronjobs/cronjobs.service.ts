@@ -67,7 +67,7 @@ export class CronJobsService {
   }
 
   /**
-   * 10분마다 새로운 입법예고 크롤링 및 알림 전송
+   * 새로운 입법예고 크롤링 및 알림 전송
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK)
   async handleCrawlingCheck(): Promise<void> {
