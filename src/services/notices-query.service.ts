@@ -67,22 +67,6 @@ export class NoticesQueryService {
         this.compareNoticeNums(a.num, b.num, normalizedSortOrder),
       );
 
-    const cacheInsertionEntries = await this.buildCacheInsertionEntries({
-      cacheOnlyItems,
-      sortOrder: normalizedSortOrder,
-      search: normalizedSearch,
-      startDate: parsedDateRange.startDate,
-      endDate: parsedDateRange.endDate,
-    });
-
-    const cacheInsertionMap = new Map(
-      cacheInsertionEntries.map((entry) => [entry.position, entry.item]),
-    );
-
-    const cacheOnlyCount = cacheOnlyItems.length;
-    const globalStart = (safePage - 1) * safeLimit;
-    const globalEnd = globalStart + safeLimit;
-
     const archiveFilteredTotal =
       await this.noticeArchiveService.getArchiveNoticesByOffset({
         skip: 0,
@@ -92,6 +76,20 @@ export class NoticesQueryService {
         endDate: parsedDateRange.endDate,
         sortOrder: normalizedSortOrder,
       });
+
+    const cacheInsertionEntries = this.buildCacheInsertionEntries({
+      cacheOnlyItems,
+      sortOrder: normalizedSortOrder,
+      archiveTotal: archiveFilteredTotal.total,
+    });
+
+    const cacheInsertionMap = new Map(
+      cacheInsertionEntries.map((entry) => [entry.position, entry.item]),
+    );
+
+    const cacheOnlyCount = cacheOnlyItems.length;
+    const globalStart = (safePage - 1) * safeLimit;
+    const globalEnd = globalStart + safeLimit;
 
     const total = cacheOnlyCount + archiveFilteredTotal.total;
     const clampedStart = Math.min(globalStart, total);
@@ -244,20 +242,16 @@ export class NoticesQueryService {
     return sortOrder === 'asc' ? left - right : right - left;
   }
 
-  private async buildCacheInsertionEntries(params: {
+  private buildCacheInsertionEntries(params: {
     cacheOnlyItems: ReturnType<
       NoticesQueryService['mapCachedNoticeToListItem']
     >[];
     sortOrder: 'asc' | 'desc';
-    search: string;
-    startDate?: Date;
-    endDate?: Date;
-  }): Promise<
-    {
-      position: number;
-      item: ReturnType<NoticesQueryService['mapCachedNoticeToListItem']>;
-    }[]
-  > {
+    archiveTotal: number;
+  }): {
+    position: number;
+    item: ReturnType<NoticesQueryService['mapCachedNoticeToListItem']>;
+  }[] {
     const entries: {
       position: number;
       item: ReturnType<NoticesQueryService['mapCachedNoticeToListItem']>;
@@ -265,18 +259,11 @@ export class NoticesQueryService {
 
     for (let index = 0; index < params.cacheOnlyItems.length; index += 1) {
       const item = params.cacheOnlyItems[index];
-      const operator = params.sortOrder === 'asc' ? 'lt' : 'gt';
-      const archiveBefore =
-        await this.noticeArchiveService.countByNoticeNumComparison({
-          num: item.num,
-          operator,
-          search: params.search,
-          startDate: params.startDate,
-          endDate: params.endDate,
-        });
+      const position =
+        params.sortOrder === 'asc' ? params.archiveTotal + index : index;
 
       entries.push({
-        position: archiveBefore + index,
+        position,
         item,
       });
     }
