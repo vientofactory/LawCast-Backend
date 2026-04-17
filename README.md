@@ -43,7 +43,13 @@ npm install
 
 프로젝트 루트에 `.env` 파일을 생성하고 다음 변수를 설정하세요:
 
-요약 기능은 선택사항입니다. Ollama 연결 정보를 설정하면 알림에 "제안이유 및 주요내용" 핵심 요약이 함께 전송됩니다. 값을 설정하지 않으면 기존 알림(요약 없음)으로 동작합니다.
+요약 기능은 선택사항이며, `OLLAMA_ENABLED` 플래그를 기준으로 동작합니다.
+
+- `OLLAMA_ENABLED=true` 이고 `OLLAMA_API_URL`, `OLLAMA_MODEL`이 모두 설정된 경우: AI 요약 기능 활성화
+- `OLLAMA_ENABLED=false` 인 경우: 환경변수 값과 무관하게 AI 요약 기능 강제 비활성화
+- `OLLAMA_ENABLED` 미설정인 경우: `OLLAMA_API_URL`, `OLLAMA_MODEL`이 모두 있을 때만 활성화
+
+비활성화 시 서버는 요약 생성/재시도 로직을 모두 스킵하며, 관련 상태는 `not_requested`로 유지됩니다.
 
 ```env
 # 서버 설정
@@ -62,8 +68,11 @@ REDIS_TTL=1800
 HASHGUARD_API_URL=https://hashguard.viento.me
 
 # Ollama 요약 API 설정 (선택사항)
+# 명시적으로 켜고 싶으면 true, 끄려면 false
+OLLAMA_ENABLED=false
+# 활성화 시 필수
 OLLAMA_API_URL=http://localhost:11434
-OLLAMA_MODEL=gemma3:1b # 명시하지 않을 경우 기본값으로 gemma3:1b 사용
+OLLAMA_MODEL=gemma3:1b
 OLLAMA_TIMEOUT=10000
 
 # 크론 작업 시간대
@@ -140,6 +149,7 @@ GET /api/notices/archive?page=1&limit=10&search=교육&startDate=2026-04-01&endD
 {
   "success": true,
   "data": {
+    "aiSummaryEnabled": true,
     "notice": {
       "num": 2212345,
       "subject": "예시 법률안",
@@ -155,12 +165,33 @@ GET /api/notices/archive?page=1&limit=10&search=교육&startDate=2026-04-01&endD
 }
 ```
 
+### AI 요약 기능 플래그 응답
+
+프론트엔드가 AI 요약 UI를 렌더링할지 판단할 수 있도록 아래 API 응답에 `aiSummaryEnabled`가 포함됩니다.
+
+- `GET /api/stats`
+- `GET /api/notices/archive`
+- `GET /api/notices/:num/detail`
+
+권장 동작:
+
+- `aiSummaryEnabled=false`이면 AI 요약 카드/안내 문구를 렌더링하지 않음
+- `aiSummaryEnabled=true`일 때만 AI 요약 UI를 렌더링
+
 ## AI 요약 아키텍처
+
+### 활성화 상태
 
 - 캐시 초기화 시점: 최근 입법예고 목록을 크롤링한 뒤, 각 항목의 contentId를 기반으로 원문을 조회하고 Ollama 요약을 생성합니다.
 - 신규 감지 시점: 새로 감지된 입법예고에 대해서만 요약을 생성합니다.
 - 재사용 전략: 생성된 요약은 Redis 캐시에 저장되며, 이후 알림 전송/프론트 응답에서 우선 재사용됩니다.
 - 안정성 정책: 요약 실패 시 전체 크롤링/알림 플로우를 중단하지 않고, 원문 조회 불가/요약 실패를 로그에 남긴 뒤 null 요약으로 처리합니다.
+
+### 비활성화 상태
+
+- Ollama 클라이언트 호출을 수행하지 않습니다.
+- 서버 시작 초기화와 크론 사이클 모두에서 요약 생성/재시도 로직을 건너뜁니다.
+- 알림/응답은 요약 없이 동작하며, 요약 상태는 `not_requested`로 유지됩니다.
 
 ## 프로젝트 구조
 
