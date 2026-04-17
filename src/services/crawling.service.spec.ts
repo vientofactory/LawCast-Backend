@@ -75,6 +75,7 @@ describe('CrawlingService', () => {
         {
           provide: OllamaClientService,
           useValue: {
+            isEnabled: jest.fn().mockReturnValue(true),
             summarizeProposal: jest.fn(),
           },
         },
@@ -213,6 +214,26 @@ describe('CrawlingService', () => {
 
       await expect(service.onModuleInit()).resolves.toBeUndefined();
       await flushPromises();
+    });
+
+    it('should skip AI summary pipeline when Ollama is disabled', async () => {
+      mockPalCrawl.get.mockResolvedValue(mockTableData);
+      (ollamaClientService.isEnabled as jest.Mock).mockReturnValue(false);
+
+      await service.onModuleInit();
+      await flushPromises();
+
+      expect(ollamaClientService.summarizeProposal).not.toHaveBeenCalled();
+      expect(
+        noticeArchiveService.getSummaryStateByNoticeNums,
+      ).not.toHaveBeenCalled();
+      expect(cacheService.updateCache).toHaveBeenCalledWith(
+        mockTableData.map((notice) => ({
+          ...notice,
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested',
+        })),
+      );
     });
 
     it('should retry unavailable archive summaries and persist updated status during bootstrap', async () => {

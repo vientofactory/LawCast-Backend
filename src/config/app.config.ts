@@ -14,6 +14,7 @@ export interface AppConfig {
     apiUrl: string;
   };
   ollama: {
+    enabled: boolean;
     apiUrl: string;
     model: string;
     timeout: number;
@@ -143,8 +144,13 @@ export default (): AppConfig => ({
     apiUrl: process.env.HASHGUARD_API_URL || 'https://hashguard.viento.me',
   },
   ollama: {
-    apiUrl: process.env.OLLAMA_API_URL || 'http://localhost:11434',
-    model: process.env.OLLAMA_MODEL || 'gemma3:4b',
+    enabled:
+      process.env.OLLAMA_ENABLED !== undefined
+        ? process.env.OLLAMA_ENABLED.toLowerCase() === 'true'
+        : !!process.env.OLLAMA_API_URL?.trim() &&
+          !!process.env.OLLAMA_MODEL?.trim(),
+    apiUrl: process.env.OLLAMA_API_URL?.trim() || '',
+    model: process.env.OLLAMA_MODEL?.trim() || '',
     timeout: parseInt(process.env.OLLAMA_TIMEOUT, 10) || 10000,
   },
   frontend: {

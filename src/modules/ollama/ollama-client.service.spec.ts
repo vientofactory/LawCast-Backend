@@ -23,6 +23,7 @@ describe('OllamaClientService', () => {
 
     const configService = {
       get: jest.fn((key: string, defaultValue?: unknown) => {
+        if (key === 'ollama.enabled') return true;
         if (key === 'ollama.apiUrl') return 'http://localhost:11434';
         if (key === 'ollama.timeout') return 10000;
         if (key === 'ollama.model') return 'gemma3:1b';

@@ -37,6 +37,7 @@ describe('Non-blocking Architecture Verification', () => {
     };
 
     const mockOllamaClientService = {
+      isEnabled: jest.fn().mockReturnValue(true),
       summarizeProposal: jest.fn().mockResolvedValue(null),
     };
 
