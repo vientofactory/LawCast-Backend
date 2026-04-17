@@ -434,6 +434,20 @@ export class NoticeArchiveService {
     );
   }
 
+  async updateSummaryStateByNoticeNum(
+    noticeNum: number,
+    summary: string | null,
+    status: AISummaryStatus,
+  ): Promise<void> {
+    await this.archiveRepository.update(
+      { noticeNum },
+      {
+        aiSummary: summary?.trim() ? summary : null,
+        aiSummaryStatus: status,
+      },
+    );
+  }
+
   private mapArchiveEntityToNoticeItem(row: NoticeArchive): ArchiveNoticeItem {
     return {
       num: row.noticeNum,

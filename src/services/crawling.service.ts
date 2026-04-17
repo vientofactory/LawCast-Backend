@@ -126,7 +126,13 @@ export class CrawlingService implements OnModuleInit {
         {
           logOllamaActivity: true,
           phase: 'init-cache',
+          retryUnavailableArchiveSummary: true,
         },
+      );
+
+      await this.persistRetriedArchiveSummaryStates(
+        noticesWithSummary,
+        archiveSummaryStates,
       );
 
       const summarizedCount = noticesWithSummary.filter(
@@ -237,7 +243,13 @@ export class CrawlingService implements OnModuleInit {
           };
         });
 
-        await this.cacheService.updateCache(noticesWithSummary);
+        const noticesWithRetriedSummary =
+          await this.retryUnavailableSummariesFromPreviousCycle(
+            noticesWithSummary,
+            existingNoticeMap,
+          );
+
+        await this.cacheService.updateCache(noticesWithRetriedSummary);
         this.logger.log(
           `Cache updated for ${newNotices.length} new notices; notification dispatch will continue in background`,
         );
@@ -268,7 +280,13 @@ export class CrawlingService implements OnModuleInit {
           };
         });
 
-        await this.cacheService.updateCache(noticesWithExistingSummary);
+        const noticesWithRetriedSummary =
+          await this.retryUnavailableSummariesFromPreviousCycle(
+            noticesWithExistingSummary,
+            existingNoticeMap,
+          );
+
+        await this.cacheService.updateCache(noticesWithRetriedSummary);
       }
 
       return newNotices;
@@ -523,9 +541,17 @@ export class CrawlingService implements OnModuleInit {
     notices: ITableData[],
     existingNotices: Map<number, CachedNotice> = new Map(),
     archiveSummaryStates: Map<number, ArchiveSummaryState> = new Map(),
-    options: { logOllamaActivity?: boolean; phase?: string } = {},
+    options: {
+      logOllamaActivity?: boolean;
+      phase?: string;
+      retryUnavailableArchiveSummary?: boolean;
+    } = {},
   ): Promise<CachedNotice[]> {
-    const { logOllamaActivity = false, phase = 'runtime' } = options;
+    const {
+      logOllamaActivity = false,
+      phase = 'runtime',
+      retryUnavailableArchiveSummary = false,
+    } = options;
 
     const summaryConcurrency = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
     const palCrawl = new PalCrawl(this.crawlConfig);
@@ -555,6 +581,32 @@ export class CrawlingService implements OnModuleInit {
         const archivedSummaryState = archiveSummaryStates.get(notice.num);
 
         if (archivedSummaryState) {
+          if (
+            retryUnavailableArchiveSummary &&
+            archivedSummaryState.aiSummaryStatus === 'unavailable'
+          ) {
+            if (logOllamaActivity) {
+              this.logOllama(
+                `Retry summary ${index + 1}/${notices.length} (archive unavailable: num=${notice.num})`,
+                phase,
+              );
+            }
+
+            const retryResult = await this.generateSummaryForNotice(notice, {
+              logOllamaActivity,
+              phase,
+              index,
+              total: notices.length,
+              palCrawl,
+            });
+
+            return {
+              ...notice,
+              aiSummary: retryResult.aiSummary,
+              aiSummaryStatus: retryResult.aiSummaryStatus,
+            };
+          }
+
           if (logOllamaActivity) {
             this.logOllama(
               `Skipping notice ${index + 1}/${notices.length} (archive hit: num=${notice.num})`,
@@ -587,7 +639,7 @@ export class CrawlingService implements OnModuleInit {
   }
 
   private async generateSummaryForNotice(
-    notice: ITableData,
+    notice: ITableData | CachedNotice,
     options: {
       logOllamaActivity?: boolean;
       phase?: string;
@@ -681,6 +733,143 @@ export class CrawlingService implements OnModuleInit {
         aiSummaryStatus: 'unavailable',
       };
     }
+  }
+
+  private async persistRetriedArchiveSummaryStates(
+    noticesWithSummary: CachedNotice[],
+    archiveSummaryStates: Map<number, ArchiveSummaryState>,
+  ): Promise<void> {
+    const changedRetriedNotices = noticesWithSummary.filter((notice) => {
+      const previousState = archiveSummaryStates.get(notice.num);
+
+      if (!previousState || previousState.aiSummaryStatus !== 'unavailable') {
+        return false;
+      }
+
+      const previousSummary = previousState.aiSummary?.trim() || null;
+      const nextSummary = notice.aiSummary?.trim() || null;
+      const nextStatus = notice.aiSummaryStatus ?? 'not_requested';
+
+      return (
+        previousSummary !== nextSummary ||
+        previousState.aiSummaryStatus !== nextStatus
+      );
+    });
+
+    if (changedRetriedNotices.length === 0) {
+      return;
+    }
+
+    await this.mapWithConcurrency(changedRetriedNotices, 5, async (notice) => {
+      await this.noticeArchiveService.updateSummaryStateByNoticeNum(
+        notice.num,
+        notice.aiSummary ?? null,
+        notice.aiSummaryStatus ?? 'not_requested',
+      );
+    });
+
+    this.logOllama(
+      `Persisted retried summary state for ${changedRetriedNotices.length} archived notices`,
+      'init-cache',
+    );
+  }
+
+  private async retryUnavailableSummariesFromPreviousCycle(
+    notices: CachedNotice[],
+    existingNoticeMap: Map<number, CachedNotice>,
+  ): Promise<CachedNotice[]> {
+    const retryCandidates = notices.filter((notice) => {
+      const existingNotice = existingNoticeMap.get(notice.num);
+
+      return (
+        !!existingNotice &&
+        existingNotice.aiSummaryStatus === 'unavailable' &&
+        notice.aiSummaryStatus === 'unavailable' &&
+        !!notice.contentId
+      );
+    });
+
+    if (retryCandidates.length === 0) {
+      return notices;
+    }
+
+    this.logOllama(
+      `Retrying unavailable summaries for ${retryCandidates.length} notices`,
+      'cron',
+    );
+
+    const retryResults = await this.mapWithConcurrency(
+      retryCandidates,
+      APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY,
+      async (notice, index) => {
+        const summaryResult = await this.generateSummaryForNotice(notice, {
+          logOllamaActivity: true,
+          phase: 'cron-retry',
+          index,
+          total: retryCandidates.length,
+        });
+
+        return {
+          num: notice.num,
+          aiSummary: summaryResult.aiSummary,
+          aiSummaryStatus: summaryResult.aiSummaryStatus,
+        };
+      },
+    );
+
+    const retryResultMap = new Map(
+      retryResults.map((result) => [result.num, result]),
+    );
+
+    const mergedNotices = notices.map((notice) => {
+      const retryResult = retryResultMap.get(notice.num);
+
+      if (!retryResult) {
+        return notice;
+      }
+
+      return {
+        ...notice,
+        aiSummary: retryResult.aiSummary,
+        aiSummaryStatus: retryResult.aiSummaryStatus,
+      };
+    });
+
+    const changedRetriedNotices = mergedNotices.filter((notice) => {
+      const previousNotice = existingNoticeMap.get(notice.num);
+
+      if (!previousNotice || previousNotice.aiSummaryStatus !== 'unavailable') {
+        return false;
+      }
+
+      const previousSummary = previousNotice.aiSummary?.trim() || null;
+      const nextSummary = notice.aiSummary?.trim() || null;
+      const nextStatus = notice.aiSummaryStatus ?? 'not_requested';
+
+      return (
+        previousSummary !== nextSummary ||
+        previousNotice.aiSummaryStatus !== nextStatus
+      );
+    });
+
+    if (changedRetriedNotices.length === 0) {
+      return mergedNotices;
+    }
+
+    await this.mapWithConcurrency(changedRetriedNotices, 5, async (notice) => {
+      await this.noticeArchiveService.updateSummaryStateByNoticeNum(
+        notice.num,
+        notice.aiSummary ?? null,
+        notice.aiSummaryStatus ?? 'not_requested',
+      );
+    });
+
+    this.logOllama(
+      `Persisted cron retried summary state for ${changedRetriedNotices.length} notices`,
+      'cron',
+    );
+
+    return mergedNotices;
   }
 
   private async mapWithConcurrency<T, R>(
