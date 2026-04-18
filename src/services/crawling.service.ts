@@ -444,6 +444,13 @@ export class CrawlingService implements OnModuleInit {
       contentId: string;
       title: string;
       proposalReason: string;
+      billNumber: string | null;
+      proposer: string | null;
+      proposalDate: string | null;
+      committee: string | null;
+      referralDate: string | null;
+      noticePeriod: string | null;
+      proposalSession: string | null;
     };
   }> {
     const notices = await this.cacheService.getRecentNotices(
@@ -480,6 +487,13 @@ export class CrawlingService implements OnModuleInit {
           contentId: notice.contentId,
           title: content?.title?.trim() || notice.subject,
           proposalReason,
+          billNumber: content?.billNumber?.trim() || null,
+          proposer: content?.proposer?.trim() || null,
+          proposalDate: content?.proposalDate?.trim() || null,
+          committee: content?.committee?.trim() || null,
+          referralDate: content?.referralDate?.trim() || null,
+          noticePeriod: content?.noticePeriod?.trim() || null,
+          proposalSession: content?.proposalSession?.trim() || null,
         },
       };
     } catch (error) {
@@ -527,6 +541,13 @@ export class CrawlingService implements OnModuleInit {
         chunk.map(async (notice) => {
           let proposalReason = '';
           let sourceTitle: string | null = notice.subject;
+          let contentBillNumber: string | null = null;
+          let contentProposer: string | null = null;
+          let contentProposalDate: string | null = null;
+          let contentCommittee: string | null = null;
+          let contentReferralDate: string | null = null;
+          let contentNoticePeriod: string | null = null;
+          let contentProposalSession: string | null = null;
           let sourceHtml: string | null = null;
           let sourceHtmlSha256: string | null = null;
           let httpMetadata: ArchiveHttpMetadata | null = null;
@@ -537,6 +558,13 @@ export class CrawlingService implements OnModuleInit {
               const content = await palCrawl.getContent(notice.contentId);
               proposalReason = content?.proposalReason?.trim() || '';
               sourceTitle = content?.title?.trim() || notice.subject;
+              contentBillNumber = content?.billNumber?.trim() || null;
+              contentProposer = content?.proposer?.trim() || null;
+              contentProposalDate = content?.proposalDate?.trim() || null;
+              contentCommittee = content?.committee?.trim() || null;
+              contentReferralDate = content?.referralDate?.trim() || null;
+              contentNoticePeriod = content?.noticePeriod?.trim() || null;
+              contentProposalSession = content?.proposalSession?.trim() || null;
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : String(error);
@@ -565,6 +593,13 @@ export class CrawlingService implements OnModuleInit {
             await this.noticeArchiveService.upsertNoticeArchive(notice, {
               proposalReason,
               title: sourceTitle,
+              billNumber: contentBillNumber,
+              proposer: contentProposer,
+              proposalDate: contentProposalDate,
+              committee: contentCommittee,
+              referralDate: contentReferralDate,
+              noticePeriod: contentNoticePeriod,
+              proposalSession: contentProposalSession,
               sourceHtml,
               htmlSha256: sourceHtmlSha256,
               archivedAt,

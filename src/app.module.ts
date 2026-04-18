@@ -20,6 +20,7 @@ import { OllamaModule } from './modules/ollama/ollama.module';
 import { NoticeArchiveService } from './services/notice-archive.service';
 import appConfig from './config/app.config';
 import { InitialSchemaMigration1744953900000 } from './migrations/202604170001-initial-schema.migration';
+import { AddContentMetadataColumns1745001601000 } from './migrations/202604180001-add-content-metadata-columns.migration';
 
 @Module({
   imports: [
@@ -57,7 +58,10 @@ import { InitialSchemaMigration1744953900000 } from './migrations/202604170001-i
         synchronize: false,
         migrationsRun: false,
         migrationsTableName: 'migrations',
-        migrations: [InitialSchemaMigration1744953900000],
+        migrations: [
+          InitialSchemaMigration1744953900000,
+          AddContentMetadataColumns1745001601000,
+        ],
       }),
     }),
     TypeOrmModule.forFeature([Webhook, NoticeArchive]),
