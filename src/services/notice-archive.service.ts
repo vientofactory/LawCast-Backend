@@ -66,6 +66,13 @@ export interface ArchiveDetailResult {
     contentId: string;
     title: string;
     proposalReason: string;
+    billNumber: string | null;
+    proposer: string | null;
+    proposalDate: string | null;
+    committee: string | null;
+    referralDate: string | null;
+    noticePeriod: string | null;
+    proposalSession: string | null;
   };
   archiveMetadata: {
     archivedAt: Date | null;
@@ -128,6 +135,13 @@ export class NoticeArchiveService {
     originalContent: {
       proposalReason: string;
       title?: string | null;
+      billNumber?: string | null;
+      proposer?: string | null;
+      proposalDate?: string | null;
+      committee?: string | null;
+      referralDate?: string | null;
+      noticePeriod?: string | null;
+      proposalSession?: string | null;
       sourceHtml?: string | null;
       htmlSha256?: string | null;
       archivedAt?: Date;
@@ -145,6 +159,13 @@ export class NoticeArchiveService {
       contentId: notice.contentId ?? null,
       proposalReason: originalContent.proposalReason ?? '',
       sourceTitle: originalContent.title?.trim() || notice.subject,
+      contentBillNumber: originalContent.billNumber?.trim() || null,
+      contentProposer: originalContent.proposer?.trim() || null,
+      contentProposalDate: originalContent.proposalDate?.trim() || null,
+      contentCommittee: originalContent.committee?.trim() || null,
+      contentReferralDate: originalContent.referralDate?.trim() || null,
+      contentNoticePeriod: originalContent.noticePeriod?.trim() || null,
+      contentProposalSession: originalContent.proposalSession?.trim() || null,
       aiSummary: notice.aiSummary ?? null,
       aiSummaryStatus: notice.aiSummaryStatus ?? 'not_requested',
       attachmentPdfFile: notice.attachments?.pdfFile ?? '',
@@ -283,6 +304,13 @@ export class NoticeArchiveService {
         contentId: row.contentId ?? '',
         title: row.sourceTitle?.trim() || row.subject,
         proposalReason: row.proposalReason || '',
+        billNumber: row.contentBillNumber ?? null,
+        proposer: row.contentProposer ?? null,
+        proposalDate: row.contentProposalDate ?? null,
+        committee: row.contentCommittee ?? null,
+        referralDate: row.contentReferralDate ?? null,
+        noticePeriod: row.contentNoticePeriod ?? null,
+        proposalSession: row.contentProposalSession ?? null,
       },
       archiveMetadata: {
         archivedAt: row.archivedAt,
@@ -479,6 +507,13 @@ export class NoticeArchiveService {
       contentId: row.contentId,
       proposalReason: row.proposalReason,
       sourceTitle: row.sourceTitle,
+      contentBillNumber: row.contentBillNumber,
+      contentProposer: row.contentProposer,
+      contentProposalDate: row.contentProposalDate,
+      contentCommittee: row.contentCommittee,
+      contentReferralDate: row.contentReferralDate,
+      contentNoticePeriod: row.contentNoticePeriod,
+      contentProposalSession: row.contentProposalSession,
       aiSummary: row.aiSummary,
       aiSummaryStatus: row.aiSummaryStatus,
       attachmentPdfFile: row.attachmentPdfFile,

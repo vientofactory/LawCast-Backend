@@ -38,6 +38,62 @@ export class NoticeArchive {
   @Column({ type: 'text', nullable: true })
   sourceTitle: string | null;
 
+  @Column({
+    type: 'varchar',
+    length: 100,
+    name: 'content_bill_number',
+    nullable: true,
+  })
+  contentBillNumber: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 255,
+    name: 'content_proposer',
+    nullable: true,
+  })
+  contentProposer: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 100,
+    name: 'content_proposal_date',
+    nullable: true,
+  })
+  contentProposalDate: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 200,
+    name: 'content_committee',
+    nullable: true,
+  })
+  contentCommittee: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 100,
+    name: 'content_referral_date',
+    nullable: true,
+  })
+  contentReferralDate: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 200,
+    name: 'content_notice_period',
+    nullable: true,
+  })
+  contentNoticePeriod: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 200,
+    name: 'content_proposal_session',
+    nullable: true,
+  })
+  contentProposalSession: string | null;
+
   @Column({ type: 'text', nullable: true })
   aiSummary: string | null;
 
