@@ -14,7 +14,10 @@ import {
 } from './batch-processing.service';
 import { APP_CONSTANTS } from '../config/app.config';
 import { LoggerUtils } from '../utils/logger.utils';
-import { OllamaClientService } from '../modules/ollama/ollama-client.service';
+import {
+  OllamaClientService,
+  type OllamaRuntimeMetrics,
+} from '../modules/ollama/ollama-client.service';
 import {
   type AISummaryStatus,
   type CacheInfo,
@@ -1036,6 +1039,12 @@ export class CrawlingService implements OnModuleInit {
     error?: string;
   }> {
     return await this.cacheService.getRedisStatus();
+  }
+
+  async getOllamaMetrics(
+    options: { forceHealthCheck?: boolean } = {},
+  ): Promise<OllamaRuntimeMetrics> {
+    return await this.ollamaClientService.getMetrics(options);
   }
 
   private getOllamaPrefix(phase?: string): string {

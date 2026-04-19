@@ -224,12 +224,13 @@ export class ApiController {
 
   @Get('stats')
   async getStats() {
-    const [webhookStats, cacheInfo, batchStatus, archiveCount] =
+    const [webhookStats, cacheInfo, batchStatus, archiveCount, ollamaMetrics] =
       await Promise.all([
         this.webhookService.getDetailedStats(),
         this.crawlingService.getCacheInfo(),
         this.batchProcessingService.getBatchJobStatus(),
         this.noticeArchiveService.getArchiveCount(),
+        this.crawlingService.getOllamaMetrics(),
       ]);
 
     const isProduction = isProductionNodeEnv(
@@ -258,6 +259,27 @@ export class ApiController {
         }
       : webhookStats;
 
+    const safeOllamaMetrics = isProduction
+      ? {
+          enabled: ollamaMetrics.enabled,
+          configured: ollamaMetrics.configured,
+          model: ollamaMetrics.model,
+          summary: {
+            total: ollamaMetrics.summary.total,
+            success: ollamaMetrics.summary.success,
+            failed: ollamaMetrics.summary.failed,
+            skipped: ollamaMetrics.summary.skipped,
+            successRate: ollamaMetrics.summary.successRate,
+          },
+          health: {
+            status: ollamaMetrics.health.status,
+            lastCheckedAt: ollamaMetrics.health.lastCheckedAt,
+            lastLatencyMs: ollamaMetrics.health.lastLatencyMs,
+            availableModelCount: ollamaMetrics.health.availableModelCount,
+          },
+        }
+      : ollamaMetrics;
+
     return ApiResponseUtils.success({
       webhooks: safeWebhookStats,
       cache: safeCacheInfo,
@@ -265,6 +287,7 @@ export class ApiController {
         count: archiveCount,
       },
       batchProcessing: safeBatchStatus,
+      ollama: safeOllamaMetrics,
       aiSummaryEnabled: this.crawlingService.isAiSummaryEnabled(),
     });
   }
@@ -289,23 +312,40 @@ export class ApiController {
 
   @Get('health')
   async getHealth() {
-    const isRedisConnected = await this.crawlingService.isRedisConnected();
-    const cacheInfo = await this.crawlingService.getCacheInfo();
+    const [isRedisConnected, cacheInfo, ollamaMetrics] = await Promise.all([
+      this.crawlingService.isRedisConnected(),
+      this.crawlingService.getCacheInfo(),
+      this.crawlingService.getOllamaMetrics(),
+    ]);
     const isProduction = isProductionNodeEnv(
       this.configService.get<string>('nodeEnv'),
     );
 
+    const isOllamaDegraded =
+      ollamaMetrics.enabled &&
+      (ollamaMetrics.health.status === 'unhealthy' ||
+        ollamaMetrics.health.status === 'misconfigured');
+
+    const systemStatus =
+      isRedisConnected && !isOllamaDegraded ? 'healthy' : 'degraded';
+
     const payload = isProduction
       ? {
           timestamp: new Date().toISOString(),
-          status: isRedisConnected ? 'healthy' : 'degraded',
+          status: systemStatus,
+          dependencies: {
+            redis: isRedisConnected ? 'up' : 'down',
+            ollama: ollamaMetrics.health.status,
+          },
         }
       : {
           timestamp: new Date().toISOString(),
+          status: systemStatus,
           redis: {
             connected: isRedisConnected,
             cache: cacheInfo,
           },
+          ollama: ollamaMetrics,
         };
 
     return ApiResponseUtils.success(payload, 'LawCast API is healthy');

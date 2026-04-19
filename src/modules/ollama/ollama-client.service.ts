@@ -20,6 +20,43 @@ interface OllamaGenerateResponse {
   eval_duration?: number;
 }
 
+interface OllamaTagsResponse {
+  models?: Array<{
+    name?: string;
+  }>;
+}
+
+export type OllamaHealthStatus =
+  | 'disabled'
+  | 'misconfigured'
+  | 'unknown'
+  | 'healthy'
+  | 'unhealthy';
+
+export interface OllamaRuntimeMetrics {
+  enabled: boolean;
+  configured: boolean;
+  model: string | null;
+  summary: {
+    total: number;
+    success: number;
+    failed: number;
+    skipped: number;
+    successRate: number;
+    lastLatencyMs: number | null;
+    lastSuccessAt: string | null;
+    lastFailureAt: string | null;
+    lastError: string | null;
+  };
+  health: {
+    status: OllamaHealthStatus;
+    lastCheckedAt: string | null;
+    lastLatencyMs: number | null;
+    availableModelCount: number | null;
+    error: string | null;
+  };
+}
+
 @Injectable()
 export class OllamaClientService {
   private readonly logger = new Logger(OllamaClientService.name);
@@ -28,6 +65,22 @@ export class OllamaClientService {
   private readonly model: string;
   private readonly modelTemperature = 0.2;
   private readonly modelNumPredict = 220;
+  private readonly healthCacheTtlMs = 30000;
+
+  private summaryTotal = 0;
+  private summarySuccess = 0;
+  private summaryFailed = 0;
+  private summarySkipped = 0;
+  private lastSummaryLatencyMs: number | null = null;
+  private lastSummarySuccessAt: Date | null = null;
+  private lastSummaryFailureAt: Date | null = null;
+  private lastSummaryError: string | null = null;
+
+  private healthStatus: OllamaHealthStatus = 'unknown';
+  private lastHealthCheckedAt: Date | null = null;
+  private lastHealthLatencyMs: number | null = null;
+  private availableModelCount: number | null = null;
+  private lastHealthError: string | null = null;
 
   constructor(private configService: ConfigService) {
     this.enabled = !!this.configService.get<boolean>('ollama.enabled', false);
@@ -38,6 +91,7 @@ export class OllamaClientService {
 
     if (!this.enabled || !apiUrl || !this.model) {
       this.client = null;
+      this.healthStatus = this.enabled ? 'misconfigured' : 'disabled';
       this.logger.log(
         'Ollama summarization is disabled. Set OLLAMA_ENABLED=true with OLLAMA_API_URL and OLLAMA_MODEL to enable it.',
       );
@@ -65,6 +119,7 @@ export class OllamaClientService {
     proposalReason: string,
   ): Promise<string | null> {
     if (!this.enabled || !this.client) {
+      this.summarySkipped += 1;
       return null;
     }
 
@@ -81,17 +136,35 @@ export class OllamaClientService {
     };
 
     try {
+      this.summaryTotal += 1;
+      const requestStartedAt = Date.now();
+
       // Generate response
       const response = await this.client.post<OllamaGenerateResponse>(
         '/api/generate',
         payload,
       );
 
+      this.summarySuccess += 1;
+      this.lastSummaryLatencyMs = Date.now() - requestStartedAt;
+      this.lastSummarySuccessAt = new Date();
+      this.lastSummaryError = null;
+      this.healthStatus = 'healthy';
+      this.lastHealthCheckedAt = this.lastSummarySuccessAt;
+      this.lastHealthLatencyMs = this.lastSummaryLatencyMs;
+      this.lastHealthError = null;
+
       // Normalize and return the summary
       const summary = this.normalizeSummary(response.data.response, title);
       return summary;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      this.summaryFailed += 1;
+      this.lastSummaryFailureAt = new Date();
+      this.lastSummaryError = message;
+      this.healthStatus = 'unhealthy';
+      this.lastHealthCheckedAt = this.lastSummaryFailureAt;
+      this.lastHealthError = message;
       this.logger.warn(`Failed to summarize proposal with Ollama: ${message}`);
       return null;
     }
@@ -99,6 +172,80 @@ export class OllamaClientService {
 
   isEnabled(): boolean {
     return this.enabled;
+  }
+
+  async getMetrics(
+    options: { forceHealthCheck?: boolean } = {},
+  ): Promise<OllamaRuntimeMetrics> {
+    await this.refreshHealthStatus(options.forceHealthCheck ?? false);
+
+    return {
+      enabled: this.enabled,
+      configured: !!this.client,
+      model: this.model?.trim() ? this.model : null,
+      summary: {
+        total: this.summaryTotal,
+        success: this.summarySuccess,
+        failed: this.summaryFailed,
+        skipped: this.summarySkipped,
+        successRate:
+          this.summaryTotal > 0
+            ? Number(
+                ((this.summarySuccess / this.summaryTotal) * 100).toFixed(1),
+              )
+            : 0,
+        lastLatencyMs: this.lastSummaryLatencyMs,
+        lastSuccessAt: this.lastSummarySuccessAt?.toISOString() || null,
+        lastFailureAt: this.lastSummaryFailureAt?.toISOString() || null,
+        lastError: this.lastSummaryError,
+      },
+      health: {
+        status: this.healthStatus,
+        lastCheckedAt: this.lastHealthCheckedAt?.toISOString() || null,
+        lastLatencyMs: this.lastHealthLatencyMs,
+        availableModelCount: this.availableModelCount,
+        error: this.lastHealthError,
+      },
+    };
+  }
+
+  private async refreshHealthStatus(forceHealthCheck: boolean): Promise<void> {
+    if (!this.enabled) {
+      this.healthStatus = 'disabled';
+      return;
+    }
+
+    if (!this.client) {
+      this.healthStatus = 'misconfigured';
+      return;
+    }
+
+    if (
+      !forceHealthCheck &&
+      this.lastHealthCheckedAt &&
+      Date.now() - this.lastHealthCheckedAt.getTime() < this.healthCacheTtlMs
+    ) {
+      return;
+    }
+
+    const startedAt = Date.now();
+
+    try {
+      const response = await this.client.get<OllamaTagsResponse>('/api/tags');
+      this.healthStatus = 'healthy';
+      this.lastHealthCheckedAt = new Date();
+      this.lastHealthLatencyMs = Date.now() - startedAt;
+      this.availableModelCount = Array.isArray(response.data?.models)
+        ? response.data.models.length
+        : 0;
+      this.lastHealthError = null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.healthStatus = 'unhealthy';
+      this.lastHealthCheckedAt = new Date();
+      this.lastHealthLatencyMs = Date.now() - startedAt;
+      this.lastHealthError = message;
+    }
   }
 
   /**

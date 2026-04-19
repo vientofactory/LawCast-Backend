@@ -57,6 +57,30 @@ describe('HTTP-Batch Processing Isolation', () => {
         isInitialized: true,
       }),
       isRedisConnected: jest.fn().mockReturnValue(true),
+      isAiSummaryEnabled: jest.fn().mockReturnValue(true),
+      getOllamaMetrics: jest.fn().mockResolvedValue({
+        enabled: true,
+        configured: true,
+        model: 'gemma3:1b',
+        summary: {
+          total: 10,
+          success: 9,
+          failed: 1,
+          skipped: 0,
+          successRate: 90,
+          lastLatencyMs: 120,
+          lastSuccessAt: new Date().toISOString(),
+          lastFailureAt: null,
+          lastError: null,
+        },
+        health: {
+          status: 'healthy',
+          lastCheckedAt: new Date().toISOString(),
+          lastLatencyMs: 50,
+          availableModelCount: 1,
+          error: null,
+        },
+      }),
     };
 
     const mockHashguardService = {
