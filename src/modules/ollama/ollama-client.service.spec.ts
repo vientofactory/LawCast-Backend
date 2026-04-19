@@ -10,6 +10,10 @@ describe('OllamaClientService', () => {
     jest.fn<
       (url: string, payload: unknown) => Promise<{ data: { response: string } }>
     >();
+  const mockGet =
+    jest.fn<
+      (url: string) => Promise<{ data: { models: Array<{ name: string }> } }>
+    >();
   const mockedAxios = axios as jest.Mocked<typeof axios>;
 
   const sampleTitle = '조세특례제한법 일부개정법률안';
@@ -19,6 +23,7 @@ describe('OllamaClientService', () => {
   const createService = (): OllamaClientService => {
     mockedAxios.create.mockReturnValue({
       post: mockPost,
+      get: mockGet,
     } as any);
 
     const configService = {
@@ -205,5 +210,37 @@ describe('OllamaClientService', () => {
     const summary = await service.summarizeProposal('법안명', '내용');
 
     expect(summary).toBeNull();
+  });
+
+  it('should collect summary request metrics and expose success rate', async () => {
+    const service = createService();
+
+    mockPost.mockResolvedValue({
+      data: {
+        response: '세액공제 확대를 통해 공급망 투자와 인력 확보를 촉진합니다.',
+      },
+    });
+
+    await service.summarizeProposal(sampleTitle, sampleReason);
+    const metrics = await service.getMetrics();
+
+    expect(metrics.summary.total).toBe(1);
+    expect(metrics.summary.success).toBe(1);
+    expect(metrics.summary.failed).toBe(0);
+    expect(metrics.summary.successRate).toBe(100);
+    expect(metrics.summary.lastSuccessAt).toBeTruthy();
+    expect(metrics.summary.lastError).toBeNull();
+  });
+
+  it('should expose unhealthy health metrics when health check fails', async () => {
+    const service = createService();
+
+    mockGet.mockRejectedValue(new Error('connection refused'));
+
+    const metrics = await service.getMetrics({ forceHealthCheck: true });
+
+    expect(metrics.health.status).toBe('unhealthy');
+    expect(metrics.health.error).toContain('connection refused');
+    expect(metrics.health.lastCheckedAt).toBeTruthy();
   });
 });
