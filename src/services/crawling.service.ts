@@ -32,12 +32,15 @@ import {
 @Injectable()
 export class CrawlingService implements OnModuleInit {
   private readonly logger = new Logger(CrawlingService.name);
-  private readonly LOG_PREFIX = {
-    OLLAMA: '[Ollama]',
-  };
   private isProcessing = false;
   private isInitialized = false;
   private readonly crawlConfig: PalCrawlConfig;
+  private ollamaMetricsCache: OllamaRuntimeMetrics | null = null;
+  private ollamaMetricsCacheAt: number | null = null;
+  private readonly ollamaMetricsCacheTtlMs = 30000;
+  private readonly LOG_PREFIX = {
+    OLLAMA: '[Ollama]',
+  };
 
   constructor(
     private cacheService: CacheService,
@@ -1044,7 +1047,20 @@ export class CrawlingService implements OnModuleInit {
   async getOllamaMetrics(
     options: { forceHealthCheck?: boolean } = {},
   ): Promise<OllamaRuntimeMetrics> {
-    return await this.ollamaClientService.getMetrics(options);
+    const now = Date.now();
+    const force = options.forceHealthCheck ?? false;
+    if (
+      !force &&
+      this.ollamaMetricsCache &&
+      this.ollamaMetricsCacheAt &&
+      now - this.ollamaMetricsCacheAt < this.ollamaMetricsCacheTtlMs
+    ) {
+      return this.ollamaMetricsCache;
+    }
+    const metrics = await this.ollamaClientService.getMetrics(options);
+    this.ollamaMetricsCache = metrics;
+    this.ollamaMetricsCacheAt = now;
+    return metrics;
   }
 
   private getOllamaPrefix(phase?: string): string {
