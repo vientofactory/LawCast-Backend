@@ -127,9 +127,19 @@ export class WebhookValidationUtils {
       forbidNonWhitelisted: true,
       transform: true,
       exceptionFactory: (errors: any[]) => {
-        const messages = errors.map((error) =>
-          Object.values(error.constraints || {}).join(', '),
-        );
+        const messages: string[] = [];
+        errors.forEach((error) => {
+          const constraints = Object.values(error.constraints || {});
+          constraints.forEach((msg) => {
+            const strMsg = String(msg);
+            strMsg
+              .split(',')
+              .map((s) => s.trim())
+              .forEach((part) => {
+                if (part) messages.push(part);
+              });
+          });
+        });
         return new BadRequestException({
           success: false,
           message: '입력 데이터가 올바르지 않습니다.',
