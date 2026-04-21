@@ -1,23 +1,27 @@
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
-import { WebhookService } from './webhook.service';
-import { NotificationService } from './notification.service';
 import { LoggerUtils } from '../utils/logger.utils';
 import { APP_CONSTANTS } from '../config/app.config';
-import { type CachedNotice } from '../types/cache.types';
 
 const { BATCH } = APP_CONSTANTS;
 
-export interface BatchJobResult<T = any> {
+export interface BatchJobResult {
   success: boolean;
-  data?: T;
-  error?: Error;
   duration: number;
-  notice?: string;
   totalWebhooks?: number;
   successCount?: number;
   failedCount?: number;
   deactivated?: number;
   temporaryFailures?: number;
+}
+
+export interface RecentBatch {
+  batchId: string;
+  jobs: BatchJobResult[];
+}
+
+export interface BatchJobStatus {
+  jobCount: number;
+  jobIds: string[];
 }
 
 export interface BatchProcessingOptions {
@@ -30,24 +34,20 @@ export interface BatchProcessingOptions {
 
 @Injectable()
 export class BatchProcessingService implements OnApplicationShutdown {
+  private recentBatches: RecentBatch[] = [];
   private readonly logger = new Logger(BatchProcessingService.name);
   private readonly jobQueue = new Map<string, Promise<any>>();
   private readonly activeTimeouts = new Set<NodeJS.Timeout>();
   private isShuttingDown = false;
   private readonly shutdownTimeout = 25000;
 
-  constructor(
-    private webhookService: WebhookService,
-    private notificationService: NotificationService,
-  ) {}
-
   /**
    * 논블로킹 병렬 배치 작업 실행
    */
-  async executeBatch<T>(
-    jobs: Array<(abortSignal: AbortSignal) => Promise<T>>,
+  async executeBatch(
+    jobs: Array<(abortSignal: AbortSignal) => Promise<any>>,
     options: BatchProcessingOptions = {},
-  ): Promise<BatchJobResult<T>[]> {
+  ): Promise<BatchJobResult[]> {
     // 종료 중인 경우 새로운 작업 거부
     if (this.isShuttingDown) {
       this.logger.warn('Rejecting new batch job - service is shutting down');
@@ -62,7 +62,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
       batchSize,
     } = options;
 
-    const results: BatchJobResult<T>[] = [];
+    const results: BatchJobResult[] = [];
 
     // batchSize가 지정된 경우 전체 작업을 배치 크기로 나누어 순차적으로 처리
     if (batchSize && jobs.length > batchSize) {
@@ -102,14 +102,14 @@ export class BatchProcessingService implements OnApplicationShutdown {
   /**
    * 단일 배치를 concurrency로 나누어 병렬 처리
    */
-  private async processBatch<T>(
-    jobs: Array<(abortSignal: AbortSignal) => Promise<T>>,
+  private async processBatch(
+    jobs: Array<(abortSignal: AbortSignal) => Promise<any>>,
     concurrency: number,
     timeout: number,
     retryCount: number,
     retryDelay: number,
-  ): Promise<BatchJobResult<T>[]> {
-    const results: BatchJobResult<T>[] = [];
+  ): Promise<BatchJobResult[]> {
+    const results: BatchJobResult[] = [];
     const chunks = this.chunkArray(jobs, concurrency);
 
     for (const chunk of chunks) {
@@ -158,166 +158,23 @@ export class BatchProcessingService implements OnApplicationShutdown {
     return results;
   }
 
-  /**
-   * 입법예고 알림 배치 처리
-   */
-  async processNotificationBatch(
-    notices: CachedNotice[],
-    options: BatchProcessingOptions = {},
-  ): Promise<string> {
-    // 종료 중인 경우 새로운 작업 거부
-    if (this.isShuttingDown) {
-      this.logger.warn(
-        'Rejecting new notification batch - service is shutting down',
-      );
-      throw new Error(
-        'Service is shutting down, cannot process new notifications',
-      );
+  // 범용 배치 관리 메서드
+  registerJob(jobId: string, promise: Promise<BatchJobResult[]>) {
+    this.jobQueue.set(jobId, promise);
+  }
+  unregisterJob(jobId: string) {
+    this.jobQueue.delete(jobId);
+  }
+  addRecentBatch(jobId: string, jobs: BatchJobResult[]) {
+    this.recentBatches.unshift({ batchId: jobId, jobs });
+    if (this.recentBatches.length > 5) {
+      this.recentBatches = this.recentBatches.slice(0, 5);
     }
-
-    const jobId = `notification_batch_${Date.now()}`;
-    LoggerUtils.logDev(
-      BatchProcessingService.name,
-      `Starting notification batch processing for ${notices.length} notices`,
-    );
-
-    // 논블로킹 실행
-    const batchPromise = this.executeNotificationBatch(notices, options);
-    this.jobQueue.set(jobId, batchPromise);
-
-    // 완료 후 정리
-    batchPromise
-      .then((results) => {
-        const successCount = results.filter((r) => r.success).length;
-        const failureCount = results.length - successCount;
-
-        this.logger.log(
-          `Notification batch completed: ${successCount} success, ${failureCount} failed`,
-        );
-      })
-      .catch((error) => {
-        this.logger.error('Batch processing error:', error);
-      })
-      .finally(() => {
-        this.jobQueue.delete(jobId);
-        LoggerUtils.logDev(
-          BatchProcessingService.name,
-          `Batch job ${jobId} cleaned up`,
-        );
-      });
-
-    LoggerUtils.logDev(
-      BatchProcessingService.name,
-      `Notification batch job ${jobId} started`,
-    );
-
-    return jobId;
   }
 
-  /**
-   * 실제 알림 배치 실행
-   */
-  private async executeNotificationBatch(
-    notices: CachedNotice[],
-    options: BatchProcessingOptions,
-  ): Promise<BatchJobResult[]> {
-    const activeWebhooks = (await this.webhookService.findAll()) ?? [];
-
-    if (activeWebhooks.length === 0) {
-      LoggerUtils.logDev(
-        BatchProcessingService.name,
-        'No active webhooks available for notification batch',
-      );
-    }
-
-    // 각 입법예고별로 배치 작업 생성
-    const notificationJobs = notices.map(
-      (notice) => async (abortSignal: AbortSignal) => {
-        const currentWebhooks = activeWebhooks;
-
-        if (currentWebhooks.length === 0) {
-          LoggerUtils.logDev(
-            BatchProcessingService.name,
-            'No active webhooks available for notification',
-          );
-          return {
-            notice: notice.subject,
-            totalWebhooks: 0,
-            successCount: 0,
-            failedCount: 0,
-            deactivated: 0,
-            temporaryFailures: 0,
-          };
-        }
-
-        const results =
-          await this.notificationService.sendDiscordNotificationBatch(
-            notice,
-            currentWebhooks,
-            abortSignal,
-          );
-
-        // 영구적으로 삭제해야 할 웹훅들과 일시적으로 실패한 웹훅들 분리
-        const permanentFailures = results.filter(
-          (result) => !result.success && result.shouldDelete,
-        );
-        const temporaryFailures = results.filter(
-          (result) => !result.success && !result.shouldDelete,
-        );
-
-        // 영구적으로 실패한 웹훅들은 첫 번째 실패에서 즉시 비활성화
-        if (permanentFailures.length > 0) {
-          const permanentFailureIds = permanentFailures.map(
-            (result) => result.webhookId,
-          );
-
-          // 각 웹훅을 개별적으로 즉시 비활성화 (재시도 없음)
-          for (const webhookId of permanentFailureIds) {
-            try {
-              await this.webhookService.remove(webhookId);
-              // NotificationService에서 실패 플래그 제거
-              this.notificationService.clearPermanentFailureFlag(webhookId);
-
-              LoggerUtils.debugDev(
-                BatchProcessingService.name,
-                `Webhook ${webhookId} immediately deactivated after first failure for notice: ${notice.subject}`,
-              );
-            } catch (error) {
-              this.logger.error(
-                `Failed to deactivate webhook ${webhookId}:`,
-                error,
-              );
-            }
-          }
-
-          LoggerUtils.debugDev(
-            BatchProcessingService.name,
-            `Immediately deactivated ${permanentFailures.length} webhooks that failed on first attempt`,
-          );
-        }
-
-        // 일시적 실패는 로그 최소화
-        if (temporaryFailures.length > 0) {
-          LoggerUtils.logDev(
-            BatchProcessingService.name,
-            `${temporaryFailures.length} webhooks failed temporarily for notice: ${notice.subject}`,
-          );
-        }
-
-        const successCount = results.filter((r) => r.success).length;
-
-        return {
-          notice: notice.subject,
-          totalWebhooks: currentWebhooks.length,
-          successCount,
-          failedCount: permanentFailures.length + temporaryFailures.length,
-          deactivated: permanentFailures.length,
-          temporaryFailures: temporaryFailures.length,
-        };
-      },
-    );
-
-    return this.executeBatch(notificationJobs, options);
+  // 최근 배치 5개 반환
+  getRecentBatches(): RecentBatch[] {
+    return this.recentBatches;
   }
 
   /**
@@ -414,7 +271,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
   /**
    * 현재 실행 중인 배치 작업 상태 반환
    */
-  getBatchJobStatus(): { jobCount: number; jobIds: string[] } {
+  getBatchJobStatus(): BatchJobStatus {
     return {
       jobCount: this.jobQueue.size,
       jobIds: Array.from(this.jobQueue.keys()),

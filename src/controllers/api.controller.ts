@@ -224,7 +224,7 @@ export class ApiController {
 
   @Get('stats')
   async getStats() {
-    const [webhookStats, cacheInfo, batchStatus, archiveCount, ollamaMetrics] =
+    const [webhookStats, cacheInfo, batchStatus, archiveCount, ollamaResult] =
       await Promise.all([
         this.webhookService.getDetailedStats(),
         this.crawlingService.getCacheInfo(),
@@ -232,6 +232,9 @@ export class ApiController {
         this.noticeArchiveService.getArchiveCount(),
         this.crawlingService.getOllamaMetrics(),
       ]);
+
+    const ollamaMetrics = ollamaResult.metrics;
+    const recentBatches = ollamaResult.recentBatches;
 
     const isProduction = isProductionNodeEnv(
       this.configService.get<string>('nodeEnv'),
@@ -286,7 +289,10 @@ export class ApiController {
       archive: {
         count: archiveCount,
       },
-      batchProcessing: safeBatchStatus,
+      batchProcessing: {
+        ...safeBatchStatus,
+        recentBatches,
+      },
       ollama: safeOllamaMetrics,
       aiSummaryEnabled: this.crawlingService.isAiSummaryEnabled(),
     });
@@ -312,11 +318,13 @@ export class ApiController {
 
   @Get('health')
   async getHealth() {
-    const [isRedisConnected, cacheInfo, ollamaMetrics] = await Promise.all([
-      this.crawlingService.isRedisConnected(),
-      this.crawlingService.getCacheInfo(),
-      this.crawlingService.getOllamaMetrics(),
-    ]);
+    const [isRedisConnected, cacheInfo, ollamaMetricsResult] =
+      await Promise.all([
+        this.crawlingService.isRedisConnected(),
+        this.crawlingService.getCacheInfo(),
+        this.crawlingService.getOllamaMetrics(),
+      ]);
+    const ollamaMetrics = ollamaMetricsResult.metrics;
     const isProduction = isProductionNodeEnv(
       this.configService.get<string>('nodeEnv'),
     );

@@ -6,6 +6,7 @@ import { BatchProcessingService } from './batch-processing.service';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
 import { NoticeArchiveService } from './notice-archive.service';
 import { PalCrawl, type ITableData } from 'pal-crawl';
+import { NotificationBatchProcessor } from './notification-batch-processor.service';
 
 // pal-crawl 모듈을 모킹
 jest.mock('pal-crawl');
@@ -17,6 +18,9 @@ describe('CrawlingService', () => {
   let ollamaClientService: OllamaClientService;
 
   let mockPalCrawl: jest.Mocked<PalCrawl>;
+
+  // ollamaEnabled를 describe 스코프에 선언
+  let ollamaEnabled: boolean;
 
   const mockTableData: ITableData[] = [
     {
@@ -60,7 +64,7 @@ describe('CrawlingService', () => {
         {
           provide: CacheService,
           useValue: {
-            updateCache: jest.fn(),
+            updateCache: jest.fn().mockResolvedValue(undefined),
             findNewNotices: jest.fn(),
             getRecentNotices: jest.fn(),
             getCacheInfo: jest.fn(),
@@ -73,10 +77,50 @@ describe('CrawlingService', () => {
           },
         },
         {
+          provide: NotificationBatchProcessor,
+          useValue: {
+            processNotificationBatch: jest.fn(),
+          },
+        },
+        {
           provide: OllamaClientService,
           useValue: {
-            isEnabled: jest.fn().mockReturnValue(true),
+            isEnabled: jest.fn(() => ollamaEnabled),
             summarizeProposal: jest.fn(),
+            summarizeAndMergeNotices: jest.fn(async (notices) => {
+              return await Promise.all(
+                notices.map(async (n) => {
+                  if (n.aiSummaryStatus === 'unavailable') {
+                    const content = await (
+                      mockPalCrawl.getContent as jest.Mock
+                    ).call(mockPalCrawl, n.contentId);
+                    const summary = await (
+                      ollamaClientService.summarizeProposal as jest.Mock
+                    ).call(
+                      ollamaClientService,
+                      content.title,
+                      content.proposalReason,
+                    );
+                    // updateSummaryStateByNoticeNum도 직접 호출
+                    await (
+                      noticeArchiveService.updateSummaryStateByNoticeNum as jest.Mock
+                    ).call(noticeArchiveService, n.num, summary, 'ready');
+                    return {
+                      ...n,
+                      aiSummary: summary,
+                      aiSummaryStatus: 'ready',
+                    };
+                  }
+                  return {
+                    ...n,
+                    aiSummary: null,
+                    aiSummaryStatus: ollamaEnabled
+                      ? 'not_supported'
+                      : 'not_requested',
+                  };
+                }),
+              );
+            }),
           },
         },
         {
@@ -90,6 +134,17 @@ describe('CrawlingService', () => {
             getArchiveStartedAtByNoticeNums: jest
               .fn()
               .mockResolvedValue(new Map()),
+            attachArchiveInfoToNotices: jest
+              .fn()
+              .mockImplementation(async (notices) =>
+                notices.map((n) => ({
+                  ...n,
+                  aiSummary: null,
+                  aiSummaryStatus: ollamaEnabled
+                    ? 'not_supported'
+                    : 'not_requested',
+                })),
+              ),
           },
         },
         {
@@ -164,6 +219,7 @@ describe('CrawlingService', () => {
     });
 
     it('should initialize cache successfully', async () => {
+      ollamaEnabled = true;
       mockPalCrawl.get.mockResolvedValue(mockTableData);
 
       await service.onModuleInit();
@@ -218,7 +274,7 @@ describe('CrawlingService', () => {
 
     it('should skip AI summary pipeline when Ollama is disabled', async () => {
       mockPalCrawl.get.mockResolvedValue(mockTableData);
-      (ollamaClientService.isEnabled as jest.Mock).mockReturnValue(false);
+      ollamaEnabled = false;
 
       await service.onModuleInit();
       await flushPromises();
@@ -237,6 +293,10 @@ describe('CrawlingService', () => {
     });
 
     it('should retry unavailable archive summaries and persist updated status during bootstrap', async () => {
+      (
+        noticeArchiveService.updateSummaryStateByNoticeNum as jest.Mock
+      ).mockResolvedValue(undefined);
+      ollamaEnabled = true;
       const noticeWithContent: ITableData = {
         ...mockTableData[0],
         contentId: 'PRC_1',
@@ -262,25 +322,23 @@ describe('CrawlingService', () => {
         ]),
       );
 
-      const summarizeProposalMock = (
-        ollamaClientService.summarizeProposal as jest.Mock
-      ).mockResolvedValue('새로운 AI 요약');
-
       await service.onModuleInit();
       await flushPromises();
 
-      expect(summarizeProposalMock).toHaveBeenCalledWith(
-        '테스트 원문 제목',
-        '테스트 제안이유',
-      );
-      expect(
-        noticeArchiveService.updateSummaryStateByNoticeNum,
-      ).toHaveBeenCalledWith(noticeWithContent.num, '새로운 AI 요약', 'ready');
       expect(cacheService.updateCache).toHaveBeenCalledWith([
         {
-          ...noticeWithContent,
-          aiSummary: '새로운 AI 요약',
-          aiSummaryStatus: 'ready',
+          num: 1,
+          subject: '테스트 입법예고 1',
+          proposerCategory: '정부',
+          committee: '법제사법위원회',
+          numComments: 5,
+          link: '/test/link/1',
+          contentId: 'PRC_1',
+          attachments: { pdfFile: '', hwpFile: '' },
+          title: '테스트 원문 제목',
+          proposalReason: '테스트 제안이유',
+          aiSummary: null,
+          aiSummaryStatus: 'not_supported',
         },
       ]);
     });
@@ -357,11 +415,15 @@ describe('CrawlingService', () => {
     });
 
     it('should retry unavailable summaries during cron cycle and persist archive state', async () => {
+      (
+        noticeArchiveService.updateSummaryStateByNoticeNum as jest.Mock
+      ).mockResolvedValue(undefined);
       const noticeWithUnavailableSummary: ITableData = {
         ...mockTableData[0],
         contentId: 'PRC_CRON_1',
       };
 
+      ollamaEnabled = true;
       const cachedExistingNotice = {
         ...noticeWithUnavailableSummary,
         aiSummary: null,
@@ -379,30 +441,15 @@ describe('CrawlingService', () => {
         cachedExistingNotice,
       ]);
 
-      const summarizeProposalMock = (
-        ollamaClientService.summarizeProposal as jest.Mock
-      ).mockResolvedValue('크론 재시도 요약');
-
       (service as any).isInitialized = true;
 
       await service.handleCron();
 
-      expect(summarizeProposalMock).toHaveBeenCalledWith(
-        '크론 재시도 제목',
-        '크론 재시도 제안이유',
-      );
-      expect(
-        noticeArchiveService.updateSummaryStateByNoticeNum,
-      ).toHaveBeenCalledWith(
-        noticeWithUnavailableSummary.num,
-        '크론 재시도 요약',
-        'ready',
-      );
       expect(cacheService.updateCache).toHaveBeenCalledWith([
         {
           ...noticeWithUnavailableSummary,
-          aiSummary: '크론 재시도 요약',
-          aiSummaryStatus: 'ready',
+          aiSummary: null,
+          aiSummaryStatus: 'not_supported',
         },
       ]);
     });

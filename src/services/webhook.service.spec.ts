@@ -267,5 +267,62 @@ describe('WebhookService', () => {
     });
   });
 
-  // getDetailedStats는 복잡한 SQL 쿼리를 사용하므로 통합 테스트에서 검증
+  describe('Concurrency and Consistency', () => {
+    it('should maintain data consistency when soft delete and hard delete occur simultaneously', async () => {
+      const mockWebhook = {
+        id: 1,
+        url: 'https://discord.com/api/webhooks/1/token1',
+        isActive: true,
+      };
+      mockRepository.findOne.mockResolvedValue(mockWebhook);
+      mockRepository.save.mockResolvedValue({
+        ...mockWebhook,
+        isActive: false,
+      });
+      mockRepository.delete.mockResolvedValue({ affected: 1 });
+
+      await Promise.all([
+        service.remove(1), // soft delete
+        service.removeFailedWebhooks([1]), // hard delete
+      ]);
+
+      expect(mockRepository.save).toHaveBeenCalled();
+      expect(mockRepository.delete).toHaveBeenCalledWith({ id: In([1]) });
+    });
+
+    it('should ignore recovery if soft delete recovery and hard delete occur simultaneously', async () => {
+      const mockWebhook = {
+        id: 2,
+        url: 'https://discord.com/api/webhooks/2/token2',
+        isActive: false,
+      };
+      mockRepository.findOne.mockResolvedValue(mockWebhook);
+      mockRepository.save.mockResolvedValue({ ...mockWebhook, isActive: true });
+      mockRepository.delete.mockResolvedValue({ affected: 1 });
+
+      await Promise.all([
+        service.create(mockWebhook.url), // 복구 시도
+        service.removeFailedWebhooks([2]), // hard delete
+      ]);
+
+      expect(mockRepository.save).toHaveBeenCalled();
+      expect(mockRepository.delete).toHaveBeenCalledWith({ id: In([2]) });
+    });
+  });
+
+  describe('Bulk Deletion', () => {
+    it('should handle batch deletion correctly for more than 1000 webhooks', async () => {
+      const webhookIds = Array.from({ length: 1200 }, (_, i) => i + 1);
+      // 첫 두 번은 500개씩, 마지막은 200개
+      mockRepository.delete
+        .mockResolvedValueOnce({ affected: 500 })
+        .mockResolvedValueOnce({ affected: 500 })
+        .mockResolvedValueOnce({ affected: 200 });
+
+      const result = await service.removeFailedWebhooks(webhookIds);
+
+      expect(mockRepository.delete).toHaveBeenCalledTimes(3);
+      expect(result).toBe(500 + 500 + 200);
+    });
+  });
 });

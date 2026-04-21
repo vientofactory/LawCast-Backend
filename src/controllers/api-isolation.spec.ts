@@ -15,10 +15,12 @@ import { HashguardService } from '../services/hashguard.service';
 import { WebhookCleanupService } from '../services/webhook-cleanup.service';
 import { NoticeArchiveService } from '../services/notice-archive.service';
 import { NoticesQueryService } from '../services/notices-query.service';
+import { NotificationBatchProcessor } from '../services/notification-batch-processor.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;
   let batchService: BatchProcessingService;
+  let notificationBatchProcessor: NotificationBatchProcessor;
   let module: TestingModule;
 
   beforeEach(async () => {
@@ -59,26 +61,28 @@ describe('HTTP-Batch Processing Isolation', () => {
       isRedisConnected: jest.fn().mockReturnValue(true),
       isAiSummaryEnabled: jest.fn().mockReturnValue(true),
       getOllamaMetrics: jest.fn().mockResolvedValue({
-        enabled: true,
-        configured: true,
-        model: 'gemma3:1b',
-        summary: {
-          total: 10,
-          success: 9,
-          failed: 1,
-          skipped: 0,
-          successRate: 90,
-          lastLatencyMs: 120,
-          lastSuccessAt: new Date().toISOString(),
-          lastFailureAt: null,
-          lastError: null,
-        },
-        health: {
-          status: 'healthy',
-          lastCheckedAt: new Date().toISOString(),
-          lastLatencyMs: 50,
-          availableModelCount: 1,
-          error: null,
+        metrics: {
+          enabled: true,
+          configured: true,
+          model: 'gemma3:1b',
+          summary: {
+            total: 10,
+            success: 9,
+            failed: 1,
+            skipped: 0,
+            successRate: 90,
+            lastLatencyMs: 120,
+            lastSuccessAt: new Date().toISOString(),
+            lastFailureAt: null,
+            lastError: null,
+          },
+          health: {
+            status: 'healthy',
+            lastCheckedAt: new Date().toISOString(),
+            lastLatencyMs: 50,
+            availableModelCount: 1,
+            error: null,
+          },
         },
       }),
     };
@@ -141,6 +145,10 @@ describe('HTTP-Batch Processing Isolation', () => {
       controllers: [ApiController],
       providers: [
         BatchProcessingService,
+        {
+          provide: NotificationBatchProcessor,
+          useValue: { processNotificationBatch: jest.fn() },
+        },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: WebhookService, useValue: mockWebhookService },
         { provide: NotificationService, useValue: mockNotificationService },
@@ -154,6 +162,9 @@ describe('HTTP-Batch Processing Isolation', () => {
 
     controller = module.get<ApiController>(ApiController);
     batchService = module.get<BatchProcessingService>(BatchProcessingService);
+    notificationBatchProcessor = module.get<NotificationBatchProcessor>(
+      NotificationBatchProcessor,
+    );
   });
 
   afterEach(async () => {
@@ -203,7 +214,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(avgResponseTime).toBeLessThan(5); // 평균 5ms 이내 응답
 
       console.log(
-        `✅ Health API: avg response time ${avgResponseTime.toFixed(2)}ms during batch processing`,
+        `Health API: avg response time ${avgResponseTime.toFixed(2)}ms during batch processing`,
       );
     });
 
@@ -217,7 +228,9 @@ describe('HTTP-Batch Processing Isolation', () => {
         link: `http://test.com/${i}`,
       }));
 
-      await batchService.processNotificationBatch(mockNotices as any);
+      await notificationBatchProcessor.processNotificationBatch(
+        mockNotices as any,
+      );
 
       // 2. 동시에 여러 클라이언트에서 최근 알림 조회
       const noticeRequests = Array.from({ length: 50 }, async () => {
@@ -239,7 +252,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(maxResponseTime).toBeLessThanOrEqual(15); // 최대 15ms 이내 (여유 허용)
 
       console.log(
-        `✅ Recent notices API: max response time ${maxResponseTime}ms (50 concurrent requests)`,
+        `Recent notices API: max response time ${maxResponseTime}ms (50 concurrent requests)`,
       );
     });
 
@@ -292,7 +305,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(avgResponseTime).toBeLessThan(20); // 평균 20ms 이내 (환경 편차 허용)
 
       console.log(
-        `✅ Batch status API: avg response time ${avgResponseTime.toFixed(2)}ms`,
+        `Batch status API: avg response time ${avgResponseTime.toFixed(2)}ms`,
       );
     });
 
@@ -338,7 +351,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(avgResponseTime).toBeLessThan(10); // 평균 10ms 이내
 
       console.log(
-        `✅ Stats API during heavy load: avg ${avgResponseTime.toFixed(2)}ms, max ${maxResponseTime}ms`,
+        `Stats API during heavy load: avg ${avgResponseTime.toFixed(2)}ms, max ${maxResponseTime}ms`,
       );
     });
   });
@@ -410,7 +423,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(avgResponseTime).toBeLessThan(15); // 평균 15ms 이내
 
       console.log(
-        `✅ Mixed load test: 50 requests in ${totalTime}ms (avg ${avgResponseTime.toFixed(2)}ms per request)`,
+        `Mixed load test: 50 requests in ${totalTime}ms (avg ${avgResponseTime.toFixed(2)}ms per request)`,
       );
     });
   });
@@ -444,7 +457,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(memoryIncrease).toBeLessThan(10 * 1024 * 1024);
 
       console.log(
-        `✅ Memory usage: ${(memoryIncrease / 1024 / 1024).toFixed(2)}MB increase`,
+        `Memory usage: ${(memoryIncrease / 1024 / 1024).toFixed(2)}MB increase`,
       );
     });
   });

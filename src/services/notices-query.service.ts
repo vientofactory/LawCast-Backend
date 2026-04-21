@@ -134,7 +134,16 @@ export class NoticesQueryService {
         ...item,
         aiSummary: cached.aiSummary ?? item.aiSummary,
         aiSummaryStatus:
-          cached.aiSummaryStatus ?? item.aiSummaryStatus ?? 'not_requested',
+          (['ready', 'unavailable', 'not_supported', 'not_requested'].includes(
+            cached.aiSummaryStatus,
+          )
+            ? cached.aiSummaryStatus
+            : undefined) ??
+          (['ready', 'unavailable', 'not_supported', 'not_requested'].includes(
+            item.aiSummaryStatus,
+          )
+            ? item.aiSummaryStatus
+            : 'not_requested'),
       };
     });
 
@@ -174,7 +183,14 @@ export class NoticesQueryService {
       link: notice.link,
       contentId: notice.contentId ?? null,
       aiSummary: notice.aiSummary ?? null,
-      aiSummaryStatus: notice.aiSummaryStatus ?? 'not_requested',
+      aiSummaryStatus: [
+        'ready',
+        'unavailable',
+        'not_supported',
+        'not_requested',
+      ].includes(notice.aiSummaryStatus)
+        ? notice.aiSummaryStatus
+        : 'not_requested',
       attachments: {
         pdfFile: notice.attachments?.pdfFile ?? '',
         hwpFile: notice.attachments?.hwpFile ?? '',

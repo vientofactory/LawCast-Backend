@@ -1,14 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
+import { ITableData, IContentData } from 'pal-crawl';
+import { CachedNotice } from '../../types/cache.types';
 
 interface OllamaGenerateResponse {
-  // Basic response fields
   model: string;
   created_at: string;
   response: string;
-
-  // Below fields may not be available when response is streamed
   done?: boolean;
   done_reason?: string;
   context?: number[];
@@ -330,5 +329,37 @@ export class OllamaClientService {
     ].join('\n');
 
     return prompt;
+  }
+
+  /**
+   * Merge AI summary and archive info into original notice array
+   * - If AI summary is not available, it will be null and status will indicate the reason.
+   * - Archive info will be attached to each notice for additional context.
+   * @param notices Original notice array
+   * @param noticeArchiveService Archive service
+   * @returns Notice array with merged summary and archive info
+   */
+  async summarizeAndMergeNotices<
+    T extends ITableData & IContentData & Partial<CachedNotice>,
+  >(notices: T[], noticeArchiveService: any): Promise<T[]> {
+    const summarized = await Promise.all(
+      notices.map(async (notice) => {
+        let aiSummary = notice.aiSummary ?? null;
+        let aiSummaryStatus = notice.aiSummaryStatus ?? 'not_requested';
+        if (!aiSummary && notice.proposalReason && notice.title) {
+          aiSummary = await this.summarizeProposal(
+            notice.title,
+            notice.proposalReason,
+          );
+          aiSummaryStatus = aiSummary ? 'ready' : 'unavailable';
+        }
+        const [noticeWithArchive] =
+          await noticeArchiveService.attachArchiveInfoToNotices([
+            { ...notice, aiSummary, aiSummaryStatus },
+          ]);
+        return noticeWithArchive;
+      }),
+    );
+    return summarized;
   }
 }

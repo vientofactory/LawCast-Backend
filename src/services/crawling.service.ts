@@ -10,7 +10,7 @@ import { PalCrawl, type ITableData, type PalCrawlConfig } from 'pal-crawl';
 import { CacheService } from './cache.service';
 import {
   BatchProcessingOptions,
-  BatchProcessingService,
+  RecentBatch,
 } from './batch-processing.service';
 import { APP_CONSTANTS } from '../config/app.config';
 import { LoggerUtils } from '../utils/logger.utils';
@@ -28,6 +28,8 @@ import {
   type ArchiveHttpMetadata,
   type ArchiveSummaryState,
 } from './notice-archive.service';
+import { NotificationBatchProcessor } from './notification-batch-processor.service';
+import { BatchProcessingService } from './batch-processing.service';
 
 @Injectable()
 export class CrawlingService implements OnModuleInit {
@@ -45,6 +47,7 @@ export class CrawlingService implements OnModuleInit {
   constructor(
     private cacheService: CacheService,
     private batchProcessingService: BatchProcessingService,
+    private notificationBatchProcessor: NotificationBatchProcessor,
     private ollamaClientService: OllamaClientService,
     private noticeArchiveService: NoticeArchiveService,
   ) {
@@ -111,85 +114,77 @@ export class CrawlingService implements OnModuleInit {
    */
   private async initializeCache(): Promise<void> {
     const palCrawl = new PalCrawl(this.crawlConfig);
-
     try {
       const crawledData = await palCrawl.get();
-
       if (!crawledData || crawledData.length === 0) {
         this.logger.warn('No data received from crawler during initialization');
         return;
       }
 
       if (!this.isAiSummaryEnabled()) {
-        const noticesWithoutSummary = crawledData.map((notice) => ({
-          ...notice,
-          aiSummary: null,
-          aiSummaryStatus: 'not_requested' as AISummaryStatus,
-        }));
-
-        const missingArchiveNotices = await this.filterAlreadyArchivedNotices(
-          noticesWithoutSummary,
+        await this.cacheService.updateCache(
+          await this.noticeArchiveService.attachArchiveInfoToNotices(
+            crawledData.map((notice) => ({
+              ...notice,
+              aiSummary: null,
+              aiSummaryStatus: 'not_requested' as AISummaryStatus,
+            })),
+          ),
         );
-
-        if (missingArchiveNotices.length > 0) {
-          await this.archiveNotices(missingArchiveNotices);
-          this.logger.log(
-            `Archived ${missingArchiveNotices.length} missing notices during bootstrap initialization`,
-          );
-        }
-
-        await this.cacheService.updateCache(noticesWithoutSummary);
         this.logger.log(
-          `Initialized Redis cache with ${noticesWithoutSummary.length} notices (AI summary disabled)`,
+          `Initialized Redis cache with ${crawledData.length} notices (AI summary disabled)`,
         );
-
         return;
       }
 
-      this.logOllama(
-        `Starting summary generation for ${crawledData.length} notices`,
-      );
-
-      const archiveSummaryStates =
-        await this.noticeArchiveService.getSummaryStateByNoticeNums(
-          crawledData.map((notice) => notice.num),
+      let noticesWithSummary;
+      if (this.isAiSummaryEnabled()) {
+        // 아카이브에서 요약 상태 미리 조회
+        const archiveSummaryStates =
+          await this.noticeArchiveService.getSummaryStateByNoticeNums(
+            crawledData.map((n) => n.num),
+          );
+        const noticesWithContent = await Promise.all(
+          crawledData.map(async (notice) => {
+            const palCrawlContent = await palCrawl.getContent(
+              notice.contentId!,
+            );
+            return {
+              ...notice,
+              ...palCrawlContent,
+            };
+          }),
         );
-
-      const noticesWithSummary = await this.enrichNoticesWithSummary(
-        crawledData,
-        new Map(),
-        archiveSummaryStates,
-        {
-          logOllamaActivity: true,
-          phase: 'init-cache',
-          retryUnavailableArchiveSummary: true,
-        },
-      );
-
-      await this.persistRetriedArchiveSummaryStates(
-        noticesWithSummary,
-        archiveSummaryStates,
-      );
-
-      const summarizedCount = noticesWithSummary.filter(
-        (notice) => !!notice.aiSummary,
-      ).length;
-
-      this.logOllama(
-        `Summary generation completed: ${summarizedCount}/${noticesWithSummary.length}`,
-      );
-
-      const missingArchiveNotices =
-        await this.filterAlreadyArchivedNotices(noticesWithSummary);
-
-      if (missingArchiveNotices.length > 0) {
-        await this.archiveNotices(missingArchiveNotices);
-        this.logger.log(
-          `Archived ${missingArchiveNotices.length} missing notices during bootstrap initialization`,
-        );
+        // 이미 요약이 있는 경우 기존 값 사용, 없으면 AI 요약 생성
+        noticesWithSummary =
+          await this.ollamaClientService.summarizeAndMergeNotices(
+            noticesWithContent.map((notice) => {
+              const archive = archiveSummaryStates.get(notice.num);
+              if (
+                archive &&
+                archive.aiSummary &&
+                archive.aiSummaryStatus === 'ready'
+              ) {
+                return {
+                  ...notice,
+                  aiSummary: archive.aiSummary,
+                  aiSummaryStatus: archive.aiSummaryStatus,
+                };
+              }
+              return notice;
+            }),
+            this.noticeArchiveService,
+          );
+      } else {
+        noticesWithSummary =
+          await this.noticeArchiveService.attachArchiveInfoToNotices(
+            crawledData.map((notice) => ({
+              ...notice,
+              aiSummary: null,
+              aiSummaryStatus: 'not_requested' as AISummaryStatus,
+            })),
+          );
       }
-
-      // 초기 캐시 업데이트
       await this.cacheService.updateCache(noticesWithSummary);
       this.logger.log(
         `Initialized Redis cache with ${noticesWithSummary.length} notices`,
@@ -211,144 +206,66 @@ export class CrawlingService implements OnModuleInit {
    */
   private async performCrawlingAndNotification(): Promise<ITableData[]> {
     const palCrawl = new PalCrawl(this.crawlConfig);
-
     try {
       LoggerUtils.debugDev(
         CrawlingService.name,
         'Starting crawling process with enhanced configuration...',
       );
       const crawledData = await palCrawl.get();
-
       if (!crawledData || crawledData.length === 0) {
         this.logger.warn('No data received from crawler');
         return [];
       }
-
       LoggerUtils.debugDev(
         CrawlingService.name,
         `Successfully crawled ${crawledData.length} legislative notices`,
       );
-
       // 새로운 입법예고 찾기
       const cacheDiffNotices =
         await this.cacheService.findNewNotices(crawledData);
       const newNotices =
         await this.filterAlreadyArchivedNotices(cacheDiffNotices);
-      const existingNotices = await this.cacheService.getRecentNotices(
-        APP_CONSTANTS.CACHE.MAX_SIZE,
-      );
-      const existingNoticeMap = this.buildNoticeMap(existingNotices);
-
       if (newNotices.length > 0) {
         this.logger.log(`Found ${newNotices.length} new legislative notices`);
-
+        // 요약/아카이브 정보 병합
         const newNoticesWithSummary = this.isAiSummaryEnabled()
-          ? await this.enrichNoticesWithSummary(
-              newNotices,
-              existingNoticeMap,
-              new Map(),
+          ? await this.ollamaClientService.summarizeAndMergeNotices(
+              await Promise.all(
+                newNotices.map(async (notice) => {
+                  const palCrawlContent = await palCrawl.getContent(
+                    notice.contentId!,
+                  );
+                  return {
+                    ...notice,
+                    ...palCrawlContent,
+                  };
+                }),
+              ),
+              this.noticeArchiveService,
             )
-          : newNotices.map((notice) => ({
-              ...notice,
-              aiSummary: null,
-              aiSummaryStatus: 'not_requested' as AISummaryStatus,
-            }));
-
-        await this.archiveNotices(newNoticesWithSummary);
-
-        const newNoticeMap = this.buildNoticeMap(newNoticesWithSummary);
-        const noticesWithSummary = crawledData.map((notice) => {
-          const newNotice = newNoticeMap.get(notice.num);
-          if (newNotice) {
-            return {
-              ...notice,
-              aiSummary: newNotice.aiSummary ?? null,
-              aiSummaryStatus: newNotice.aiSummaryStatus ?? 'not_requested',
-            };
-          }
-
-          const existingNotice = existingNoticeMap.get(notice.num);
-          if (existingNotice) {
-            if (!this.isAiSummaryEnabled()) {
-              return {
+          : await this.noticeArchiveService.attachArchiveInfoToNotices(
+              newNotices.map((notice) => ({
                 ...notice,
                 aiSummary: null,
                 aiSummaryStatus: 'not_requested' as AISummaryStatus,
-              };
-            }
-
-            return {
-              ...notice,
-              aiSummary: existingNotice.aiSummary ?? null,
-              aiSummaryStatus:
-                existingNotice.aiSummaryStatus ??
-                this.resolveSummaryStatus(existingNotice.aiSummary),
-            };
-          }
-
-          return {
-            ...notice,
-            aiSummary: null,
-            aiSummaryStatus: 'not_requested' as AISummaryStatus,
-          };
-        });
-
-        const noticesWithRetriedSummary = this.isAiSummaryEnabled()
-          ? await this.retryUnavailableSummariesFromPreviousCycle(
-              noticesWithSummary,
-              existingNoticeMap,
-            )
-          : noticesWithSummary;
-
-        await this.cacheService.updateCache(noticesWithRetriedSummary);
+              })),
+            );
+        await this.cacheService.updateCache(newNoticesWithSummary);
         this.logger.log(
           `Cache updated for ${newNotices.length} new notices; notification dispatch will continue in background`,
         );
-
         void this.sendNotifications(newNoticesWithSummary).catch((error) => {
           this.logger.error('Background notification dispatch failed:', error);
         });
       } else {
         LoggerUtils.debugDev(CrawlingService.name, 'No new notices found');
         // 새 데이터가 없어도 기존 요약 상태를 보존하며 전체 캐시 업데이트
-        const noticesWithExistingSummary = crawledData.map((notice) => {
-          const existingNotice = existingNoticeMap.get(notice.num);
-
-          if (!existingNotice) {
-            return {
-              ...notice,
-              aiSummary: null,
-              aiSummaryStatus: 'not_requested' as AISummaryStatus,
-            };
-          }
-
-          if (!this.isAiSummaryEnabled()) {
-            return {
-              ...notice,
-              aiSummary: null,
-              aiSummaryStatus: 'not_requested' as AISummaryStatus,
-            };
-          }
-
-          return {
-            ...notice,
-            aiSummary: existingNotice.aiSummary ?? null,
-            aiSummaryStatus:
-              existingNotice.aiSummaryStatus ??
-              this.resolveSummaryStatus(existingNotice.aiSummary),
-          };
-        });
-
-        const noticesWithRetriedSummary = this.isAiSummaryEnabled()
-          ? await this.retryUnavailableSummariesFromPreviousCycle(
-              noticesWithExistingSummary,
-              existingNoticeMap,
-            )
-          : noticesWithExistingSummary;
-
-        await this.cacheService.updateCache(noticesWithRetriedSummary);
+        const noticesWithExistingSummary =
+          await this.noticeArchiveService.attachArchiveInfoToNotices(
+            crawledData,
+          );
+        await this.cacheService.updateCache(noticesWithExistingSummary);
       }
-
       return newNotices;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -388,10 +305,11 @@ export class CrawlingService implements OnModuleInit {
       }
 
       // 배치 처리 시작하고 jobId 받기
-      const jobId = await this.batchProcessingService.processNotificationBatch(
-        notices,
-        options,
-      );
+      const jobId =
+        await this.notificationBatchProcessor.processNotificationBatch(
+          notices,
+          options,
+        );
 
       this.logger.log(
         `Started notification batch processing for ${notices.length} notices (job: ${jobId})`,
@@ -1046,7 +964,7 @@ export class CrawlingService implements OnModuleInit {
 
   async getOllamaMetrics(
     options: { forceHealthCheck?: boolean } = {},
-  ): Promise<OllamaRuntimeMetrics> {
+  ): Promise<{ metrics: OllamaRuntimeMetrics; recentBatches: RecentBatch[] }> {
     const now = Date.now();
     const force = options.forceHealthCheck ?? false;
     if (
@@ -1055,12 +973,15 @@ export class CrawlingService implements OnModuleInit {
       this.ollamaMetricsCacheAt &&
       now - this.ollamaMetricsCacheAt < this.ollamaMetricsCacheTtlMs
     ) {
-      return this.ollamaMetricsCache;
+      return { metrics: this.ollamaMetricsCache, recentBatches: [] };
     }
     const metrics = await this.ollamaClientService.getMetrics(options);
+    const recentBatches = this.batchProcessingService.getRecentBatches
+      ? this.batchProcessingService.getRecentBatches()
+      : [];
     this.ollamaMetricsCache = metrics;
     this.ollamaMetricsCacheAt = now;
-    return metrics;
+    return { metrics, recentBatches };
   }
 
   private getOllamaPrefix(phase?: string): string {

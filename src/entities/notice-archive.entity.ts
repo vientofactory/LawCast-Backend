@@ -6,6 +6,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import type { AISummaryStatus } from '../types/cache.types';
 
 @Entity('notice_archives')
 @Index('idx_notice_archives_notice_num', ['noticeNum'], { unique: true })
@@ -98,7 +99,7 @@ export class NoticeArchive {
   aiSummary: string | null;
 
   @Column({ type: 'varchar', length: 30, default: 'not_requested' })
-  aiSummaryStatus: string;
+  aiSummaryStatus: AISummaryStatus;
 
   @Column({ type: 'text', default: '' })
   attachmentPdfFile: string;

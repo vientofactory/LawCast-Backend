@@ -18,9 +18,10 @@ import { Webhook } from './entities/webhook.entity';
 import { NoticeArchive } from './entities/notice-archive.entity';
 import { OllamaModule } from './modules/ollama/ollama.module';
 import { NoticeArchiveService } from './services/notice-archive.service';
-import appConfig from './config/app.config';
 import { InitialSchemaMigration1744953900000 } from './migrations/202604170001-initial-schema.migration';
 import { AddContentMetadataColumns1745001601000 } from './migrations/202604180001-add-content-metadata-columns.migration';
+import { NotificationBatchProcessor } from './services/notification-batch-processor.service';
+import appConfig from './config/app.config';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { AddContentMetadataColumns1745001601000 } from './migrations/20260418000
     CacheService,
     HashguardService,
     BatchProcessingService,
+    NotificationBatchProcessor,
     NoticeArchiveService,
     NoticesQueryService,
     WebhookCleanupService,

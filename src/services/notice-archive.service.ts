@@ -13,9 +13,70 @@ import {
   MoreThanOrEqual,
   Repository,
 } from 'typeorm';
-import { type AISummaryStatus, type CachedNotice } from '../types/cache.types';
+import type { AISummaryStatus, CachedNotice } from '../types/cache.types';
 import { NoticeArchive } from '../entities/notice-archive.entity';
 import { buildArchiveExportArtifacts } from './archive-export.builder';
+
+export interface ArchiveHttpMetadata {
+  requestUrl?: string;
+  responseUrl?: string;
+  fetchedAt?: string;
+  statusCode?: number;
+  contentType?: string;
+  etag?: string;
+  lastModified?: string;
+  [key: string]: unknown;
+}
+
+export interface ArchiveSummaryState {
+  aiSummary: string | null;
+  aiSummaryStatus: AISummaryStatus;
+}
+
+export interface ArchiveDetailResult {
+  notice: ArchiveNoticeItem;
+  originalContent: {
+    contentId: string;
+    title: string;
+    proposalReason: string;
+    billNumber: string | null;
+    proposer: string | null;
+    proposalDate: string | null;
+    committee: string | null;
+    referralDate: string | null;
+    noticePeriod: string | null;
+    proposalSession: string | null;
+  };
+  archiveMetadata: {
+    archivedAt: Date | null;
+    sourceHtmlSha256: string | null;
+    sourceHtmlSize: number;
+    integrity: {
+      checkedAt: Date | null;
+      passed: boolean | null;
+      calculatedSha256: string | null;
+    };
+    http: {
+      fetchedAt: Date | null;
+      statusCode: number | null;
+      contentType: string | null;
+      etag: string | null;
+      lastModified: string | null;
+      requestUrl?: string;
+      responseUrl?: string;
+    };
+  };
+}
+
+import type { ArchiveVerificationScript } from './archive-export.builder';
+export interface ArchiveExportResult {
+  jsonFileName: string;
+  jsonContent: string;
+  integrityFileName: string;
+  integrityContent: string;
+  verificationScripts: ArchiveVerificationScript[];
+  zipFileName?: string;
+}
 
 export interface ArchiveListQuery {
   page: number;
@@ -60,75 +121,28 @@ export interface ArchiveNoticeItem {
   lastUpdatedAt: Date;
 }
 
-export interface ArchiveDetailResult {
-  notice: ArchiveNoticeItem;
-  originalContent: {
-    contentId: string;
-    title: string;
-    proposalReason: string;
-    billNumber: string | null;
-    proposer: string | null;
-    proposalDate: string | null;
-    committee: string | null;
-    referralDate: string | null;
-    noticePeriod: string | null;
-    proposalSession: string | null;
-  };
-  archiveMetadata: {
-    archivedAt: Date | null;
-    sourceHtmlSha256: string | null;
-    sourceHtmlSize: number;
-    integrity: {
-      checkedAt: Date | null;
-      passed: boolean | null;
-      calculatedSha256: string | null;
-    };
-    http: {
-      fetchedAt: Date | null;
-      statusCode: number | null;
-      contentType: string | null;
-      etag: string | null;
-      lastModified: string | null;
-      requestUrl?: string;
-      responseUrl?: string;
-    };
-  };
-}
-
-export interface ArchiveSummaryState {
-  aiSummary: string | null;
-  aiSummaryStatus: AISummaryStatus;
-}
-
-export interface ArchiveExportResult {
-  zipFileName: string;
-  jsonFileName: string;
-  jsonContent: string;
-  integrityFileName: string;
-  integrityContent: string;
-  verificationScripts?: Array<{
-    fileName: string;
-    content: string;
-  }>;
-}
-
-export interface ArchiveHttpMetadata {
-  requestUrl?: string;
-  responseUrl?: string;
-  fetchedAt?: string;
-  statusCode?: number;
-  contentType?: string;
-  etag?: string;
-  lastModified?: string;
-  [key: string]: unknown;
-}
-
 @Injectable()
 export class NoticeArchiveService {
   constructor(
     @InjectRepository(NoticeArchive)
     private readonly archiveRepository: Repository<NoticeArchive>,
   ) {}
+
+  /**
+   * 크롤링 데이터에 아카이브 정보 병합
+   */
+  async attachArchiveInfoToNotices<T extends { num: number }>(
+    notices: T[],
+  ): Promise<(T & { archiveStartedAt: Date | null })[]> {
+    if (!notices.length) return [];
+    const archiveStartedAtMap = await this.getArchiveStartedAtByNoticeNums(
+      notices.map((n) => n.num),
+    );
+    return notices.map((notice) => ({
+      ...notice,
+      archiveStartedAt: archiveStartedAtMap.get(notice.num) ?? null,
+    }));
+  }
 
   async upsertNoticeArchive(
     notice: CachedNotice,
@@ -167,7 +181,8 @@ export class NoticeArchiveService {
       contentNoticePeriod: originalContent.noticePeriod?.trim() || null,
       contentProposalSession: originalContent.proposalSession?.trim() || null,
       aiSummary: notice.aiSummary ?? null,
-      aiSummaryStatus: notice.aiSummaryStatus ?? 'not_requested',
+      aiSummaryStatus:
+        (notice.aiSummaryStatus as AISummaryStatus) ?? 'not_requested',
       attachmentPdfFile: notice.attachments?.pdfFile ?? '',
       attachmentHwpFile: notice.attachments?.hwpFile ?? '',
       archivedAt: originalContent.archivedAt ?? new Date(),
@@ -455,8 +470,14 @@ export class NoticeArchiveService {
         row.noticeNum,
         {
           aiSummary: row.aiSummary ?? null,
-          aiSummaryStatus: (row.aiSummaryStatus ||
-            'not_requested') as AISummaryStatus,
+          aiSummaryStatus: [
+            'ready',
+            'unavailable',
+            'not_supported',
+            'not_requested',
+          ].includes(row.aiSummaryStatus)
+            ? (row.aiSummaryStatus as AISummaryStatus)
+            : 'not_requested',
         },
       ]),
     );
@@ -471,7 +492,14 @@ export class NoticeArchiveService {
       { noticeNum },
       {
         aiSummary: summary?.trim() ? summary : null,
-        aiSummaryStatus: status,
+        aiSummaryStatus: [
+          'ready',
+          'unavailable',
+          'not_supported',
+          'not_requested',
+        ].includes(status)
+          ? status
+          : 'not_requested',
       },
     );
   }

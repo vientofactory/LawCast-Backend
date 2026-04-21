@@ -93,7 +93,14 @@ export class CacheService implements OnModuleDestroy {
           dedupedNotices.set(notice.num, {
             ...existingNotice,
             aiSummary: notice.aiSummary,
-            aiSummaryStatus: notice.aiSummaryStatus ?? 'ready',
+            aiSummaryStatus: [
+              'ready',
+              'unavailable',
+              'not_supported',
+              'not_requested',
+            ].includes(notice.aiSummaryStatus)
+              ? notice.aiSummaryStatus
+              : 'ready',
           });
           continue;
         }
