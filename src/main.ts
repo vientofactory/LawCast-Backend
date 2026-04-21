@@ -1,10 +1,11 @@
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { Logger } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { BatchProcessingService } from './services/batch-processing.service';
+import { WebhookValidationUtils } from './utils/webhook-validation.utils';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -13,8 +14,17 @@ async function bootstrap() {
   const batchProcessingService = app.get(BatchProcessingService);
   const logger = new Logger('Bootstrap');
   const frontendUrls = configService.get<string[]>('frontend.urls');
+  const { getValidationPipeOptions } = WebhookValidationUtils;
 
+  // Initialize process signal handlers for graceful shutdown
+  app.enableShutdownHooks();
+  initProcessSignalHandlers(app, batchProcessingService, logger);
+
+  // Ensure database migrations are applied before the application starts
   await ensureDatabaseMigrations(dataSource, logger);
+
+  // Initialize validation pipe
+  app.useGlobalPipes(new ValidationPipe(getValidationPipeOptions()));
 
   app.enableCors({
     origin: frontendUrls,
@@ -22,29 +32,6 @@ async function bootstrap() {
   });
   app.setGlobalPrefix('');
   app.disable('x-powered-by');
-
-  app.enableShutdownHooks();
-
-  process.on('SIGTERM', async () => {
-    logger.log('SIGTERM received, starting graceful shutdown...');
-    await gracefulShutdown(app, batchProcessingService, logger);
-  });
-
-  process.on('SIGINT', async () => {
-    logger.log('SIGINT received, starting graceful shutdown...');
-    await gracefulShutdown(app, batchProcessingService, logger);
-  });
-
-  // Unexpected error handling
-  process.on('uncaughtException', async (error) => {
-    logger.error('Uncaught Exception:', error);
-    await gracefulShutdown(app, batchProcessingService, logger, 1);
-  });
-
-  process.on('unhandledRejection', async (reason, promise) => {
-    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    await gracefulShutdown(app, batchProcessingService, logger, 1);
-  });
 
   const port = configService.get<number>('port');
   await app.listen(port);
@@ -111,6 +98,33 @@ async function gracefulShutdown(
     clearTimeout(shutdownTimer!);
     process.exit(1);
   }
+}
+
+function initProcessSignalHandlers(
+  app: NestExpressApplication,
+  batchProcessingService: BatchProcessingService,
+  logger: Logger,
+): void {
+  process.on('SIGTERM', async () => {
+    logger.log('SIGTERM received, starting graceful shutdown...');
+    await gracefulShutdown(app, batchProcessingService, logger);
+  });
+
+  process.on('SIGINT', async () => {
+    logger.log('SIGINT received, starting graceful shutdown...');
+    await gracefulShutdown(app, batchProcessingService, logger);
+  });
+
+  // Unexpected error handling
+  process.on('uncaughtException', async (error) => {
+    logger.error('Uncaught Exception:', error);
+    await gracefulShutdown(app, batchProcessingService, logger, 1);
+  });
+
+  process.on('unhandledRejection', async (reason, promise) => {
+    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    await gracefulShutdown(app, batchProcessingService, logger, 1);
+  });
 }
 
 bootstrap().catch((error) => {

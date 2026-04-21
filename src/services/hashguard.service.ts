@@ -31,8 +31,7 @@ export class HashguardService {
       );
 
       return result.valid;
-    } catch (error) {
-      this.logger.error('PoW verification failed:', error);
+    } catch {
       return false;
     }
   }
