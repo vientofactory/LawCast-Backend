@@ -63,7 +63,7 @@ export class NotificationService {
     Array<{
       webhookId: number;
       success: boolean;
-      error?: any;
+      error?: unknown;
       shouldDelete?: boolean;
     }>
   > {
@@ -73,7 +73,7 @@ export class NotificationService {
     const results: Array<{
       webhookId: number;
       success: boolean;
-      error?: any;
+      error?: unknown;
       shouldDelete?: boolean;
     }> = [];
 
