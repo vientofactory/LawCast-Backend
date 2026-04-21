@@ -1,10 +1,11 @@
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { Logger } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { BatchProcessingService } from './services/batch-processing.service';
+import { WebhookValidationUtils } from './utils/webhook-validation.utils';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -13,38 +14,27 @@ async function bootstrap() {
   const batchProcessingService = app.get(BatchProcessingService);
   const logger = new Logger('Bootstrap');
   const frontendUrls = configService.get<string[]>('frontend.urls');
+  const { getValidationPipeOptions } = WebhookValidationUtils;
 
+  // Initialize shutdown handlers
+  app.enableShutdownHooks();
+  initShutdownHandlers(app, batchProcessingService, logger);
+
+  // Ensure database migrations are applied before starting the application
   await ensureDatabaseMigrations(dataSource, logger);
 
+  // initialize global validation pipe with custom options
+  app.useGlobalPipes(new ValidationPipe(getValidationPipeOptions()));
+
+  // Enable CORS for frontend URLs
   app.enableCors({
     origin: frontendUrls,
     credentials: true,
   });
+
+  // Set global prefix and disable some headers for security
   app.setGlobalPrefix('');
   app.disable('x-powered-by');
-
-  app.enableShutdownHooks();
-
-  process.on('SIGTERM', async () => {
-    logger.log('SIGTERM received, starting graceful shutdown...');
-    await gracefulShutdown(app, batchProcessingService, logger);
-  });
-
-  process.on('SIGINT', async () => {
-    logger.log('SIGINT received, starting graceful shutdown...');
-    await gracefulShutdown(app, batchProcessingService, logger);
-  });
-
-  // Unexpected error handling
-  process.on('uncaughtException', async (error) => {
-    logger.error('Uncaught Exception:', error);
-    await gracefulShutdown(app, batchProcessingService, logger, 1);
-  });
-
-  process.on('unhandledRejection', async (reason, promise) => {
-    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    await gracefulShutdown(app, batchProcessingService, logger, 1);
-  });
 
   const port = configService.get<number>('port');
   await app.listen(port);
@@ -52,6 +42,15 @@ async function bootstrap() {
   logger.log(`LawCast Backend is running on port ${port}`);
 }
 
+/**
+ * Ensures that all pending TypeORM migrations are applied before the application starts accepting requests.
+ * This function checks for pending migrations and runs them if necessary, logging the process.
+ * If migrations fail, it will throw an error to prevent the application from starting in an inconsistent state.
+ * @param dataSource The TypeORM DataSource instance used to manage database connections and migrations.
+ * @param logger The NestJS Logger instance for logging migration status and errors.
+ * @returns A Promise that resolves when migrations are complete or rejects if there is an error.
+ * @throws Will throw an error if migration execution fails, preventing the application from starting.
+ */
 async function ensureDatabaseMigrations(
   dataSource: DataSource,
   logger: Logger,
@@ -74,6 +73,14 @@ async function ensureDatabaseMigrations(
   );
 }
 
+/**
+ * Performs a graceful shutdown of the application, ensuring that ongoing batch jobs are completed
+ * and the NestJS application is properly closed.
+ * @param app The NestJS application instance to be closed during shutdown.
+ * @param batchProcessingService The BatchProcessingService instance to ensure batch jobs are completed before shutdown.
+ * @param logger The NestJS Logger instance for logging shutdown events and errors.
+ * @param exitCode The exit code to use when terminating the process. Defaults to 0.
+ */
 async function gracefulShutdown(
   app: NestExpressApplication,
   batchProcessingService: BatchProcessingService,
@@ -111,6 +118,39 @@ async function gracefulShutdown(
     clearTimeout(shutdownTimer!);
     process.exit(1);
   }
+}
+
+/**
+ * Initializes handlers for graceful shutdown on SIGTERM and SIGINT signals, as well as unexpected errors.
+ * @param app The NestJS application instance to be closed during shutdown.
+ * @param batchProcessingService The BatchProcessingService instance to ensure batch jobs are completed before shutdown.
+ * @param logger The NestJS Logger instance for logging shutdown events and errors.
+ */
+function initShutdownHandlers(
+  app: NestExpressApplication,
+  batchProcessingService: BatchProcessingService,
+  logger: Logger,
+): void {
+  process.on('SIGTERM', async () => {
+    logger.log('SIGTERM received, starting graceful shutdown...');
+    await gracefulShutdown(app, batchProcessingService, logger);
+  });
+
+  process.on('SIGINT', async () => {
+    logger.log('SIGINT received, starting graceful shutdown...');
+    await gracefulShutdown(app, batchProcessingService, logger);
+  });
+
+  // Unexpected error handling
+  process.on('uncaughtException', async (error) => {
+    logger.error('Uncaught Exception:', error);
+    await gracefulShutdown(app, batchProcessingService, logger, 1);
+  });
+
+  process.on('unhandledRejection', async (reason, promise) => {
+    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    await gracefulShutdown(app, batchProcessingService, logger, 1);
+  });
 }
 
 bootstrap().catch((error) => {

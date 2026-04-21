@@ -93,7 +93,7 @@ describe('Non-blocking Architecture Verification', () => {
       expect(executionTime).toBeLessThan(50);
 
       console.log(
-        `✅ processNotificationBatch returned in ${executionTime}ms (non-blocking)`,
+        `processNotificationBatch returned in ${executionTime}ms (non-blocking)`,
       );
     });
 
@@ -117,7 +117,7 @@ describe('Non-blocking Architecture Verification', () => {
       expect(results).toHaveLength(3);
       expect(totalTime).toBeLessThan(1000); // 1초 이내에 완료
 
-      console.log(`✅ 3 concurrent batch jobs completed in ${totalTime}ms`);
+      console.log(`3 concurrent batch jobs completed in ${totalTime}ms`);
     });
 
     it('should maintain job queue state correctly', () => {
@@ -128,7 +128,7 @@ describe('Non-blocking Architecture Verification', () => {
       expect(typeof status.jobCount).toBe('number');
       expect(Array.isArray(status.jobIds)).toBe(true);
 
-      console.log('✅ Batch job status API works correctly');
+      console.log('Batch job status API works correctly');
     });
   });
 
@@ -141,7 +141,7 @@ describe('Non-blocking Architecture Verification', () => {
       const notices = await crawlingService.getRecentNotices(10);
       expect(Array.isArray(notices)).toBe(true);
 
-      console.log('✅ Service integration is correct');
+      console.log('Service integration is correct');
     });
 
     it('should verify separation of concerns in architecture', () => {
@@ -169,7 +169,7 @@ describe('Non-blocking Architecture Verification', () => {
       expect(hasSendNotifications).toBe(true); // sendNotifications는 있지만 배치로 위임
       expect(hasCrawlingLogic).toBe(false); // 배치 서비스에는 크롤링 로직 없음
 
-      console.log('✅ Separation of concerns is properly maintained');
+      console.log('Separation of concerns is properly maintained');
     });
   });
 
@@ -196,7 +196,7 @@ describe('Non-blocking Architecture Verification', () => {
       expect(totalTime).toBeGreaterThanOrEqual(40); // 최소 4번의 배치 (20/5)
       expect(totalTime).toBeLessThan(500); // 하지만 충분히 빨라야 함
 
-      console.log(`✅ 20 jobs with concurrency=5 completed in ${totalTime}ms`);
+      console.log(`20 jobs with concurrency=5 completed in ${totalTime}ms`);
     });
 
     it('should handle timeout and retry mechanisms', async () => {
@@ -221,7 +221,7 @@ describe('Non-blocking Architecture Verification', () => {
       expect(results[0].success).toBe(true);
       expect(attemptCount).toBe(3); // 첫 시도 + 2번 재시도
 
-      console.log(`✅ Retry mechanism worked: ${attemptCount} attempts`);
+      console.log(`Retry mechanism worked: ${attemptCount} attempts`);
     });
   });
 
@@ -244,7 +244,7 @@ describe('Non-blocking Architecture Verification', () => {
       // 타이머 정리
       batchService.clearAllTimeouts();
 
-      console.log('✅ Resources properly cleaned up');
+      console.log('Resources properly cleaned up');
     });
   });
 
@@ -265,7 +265,7 @@ describe('Non-blocking Architecture Verification', () => {
       const status = batchService.getBatchJobStatus();
       expect(status).toBeDefined(); // 서비스는 여전히 정상 작동
 
-      console.log('✅ Error isolation works correctly');
+      console.log('Error isolation works correctly');
     });
   });
 });

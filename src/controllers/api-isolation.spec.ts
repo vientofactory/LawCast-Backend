@@ -203,7 +203,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(avgResponseTime).toBeLessThan(5); // 평균 5ms 이내 응답
 
       console.log(
-        `✅ Health API: avg response time ${avgResponseTime.toFixed(2)}ms during batch processing`,
+        `Health API: avg response time ${avgResponseTime.toFixed(2)}ms during batch processing`,
       );
     });
 
@@ -239,7 +239,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(maxResponseTime).toBeLessThanOrEqual(15); // 최대 15ms 이내 (여유 허용)
 
       console.log(
-        `✅ Recent notices API: max response time ${maxResponseTime}ms (50 concurrent requests)`,
+        `Recent notices API: max response time ${maxResponseTime}ms (50 concurrent requests)`,
       );
     });
 
@@ -292,7 +292,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(avgResponseTime).toBeLessThan(20); // 평균 20ms 이내 (환경 편차 허용)
 
       console.log(
-        `✅ Batch status API: avg response time ${avgResponseTime.toFixed(2)}ms`,
+        `Batch status API: avg response time ${avgResponseTime.toFixed(2)}ms`,
       );
     });
 
@@ -338,7 +338,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(avgResponseTime).toBeLessThan(10); // 평균 10ms 이내
 
       console.log(
-        `✅ Stats API during heavy load: avg ${avgResponseTime.toFixed(2)}ms, max ${maxResponseTime}ms`,
+        `Stats API during heavy load: avg ${avgResponseTime.toFixed(2)}ms, max ${maxResponseTime}ms`,
       );
     });
   });
@@ -410,7 +410,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(avgResponseTime).toBeLessThan(15); // 평균 15ms 이내
 
       console.log(
-        `✅ Mixed load test: 50 requests in ${totalTime}ms (avg ${avgResponseTime.toFixed(2)}ms per request)`,
+        `Mixed load test: 50 requests in ${totalTime}ms (avg ${avgResponseTime.toFixed(2)}ms per request)`,
       );
     });
   });
@@ -444,7 +444,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       expect(memoryIncrease).toBeLessThan(10 * 1024 * 1024);
 
       console.log(
-        `✅ Memory usage: ${(memoryIncrease / 1024 / 1024).toFixed(2)}MB increase`,
+        `Memory usage: ${(memoryIncrease / 1024 / 1024).toFixed(2)}MB increase`,
       );
     });
   });

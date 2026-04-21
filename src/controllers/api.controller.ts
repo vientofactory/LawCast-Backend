@@ -7,8 +7,6 @@ import {
   Query,
   DefaultValuePipe,
   ParseIntPipe,
-  ValidationPipe,
-  UsePipes,
   HttpStatus,
   HttpCode,
   Req,
@@ -50,9 +48,6 @@ export class ApiController {
 
   @Post('webhooks')
   @HttpCode(HttpStatus.CREATED)
-  @UsePipes(
-    new ValidationPipe(WebhookValidationUtils.getValidationPipeOptions()),
-  )
   async createWebhook(
     @Body() createWebhookDto: CreateWebhookDto,
     @Req() req: Request,
