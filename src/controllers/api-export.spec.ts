@@ -2,7 +2,6 @@ import { Readable } from 'stream';
 import { StreamableFile } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import JSZip from 'jszip';
 import { ApiController } from './api.controller';
 import { WebhookService } from '../services/webhook.service';
 import { CrawlingService } from '../services/crawling.service';
@@ -11,6 +10,7 @@ import { HashguardService } from '../services/hashguard.service';
 import { BatchProcessingService } from '../services/batch-processing.service';
 import { NoticeArchiveService } from '../services/notice-archive.service';
 import { NoticesQueryService } from '../services/notices-query.service';
+import JSZip from 'jszip';
 
 describe('ApiController archive export', () => {
   let controller: ApiController;

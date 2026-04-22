@@ -15,10 +15,12 @@ import { HashguardService } from '../services/hashguard.service';
 import { WebhookCleanupService } from '../services/webhook-cleanup.service';
 import { NoticeArchiveService } from '../services/notice-archive.service';
 import { NoticesQueryService } from '../services/notices-query.service';
+import { NotificationBatchService } from '../services/notification-batch.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;
   let batchService: BatchProcessingService;
+  let notificationBatchService: NotificationBatchService;
   let module: TestingModule;
 
   beforeEach(async () => {
@@ -137,6 +139,15 @@ describe('HTTP-Batch Processing Isolation', () => {
       }),
     };
 
+    const mockNotificationBatchService = {
+      processNotificationBatch: jest.fn().mockResolvedValue('job-123'),
+      executeNotificationBatch: jest.fn().mockResolvedValue([
+        { success: true, data: 'result1' },
+        { success: true, data: 'result2' },
+        { success: true, data: 'result3' },
+      ]),
+    };
+
     module = await Test.createTestingModule({
       controllers: [ApiController],
       providers: [
@@ -149,11 +160,18 @@ describe('HTTP-Batch Processing Isolation', () => {
         { provide: WebhookCleanupService, useValue: mockWebhookCleanupService },
         { provide: NoticeArchiveService, useValue: mockNoticeArchiveService },
         { provide: NoticesQueryService, useValue: mockNoticesQueryService },
+        {
+          provide: NotificationBatchService,
+          useValue: mockNotificationBatchService,
+        },
       ],
     }).compile();
 
     controller = module.get<ApiController>(ApiController);
     batchService = module.get<BatchProcessingService>(BatchProcessingService);
+    notificationBatchService = module.get<NotificationBatchService>(
+      NotificationBatchService,
+    );
   });
 
   afterEach(async () => {
@@ -217,7 +235,9 @@ describe('HTTP-Batch Processing Isolation', () => {
         link: `http://test.com/${i}`,
       }));
 
-      await batchService.processNotificationBatch(mockNotices as any);
+      await notificationBatchService.processNotificationBatch(
+        mockNotices as any,
+      );
 
       // 2. 동시에 여러 클라이언트에서 최근 알림 조회
       const noticeRequests = Array.from({ length: 50 }, async () => {

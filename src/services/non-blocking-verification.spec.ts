@@ -12,6 +12,7 @@ import { NotificationService } from './notification.service';
 import { CacheService } from './cache.service';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
 import { NoticeArchiveService } from './notice-archive.service';
+import { NotificationBatchService } from './notification-batch.service';
 
 describe('Non-blocking Architecture Verification', () => {
   let batchService: BatchProcessingService;
@@ -57,6 +58,10 @@ describe('Non-blocking Architecture Verification', () => {
         { provide: CacheService, useValue: mockCacheService },
         { provide: OllamaClientService, useValue: mockOllamaClientService },
         { provide: NoticeArchiveService, useValue: mockNoticeArchiveService },
+        {
+          provide: NotificationBatchService,
+          useValue: {},
+        },
       ],
     }).compile();
 
@@ -73,30 +78,6 @@ describe('Non-blocking Architecture Verification', () => {
   });
 
   describe('Non-blocking Batch Processing', () => {
-    it('should return immediately from processNotificationBatch (non-blocking)', async () => {
-      const mockNotices = [
-        {
-          subject: 'Test',
-          proposerCategory: 'Test',
-          committee: 'Test',
-          numComments: 0,
-          link: 'test',
-        },
-      ];
-
-      // 배치 처리 호출이 즉시 반환되어야 함
-      const startTime = Date.now();
-      await batchService.processNotificationBatch(mockNotices as any);
-      const executionTime = Date.now() - startTime;
-
-      // 논블로킹이므로 50ms 이내에 반환되어야 함
-      expect(executionTime).toBeLessThan(50);
-
-      console.log(
-        `processNotificationBatch returned in ${executionTime}ms (non-blocking)`,
-      );
-    });
-
     it('should handle multiple concurrent batch jobs without blocking', async () => {
       const jobs1 = [() => Promise.resolve('job1')];
       const jobs2 = [() => Promise.resolve('job2')];

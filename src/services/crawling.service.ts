@@ -8,10 +8,7 @@ import {
 import { createHash } from 'crypto';
 import { PalCrawl, type ITableData, type PalCrawlConfig } from 'pal-crawl';
 import { CacheService } from './cache.service';
-import {
-  BatchProcessingOptions,
-  BatchProcessingService,
-} from './batch-processing.service';
+import { BatchProcessingOptions } from './batch-processing.service';
 import { APP_CONSTANTS } from '../config/app.config';
 import { LoggerUtils } from '../utils/logger.utils';
 import {
@@ -28,6 +25,7 @@ import {
   type ArchiveHttpMetadata,
   type ArchiveSummaryState,
 } from './notice-archive.service';
+import { NotificationBatchService } from './notification-batch.service';
 
 @Injectable()
 export class CrawlingService implements OnModuleInit {
@@ -44,7 +42,7 @@ export class CrawlingService implements OnModuleInit {
 
   constructor(
     private cacheService: CacheService,
-    private batchProcessingService: BatchProcessingService,
+    private notificationBatchService: NotificationBatchService,
     private ollamaClientService: OllamaClientService,
     private noticeArchiveService: NoticeArchiveService,
   ) {
@@ -388,10 +386,11 @@ export class CrawlingService implements OnModuleInit {
       }
 
       // 배치 처리 시작하고 jobId 받기
-      const jobId = await this.batchProcessingService.processNotificationBatch(
-        notices,
-        options,
-      );
+      const jobId =
+        await this.notificationBatchService.processNotificationBatch(
+          notices,
+          options,
+        );
 
       this.logger.log(
         `Started notification batch processing for ${notices.length} notices (job: ${jobId})`,
