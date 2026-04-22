@@ -1,9 +1,6 @@
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
-import { WebhookService } from './webhook.service';
-import { NotificationService } from './notification.service';
 import { LoggerUtils } from '../utils/logger.utils';
 import { APP_CONSTANTS } from '../config/app.config';
-import { type CachedNotice } from '../types/cache.types';
 
 const { BATCH } = APP_CONSTANTS;
 
@@ -36,19 +33,20 @@ export class BatchProcessingService implements OnApplicationShutdown {
   private isShuttingDown = false;
   private readonly shutdownTimeout = 25000;
 
-  constructor(
-    private webhookService: WebhookService,
-    private notificationService: NotificationService,
-  ) {}
+  constructor() {}
 
   /**
-   * 논블로킹 병렬 배치 작업 실행
+   * Process a batch of jobs with configurable concurrency, timeouts, and retry logic.
+   * Supports optional batch size for large job sets, and includes graceful shutdown handling.
+   * @param jobs - Array of functions that return a Promise for each job to execute
+   * @param options - Batch processing options such as concurrency, timeouts, retries, and batch size
+   * @returns An array of results for each job, including success status, data, errors, and execution duration
    */
   async executeBatch<T>(
     jobs: Array<(abortSignal: AbortSignal) => Promise<T>>,
     options: BatchProcessingOptions = {},
   ): Promise<BatchJobResult<T>[]> {
-    // 종료 중인 경우 새로운 작업 거부
+    // Reject new batch jobs if service is shutting down
     if (this.isShuttingDown) {
       this.logger.warn('Rejecting new batch job - service is shutting down');
       throw new Error('Service is shutting down, cannot process new jobs');
@@ -64,7 +62,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
 
     const results: BatchJobResult<T>[] = [];
 
-    // batchSize가 지정된 경우 전체 작업을 배치 크기로 나누어 순차적으로 처리
+    // If batchSize is specified, split the jobs into batches of the given size and process sequentially
     if (batchSize && jobs.length > batchSize) {
       const jobBatches = this.chunkArray(jobs, batchSize);
 
@@ -84,7 +82,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
         results.push(...batchResults);
       }
     } else {
-      // batchSize가 없거나 작업 수가 batchSize 이하인 경우 기존 로직 사용
+      // If batchSize is not specified or the number of jobs is less than or equal to batchSize, use the existing logic
       results.push(
         ...(await this.processBatch(
           jobs,
@@ -100,7 +98,14 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * 단일 배치를 concurrency로 나누어 병렬 처리
+   * Process a single batch by dividing it into chunks based on concurrency and executing them in parallel.
+   * Includes retry logic with delay and timeout handling for each job, and collects results with execution duration.
+   * @param jobs - Array of functions that return a Promise for each job to execute
+   * @param concurrency - Number of jobs to execute in parallel
+   * @param timeout - Maximum time in milliseconds to allow for each job before timing out
+   * @param retryCount - Number of times to retry a failed job before giving up
+   * @param retryDelay - Time in milliseconds to wait between retry attempts for a failed job
+   * @returns An array of results for each job, including success status, data, errors, and execution duration
    */
   private async processBatch<T>(
     jobs: Array<(abortSignal: AbortSignal) => Promise<T>>,
@@ -159,169 +164,15 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * 입법예고 알림 배치 처리
-   */
-  async processNotificationBatch(
-    notices: CachedNotice[],
-    options: BatchProcessingOptions = {},
-  ): Promise<string> {
-    // 종료 중인 경우 새로운 작업 거부
-    if (this.isShuttingDown) {
-      this.logger.warn(
-        'Rejecting new notification batch - service is shutting down',
-      );
-      throw new Error(
-        'Service is shutting down, cannot process new notifications',
-      );
-    }
-
-    const jobId = `notification_batch_${Date.now()}`;
-    LoggerUtils.logDev(
-      BatchProcessingService.name,
-      `Starting notification batch processing for ${notices.length} notices`,
-    );
-
-    // 논블로킹 실행
-    const batchPromise = this.executeNotificationBatch(notices, options);
-    this.jobQueue.set(jobId, batchPromise);
-
-    // 완료 후 정리
-    batchPromise
-      .then((results) => {
-        const successCount = results.filter((r) => r.success).length;
-        const failureCount = results.length - successCount;
-
-        this.logger.log(
-          `Notification batch completed: ${successCount} success, ${failureCount} failed`,
-        );
-      })
-      .catch((error) => {
-        this.logger.error('Batch processing error:', error);
-      })
-      .finally(() => {
-        this.jobQueue.delete(jobId);
-        LoggerUtils.logDev(
-          BatchProcessingService.name,
-          `Batch job ${jobId} cleaned up`,
-        );
-      });
-
-    LoggerUtils.logDev(
-      BatchProcessingService.name,
-      `Notification batch job ${jobId} started`,
-    );
-
-    return jobId;
-  }
-
-  /**
-   * 실제 알림 배치 실행
-   */
-  private async executeNotificationBatch(
-    notices: CachedNotice[],
-    options: BatchProcessingOptions,
-  ): Promise<BatchJobResult[]> {
-    const activeWebhooks = (await this.webhookService.findAll()) ?? [];
-
-    if (activeWebhooks.length === 0) {
-      LoggerUtils.logDev(
-        BatchProcessingService.name,
-        'No active webhooks available for notification batch',
-      );
-    }
-
-    // 각 입법예고별로 배치 작업 생성
-    const notificationJobs = notices.map(
-      (notice) => async (abortSignal: AbortSignal) => {
-        const currentWebhooks = activeWebhooks;
-
-        if (currentWebhooks.length === 0) {
-          LoggerUtils.logDev(
-            BatchProcessingService.name,
-            'No active webhooks available for notification',
-          );
-          return {
-            notice: notice.subject,
-            totalWebhooks: 0,
-            successCount: 0,
-            failedCount: 0,
-            deactivated: 0,
-            temporaryFailures: 0,
-          };
-        }
-
-        const results =
-          await this.notificationService.sendDiscordNotificationBatch(
-            notice,
-            currentWebhooks,
-            abortSignal,
-          );
-
-        // 영구적으로 삭제해야 할 웹훅들과 일시적으로 실패한 웹훅들 분리
-        const permanentFailures = results.filter(
-          (result) => !result.success && result.shouldDelete,
-        );
-        const temporaryFailures = results.filter(
-          (result) => !result.success && !result.shouldDelete,
-        );
-
-        // 영구적으로 실패한 웹훅들은 첫 번째 실패에서 즉시 비활성화
-        if (permanentFailures.length > 0) {
-          const permanentFailureIds = permanentFailures.map(
-            (result) => result.webhookId,
-          );
-
-          // 각 웹훅을 개별적으로 즉시 비활성화 (재시도 없음)
-          for (const webhookId of permanentFailureIds) {
-            try {
-              await this.webhookService.remove(webhookId);
-              // NotificationService에서 실패 플래그 제거
-              this.notificationService.clearPermanentFailureFlag(webhookId);
-
-              LoggerUtils.debugDev(
-                BatchProcessingService.name,
-                `Webhook ${webhookId} immediately deactivated after first failure for notice: ${notice.subject}`,
-              );
-            } catch (error) {
-              this.logger.error(
-                `Failed to deactivate webhook ${webhookId}:`,
-                error,
-              );
-            }
-          }
-
-          LoggerUtils.debugDev(
-            BatchProcessingService.name,
-            `Immediately deactivated ${permanentFailures.length} webhooks that failed on first attempt`,
-          );
-        }
-
-        // 일시적 실패는 로그 최소화
-        if (temporaryFailures.length > 0) {
-          LoggerUtils.logDev(
-            BatchProcessingService.name,
-            `${temporaryFailures.length} webhooks failed temporarily for notice: ${notice.subject}`,
-          );
-        }
-
-        const successCount = results.filter((r) => r.success).length;
-
-        return {
-          notice: notice.subject,
-          totalWebhooks: currentWebhooks.length,
-          successCount,
-          failedCount: permanentFailures.length + temporaryFailures.length,
-          deactivated: permanentFailures.length,
-          temporaryFailures: temporaryFailures.length,
-        };
-      },
-    );
-
-    return this.executeBatch(notificationJobs, options);
-  }
-
-  /**
-   * 재시도 로직이 포함된 작업 실행
+   * Execute a job with retry logic, including delay between retries and timeout handling.
+   * Each attempt is given a unique job ID for logging purposes.
+   * @param job - Function that returns a Promise for the job to execute
+   * @param retryCount - Number of times to retry a failed job before giving up
+   * @param retryDelay - Time in milliseconds to wait between retry attempts for a failed job
+   * @param timeout - Maximum time in milliseconds to allow for each job before timing out
+   * @param jobId - Unique identifier for the job, used for logging
+   * @returns The result of the job if successful
+   * @throws The last error encountered if all retry attempts fail
    */
   private async executeJobWithRetry<T>(
     job: (abortSignal: AbortSignal) => Promise<T>,
@@ -358,7 +209,13 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * 타임아웃과 취소를 포함한 단일 작업 실행
+   * Run a job with a timeout, using an AbortController to signal cancellation if the timeout is reached.
+   * The timeout is tracked in the activeTimeouts set for proper cleanup during shutdown.
+   * @param run - Function that returns a Promise for the job to execute
+   * @param timeout - Maximum time in milliseconds to allow for the job before timing out
+   * @param abortController - AbortController used to signal cancellation if the timeout is reached
+   * @returns The result of the job if successful
+   * @throws An error if the operation times out or if the job execution fails
    */
   private runJobWithTimeout<T>(
     run: () => Promise<T>,
@@ -388,7 +245,10 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * 배열을 청크 단위로 분할
+   * Split an array into chunks of a specified size
+   * @param array - The array to split
+   * @param chunkSize - The size of each chunk
+   * @returns An array of chunks
    */
   private chunkArray<T>(array: T[], chunkSize: number): T[][] {
     const chunks: T[][] = [];
@@ -399,7 +259,9 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * 지연 함수
+   * Delay execution for a specified number of milliseconds, tracking the timeout for proper cleanup during shutdown
+   * @param ms - Time in milliseconds to delay
+   * @returns A Promise that resolves after the specified delay
    */
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => {
@@ -412,7 +274,8 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * 현재 실행 중인 배치 작업 상태 반환
+   * Get the current status of batch jobs, including the count of active jobs and their IDs.
+   * @returns An object containing the count of active jobs and their IDs
    */
   getBatchJobStatus(): { jobCount: number; jobIds: string[] } {
     return {
@@ -422,7 +285,9 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * 특정 배치 작업 대기
+   * Wait for a specific batch job to complete
+   * @param jobId - The ID of the batch job to wait for
+   * @returns A Promise that resolves when the specified batch job completes
    */
   async waitForBatchJob(jobId: string): Promise<void> {
     const job = this.jobQueue.get(jobId);
@@ -432,7 +297,8 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * 모든 배치 작업 완료 대기
+   * Wait for all batch jobs to complete
+   * @returns A Promise that resolves when all batch jobs have completed
    */
   async waitForAllBatchJobs(): Promise<void> {
     const jobs = Array.from(this.jobQueue.values());
@@ -440,7 +306,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * 모든 활성 타이머 정리 (테스트용)
+   * Clear all active timeouts (for testing purposes)
    */
   clearAllTimeouts(): void {
     this.activeTimeouts.forEach((timeoutId) => {
@@ -458,7 +324,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * Graceful shutdown 시작
+   * Graceful shutdown
    */
   async gracefulShutdown(): Promise<void> {
     this.logger.log('Starting batch processing service graceful shutdown...');
@@ -483,7 +349,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
     );
 
     try {
-      // 타임아웃과 함께 모든 배치 작업 완료 대기
+      // Wait for all batch jobs to complete with a timeout
       await Promise.race([
         this.waitForAllBatchJobs(),
         this.createShutdownTimeoutPromise(),
@@ -495,21 +361,21 @@ export class BatchProcessingService implements OnApplicationShutdown {
       this.logger.error('Error during batch jobs completion:', error);
       throw error;
     } finally {
-      // 모든 활성 타이머 정리
+      // Clear all active timeouts
       this.clearAllTimeouts();
       this.logger.log('Batch processing service shutdown completed');
     }
   }
 
   /**
-   * Shutdown 상태 확인
+   * Check if the service is shutting down
    */
   isServiceShuttingDown(): boolean {
     return this.isShuttingDown;
   }
 
   /**
-   * 강제 종료 (긴급 상황용)
+   * Force shutdown
    */
   forceShutdown(): void {
     this.logger.warn('Force shutdown initiated - canceling all active jobs');
@@ -519,7 +385,8 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * Shutdown 타임아웃 Promise 생성
+   * Create a shutdown timeout Promise
+   * @returns A Promise that rejects after the shutdown timeout duration
    */
   private createShutdownTimeoutPromise(): Promise<never> {
     return new Promise<never>((_, reject) => {
@@ -536,7 +403,8 @@ export class BatchProcessingService implements OnApplicationShutdown {
   }
 
   /**
-   * 상세한 배치 작업 상태 반환 (모니터링용)
+   * Get detailed batch job status
+   * @returns An object containing detailed batch job status
    */
   getDetailedBatchJobStatus(): {
     jobCount: number;

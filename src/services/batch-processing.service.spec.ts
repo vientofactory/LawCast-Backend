@@ -111,35 +111,6 @@ describe('BatchProcessingService', () => {
     }, 10000);
   });
 
-  describe('processNotificationBatch', () => {
-    it('should process notification batch in background', async () => {
-      const mockNotices = [
-        {
-          subject: 'Notice 1',
-          proposerCategory: 'Test',
-          committee: 'Test',
-          numComments: 0,
-          link: 'http://test.com',
-        },
-      ];
-
-      // Test that the method returns immediately (non-blocking)
-      const startTime = Date.now();
-      await service.processNotificationBatch(mockNotices as any);
-      const endTime = Date.now();
-
-      // Should return very quickly (less than 100ms) since it's non-blocking
-      expect(endTime - startTime).toBeLessThan(100);
-
-      // Check that a batch job was queued
-      const status = service.getBatchJobStatus();
-      expect(status.jobCount).toBeGreaterThanOrEqual(0);
-
-      // Wait for the batch job to complete to avoid hanging processes
-      await service.waitForAllBatchJobs();
-    });
-  });
-
   describe('getBatchJobStatus', () => {
     it('should return current batch job status', () => {
       const status = service.getBatchJobStatus();
@@ -167,29 +138,6 @@ describe('BatchProcessingService', () => {
 
       await expect(service.executeBatch(mockJobs)).rejects.toThrow(
         'Service is shutting down, cannot process new jobs',
-      );
-
-      await shutdownPromise;
-    });
-
-    it('should reject new notification batches when shutting down', async () => {
-      // Start shutdown process
-      const shutdownPromise = service.gracefulShutdown();
-
-      const mockNotices = [
-        {
-          subject: 'Test Notice',
-          proposerCategory: 'Test',
-          committee: 'Test',
-          numComments: 0,
-          link: 'http://test.com',
-        },
-      ];
-
-      await expect(
-        service.processNotificationBatch(mockNotices as any),
-      ).rejects.toThrow(
-        'Service is shutting down, cannot process new notifications',
       );
 
       await shutdownPromise;

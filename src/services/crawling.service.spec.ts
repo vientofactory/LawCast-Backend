@@ -6,6 +6,7 @@ import { BatchProcessingService } from './batch-processing.service';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
 import { NoticeArchiveService } from './notice-archive.service';
 import { PalCrawl, type ITableData } from 'pal-crawl';
+import { NotificationBatchService } from './notification-batch.service';
 
 // pal-crawl 모듈을 모킹
 jest.mock('pal-crawl');
@@ -57,6 +58,13 @@ describe('CrawlingService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CrawlingService,
+        {
+          provide: NotificationBatchService,
+          useValue: {
+            processNotificationBatch: jest.fn(),
+            executeNotificationBatch: jest.fn(),
+          },
+        },
         {
           provide: CacheService,
           useValue: {

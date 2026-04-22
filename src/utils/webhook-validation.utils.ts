@@ -71,16 +71,11 @@ export class WebhookValidationUtils {
     const webhookId = pathParts[3];
     const webhookToken = pathParts[4];
 
-    // 웹훅 ID 형식 검증 (Discord Snowflake ID)
-    if (!this.isValidSnowflakeId(webhookId)) {
-      throw new BadRequestException({
-        success: false,
-        message: '올바르지 않은 웹훅 ID 형식입니다.',
-      });
-    }
-
-    // 웹훅 토큰 형식 검증
-    if (!this.isValidWebhookToken(webhookToken)) {
+    // 웹훅 형식 검증
+    if (
+      !this.isValidSnowflakeId(webhookId) ||
+      !this.isValidWebhookToken(webhookToken)
+    ) {
       throw new BadRequestException({
         success: false,
         message: '올바르지 않은 웹훅 토큰 형식입니다.',
@@ -127,12 +122,17 @@ export class WebhookValidationUtils {
       forbidNonWhitelisted: true,
       transform: true,
       exceptionFactory: (errors: any[]) => {
-        const messages = errors.map((error) =>
-          Object.values(error.constraints || {}).join(', '),
-        );
+        const messages: string[] = errors
+          .map((error) => Object.values(error.constraints || {}).join(', '))
+          .flatMap((msg) =>
+            msg
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean),
+          );
         return new BadRequestException({
           success: false,
-          message: '입력 데이터가 올바르지 않습니다.',
+          message: 'Validation failed',
           errors: messages,
         });
       },

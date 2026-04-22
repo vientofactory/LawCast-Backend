@@ -1,11 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HashGuardClient } from 'hashguard-client';
 import { LoggerUtils } from '../utils/logger.utils';
 
 @Injectable()
 export class HashguardService {
-  private readonly logger = new Logger(HashguardService.name);
   private client: HashGuardClient;
 
   constructor(private readonly configService: ConfigService) {
@@ -31,8 +30,7 @@ export class HashguardService {
       );
 
       return result.valid;
-    } catch (error) {
-      this.logger.error('PoW verification failed:', error);
+    } catch {
       return false;
     }
   }

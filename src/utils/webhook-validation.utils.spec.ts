@@ -160,8 +160,8 @@ describe('WebhookValidationUtils', () => {
       expect(exception).toBeInstanceOf(BadRequestException);
       expect(exception.getResponse()).toMatchObject({
         success: false,
-        message: '입력 데이터가 올바르지 않습니다.',
-        errors: ['must be a string, should not be empty'],
+        message: 'Validation failed',
+        errors: ['must be a string', 'should not be empty'],
       });
     });
   });
