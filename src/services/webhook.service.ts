@@ -10,10 +10,14 @@ export class WebhookService {
     private webhookRepository: Repository<Webhook>,
   ) {}
 
+  /**
+   * Create a new webhook or reactivate an existing one if it was soft-deleted
+   * @param url - The URL of the webhook to create or reactivate
+   * @returns The created or reactivated Webhook entity
+   */
   async create(url: string): Promise<Webhook> {
     const normalizedUrl = this.normalizeWebhookUrl(url);
 
-    // 중복 확인 및 soft delete된 웹훅 복원
     const existingWebhook = await this.webhookRepository.findOne({
       where: { url: normalizedUrl },
     });
@@ -27,7 +31,6 @@ export class WebhookService {
       return existingWebhook;
     }
 
-    // 새로운 웹훅 생성
     const webhook = this.webhookRepository.create({
       url: normalizedUrl,
     });
@@ -35,25 +38,30 @@ export class WebhookService {
     return this.webhookRepository.save(webhook);
   }
 
+  /**
+   * Normalize webhook URLs to ensure consistent storage and comparison, removing query parameters and trailing slashes
+   * @param url - The URL to normalize
+   * @returns The normalized URL string
+   */
   private normalizeWebhookUrl(url: string): string {
-    // URL 끝의 슬래시 제거 및 쿼리 파라미터 정리
     try {
       const parsed = new URL(url);
-      // 쿼리 파라미터 제거 (웹훅 URL에는 불필요)
       parsed.search = '';
       parsed.hash = '';
 
       let normalizedPath = parsed.pathname;
-      // 끝의 슬래시 제거
       if (normalizedPath.endsWith('/') && normalizedPath.length > 1) {
         normalizedPath = normalizedPath.slice(0, -1);
       }
 
       return `${parsed.protocol}//${parsed.host}${normalizedPath}`;
     } catch {
-      return url; // 파싱 실패 시 원본 반환
+      // Fallback to original URL if parsing fails
+      return url;
     }
   }
+
+  // Utility methods for managing webhooks
 
   async findAll(): Promise<Webhook[]> {
     return this.webhookRepository.find({
@@ -83,14 +91,15 @@ export class WebhookService {
   }
 
   /**
-   * 실패한 웹훅들을 배치로 효율적 삭제
+   * Remove failed webhooks in batches for efficient cleanup
+   * @param webhookIds - Array of webhook IDs to remove
+   * @returns The number of webhooks removed
    */
   async removeFailedWebhooks(webhookIds: number[]): Promise<number> {
     if (webhookIds.length === 0) {
       return 0;
     }
 
-    // 배치 크기 제한으로 대용량 삭제 시 성능 보장
     const batchSize = 500;
     let totalDeleted = 0;
 
@@ -104,7 +113,9 @@ export class WebhookService {
   }
 
   /**
-   * 대량 웹훅 생성 (중복 제거 및 최적화)
+   * Create or reactivate multiple webhooks in bulk, ensuring efficient handling of duplicates and reactivations
+   * @param urls - Array of webhook URLs to create or reactivate
+   * @returns An object containing counts of created, reactivated, and duplicate webhooks
    */
   async createBulk(
     urls: string[],
@@ -137,7 +148,8 @@ export class WebhookService {
   }
 
   /**
-   * 비활성 웹훅들을 완전히 정리 (DB 최적화용)
+   * Clean up all inactive webhooks immediately, typically used in emergency situations to restore system efficiency
+   * @returns The number of webhooks removed
    */
   async cleanupInactiveWebhooks(): Promise<number> {
     const result = await this.webhookRepository.delete({ isActive: false });
@@ -145,19 +157,19 @@ export class WebhookService {
   }
 
   /**
-   * 오래된 비활성 웹훅들을 배치로 효율적 정리
+   * Clean up old inactive webhooks in batches for efficient maintenance
+   * @param daysBefore - Number of days before which inactive webhooks are considered old
+   * @returns The number of webhooks removed
    */
   async cleanupOldInactiveWebhooks(daysBefore: number = 30): Promise<number> {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysBefore);
 
-    // 배치 처리를 위해 ID 기반으로 처리
     const batchSize = 1000;
     let totalDeleted = 0;
     let hasMore = true;
 
     while (hasMore) {
-      // 삭제할 ID들을 먼저 조회
       const webhooksToDelete = await this.webhookRepository
         .createQueryBuilder('webhook')
         .select('webhook.id')
@@ -170,7 +182,6 @@ export class WebhookService {
         break;
       }
 
-      // 조회된 ID들로 삭제 실행
       const ids = webhooksToDelete.map((w) => w.id);
       const result = await this.webhookRepository.delete({ id: In(ids) });
 
@@ -183,7 +194,8 @@ export class WebhookService {
   }
 
   /**
-   * 최적화된 통계 조회 (단일 쿼리로 모든 정보 수집)
+   * Get detailed statistics about webhooks for intelligent cleanup decisions
+   * @returns An object containing total, active, inactive, oldInactive, recentInactive counts and efficiency percentage
    */
   async getDetailedStats(): Promise<{
     total: number;
@@ -199,7 +211,7 @@ export class WebhookService {
     const recentCutoffDate = new Date();
     recentCutoffDate.setDate(recentCutoffDate.getDate() - 7);
 
-    // 단일 쿼리로 모든 통계 수집 (성능 최적화)
+    // Collect all statistics in a single query for performance optimization
     const result = await this.webhookRepository
       .createQueryBuilder('webhook')
       .select([

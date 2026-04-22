@@ -27,9 +27,6 @@ export class NotificationBatchService {
    * @param executeBatch - Function to execute the batch of jobs, allowing for flexible batch processing strategies
    * @returns An array of results for each notice, including counts of successes, failures, deactivations, and temporary failures
    */
-  /**
-   * 입법예고 알림 배치 처리 (외부에서 직접 호출)
-   */
   async processNotificationBatch(
     notices: CachedNotice[],
     options: BatchProcessingOptions = {},
@@ -41,7 +38,6 @@ export class NotificationBatchService {
     );
 
     const batchPromise = this.executeNotificationBatch(notices, options);
-    // 필요하다면 jobQueue 등 관리 로직 추가 가능
 
     batchPromise
       .then((results) => {
@@ -64,7 +60,10 @@ export class NotificationBatchService {
   }
 
   /**
-   * 실제 알림 배치 실행
+   * Execute the notification batch by sending notifications for each notice to all active webhooks, handling immediate deactivation of permanently failing webhooks and logging temporary failures with minimal verbosity.
+   * @param notices - Array of notices to process
+   * @param options - Batch processing options such as concurrency and retry settings
+   * @returns An array of results for each notice, including counts of successes, failures, deactivations, and temporary failures
    */
   async executeNotificationBatch(
     notices: CachedNotice[],
