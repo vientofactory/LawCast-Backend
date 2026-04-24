@@ -53,7 +53,7 @@ export class NoticesQueryService {
       searchedCached.map((notice) => [notice.num, notice]),
     );
 
-    const cacheCandidates = hasDateFilter ? [] : searchedCached;
+    const cacheCandidates: CachedNotice[] = hasDateFilter ? [] : searchedCached;
 
     const existingArchivedNums =
       await this.noticeArchiveService.getExistingNoticeNumSet(
