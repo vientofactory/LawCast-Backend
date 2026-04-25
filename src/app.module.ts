@@ -13,6 +13,7 @@ import { HashguardService } from './services/hashguard.service';
 import { BatchProcessingService } from './services/batch-processing.service';
 import { CronJobsService } from './cronjobs/cronjobs.service';
 import { WebhookCleanupService } from './services/webhook-cleanup.service';
+import { RuntimeStatsService } from './services/runtime-stats.service';
 import { NoticesQueryService } from './services/notices-query.service';
 import { Webhook } from './entities/webhook.entity';
 import { NoticeArchive } from './entities/notice-archive.entity';
@@ -82,6 +83,7 @@ import appConfig from './config/app.config';
     NoticesQueryService,
     WebhookCleanupService,
     CronJobsService,
+    RuntimeStatsService,
   ],
 })
 export class AppModule {}

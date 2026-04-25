@@ -32,6 +32,7 @@ import {
 } from '../utils/api-controller.utils';
 import { APP_CONSTANTS } from '../config/app.config';
 import JSZip from 'jszip';
+import { RuntimeStatsService } from '../services/runtime-stats.service';
 
 @Controller('api')
 export class ApiController {
@@ -44,6 +45,7 @@ export class ApiController {
     private readonly batchProcessingService: BatchProcessingService,
     private readonly noticeArchiveService: NoticeArchiveService,
     private readonly noticesQueryService: NoticesQueryService,
+    private readonly runtimeStatsService: RuntimeStatsService,
   ) {}
 
   @Post('webhooks')
@@ -227,6 +229,7 @@ export class ApiController {
         this.noticeArchiveService.getArchiveCount(),
         this.crawlingService.getOllamaMetrics(),
       ]);
+    const nodeRuntime = this.runtimeStatsService.getNodeRuntimeStats();
 
     const isProduction = isProductionNodeEnv(
       this.configService.get<string>('nodeEnv'),
@@ -284,6 +287,7 @@ export class ApiController {
       batchProcessing: safeBatchStatus,
       ollama: safeOllamaMetrics,
       aiSummaryEnabled: this.crawlingService.isAiSummaryEnabled(),
+      nodeRuntime,
     });
   }
 
