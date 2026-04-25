@@ -1,5 +1,9 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { WebhookService } from './webhook.service';
+import { CrawlingService } from './crawling.service';
+import { BatchProcessingService } from './batch-processing.service';
+import { NoticeArchiveService } from './notice-archive.service';
 
 @Injectable()
 export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
@@ -37,6 +41,71 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
       };
       h.reset();
     }, this.measurementInterval);
+  }
+
+  async getAggregatedStats(
+    params: { nodeEnv?: string },
+    webhookService: WebhookService,
+    crawlingService: CrawlingService,
+    batchProcessingService: BatchProcessingService,
+    noticeArchiveService: NoticeArchiveService,
+  ) {
+    const nodeEnv = params.nodeEnv;
+    if (
+      !webhookService ||
+      !crawlingService ||
+      !batchProcessingService ||
+      !noticeArchiveService
+    ) {
+      throw new Error('All service dependencies must be provided');
+    }
+    const [webhookStats, cacheInfo, batchStatus, archiveCount, ollamaMetrics] =
+      await Promise.all([
+        webhookService.getDetailedStatsForApi({ nodeEnv }),
+        crawlingService.getCacheInfo(),
+        batchProcessingService.getBatchStatusForApi({ nodeEnv }),
+        noticeArchiveService.getArchiveCount(),
+        crawlingService.getOllamaMetrics(),
+      ]);
+    const nodeRuntime = this.getNodeRuntimeStats();
+    const isProduction = nodeEnv === 'production';
+    return {
+      webhooks: webhookStats,
+      cache: isProduction
+        ? {
+            size: cacheInfo.size,
+            lastUpdated: cacheInfo.lastUpdated,
+            maxSize: cacheInfo.maxSize,
+            isInitialized: cacheInfo.isInitialized,
+          }
+        : cacheInfo,
+      archive: {
+        count: archiveCount,
+      },
+      batchProcessing: batchStatus,
+      ollama: isProduction
+        ? {
+            enabled: ollamaMetrics.enabled,
+            configured: ollamaMetrics.configured,
+            model: ollamaMetrics.model,
+            summary: {
+              total: ollamaMetrics.summary.total,
+              success: ollamaMetrics.summary.success,
+              failed: ollamaMetrics.summary.failed,
+              skipped: ollamaMetrics.summary.skipped,
+              successRate: ollamaMetrics.summary.successRate,
+            },
+            health: {
+              status: ollamaMetrics.health.status,
+              lastCheckedAt: ollamaMetrics.health.lastCheckedAt,
+              lastLatencyMs: ollamaMetrics.health.lastLatencyMs,
+              availableModelCount: ollamaMetrics.health.availableModelCount,
+            },
+          }
+        : ollamaMetrics,
+      aiSummaryEnabled: crawlingService.isAiSummaryEnabled(),
+      nodeRuntime,
+    };
   }
 
   getNodeRuntimeStats() {

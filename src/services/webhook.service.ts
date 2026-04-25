@@ -238,4 +238,36 @@ export class WebhookService {
 
     return stats;
   }
+
+  async getDetailedStatsForApi(params: { nodeEnv?: string }) {
+    const stats = await this.getDetailedStats();
+    const isProduction = params.nodeEnv === 'production';
+    if (isProduction) {
+      return {
+        total: stats.total,
+        active: stats.active,
+        efficiency: stats.efficiency,
+      };
+    }
+    return stats;
+  }
+
+  async getSystemHealthForApi(params: { nodeEnv?: string }) {
+    const stats = await this.getDetailedStats();
+    const efficiency =
+      stats.total > 0 ? (stats.active / stats.total) * 100 : 100;
+    const isProduction = params.nodeEnv === 'production';
+    const safeStats = isProduction
+      ? {
+          total: stats.total,
+          active: stats.active,
+          efficiency: stats.efficiency,
+        }
+      : stats;
+    return {
+      efficiency: Number(efficiency.toFixed(1)),
+      stats: safeStats,
+      status: efficiency >= 70 ? 'healthy' : 'needs_optimization',
+    };
+  }
 }

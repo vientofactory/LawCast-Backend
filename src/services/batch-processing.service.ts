@@ -1,7 +1,6 @@
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { LoggerUtils } from '../utils/logger.utils';
 import { APP_CONSTANTS } from '../config/app.config';
-
 const { BATCH } = APP_CONSTANTS;
 
 export interface BatchJobResult<T = any> {
@@ -130,14 +129,12 @@ export class BatchProcessingService implements OnApplicationShutdown {
             timeout,
             jobId,
           );
-
           return {
             success: true,
             data: result,
             duration: Date.now() - startTime,
           };
         } catch (error) {
-          this.logger.error(`Job ${jobId} failed:`, error);
           return {
             success: false,
             error: error as Error,
@@ -418,5 +415,17 @@ export class BatchProcessingService implements OnApplicationShutdown {
       isShuttingDown: this.isShuttingDown,
       activeTimeouts: this.activeTimeouts.size,
     };
+  }
+
+  getBatchStatusForApi({ nodeEnv }: { nodeEnv?: string }) {
+    const isProduction = nodeEnv === 'production';
+    if (isProduction) {
+      const status = this.getBatchJobStatus();
+      return {
+        jobCount: status.jobCount,
+        jobIds: [],
+      };
+    }
+    return this.getDetailedBatchJobStatus();
   }
 }
