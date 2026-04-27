@@ -22,6 +22,12 @@ import { NoticeArchiveService } from './services/notice-archive.service';
 import { NotificationBatchService } from './services/notification-batch.service';
 import { InitialSchemaMigration1744953900000 } from './migrations/202604170001-initial-schema.migration';
 import { AddContentMetadataColumns1745001601000 } from './migrations/202604180001-add-content-metadata-columns.migration';
+import { CrawlingCoreService } from './services/crawling-core.service';
+import { SummaryGenerationService } from './services/summary-generation.service';
+import { ArchiveOrchestratorService } from './services/archive-orchestrator.service';
+import { NotificationOrchestratorService } from './services/notification-orchestrator.service';
+import { CrawlingSchedulerService } from './services/crawling-scheduler.service';
+import { HealthCheckService } from './services/health-check.service';
 import appConfig from './config/app.config';
 
 @Module({
@@ -84,6 +90,12 @@ import appConfig from './config/app.config';
     WebhookCleanupService,
     CronJobsService,
     RuntimeStatsService,
+    CrawlingCoreService,
+    SummaryGenerationService,
+    ArchiveOrchestratorService,
+    NotificationOrchestratorService,
+    CrawlingSchedulerService,
+    HealthCheckService,
   ],
 })
 export class AppModule {}

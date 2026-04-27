@@ -16,6 +16,8 @@ import { WebhookCleanupService } from '../services/webhook-cleanup.service';
 import { NoticeArchiveService } from '../services/notice-archive.service';
 import { NoticesQueryService } from '../services/notices-query.service';
 import { NotificationBatchService } from '../services/notification-batch.service';
+import { HealthCheckService } from '../services/health-check.service';
+import { RuntimeStatsService } from '../services/runtime-stats.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;
@@ -58,6 +60,13 @@ describe('HTTP-Batch Processing Isolation', () => {
         maxSize: 50,
         isInitialized: true,
       }),
+      getApiHealthPayload: jest.fn().mockResolvedValue({
+        status: 'healthy',
+        services: {
+          redis: { status: 'connected' },
+          ollama: { status: 'ready', model: 'gemma3:1b' },
+        },
+      }),
       isRedisConnected: jest.fn().mockReturnValue(true),
       isAiSummaryEnabled: jest.fn().mockReturnValue(true),
       getOllamaMetrics: jest.fn().mockResolvedValue({
@@ -85,6 +94,10 @@ describe('HTTP-Batch Processing Isolation', () => {
       }),
     };
 
+    const mockHealthCheckService = {
+      getApiHealthPayload: jest.fn().mockResolvedValue({ status: 'healthy' }),
+    };
+
     const mockHashguardService = {
       verifyProof: jest.fn().mockResolvedValue(true),
     };
@@ -110,6 +123,54 @@ describe('HTTP-Batch Processing Isolation', () => {
       }),
       getArchivedNoticeDetail: jest.fn().mockResolvedValue(null),
       getArchiveCount: jest.fn().mockResolvedValue(0),
+    };
+
+    const mockRuntimeStatsService = {
+      getRuntimeStats: jest.fn().mockResolvedValue({
+        uptime: 3600,
+        memoryUsage: { rss: 1000000, heapTotal: 500000, heapUsed: 300000 },
+        activeConnections: 5,
+        requestCount: 100,
+      }),
+      getAggregatedStats: jest.fn().mockResolvedValue({
+        webhooks: {
+          total: 100,
+          active: 75,
+          inactive: 25,
+          oldInactive: 5,
+          recentInactive: 20,
+          efficiency: 75,
+        },
+        cache: {
+          size: 10,
+          lastUpdated: new Date(),
+          maxSize: 50,
+          isInitialized: true,
+        },
+        archive: {
+          count: 100,
+        },
+        batchProcessing: {
+          jobCount: 0,
+          jobIds: [],
+        },
+        ollama: {
+          enabled: true,
+          configured: true,
+          model: 'gemma3:1b',
+          summary: {
+            total: 10,
+            success: 8,
+            failed: 1,
+            skipped: 1,
+            successRate: 80,
+          },
+          health: {
+            status: 'ready',
+            lastCheckedAt: new Date().toISOString(),
+          },
+        },
+      }),
     };
 
     const mockNoticesQueryService = {
@@ -154,16 +215,19 @@ describe('HTTP-Batch Processing Isolation', () => {
         BatchProcessingService,
         { provide: ConfigService, useValue: mockConfigService },
         { provide: WebhookService, useValue: mockWebhookService },
-        { provide: NotificationService, useValue: mockNotificationService },
         { provide: CrawlingService, useValue: mockCrawlingService },
+        { provide: NotificationService, useValue: mockNotificationService },
+        { provide: HealthCheckService, useValue: mockHealthCheckService },
         { provide: HashguardService, useValue: mockHashguardService },
         { provide: WebhookCleanupService, useValue: mockWebhookCleanupService },
         { provide: NoticeArchiveService, useValue: mockNoticeArchiveService },
+        { provide: NoticesQueryService, useValue: mockNoticesQueryService },
         { provide: NoticesQueryService, useValue: mockNoticesQueryService },
         {
           provide: NotificationBatchService,
           useValue: mockNotificationBatchService,
         },
+        { provide: RuntimeStatsService, useValue: mockRuntimeStatsService },
       ],
     }).compile();
 

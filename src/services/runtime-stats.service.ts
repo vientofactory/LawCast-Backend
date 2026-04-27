@@ -103,7 +103,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
             },
           }
         : ollamaMetrics,
-      aiSummaryEnabled: crawlingService.isAiSummaryEnabled(),
+      aiSummaryEnabled: (await crawlingService.getOllamaMetrics()).enabled,
       nodeRuntime,
     };
   }

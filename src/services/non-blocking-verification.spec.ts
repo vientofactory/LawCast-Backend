@@ -1,9 +1,3 @@
-/**
- * 논블로킹 배치 처리 구조 검증 테스트
- *
- * 이 테스트는 배치 처리가 실제로 HTTP 요청 처리를 방해하지 않는지 검증합니다.
- */
-
 import { BatchProcessingService } from './batch-processing.service';
 import { CrawlingService } from './crawling.service';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -13,7 +7,15 @@ import { CacheService } from './cache.service';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
 import { NoticeArchiveService } from './notice-archive.service';
 import { NotificationBatchService } from './notification-batch.service';
+import { CrawlingSchedulerService } from './crawling-scheduler.service';
+import { HealthCheckService } from './health-check.service';
+import { ArchiveOrchestratorService } from './archive-orchestrator.service';
+import { CrawlingCoreService } from './crawling-core.service';
 
+/**
+ * 논블로킹 배치 처리 구조 검증 테스트
+ * 이 테스트는 배치 처리가 실제로 HTTP 요청 처리를 방해하지 않는지 검증합니다.
+ */
 describe('Non-blocking Architecture Verification', () => {
   let batchService: BatchProcessingService;
   let crawlingService: CrawlingService;
@@ -49,6 +51,32 @@ describe('Non-blocking Architecture Verification', () => {
       getSummaryStateByNoticeNums: jest.fn().mockResolvedValue(new Map()),
     };
 
+    const mockNotificationBatchService = {
+      processNotificationBatch: jest.fn().mockResolvedValue('job-123'),
+    };
+
+    const mockCrawlingSchedulerService = {
+      handleCron: jest.fn(),
+    };
+
+    const mockHealthCheckService = {
+      getApiHealthPayload: jest.fn().mockResolvedValue({ status: 'healthy' }),
+      getRedisStatusForApi: jest
+        .fn()
+        .mockResolvedValue({ data: {}, message: 'OK' }),
+      getOllamaMetrics: jest.fn().mockResolvedValue({ enabled: true }),
+    };
+
+    const mockArchiveOrchestratorService = {
+      filterAlreadyArchivedNotices: jest.fn().mockResolvedValue([]),
+      archiveNotices: jest.fn(),
+    };
+
+    const mockCrawlingCoreService = {
+      getContent: jest.fn().mockResolvedValue({}),
+      crawlData: jest.fn().mockResolvedValue([]),
+    };
+
     module = await Test.createTestingModule({
       providers: [
         BatchProcessingService,
@@ -60,7 +88,20 @@ describe('Non-blocking Architecture Verification', () => {
         { provide: NoticeArchiveService, useValue: mockNoticeArchiveService },
         {
           provide: NotificationBatchService,
-          useValue: {},
+          useValue: mockNotificationBatchService,
+        },
+        {
+          provide: CrawlingSchedulerService,
+          useValue: mockCrawlingSchedulerService,
+        },
+        { provide: HealthCheckService, useValue: mockHealthCheckService },
+        {
+          provide: ArchiveOrchestratorService,
+          useValue: mockArchiveOrchestratorService,
+        },
+        {
+          provide: CrawlingCoreService,
+          useValue: mockCrawlingCoreService,
         },
       ],
     }).compile();
@@ -118,7 +159,6 @@ describe('Non-blocking Architecture Verification', () => {
       expect(crawlingService).toBeDefined();
       expect(batchService).toBeDefined();
 
-      // getRecentNotices는 async 메서드지만 HTTP 컨트롤러에서 await로 호출됨
       const notices = await crawlingService.getRecentNotices(10);
       expect(Array.isArray(notices)).toBe(true);
 
@@ -126,10 +166,6 @@ describe('Non-blocking Architecture Verification', () => {
     });
 
     it('should verify separation of concerns in architecture', () => {
-      // CrawlingService는 스케줄링된 크롤링만 담당
-      // BatchProcessingService는 배치 처리만 담당
-      // HTTP 컨트롤러는 동기적 응답만 담당
-
       const crawlingMethods = Object.getOwnPropertyNames(
         CrawlingService.prototype,
       );
@@ -137,18 +173,16 @@ describe('Non-blocking Architecture Verification', () => {
         BatchProcessingService.prototype,
       );
 
-      // CrawlingService에는 배치 처리 로직이 없어야 함 (분리됨)
       const hasSendNotifications = crawlingMethods.some((method) =>
         method.includes('sendNotifications'),
       );
 
-      // BatchProcessingService에는 크롤링 로직이 없어야 함
       const hasCrawlingLogic = batchMethods.some(
         (method) => method.includes('crawl') || method.includes('cache'),
       );
 
-      expect(hasSendNotifications).toBe(true); // sendNotifications는 있지만 배치로 위임
-      expect(hasCrawlingLogic).toBe(false); // 배치 서비스에는 크롤링 로직 없음
+      expect(hasSendNotifications).toBe(false);
+      expect(hasCrawlingLogic).toBe(false);
 
       console.log('Separation of concerns is properly maintained');
     });

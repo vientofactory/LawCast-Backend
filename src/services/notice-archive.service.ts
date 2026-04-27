@@ -372,6 +372,36 @@ export class NoticeArchiveService {
     });
   }
 
+  async buildArchiveExportZip(
+    noticeNum: number,
+  ): Promise<{ zipFileName: string; zipBuffer: Buffer } | null> {
+    const artifacts = await this.buildArchiveExportFile(noticeNum);
+
+    if (!artifacts) {
+      return null;
+    }
+
+    const zip = new JSZip();
+
+    // JSON 파일 추가
+    zip.file(artifacts.jsonFileName, artifacts.jsonContent);
+
+    // 무결성 메타데이터 파일 추가
+    zip.file(artifacts.integrityFileName, artifacts.integrityContent);
+
+    // 검증 스크립트 추가
+    for (const script of artifacts.verificationScripts) {
+      zip.file(script.fileName, script.content);
+    }
+
+    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+    return {
+      zipFileName: artifacts.zipFileName,
+      zipBuffer,
+    };
+  }
+
   async existsByNoticeNum(noticeNum: number): Promise<boolean> {
     return this.archiveRepository.exists({ where: { noticeNum } });
   }
@@ -642,24 +672,5 @@ export class NoticeArchiveService {
       passed,
       calculatedSha256,
     };
-  }
-
-  async buildArchiveExportZip(
-    noticeNum: number,
-  ): Promise<{ zipBuffer: Buffer; zipFileName: string } | null> {
-    const archiveExport = await this.buildArchiveExportFile(noticeNum);
-    if (!archiveExport) return null;
-    const zip = new JSZip();
-    zip.file(archiveExport.jsonFileName, archiveExport.jsonContent);
-    zip.file(archiveExport.integrityFileName, archiveExport.integrityContent);
-    for (const script of archiveExport.verificationScripts || []) {
-      zip.file(script.fileName, script.content);
-    }
-    const zipBuffer = await zip.generateAsync({
-      type: 'nodebuffer',
-      compression: 'DEFLATE',
-      compressionOptions: { level: 9 },
-    });
-    return { zipBuffer, zipFileName: archiveExport.zipFileName };
   }
 }

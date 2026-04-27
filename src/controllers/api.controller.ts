@@ -18,6 +18,7 @@ import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
 import { WebhookService } from '../services/webhook.service';
 import { CrawlingService } from '../services/crawling.service';
+import { HealthCheckService } from '../services/health-check.service';
 import { NotificationService } from '../services/notification.service';
 import { HashguardService } from '../services/hashguard.service';
 import { BatchProcessingService } from '../services/batch-processing.service';
@@ -35,6 +36,7 @@ export class ApiController {
     private readonly configService: ConfigService,
     private readonly webhookService: WebhookService,
     private readonly crawlingService: CrawlingService,
+    private readonly healthCheckService: HealthCheckService,
     private readonly notificationService: NotificationService,
     private readonly hashguardService: HashguardService,
     private readonly batchProcessingService: BatchProcessingService,
@@ -143,7 +145,8 @@ export class ApiController {
 
     return ApiResponseUtils.success({
       ...detail,
-      aiSummaryEnabled: this.crawlingService.isAiSummaryEnabled(),
+      aiSummaryEnabled: (await this.healthCheckService.getOllamaMetrics())
+        .enabled,
     });
   }
 
@@ -152,8 +155,13 @@ export class ApiController {
     @Param('num', ParseIntPipe) num: number,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const { zipBuffer, zipFileName } =
-      await this.noticeArchiveService.buildArchiveExportZip(num);
+    const result = await this.noticeArchiveService.buildArchiveExportZip(num);
+
+    if (!result) {
+      throw new NotFoundException(`Archive not found for notice ${num}`);
+    }
+
+    const { zipBuffer, zipFileName } = result;
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader(
       'Content-Disposition',
