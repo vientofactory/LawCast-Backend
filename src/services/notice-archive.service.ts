@@ -1,3 +1,8 @@
+import JSZip from 'jszip';
+/**
+ * 아카이브 zip 파일 생성 및 buffer 반환 (컨트롤러 위임용)
+ */
+
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
@@ -365,6 +370,36 @@ export class NoticeArchiveService {
       httpMetadata,
       dbRecord: this.mapArchiveEntityToRawRecord(row),
     });
+  }
+
+  async buildArchiveExportZip(
+    noticeNum: number,
+  ): Promise<{ zipFileName: string; zipBuffer: Buffer } | null> {
+    const artifacts = await this.buildArchiveExportFile(noticeNum);
+
+    if (!artifacts) {
+      return null;
+    }
+
+    const zip = new JSZip();
+
+    // JSON 파일 추가
+    zip.file(artifacts.jsonFileName, artifacts.jsonContent);
+
+    // 무결성 메타데이터 파일 추가
+    zip.file(artifacts.integrityFileName, artifacts.integrityContent);
+
+    // 검증 스크립트 추가
+    for (const script of artifacts.verificationScripts) {
+      zip.file(script.fileName, script.content);
+    }
+
+    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+    return {
+      zipFileName: artifacts.zipFileName,
+      zipBuffer,
+    };
   }
 
   async existsByNoticeNum(noticeNum: number): Promise<boolean> {

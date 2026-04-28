@@ -18,6 +18,7 @@ import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
 import { WebhookService } from '../services/webhook.service';
 import { CrawlingService } from '../services/crawling.service';
+import { HealthCheckService } from '../services/health-check.service';
 import { NotificationService } from '../services/notification.service';
 import { HashguardService } from '../services/hashguard.service';
 import { BatchProcessingService } from '../services/batch-processing.service';
@@ -26,12 +27,8 @@ import { NoticesQueryService } from '../services/notices-query.service';
 import { CreateWebhookDto } from '../dto/create-webhook.dto';
 import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
 import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
-import {
-  isProductionNodeEnv,
-  sanitizeSearchQuery,
-} from '../utils/api-controller.utils';
 import { APP_CONSTANTS } from '../config/app.config';
-import JSZip from 'jszip';
+import { RuntimeStatsService } from '../services/runtime-stats.service';
 
 @Controller('api')
 export class ApiController {
@@ -39,11 +36,13 @@ export class ApiController {
     private readonly configService: ConfigService,
     private readonly webhookService: WebhookService,
     private readonly crawlingService: CrawlingService,
+    private readonly healthCheckService: HealthCheckService,
     private readonly notificationService: NotificationService,
     private readonly hashguardService: HashguardService,
     private readonly batchProcessingService: BatchProcessingService,
     private readonly noticeArchiveService: NoticeArchiveService,
     private readonly noticesQueryService: NoticesQueryService,
+    private readonly runtimeStatsService: RuntimeStatsService,
   ) {}
 
   @Post('webhooks')
@@ -123,41 +122,15 @@ export class ApiController {
     @Query('endDate') endDate?: string,
     @Query('sortOrder') sortOrder?: string,
   ) {
-    const safePage = Math.max(APP_CONSTANTS.API.PAGINATION.MIN_PAGE, page);
-    const safeLimit = Math.min(
-      APP_CONSTANTS.API.PAGINATION.MAX_LIMIT,
-      Math.max(APP_CONSTANTS.API.PAGINATION.MIN_LIMIT, limit),
-    );
-    const safeSortOrder = sortOrder === 'asc' ? 'asc' : 'desc';
-    const safeStartDate = this.sanitizeDateQuery(startDate);
-    const safeEndDate = this.sanitizeDateQuery(endDate);
-
     const archiveResult = await this.noticesQueryService.getArchivedNotices({
-      page: safePage,
-      limit: safeLimit,
-      search: sanitizeSearchQuery(search, APP_CONSTANTS.API.SEARCH.MAX_LENGTH),
-      startDate: safeStartDate,
-      endDate: safeEndDate,
-      sortOrder: safeSortOrder,
+      page,
+      limit,
+      search,
+      startDate,
+      endDate,
+      sortOrder: sortOrder === 'asc' ? 'asc' : 'desc',
     });
-
-    return ApiResponseUtils.success({
-      ...archiveResult,
-      aiSummaryEnabled: this.crawlingService.isAiSummaryEnabled(),
-    });
-  }
-
-  private sanitizeDateQuery(rawDate?: string): string | undefined {
-    if (!rawDate) {
-      return undefined;
-    }
-
-    const normalized = rawDate.trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
-      return undefined;
-    }
-
-    return normalized;
+    return ApiResponseUtils.success(archiveResult);
   }
 
   @Get('notices/:num/detail')
@@ -172,7 +145,8 @@ export class ApiController {
 
     return ApiResponseUtils.success({
       ...detail,
-      aiSummaryEnabled: this.crawlingService.isAiSummaryEnabled(),
+      aiSummaryEnabled: (await this.healthCheckService.getOllamaMetrics())
+        .enabled,
     });
   }
 
@@ -181,124 +155,40 @@ export class ApiController {
     @Param('num', ParseIntPipe) num: number,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const archiveExport =
-      await this.noticeArchiveService.buildArchiveExportFile(num);
+    const result = await this.noticeArchiveService.buildArchiveExportZip(num);
 
-    if (!archiveExport) {
-      throw new NotFoundException(
-        `의안번호 ${num}에 해당하는 아카이브 입법예고를 찾을 수 없습니다.`,
-      );
+    if (!result) {
+      throw new NotFoundException(`Archive not found for notice ${num}`);
     }
 
-    const zip = this.createZipInstance();
-    zip.file(archiveExport.jsonFileName, archiveExport.jsonContent);
-    zip.file(archiveExport.integrityFileName, archiveExport.integrityContent);
-    for (const script of archiveExport.verificationScripts || []) {
-      zip.file(script.fileName, script.content);
-    }
-
-    const zipBuffer = await zip.generateAsync({
-      type: 'nodebuffer',
-      compression: 'DEFLATE',
-      compressionOptions: { level: 9 },
-    });
-
+    const { zipBuffer, zipFileName } = result;
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${archiveExport.zipFileName}"`,
+      `attachment; filename="${zipFileName}"`,
     );
     res.setHeader('Cache-Control', 'no-store');
-
     return new StreamableFile(zipBuffer);
-  }
-
-  private createZipInstance() {
-    return new JSZip();
   }
 
   @Get('stats')
   async getStats() {
-    const [webhookStats, cacheInfo, batchStatus, archiveCount, ollamaMetrics] =
-      await Promise.all([
-        this.webhookService.getDetailedStats(),
-        this.crawlingService.getCacheInfo(),
-        this.batchProcessingService.getBatchJobStatus(),
-        this.noticeArchiveService.getArchiveCount(),
-        this.crawlingService.getOllamaMetrics(),
-      ]);
-
-    const isProduction = isProductionNodeEnv(
-      this.configService.get<string>('nodeEnv'),
+    const nodeEnv = this.configService.get<string>('nodeEnv');
+    const stats = await this.runtimeStatsService.getAggregatedStats(
+      { nodeEnv },
+      this.webhookService,
+      this.crawlingService,
+      this.batchProcessingService,
+      this.noticeArchiveService,
     );
-    const safeBatchStatus = isProduction
-      ? {
-          jobCount: batchStatus.jobCount,
-        }
-      : batchStatus;
-
-    const safeCacheInfo = isProduction
-      ? {
-          size: cacheInfo.size,
-          lastUpdated: cacheInfo.lastUpdated,
-          maxSize: cacheInfo.maxSize,
-          isInitialized: cacheInfo.isInitialized,
-        }
-      : cacheInfo;
-
-    const safeWebhookStats = isProduction
-      ? {
-          total: webhookStats.total,
-          active: webhookStats.active,
-          efficiency: webhookStats.efficiency,
-        }
-      : webhookStats;
-
-    const safeOllamaMetrics = isProduction
-      ? {
-          enabled: ollamaMetrics.enabled,
-          configured: ollamaMetrics.configured,
-          model: ollamaMetrics.model,
-          summary: {
-            total: ollamaMetrics.summary.total,
-            success: ollamaMetrics.summary.success,
-            failed: ollamaMetrics.summary.failed,
-            skipped: ollamaMetrics.summary.skipped,
-            successRate: ollamaMetrics.summary.successRate,
-          },
-          health: {
-            status: ollamaMetrics.health.status,
-            lastCheckedAt: ollamaMetrics.health.lastCheckedAt,
-            lastLatencyMs: ollamaMetrics.health.lastLatencyMs,
-            availableModelCount: ollamaMetrics.health.availableModelCount,
-          },
-        }
-      : ollamaMetrics;
-
-    return ApiResponseUtils.success({
-      webhooks: safeWebhookStats,
-      cache: safeCacheInfo,
-      archive: {
-        count: archiveCount,
-      },
-      batchProcessing: safeBatchStatus,
-      ollama: safeOllamaMetrics,
-      aiSummaryEnabled: this.crawlingService.isAiSummaryEnabled(),
-    });
+    return ApiResponseUtils.success(stats);
   }
 
   @Get('batch/status')
   async getBatchStatus() {
-    const isProduction = isProductionNodeEnv(
-      this.configService.get<string>('nodeEnv'),
-    );
-    const status = isProduction
-      ? {
-          jobCount: this.batchProcessingService.getBatchJobStatus().jobCount,
-          jobIds: [],
-        }
-      : this.batchProcessingService.getDetailedBatchJobStatus();
-
+    const status = await this.batchProcessingService.getBatchStatusForApi({
+      nodeEnv: this.configService.get<string>('nodeEnv'),
+    });
     return ApiResponseUtils.success(
       status,
       'Batch processing status retrieved successfully',
@@ -307,116 +197,43 @@ export class ApiController {
 
   @Get('health')
   async getHealth() {
-    const [isRedisConnected, cacheInfo, ollamaMetrics] = await Promise.all([
-      this.crawlingService.isRedisConnected(),
-      this.crawlingService.getCacheInfo(),
-      this.crawlingService.getOllamaMetrics(),
-    ]);
-    const isProduction = isProductionNodeEnv(
-      this.configService.get<string>('nodeEnv'),
-    );
-
-    const isOllamaDegraded =
-      ollamaMetrics.enabled &&
-      (ollamaMetrics.health.status === 'unhealthy' ||
-        ollamaMetrics.health.status === 'misconfigured');
-
-    const systemStatus =
-      isRedisConnected && !isOllamaDegraded ? 'healthy' : 'degraded';
-
-    const payload = isProduction
-      ? {
-          timestamp: new Date().toISOString(),
-          status: systemStatus,
-          dependencies: {
-            redis: isRedisConnected ? 'up' : 'down',
-            ollama: ollamaMetrics.health.status,
-          },
-        }
-      : {
-          timestamp: new Date().toISOString(),
-          status: systemStatus,
-          redis: {
-            connected: isRedisConnected,
-            cache: cacheInfo,
-          },
-          ollama: ollamaMetrics,
-        };
-
-    return ApiResponseUtils.success(payload, 'LawCast API is healthy');
+    const healthPayload = await this.crawlingService.getApiHealthPayload({
+      nodeEnv: this.configService.get<string>('nodeEnv'),
+    });
+    return ApiResponseUtils.success(healthPayload, 'LawCast API is healthy');
   }
 
   @Get('webhooks/stats/detailed')
   async getDetailedWebhookStats() {
-    const stats = await this.webhookService.getDetailedStats();
-    const isProduction = isProductionNodeEnv(
-      this.configService.get<string>('nodeEnv'),
-    );
-    const safeStats = isProduction
-      ? {
-          total: stats.total,
-          active: stats.active,
-          efficiency: stats.efficiency,
-        }
-      : stats;
-
+    const stats = await this.webhookService.getDetailedStatsForApi({
+      nodeEnv: this.configService.get<string>('nodeEnv'),
+    });
     return ApiResponseUtils.success(
-      safeStats,
+      stats,
       'Detailed webhook statistics retrieved successfully',
     );
   }
 
   @Get('webhooks/system-health')
   async getSystemHealth() {
-    const stats = await this.webhookService.getDetailedStats();
-    const efficiency =
-      stats.total > 0 ? (stats.active / stats.total) * 100 : 100;
-    const isProduction = isProductionNodeEnv(
-      this.configService.get<string>('nodeEnv'),
-    );
-    const safeStats = isProduction
-      ? {
-          total: stats.total,
-          active: stats.active,
-          efficiency: stats.efficiency,
-        }
-      : stats;
-
+    const systemHealth = await this.webhookService.getSystemHealthForApi({
+      nodeEnv: this.configService.get<string>('nodeEnv'),
+    });
     return ApiResponseUtils.success(
-      {
-        efficiency: Number(efficiency.toFixed(1)),
-        stats: safeStats,
-        status: efficiency >= 70 ? 'healthy' : 'needs_optimization',
-      },
+      systemHealth,
       'System health status retrieved successfully',
     );
   }
 
   @Get('redis/status')
   async getRedisStatus() {
-    const redisStatus = await this.crawlingService.getRedisStatus();
-
-    const isProduction = isProductionNodeEnv(
-      this.configService.get<string>('nodeEnv'),
+    const redisStatusPayload = await this.crawlingService.getRedisStatusForApi({
+      nodeEnv: this.configService.get<string>('nodeEnv'),
+    });
+    return ApiResponseUtils.success(
+      redisStatusPayload.data,
+      redisStatusPayload.message,
     );
-
-    if (isProduction) {
-      return ApiResponseUtils.success(
-        {
-          connected: redisStatus.connected,
-          timestamp: new Date().toISOString(),
-        },
-        redisStatus.connected
-          ? 'Redis status is available'
-          : 'Redis is unavailable',
-      );
-    }
-
-    const message = redisStatus.connected
-      ? `Redis is connected (${redisStatus.responseTime}ms response time)`
-      : `Redis connection failed: ${redisStatus.error}`;
-
-    return ApiResponseUtils.success(redisStatus, message);
   }
 
   @Get('redis/connection')

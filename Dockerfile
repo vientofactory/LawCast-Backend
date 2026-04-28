@@ -1,9 +1,21 @@
 # Backend Dockerfile
+
+# hardened_malloc build stage – security-focused memory allocator (GrapheneOS)
+# NOTE: Requires host vm.max_map_count >= 1048576:
+#   sysctl -w vm.max_map_count=1048576  (host)  or  docker-compose sysctls
+FROM node:24-alpine AS hardened-malloc
+RUN apk add --no-cache git build-base linux-headers
+RUN git clone --depth 1 https://github.com/GrapheneOS/hardened_malloc.git /hardened_malloc
+WORKDIR /hardened_malloc
+# CONFIG_NATIVE=false  – portable build for Alpine/musl (no host-specific CET/AVX instructions)
+# CONFIG_CXX_ALLOCATOR=false – skips libstdc++ linkage so the .so has no extra runtime deps
+RUN make CONFIG_NATIVE=false CONFIG_CXX_ALLOCATOR=false
+
 FROM node:24-alpine AS base
 
 # Install dependencies only when needed
 FROM base AS deps
-RUN apk add --no-cache libc6-compat dumb-init
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 # Copy package files
@@ -32,10 +44,12 @@ RUN npm run build
 FROM base AS runner
 WORKDIR /app
 
-ENV NODE_ENV=production
+# Copy hardened_malloc before LD_PRELOAD is active so the library exists
+# for all subsequent RUN instructions in this stage
+COPY --from=hardened-malloc /hardened_malloc/out/libhardened_malloc.so /usr/local/lib/libhardened_malloc.so
 
-# Install dumb-init for proper signal handling
-RUN apk add --no-cache dumb-init
+ENV NODE_ENV=production
+ENV LD_PRELOAD=/usr/local/lib/libhardened_malloc.so
 
 # Create a non-root user
 RUN addgroup -g 1001 -S nodejs && \
@@ -51,6 +65,10 @@ RUN mkdir -p /app/data && chown -R nestjs:nodejs /app/data
 
 # Change ownership of the app directory
 RUN chown -R nestjs:nodejs /app
+
+# Remove SUID/SGID bits from binaries to prevent privilege escalation
+RUN find /bin /usr/bin /usr/local/bin -xdev \( -perm /4000 -o -perm /2000 \) -exec chmod -s {} + 2>/dev/null || true
+
 USER nestjs
 
 # Expose port
@@ -62,8 +80,5 @@ ENV PORT=3001
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3001/api/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })" || exit 1
 
-# Use dumb-init to handle signals properly
-ENTRYPOINT ["dumb-init", "--"]
-
 # Start the application
-CMD ["npm", "run", "start:prod"]
+CMD ["node", "dist/main"]
