@@ -65,6 +65,10 @@ RUN mkdir -p /app/data && chown -R nestjs:nodejs /app/data
 
 # Change ownership of the app directory
 RUN chown -R nestjs:nodejs /app
+
+# Remove SUID/SGID bits from binaries to prevent privilege escalation
+RUN find /bin /usr/bin /usr/local/bin -xdev \( -perm /4000 -o -perm /2000 \) -exec chmod -s {} + 2>/dev/null || true
+
 USER nestjs
 
 # Expose port
