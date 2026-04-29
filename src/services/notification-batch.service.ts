@@ -9,6 +9,15 @@ import {
   BatchProcessingService,
 } from './batch-processing.service';
 
+interface NotificationJobResult {
+  notice: string;
+  totalWebhooks: number;
+  successCount: number;
+  failedCount: number;
+  deactivated: number;
+  temporaryFailures: number;
+}
+
 @Injectable()
 export class NotificationBatchService {
   private readonly logger = new Logger(NotificationBatchService.name);
@@ -31,32 +40,56 @@ export class NotificationBatchService {
     notices: CachedNotice[],
     options: BatchProcessingOptions = {},
   ): Promise<string> {
-    const jobId = `notification_batch_${Date.now()}`;
+    const batchRunId = BatchProcessingService.generateId('notification_batch');
     LoggerUtils.logDev(
       NotificationBatchService.name,
       `Starting notification batch processing for ${notices.length} notices`,
     );
 
-    const batchPromise = this.executeNotificationBatch(notices, options);
+    const batchPromise = this.executeNotificationBatch(notices, {
+      ...options,
+      batchRunId,
+    });
 
     batchPromise
       .then((results) => {
         const successCount = results.filter((r) => r.success).length;
         const failureCount = results.length - successCount;
+
+        const totalWebhooks = results.reduce(
+          (sum, r) => sum + ((r.data?.totalWebhooks as number) ?? 0),
+          0,
+        );
+        const deactivated = results.reduce(
+          (sum, r) => sum + ((r.data?.deactivated as number) ?? 0),
+          0,
+        );
+        const temporaryFailures = results.reduce(
+          (sum, r) => sum + ((r.data?.temporaryFailures as number) ?? 0),
+          0,
+        );
+
+        this.batchProcessingService.updateRecentJobMetadata(batchRunId, {
+          totalWebhooks,
+          deactivated,
+          temporaryFailures,
+        });
+
         this.logger.log(
-          `Notification batch completed: ${successCount} success, ${failureCount} failed`,
+          `Notification batch ${batchRunId} completed: ${successCount} success, ${failureCount} failed` +
+            ` (webhooks: ${totalWebhooks}, deactivated: ${deactivated}, temporary failures: ${temporaryFailures})`,
         );
       })
       .catch((error) => {
-        this.logger.error('Batch processing error:', error);
+        this.logger.error(`Batch ${batchRunId} processing error:`, error);
       });
 
     LoggerUtils.logDev(
       NotificationBatchService.name,
-      `Notification batch job ${jobId} started`,
+      `Notification batch job ${batchRunId} started`,
     );
 
-    return jobId;
+    return batchRunId;
   }
 
   /**
@@ -68,7 +101,7 @@ export class NotificationBatchService {
   async executeNotificationBatch(
     notices: CachedNotice[],
     options: BatchProcessingOptions = {},
-  ): Promise<BatchJobResult[]> {
+  ): Promise<BatchJobResult<NotificationJobResult>[]> {
     const activeWebhooks = (await this.webhookService.findAll()) ?? [];
 
     if (activeWebhooks.length === 0) {
@@ -159,6 +192,9 @@ export class NotificationBatchService {
       },
     );
 
-    return this.batchProcessingService.executeBatch(notificationJobs, options);
+    return this.batchProcessingService.executeBatch<NotificationJobResult>(
+      notificationJobs,
+      { ...options, label: 'notification_batch' },
+    );
   }
 }
