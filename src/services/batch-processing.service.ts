@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { LoggerUtils } from '../utils/logger.utils';
 import { APP_CONSTANTS } from '../config/app.config';
@@ -207,7 +208,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
    * @returns A unique batch run ID
    */
   static generateId(label: string): string {
-    return `${label}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    return `${label}_${Date.now()}_${randomBytes(8).toString('hex')}`;
   }
 
   /**
