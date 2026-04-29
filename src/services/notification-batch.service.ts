@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { WebhookService } from './webhook.service';
 import { NotificationService } from './notification.service';
 import { LoggerUtils } from '../utils/logger.utils';
@@ -8,6 +8,8 @@ import {
   BatchProcessingOptions,
   BatchProcessingService,
 } from './batch-processing.service';
+import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
+import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
 
 interface NotificationJobResult {
   notice: string;
@@ -26,6 +28,7 @@ export class NotificationBatchService {
     private webhookService: WebhookService,
     private notificationService: NotificationService,
     private batchProcessingService: BatchProcessingService,
+    @Optional() private discordBridge: DiscordBridgeService,
   ) {}
 
   /**
@@ -44,6 +47,13 @@ export class NotificationBatchService {
     LoggerUtils.logDev(
       NotificationBatchService.name,
       `Starting notification batch processing for ${notices.length} notices`,
+    );
+
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.LOG,
+      'NotificationBatch',
+      `Notification batch started for **${notices.length}** notice(s)`,
+      { batchRunId, noticeCount: notices.length },
     );
 
     const batchPromise = this.executeNotificationBatch(notices, {
@@ -79,9 +89,29 @@ export class NotificationBatchService {
           `Notification batch ${batchRunId} completed: ${successCount} success, ${failureCount} failed` +
             ` (webhooks: ${totalWebhooks}, deactivated: ${deactivated}, temporary failures: ${temporaryFailures})`,
         );
+
+        void this.discordBridge?.logEvent(
+          failureCount > 0 ? BridgeLogLevel.WARN : BridgeLogLevel.LOG,
+          'NotificationBatch',
+          `Batch **${batchRunId}** completed: ${successCount} success, ${failureCount} failed`,
+          {
+            batchRunId,
+            successCount,
+            failureCount,
+            totalWebhooks,
+            deactivated,
+            temporaryFailures,
+          },
+        );
       })
       .catch((error) => {
         this.logger.error(`Batch ${batchRunId} processing error:`, error);
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.ERROR,
+          'NotificationBatch',
+          `Batch **${batchRunId}** failed: ${(error as Error).message}`,
+          { batchRunId },
+        );
       });
 
     LoggerUtils.logDev(

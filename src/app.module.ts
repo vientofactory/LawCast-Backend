@@ -28,6 +28,7 @@ import { ArchiveOrchestratorService } from './services/archive-orchestrator.serv
 import { NotificationOrchestratorService } from './services/notification-orchestrator.service';
 import { CrawlingSchedulerService } from './services/crawling-scheduler.service';
 import { HealthCheckService } from './services/health-check.service';
+import { DiscordBridgeModule } from './modules/discord-bridge/discord-bridge.module';
 import appConfig from './config/app.config';
 
 @Module({
@@ -75,6 +76,7 @@ import appConfig from './config/app.config';
     TypeOrmModule.forFeature([Webhook, NoticeArchive]),
     ScheduleModule.forRoot(),
     OllamaModule,
+    DiscordBridgeModule,
   ],
   controllers: [ApiController],
   providers: [

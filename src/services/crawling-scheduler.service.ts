@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { type ITableData } from 'pal-crawl';
 import { type CachedNotice } from '../types/cache.types';
 import { CacheService } from './cache.service';
@@ -10,6 +10,8 @@ import {
   NoticeArchiveService,
   type ArchiveSummaryState,
 } from './notice-archive.service';
+import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
+import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
 
 @Injectable()
 export class CrawlingSchedulerService implements OnModuleInit {
@@ -24,6 +26,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     private archiveOrchestratorService: ArchiveOrchestratorService,
     private notificationOrchestratorService: NotificationOrchestratorService,
     private noticeArchiveService: NoticeArchiveService,
+    @Optional() private discordBridge: DiscordBridgeService,
   ) {}
 
   /**
@@ -38,11 +41,26 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
   private async initializeCacheInBackground(): Promise<void> {
     this.logger.log('Initializing cache with recent legislative notices...');
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.LOG,
+      'CrawlingScheduler',
+      'Cache initialization started',
+    );
     try {
       await this.initializeCache();
       this.logger.log('Cache initialization completed successfully');
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.LOG,
+        'CrawlingScheduler',
+        'Cache initialization completed successfully',
+      );
     } catch (error) {
       this.logger.error('Failed to initialize cache:', error);
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.ERROR,
+        'CrawlingScheduler',
+        `Cache initialization failed: ${(error as Error).message}`,
+      );
     } finally {
       this.isInitialized = true;
     }
@@ -67,6 +85,11 @@ export class CrawlingSchedulerService implements OnModuleInit {
       await this.performCrawlingAndNotification();
     } catch (error) {
       this.logger.error('Error during crawling process', error);
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.ERROR,
+        'CrawlingScheduler',
+        `Crawling process failed: ${(error as Error).message}`,
+      );
     } finally {
       this.isProcessing = false;
     }
@@ -149,6 +172,15 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
     if (newNotices.length > 0) {
       this.logger.log(`Found ${newNotices.length} new legislative notices`);
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.LOG,
+        'CrawlingScheduler',
+        `Found **${newNotices.length}** new legislative notice(s)`,
+        {
+          subjects: newNotices.slice(0, 5).map((n) => n.subject ?? n.num),
+          total: newNotices.length,
+        },
+      );
 
       const archiveSummaryStates =
         await this.noticeArchiveService.getSummaryStateByNoticeNums(
