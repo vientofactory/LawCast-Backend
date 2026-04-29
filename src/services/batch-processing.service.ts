@@ -24,6 +24,18 @@ export interface BatchProcessingOptions {
   batchSize?: number;
 }
 
+export interface BatchRunRecord {
+  id: string;
+  startedAt: string;
+  completedAt: string | null;
+  totalJobs: number;
+  successCount: number;
+  failedCount: number;
+  duration: number | null;
+  status: 'running' | 'completed' | 'failed';
+  error?: string | null;
+}
+
 @Injectable()
 export class BatchProcessingService implements OnApplicationShutdown {
   private readonly logger = new Logger(BatchProcessingService.name);
@@ -31,6 +43,8 @@ export class BatchProcessingService implements OnApplicationShutdown {
   private readonly activeTimeouts = new Set<NodeJS.Timeout>();
   private isShuttingDown = false;
   private readonly shutdownTimeout = 25000;
+  private readonly recentJobHistory: BatchRunRecord[] = [];
+  private static readonly MAX_HISTORY = 10;
 
   constructor() {}
 
@@ -51,6 +65,53 @@ export class BatchProcessingService implements OnApplicationShutdown {
       throw new Error('Service is shutting down, cannot process new jobs');
     }
 
+    const batchRunId = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const startTime = Date.now();
+    const runRecord: BatchRunRecord = {
+      id: batchRunId,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      totalJobs: jobs.length,
+      successCount: 0,
+      failedCount: 0,
+      duration: null,
+      status: 'running',
+    };
+
+    const promise = this.runBatch<T>(jobs, options);
+    this.jobQueue.set(batchRunId, promise);
+
+    try {
+      const results = await promise;
+      const successCount = results.filter((r) => r.success).length;
+      this.addToRecentHistory({
+        ...runRecord,
+        completedAt: new Date().toISOString(),
+        successCount,
+        failedCount: results.length - successCount,
+        duration: Date.now() - startTime,
+        status: 'completed',
+      });
+      return results;
+    } catch (error) {
+      this.addToRecentHistory({
+        ...runRecord,
+        completedAt: new Date().toISOString(),
+        failedCount: jobs.length,
+        duration: Date.now() - startTime,
+        status: 'failed',
+        error: (error as Error)?.message ?? 'Unknown error',
+      });
+      throw error;
+    } finally {
+      this.jobQueue.delete(batchRunId);
+    }
+  }
+
+  private async runBatch<T>(
+    jobs: Array<(abortSignal: AbortSignal) => Promise<T>>,
+    options: BatchProcessingOptions = {},
+  ): Promise<BatchJobResult<T>[]> {
     const {
       concurrency = BATCH.CONCURRENCY,
       timeout = BATCH.TIMEOUT,
@@ -94,6 +155,17 @@ export class BatchProcessingService implements OnApplicationShutdown {
     }
 
     return results;
+  }
+
+  private addToRecentHistory(record: BatchRunRecord): void {
+    this.recentJobHistory.unshift(record);
+    if (this.recentJobHistory.length > BatchProcessingService.MAX_HISTORY) {
+      this.recentJobHistory.length = BatchProcessingService.MAX_HISTORY;
+    }
+  }
+
+  getRecentJobHistory(): BatchRunRecord[] {
+    return [...this.recentJobHistory];
   }
 
   /**
@@ -419,13 +491,18 @@ export class BatchProcessingService implements OnApplicationShutdown {
 
   getBatchStatusForApi({ nodeEnv }: { nodeEnv?: string }) {
     const isProduction = nodeEnv === 'production';
+    const recentJobs = this.getRecentJobHistory();
     if (isProduction) {
       const status = this.getBatchJobStatus();
       return {
         jobCount: status.jobCount,
         jobIds: [],
+        recentJobs,
       };
     }
-    return this.getDetailedBatchJobStatus();
+    return {
+      ...this.getDetailedBatchJobStatus(),
+      recentJobs,
+    };
   }
 }
