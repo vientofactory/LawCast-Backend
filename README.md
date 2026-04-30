@@ -81,7 +81,45 @@ CRON_TIMEZONE=Asia/Seoul
 # CORS 허용 도메인 (쉼표로 구분)
 FRONTEND_URL=http://localhost:5173,http://localhost:3002
 
+# Discord 디버그 브릿지 (선택사항)
+DISCORD_BRIDGE_ENABLED=false
+DISCORD_BRIDGE_BOT_TOKEN=
+DISCORD_BRIDGE_GUILD_ID=
+DISCORD_BRIDGE_CHANNEL_ID=
+DISCORD_BRIDGE_LOG_CHANNEL_ID=
+DISCORD_BRIDGE_LOG_LEVEL=LOG
+DISCORD_BRIDGE_ADMIN_USER_IDS=
+
 ```
+
+### Discord 디버그 브릿지
+
+`DISCORD_BRIDGE_ENABLED=true`로 설정하면 Discord 봇을 통해 서버 런타임 상태를 실시간으로 모니터링하고 조작할 수 있습니다.
+
+| 환경변수                        | 필수 | 설명                                                                                     |
+| ------------------------------- | ---- | ---------------------------------------------------------------------------------------- |
+| `DISCORD_BRIDGE_ENABLED`        | -    | `true`로 설정해야 활성화 (기본값: `false`)                                               |
+| `DISCORD_BRIDGE_BOT_TOKEN`      | ✅   | Discord 봇 토큰 (Developer Portal > Bot > Token)                                         |
+| `DISCORD_BRIDGE_GUILD_ID`       | -    | 길드(서버) ID — 설정 시 슬래시 명령어 즉시 등록, 미설정 시 글로벌 등록 (최대 1시간 소요) |
+| `DISCORD_BRIDGE_CHANNEL_ID`     | ✅   | 슬래시 명령어를 입력할 채널 Snowflake ID                                                 |
+| `DISCORD_BRIDGE_LOG_CHANNEL_ID` | ✅   | 이벤트 로그가 전송될 채널 Snowflake ID                                                   |
+| `DISCORD_BRIDGE_LOG_LEVEL`      | -    | 최대 로그 레벨: `ERROR` `WARN` `LOG` `DEBUG` `VERBOSE` (기본값: `LOG`)                   |
+| `DISCORD_BRIDGE_ADMIN_USER_IDS` | ✅   | 명령어 사용 가능 유저 ID 목록, 쉼표 구분 (예: `111,222,333`)                             |
+
+**봇 권한 요구사항**: 두 채널 모두 슬래시 명령어 사용 및 메시지 전송 권한 필요. `DISCORD_BRIDGE_GUILD_ID` 설정 시 명령어가 해당 서버에 즉시 등록됩니다.
+
+**지원 명령어** (브릿지 채널, 관리자 전용):
+
+| 명령어           | 설명                       |
+| ---------------- | -------------------------- |
+| `/status`        | 업타임, 메모리, Node 환경  |
+| `/health`        | Redis·Ollama 헬스 체크     |
+| `/stats`         | 런타임 집계 통계           |
+| `/cache`         | 캐시 현황                  |
+| `/crawl`         | 수동 크롤링 실행           |
+| `/batch-history` | 최근 배치 작업 이력        |
+| `/webhooks`      | 웹훅 통계                  |
+| `/loglevel`      | 로그 레벨 조회/런타임 변경 |
 
 ### 실행
 

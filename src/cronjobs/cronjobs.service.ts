@@ -1,9 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { WebhookCleanupService } from '../services/webhook-cleanup.service';
 import { CrawlingService } from '../services/crawling.service';
 import appConfig, { APP_CONSTANTS } from '../config/app.config';
 import { LoggerUtils } from '../utils/logger.utils';
+import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
+import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
 
 const CRON_TIMEZONE = appConfig().cron.timezone;
 
@@ -14,6 +16,7 @@ export class CronJobsService {
   constructor(
     private readonly webhookCleanupService: WebhookCleanupService,
     private readonly crawlingService: CrawlingService,
+    @Optional() private readonly discordBridge: DiscordBridgeService,
   ) {}
 
   /**
@@ -23,18 +26,33 @@ export class CronJobsService {
     taskName: string,
     task: () => Promise<void>,
   ): Promise<void> {
+    void this.discordBridge.logEvent(
+      BridgeLogLevel.DEBUG,
+      CronJobsService.name,
+      `Scheduled task started: **${taskName}**`,
+    );
     try {
       LoggerUtils.debugDev(
         CronJobsService.name,
         `Starting scheduled ${taskName}...`,
       );
       await task();
+      void this.discordBridge.logEvent(
+        BridgeLogLevel.DEBUG,
+        CronJobsService.name,
+        `Scheduled task completed: **${taskName}**`,
+      );
       LoggerUtils.debugDev(
         CronJobsService.name,
         `Completed scheduled ${taskName}.`,
       );
     } catch (error) {
       this.logger.error(`Scheduled ${taskName} failed:`, error);
+      void this.discordBridge.logEvent(
+        BridgeLogLevel.ERROR,
+        CronJobsService.name,
+        `Scheduled task failed: **${taskName}** — ${(error as Error).message}`,
+      );
     }
   }
 

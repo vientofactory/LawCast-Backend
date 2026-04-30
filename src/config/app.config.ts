@@ -25,6 +25,15 @@ export interface AppConfig {
   cron: {
     timezone: string;
   };
+  discordBridge: {
+    enabled: boolean;
+    botToken: string;
+    guildId: string;
+    bridgeChannelId: string;
+    logChannelId: string;
+    logLevel: number;
+    adminUserIds: string[];
+  };
 }
 
 // Application Constants
@@ -161,4 +170,28 @@ export default (): AppConfig => ({
   cron: {
     timezone: process.env.CRON_TIMEZONE || 'Asia/Seoul',
   },
+  discordBridge: {
+    enabled: process.env.DISCORD_BRIDGE_ENABLED === 'true',
+    botToken: process.env.DISCORD_BRIDGE_BOT_TOKEN ?? '',
+    guildId: process.env.DISCORD_BRIDGE_GUILD_ID ?? '',
+    bridgeChannelId: process.env.DISCORD_BRIDGE_CHANNEL_ID ?? '',
+    logChannelId: process.env.DISCORD_BRIDGE_LOG_CHANNEL_ID ?? '',
+    logLevel: parseBridgeLogLevel(process.env.DISCORD_BRIDGE_LOG_LEVEL),
+    adminUserIds: process.env.DISCORD_BRIDGE_ADMIN_USER_IDS
+      ? process.env.DISCORD_BRIDGE_ADMIN_USER_IDS.split(',')
+          .map((id) => id.trim())
+          .filter(Boolean)
+      : [],
+  },
 });
+
+function parseBridgeLogLevel(value: string | undefined): number {
+  const map: Record<string, number> = {
+    ERROR: 0,
+    WARN: 1,
+    LOG: 2,
+    DEBUG: 3,
+    VERBOSE: 4,
+  };
+  return map[value?.toUpperCase() ?? ''] ?? 2; // default: LOG
+}

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { LoggerUtils } from '../utils/logger.utils';
 import { APP_CONSTANTS } from '../config/app.config';
@@ -22,6 +23,9 @@ export interface BatchProcessingOptions {
   retryCount?: number;
   retryDelay?: number;
   batchSize?: number;
+  label?: string;
+  batchRunId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface BatchRunRecord {
@@ -34,6 +38,7 @@ export interface BatchRunRecord {
   duration: number | null;
   status: 'running' | 'completed' | 'failed';
   error?: string | null;
+  metadata?: Record<string, unknown>;
 }
 
 @Injectable()
@@ -65,7 +70,9 @@ export class BatchProcessingService implements OnApplicationShutdown {
       throw new Error('Service is shutting down, cannot process new jobs');
     }
 
-    const batchRunId = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const batchRunId =
+      options.batchRunId ??
+      BatchProcessingService.generateId(options.label ?? 'batch');
     const startTime = Date.now();
     const runRecord: BatchRunRecord = {
       id: batchRunId,
@@ -76,6 +83,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
       failedCount: 0,
       duration: null,
       status: 'running',
+      metadata: options.metadata,
     };
 
     const promise = this.runBatch<T>(jobs, options);
@@ -108,6 +116,12 @@ export class BatchProcessingService implements OnApplicationShutdown {
     }
   }
 
+  /**
+   * Execute a batch of jobs with the specified options, handling concurrency, timeouts, and retries.
+   * @param jobs - Array of functions that return a Promise for each job to execute
+   * @param options - Batch processing options such as concurrency, timeouts, retries, and batch size
+   * @returns An array of results for each job, including success status, data, errors, and execution duration
+   */
   private async runBatch<T>(
     jobs: Array<(abortSignal: AbortSignal) => Promise<T>>,
     options: BatchProcessingOptions = {},
@@ -157,6 +171,10 @@ export class BatchProcessingService implements OnApplicationShutdown {
     return results;
   }
 
+  /**
+   * Add a batch run record to the recent job history. This method ensures that the history does not exceed the maximum allowed length.
+   * @param record - The batch run record to add to the history
+   */
   private addToRecentHistory(record: BatchRunRecord): void {
     this.recentJobHistory.unshift(record);
     if (this.recentJobHistory.length > BatchProcessingService.MAX_HISTORY) {
@@ -164,8 +182,33 @@ export class BatchProcessingService implements OnApplicationShutdown {
     }
   }
 
+  /**
+   * Get a copy of the recent job history. This allows for retrieving the history of batch runs without directly modifying the internal state.
+   * @returns An array of recent batch run records
+   */
   getRecentJobHistory(): BatchRunRecord[] {
     return [...this.recentJobHistory];
+  }
+
+  /**
+   * Update the metadata of a recent job record by its ID. This allows for adding additional information to the batch run record after the batch has started, such as counts of processed items or other relevant metrics.
+   * @param id - The ID of the batch run record to update
+   * @param metadata - A record of key-value pairs to merge into the existing metadata of the batch run record
+   */
+  updateRecentJobMetadata(id: string, metadata: Record<string, unknown>): void {
+    const record = this.recentJobHistory.find((r) => r.id === id);
+    if (record) {
+      record.metadata = { ...record.metadata, ...metadata };
+    }
+  }
+
+  /**
+   * Generate a unique batch run ID using the provided label, current timestamp, and a random string.
+   * @param label - A label to identify the batch type
+   * @returns A unique batch run ID
+   */
+  static generateId(label: string): string {
+    return `${label}_${Date.now()}_${randomBytes(8).toString('hex')}`;
   }
 
   /**
