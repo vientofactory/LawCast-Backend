@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { type CachedNotice } from '../types/cache.types';
 import {
@@ -6,6 +6,8 @@ import {
   type ArchiveHttpMetadata,
 } from './notice-archive.service';
 import { CrawlingCoreService } from './crawling-core.service';
+import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
+import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
 
 @Injectable()
 export class ArchiveOrchestratorService {
@@ -14,6 +16,7 @@ export class ArchiveOrchestratorService {
   constructor(
     private noticeArchiveService: NoticeArchiveService,
     private crawlingCoreService: CrawlingCoreService,
+    @Optional() private discordBridge: DiscordBridgeService,
   ) {}
 
   /**
@@ -23,6 +26,13 @@ export class ArchiveOrchestratorService {
     if (notices.length === 0) {
       return;
     }
+
+    void this.discordBridge.logEvent(
+      BridgeLogLevel.LOG,
+      ArchiveOrchestratorService.name,
+      `Archiving **${notices.length}** notice(s)`,
+      { count: notices.length },
+    );
 
     const concurrency = 5;
 
@@ -65,6 +75,12 @@ export class ArchiveOrchestratorService {
               this.logger.warn(
                 `Failed to fetch original content for archive notice ${notice.num}: ${message}`,
               );
+              void this.discordBridge.logEvent(
+                BridgeLogLevel.VERBOSE,
+                ArchiveOrchestratorService.name,
+                `Content fetch failed for notice **${notice.num}**: ${message}`,
+                { noticeNum: notice.num, contentId: notice.contentId },
+              );
             }
           }
 
@@ -80,6 +96,12 @@ export class ArchiveOrchestratorService {
               error instanceof Error ? error.message : String(error);
             this.logger.warn(
               `Failed to capture source HTML for archive notice ${notice.num}: ${message}`,
+            );
+            void this.discordBridge.logEvent(
+              BridgeLogLevel.VERBOSE,
+              ArchiveOrchestratorService.name,
+              `HTML capture failed for notice **${notice.num}**: ${message}`,
+              { noticeNum: notice.num, link: notice.link },
             );
           }
 
@@ -127,7 +149,22 @@ export class ArchiveOrchestratorService {
         notices.map((notice) => notice.num),
       );
 
-    return notices.filter((notice) => !existingNoticeNums.has(notice.num));
+    const filtered = notices.filter(
+      (notice) => !existingNoticeNums.has(notice.num),
+    );
+
+    void this.discordBridge.logEvent(
+      BridgeLogLevel.VERBOSE,
+      ArchiveOrchestratorService.name,
+      `Archive filter: **${filtered.length}** new out of **${notices.length}** (${notices.length - filtered.length} already archived)`,
+      {
+        total: notices.length,
+        newCount: filtered.length,
+        alreadyArchived: notices.length - filtered.length,
+      },
+    );
+
+    return filtered;
   }
 
   private computeSha256(input: string): string {

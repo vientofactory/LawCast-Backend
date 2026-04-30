@@ -6,8 +6,6 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { BatchProcessingService } from './services/batch-processing.service';
 import { WebhookValidationUtils } from './utils/webhook-validation.utils';
-import { DiscordBridgeService } from './modules/discord-bridge/discord-bridge.service';
-import { BridgeLogLevel } from './modules/discord-bridge/discord-bridge.types';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -20,8 +18,7 @@ async function bootstrap() {
 
   // Initialize shutdown handlers
   app.enableShutdownHooks();
-  const discordBridge = app.get(DiscordBridgeService);
-  initShutdownHandlers(app, batchProcessingService, logger, discordBridge);
+  initShutdownHandlers(app, batchProcessingService, logger);
 
   // Ensure database migrations are applied before starting the application
   await ensureDatabaseMigrations(dataSource, logger);
@@ -43,13 +40,6 @@ async function bootstrap() {
   await app.listen(port);
 
   logger.log(`LawCast Backend is running on port ${port}`);
-
-  void discordBridge.logEvent(
-    BridgeLogLevel.LOG,
-    'Bootstrap',
-    `LawCast backend started on port **${port}**`,
-    { nodeEnv: process.env.NODE_ENV, port },
-  );
 }
 
 /**
@@ -140,25 +130,14 @@ function initShutdownHandlers(
   app: NestExpressApplication,
   batchProcessingService: BatchProcessingService,
   logger: Logger,
-  discordBridge?: DiscordBridgeService,
 ): void {
   process.on('SIGTERM', async () => {
     logger.log('SIGTERM received, starting graceful shutdown...');
-    await discordBridge?.logEvent(
-      BridgeLogLevel.WARN,
-      'Bootstrap',
-      'SIGTERM received — starting graceful shutdown',
-    );
     await gracefulShutdown(app, batchProcessingService, logger);
   });
 
   process.on('SIGINT', async () => {
     logger.log('SIGINT received, starting graceful shutdown...');
-    await discordBridge?.logEvent(
-      BridgeLogLevel.WARN,
-      'Bootstrap',
-      'SIGINT received — starting graceful shutdown',
-    );
     await gracefulShutdown(app, batchProcessingService, logger);
   });
 

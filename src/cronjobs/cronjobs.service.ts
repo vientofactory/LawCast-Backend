@@ -26,9 +26,9 @@ export class CronJobsService {
     taskName: string,
     task: () => Promise<void>,
   ): Promise<void> {
-    void this.discordBridge?.logEvent(
+    void this.discordBridge.logEvent(
       BridgeLogLevel.DEBUG,
-      'CronJob',
+      CronJobsService.name,
       `Scheduled task started: **${taskName}**`,
     );
     try {
@@ -37,15 +37,20 @@ export class CronJobsService {
         `Starting scheduled ${taskName}...`,
       );
       await task();
+      void this.discordBridge.logEvent(
+        BridgeLogLevel.DEBUG,
+        CronJobsService.name,
+        `Scheduled task completed: **${taskName}**`,
+      );
       LoggerUtils.debugDev(
         CronJobsService.name,
         `Completed scheduled ${taskName}.`,
       );
     } catch (error) {
       this.logger.error(`Scheduled ${taskName} failed:`, error);
-      void this.discordBridge?.logEvent(
+      void this.discordBridge.logEvent(
         BridgeLogLevel.ERROR,
-        'CronJob',
+        CronJobsService.name,
         `Scheduled task failed: **${taskName}** — ${(error as Error).message}`,
       );
     }
