@@ -30,9 +30,6 @@ export class CrawlingCoreService {
         return [];
       }
 
-      this.logger.log(
-        `Successfully crawled ${crawledData.length} legislative notices`,
-      );
       return crawledData;
     } catch (error) {
       this.logger.error('Error during crawling:', error);
