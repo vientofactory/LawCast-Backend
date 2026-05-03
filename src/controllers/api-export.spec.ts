@@ -10,7 +10,9 @@ import { HashguardService } from '../services/hashguard.service';
 import { BatchProcessingService } from '../services/batch-processing.service';
 import { NoticeArchiveService } from '../services/notice-archive.service';
 import { NoticesQueryService } from '../services/notices-query.service';
+import { NoticeSearchService } from '../services/notice-search.service';
 import { RuntimeStatsService } from '../services/runtime-stats.service';
+import { IsDoneSyncService } from '../services/is-done-sync.service';
 
 // NoticeArchiveService 모킹
 const mockBuildArchiveExportZip = jest.fn();
@@ -90,9 +92,28 @@ describe('ApiController archive export', () => {
           },
         },
         {
+          provide: NoticeSearchService,
+          useValue: {
+            searchNotices: jest.fn(),
+          },
+        },
+        {
           provide: RuntimeStatsService,
           useValue: {
             getRuntimeStats: jest.fn().mockResolvedValue({}),
+          },
+        },
+        {
+          provide: IsDoneSyncService,
+          useValue: {
+            getSyncStatus: jest
+              .fn()
+              .mockReturnValue({
+                status: 'idle',
+                lastRunAt: null,
+                lastResult: null,
+                lastError: null,
+              }),
           },
         },
       ],

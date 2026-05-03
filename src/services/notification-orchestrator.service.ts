@@ -34,7 +34,7 @@ export class NotificationOrchestratorService {
         this.logger.log(
           `Large notification batch detected (${notices.length} notices), applying batch size limit of 50`,
         );
-        void this.discordBridge.logEvent(
+        void this.discordBridge?.logEvent(
           BridgeLogLevel.DEBUG,
           NotificationOrchestratorService.name,
           `Large batch detected: **${notices.length}** notices — applying batch size limit of 50`,
@@ -52,7 +52,7 @@ export class NotificationOrchestratorService {
       this.logger.log(
         `Started notification batch processing for ${notices.length} notices (job: ${jobId})`,
       );
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.DEBUG,
         NotificationOrchestratorService.name,
         `Notification batch dispatched: **${notices.length}** notice(s) (job: \`${jobId}\`)`,

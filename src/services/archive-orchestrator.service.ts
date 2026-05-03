@@ -30,7 +30,7 @@ export class ArchiveOrchestratorService {
       return;
     }
 
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.LOG,
       ArchiveOrchestratorService.name,
       `Archiving **${notices.length}** notice(s)`,
@@ -78,7 +78,7 @@ export class ArchiveOrchestratorService {
               this.logger.warn(
                 `Failed to fetch original content for archive notice ${notice.num}: ${message}`,
               );
-              void this.discordBridge.logEvent(
+              void this.discordBridge?.logEvent(
                 BridgeLogLevel.VERBOSE,
                 ArchiveOrchestratorService.name,
                 `Content fetch failed for notice **${notice.num}**: ${message}`,
@@ -100,7 +100,7 @@ export class ArchiveOrchestratorService {
             this.logger.warn(
               `Failed to capture source HTML for archive notice ${notice.num}: ${message}`,
             );
-            void this.discordBridge.logEvent(
+            void this.discordBridge?.logEvent(
               BridgeLogLevel.VERBOSE,
               ArchiveOrchestratorService.name,
               `HTML capture failed for notice **${notice.num}**: ${message}`,
@@ -158,7 +158,7 @@ export class ArchiveOrchestratorService {
       (notice) => !existingNoticeNums.has(notice.num),
     );
 
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.VERBOSE,
       ArchiveOrchestratorService.name,
       `Archive filter: **${filtered.length}** new out of **${notices.length}** (${notices.length - filtered.length} already archived)`,

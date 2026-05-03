@@ -18,6 +18,8 @@ import { NoticesQueryService } from '../services/notices-query.service';
 import { NotificationBatchService } from '../services/notification-batch.service';
 import { HealthCheckService } from '../services/health-check.service';
 import { RuntimeStatsService } from '../services/runtime-stats.service';
+import { NoticeSearchService } from '../services/notice-search.service';
+import { IsDoneSyncService } from '../services/is-done-sync.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;
@@ -222,7 +224,25 @@ describe('HTTP-Batch Processing Isolation', () => {
         { provide: WebhookCleanupService, useValue: mockWebhookCleanupService },
         { provide: NoticeArchiveService, useValue: mockNoticeArchiveService },
         { provide: NoticesQueryService, useValue: mockNoticesQueryService },
-        { provide: NoticesQueryService, useValue: mockNoticesQueryService },
+        {
+          provide: NoticeSearchService,
+          useValue: {
+            searchNotices: jest.fn().mockResolvedValue({ items: [], total: 0 }),
+          },
+        },
+        {
+          provide: IsDoneSyncService,
+          useValue: {
+            getSyncStatus: jest
+              .fn()
+              .mockReturnValue({
+                status: 'idle',
+                lastRunAt: null,
+                lastResult: null,
+                lastError: null,
+              }),
+          },
+        },
         {
           provide: NotificationBatchService,
           useValue: mockNotificationBatchService,

@@ -82,7 +82,7 @@ describe('NotificationService', () => {
     jest.clearAllMocks();
   });
 
-  describe('sendDiscordNotification', () => {
+  describe('sendDiscordNotificationBatch', () => {
     const mockNotice = {
       num: 1,
       subject: '테스트 법률안',
@@ -109,7 +109,7 @@ describe('NotificationService', () => {
     it('should successfully send notifications to all webhooks', async () => {
       mockDiscordWebhook.send.mockResolvedValue(undefined);
 
-      await service.sendDiscordNotification(mockNotice, mockWebhooks);
+      await service.sendDiscordNotificationBatch(mockNotice, mockWebhooks);
 
       expect(MockedDiscordWebhook).toHaveBeenCalledTimes(2);
       expect(mockDiscordWebhook.setUsername).toHaveBeenCalledWith(
@@ -123,7 +123,7 @@ describe('NotificationService', () => {
         .mockResolvedValueOnce(undefined) // 첫 번째 성공
         .mockRejectedValueOnce(new Error('Network error')); // 두 번째 실패
 
-      await service.sendDiscordNotification(mockNotice, mockWebhooks);
+      await service.sendDiscordNotificationBatch(mockNotice, mockWebhooks);
 
       expect(mockDiscordWebhook.send).toHaveBeenCalledTimes(2);
     });
@@ -131,7 +131,7 @@ describe('NotificationService', () => {
     it('should create correct embed message', async () => {
       mockDiscordWebhook.send.mockResolvedValue(undefined);
 
-      await service.sendDiscordNotification(mockNotice, [mockWebhooks[0]]);
+      await service.sendDiscordNotificationBatch(mockNotice, [mockWebhooks[0]]);
 
       expect(mockMessageBuilder.setTitle).toHaveBeenCalledWith(
         '새로운 국회 입법예고',
@@ -158,7 +158,7 @@ describe('NotificationService', () => {
       const summarized = '핵심 정책 변화와 영향 중심의 사전 생성 요약입니다.';
       mockDiscordWebhook.send.mockResolvedValue(undefined);
 
-      await service.sendDiscordNotification(
+      await service.sendDiscordNotificationBatch(
         {
           num: 1,
           subject: '테스트 법률안',
@@ -188,7 +188,7 @@ describe('NotificationService', () => {
     it('should skip summary field when aiSummary is not precomputed', async () => {
       mockDiscordWebhook.send.mockResolvedValue(undefined);
 
-      await service.sendDiscordNotification(
+      await service.sendDiscordNotificationBatch(
         {
           num: 1,
           subject: '요약 미생성 법률안',
