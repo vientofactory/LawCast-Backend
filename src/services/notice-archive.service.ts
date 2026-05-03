@@ -237,6 +237,47 @@ export class NoticeArchiveService {
     return rows.map((row) => row.noticeNum);
   }
 
+  /**
+   * Returns the first `take` archive rows whose `aiSummaryStatus` is
+   * `'not_requested'`, ordered by `noticeNum` ascending.
+   *
+   * Intended for a **drain loop** - callers should always pass `skip=0`
+   * because processed rows transition away from `'not_requested'` and
+   * naturally drop out of subsequent calls.
+   */
+  async getPendingSummaryPage(take: number): Promise<CachedNotice[]> {
+    const rows = await this.archiveRepository.find({
+      where: { aiSummaryStatus: 'not_requested' },
+      select: {
+        noticeNum: true,
+        subject: true,
+        proposerCategory: true,
+        committee: true,
+        assemblyLink: true,
+        contentId: true,
+        attachmentPdfFile: true,
+        attachmentHwpFile: true,
+      },
+      order: { noticeNum: 'ASC' },
+      take,
+    });
+
+    return rows.map((row) => ({
+      num: row.noticeNum,
+      subject: row.subject,
+      proposerCategory: row.proposerCategory,
+      committee: row.committee,
+      link: row.assemblyLink,
+      contentId: row.contentId,
+      attachments: {
+        pdfFile: row.attachmentPdfFile ?? '',
+        hwpFile: row.attachmentHwpFile ?? '',
+      },
+      aiSummary: null,
+      aiSummaryStatus: 'not_requested' as const,
+    }));
+  }
+
   async getArchiveNotices(query: ArchiveListQuery): Promise<{
     items: ArchiveNoticeItem[];
     page: number;
@@ -475,6 +516,92 @@ export class NoticeArchiveService {
 
   async getArchiveCount(): Promise<number> {
     return this.archiveRepository.count();
+  }
+
+  /**
+   * Paginates through every archive record and verifies its stored SHA-256
+   * hash against a freshly computed hash of `sourceHtml`.  Results are
+   * persisted back to `integrityVerifiedAt` / `integrityCheckPassed` so
+   * subsequent detail views reflect the latest check.
+   *
+   * Rows without `sourceHtml` or `sourceHtmlSha256` are counted as skipped.
+   *
+   * @param batchSize Number of rows fetched per round-trip (default 200).
+   */
+  async runIntegrityScan(batchSize = 200): Promise<{
+    scanned: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+  }> {
+    let skip = 0;
+    let scanned = 0;
+    let passed = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    for (;;) {
+      const rows = await this.archiveRepository.find({
+        select: {
+          id: true,
+          sourceHtml: true,
+          sourceHtmlSha256: true,
+          integrityCheckPassed: true,
+          integrityVerifiedAt: true,
+        },
+        order: { id: 'ASC' },
+        skip,
+        take: batchSize,
+      });
+
+      if (rows.length === 0) break;
+
+      const checkedAt = new Date();
+      const updates: Array<{
+        id: number;
+        integrityCheckPassed: boolean;
+        integrityVerifiedAt: Date;
+      }> = [];
+
+      for (const row of rows) {
+        scanned++;
+        if (!row.sourceHtml || !row.sourceHtmlSha256) {
+          skipped++;
+          continue;
+        }
+        const computed = this.computeSha256(row.sourceHtml);
+        const ok = computed === row.sourceHtmlSha256;
+        if (ok) passed++;
+        else failed++;
+
+        if (row.integrityCheckPassed !== ok || !row.integrityVerifiedAt) {
+          updates.push({
+            id: row.id,
+            integrityCheckPassed: ok,
+            integrityVerifiedAt: checkedAt,
+          });
+        }
+      }
+
+      if (updates.length > 0) {
+        await Promise.all(
+          updates.map((u) =>
+            this.archiveRepository.update(
+              { id: u.id },
+              {
+                integrityCheckPassed: u.integrityCheckPassed,
+                integrityVerifiedAt: u.integrityVerifiedAt,
+              },
+            ),
+          ),
+        );
+      }
+
+      if (rows.length < batchSize) break;
+      skip += batchSize;
+    }
+
+    return { scanned, passed, failed, skipped };
   }
 
   async getArchiveStartedAtByNoticeNums(

@@ -30,7 +30,7 @@ import { NotificationOrchestratorService } from './services/notification-orchest
 import { CrawlingSchedulerService } from './services/crawling-scheduler.service';
 import { HealthCheckService } from './services/health-check.service';
 import { NoticeSearchService } from './services/notice-search.service';
-import { IsDoneSyncService } from './services/is-done-sync.service';
+import { ArchiveSyncService } from './services/archive-sync.service';
 import { DiscordBridgeModule } from './modules/discord-bridge/discord-bridge.module';
 import appConfig from './config/app.config';
 
@@ -103,7 +103,7 @@ import appConfig from './config/app.config';
     CrawlingSchedulerService,
     HealthCheckService,
     NoticeSearchService,
-    IsDoneSyncService,
+    ArchiveSyncService,
   ],
 })
 export class AppModule {}

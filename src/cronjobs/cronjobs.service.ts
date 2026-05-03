@@ -6,7 +6,7 @@ import appConfig, { APP_CONSTANTS } from '../config/app.config';
 import { LoggerUtils } from '../utils/logger.utils';
 import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
-import { IsDoneSyncService } from '../services/is-done-sync.service';
+import { ArchiveSyncService } from '../services/archive-sync.service';
 
 const CRON_TIMEZONE = appConfig().cron.timezone;
 
@@ -17,7 +17,7 @@ export class CronJobsService {
   constructor(
     private readonly webhookCleanupService: WebhookCleanupService,
     private readonly crawlingService: CrawlingService,
-    private readonly isDoneSyncService: IsDoneSyncService,
+    private readonly archiveSyncService: ArchiveSyncService,
     @Optional() private readonly discordBridge: DiscordBridgeService,
   ) {}
 
@@ -30,7 +30,7 @@ export class CronJobsService {
     taskName: string,
     task: () => Promise<void>,
   ): Promise<void> {
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.DEBUG,
       CronJobsService.name,
       `Scheduled task started: **${taskName}**`,
@@ -41,7 +41,7 @@ export class CronJobsService {
         `Starting scheduled ${taskName}...`,
       );
       await task();
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.DEBUG,
         CronJobsService.name,
         `Scheduled task completed: **${taskName}**`,
@@ -52,7 +52,7 @@ export class CronJobsService {
       );
     } catch (error) {
       this.logger.error(`Scheduled ${taskName} failed:`, error);
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.ERROR,
         CronJobsService.name,
         `Scheduled task failed: **${taskName}** - ${(error as Error).message}`,
@@ -116,7 +116,7 @@ export class CronJobsService {
   })
   async handleIsDoneSync(): Promise<void> {
     await this.execute('isDone sync', () =>
-      this.isDoneSyncService.runSync('cron').then(() => undefined),
+      this.archiveSyncService.runIsDoneSync('cron').then(() => undefined),
     );
   }
 }

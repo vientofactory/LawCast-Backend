@@ -19,7 +19,7 @@ import { NotificationBatchService } from '../services/notification-batch.service
 import { HealthCheckService } from '../services/health-check.service';
 import { RuntimeStatsService } from '../services/runtime-stats.service';
 import { NoticeSearchService } from '../services/notice-search.service';
-import { IsDoneSyncService } from '../services/is-done-sync.service';
+import { ArchiveSyncService } from '../services/archive-sync.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;
@@ -231,9 +231,9 @@ describe('HTTP-Batch Processing Isolation', () => {
           },
         },
         {
-          provide: IsDoneSyncService,
+          provide: ArchiveSyncService,
           useValue: {
-            getSyncStatus: jest.fn().mockReturnValue({
+            getIsDoneSyncStatus: jest.fn().mockReturnValue({
               status: 'idle',
               lastRunAt: null,
               lastResult: null,

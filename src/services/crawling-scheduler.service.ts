@@ -200,7 +200,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     void this.discordBridge?.logEvent(
       BridgeLogLevel.VERBOSE,
       CrawlingSchedulerService.name,
-      `Crawl stats — crawled: **${crawledData.length}**, cache diff: **${cacheDiffNotices.length}**, new: **${newNotices.length}**`,
+      `Crawl stats - crawled: **${crawledData.length}**, cache diff: **${cacheDiffNotices.length}**, new: **${newNotices.length}**`,
       {
         totalCrawled: crawledData.length,
         cacheDiff: cacheDiffNotices.length,
@@ -318,7 +318,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       void this.discordBridge?.logEvent(
         BridgeLogLevel.VERBOSE,
         CrawlingSchedulerService.name,
-        `No new notices — cache refreshed with **${crawledData.length}** existing notice(s)`,
+        `No new notices - cache refreshed with **${crawledData.length}** existing notice(s)`,
         { total: crawledData.length },
       );
     }
@@ -343,7 +343,18 @@ export class CrawlingSchedulerService implements OnModuleInit {
     const changedRetriedNotices = noticesWithSummary.filter((notice) => {
       const previousState = archiveSummaryStates.get(notice.num);
 
-      if (!previousState || previousState.aiSummaryStatus !== 'unavailable') {
+      if (!previousState) {
+        return false;
+      }
+
+      // Persist when the previous state was either:
+      //  - 'not_requested': archive row saved without a summary (e.g. full-sync bootstrap)
+      //  - 'unavailable': previous generation failed and was just retried
+      const wasPending =
+        previousState.aiSummaryStatus === 'not_requested' ||
+        previousState.aiSummaryStatus === 'unavailable';
+
+      if (!wasPending) {
         return false;
       }
 

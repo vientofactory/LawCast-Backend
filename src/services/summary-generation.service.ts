@@ -68,7 +68,14 @@ export class SummaryGenerationService {
 
         const archivedSummaryState = archiveSummaryStates.get(notice.num);
 
-        if (archivedSummaryState) {
+        // Skip generation only for terminal states (ready / not_supported).
+        // 'not_requested' means the archive row was saved without ever attempting
+        // a summary (e.g. by the full-sync bootstrap), so fall through and generate.
+        // 'unavailable' follows the existing retry-flag logic below.
+        if (
+          archivedSummaryState &&
+          archivedSummaryState.aiSummaryStatus !== 'not_requested'
+        ) {
           if (
             retryUnavailableArchiveSummary &&
             archivedSummaryState.aiSummaryStatus === 'unavailable'
@@ -245,7 +252,7 @@ export class SummaryGenerationService {
    * Checks if AI summary generation is enabled.
    * @returns A boolean indicating whether AI summary generation is enabled.
    */
-  private isAiSummaryEnabled(): boolean {
+  isAiSummaryEnabled(): boolean {
     return this.ollamaClientService.isEnabled();
   }
 

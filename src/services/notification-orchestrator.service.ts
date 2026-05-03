@@ -37,7 +37,7 @@ export class NotificationOrchestratorService {
         void this.discordBridge?.logEvent(
           BridgeLogLevel.DEBUG,
           NotificationOrchestratorService.name,
-          `Large batch detected: **${notices.length}** notices — applying batch size limit of 50`,
+          `Large batch detected: **${notices.length}** notices - applying batch size limit of 50`,
           { noticeCount: notices.length, batchSizeLimit: 50 },
         );
       }

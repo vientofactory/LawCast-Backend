@@ -206,4 +206,63 @@ describe('NoticeArchiveService', () => {
 
     expect(result).toBeNull();
   });
+
+  describe('getPendingSummaryPage', () => {
+    it('queries only not_requested rows and maps fields to CachedNotice shape', async () => {
+      const pendingRows: NoticeArchive[] = [
+        buildRow({
+          noticeNum: 1001,
+          subject: '백필 테스트 법률안',
+          proposerCategory: '정부',
+          committee: '국방위원회',
+          assemblyLink: 'https://example.com/1001',
+          contentId: 'PRC_BACKFILL_1',
+          attachmentPdfFile: 'test.pdf',
+          attachmentHwpFile: 'test.hwp',
+          aiSummaryStatus: 'not_requested',
+          aiSummary: null,
+        }),
+      ];
+
+      const findMock = jest
+        .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+        .mockResolvedValue(pendingRows);
+      const repoMock = { ...createRepositoryMock(), find: findMock };
+      const service = new NoticeArchiveService(repoMock as any);
+
+      const result = await service.getPendingSummaryPage(50);
+
+      expect(findMock).toHaveBeenCalledTimes(1);
+      const callArg = findMock.mock.calls[0][0] as Record<string, unknown>;
+      expect(
+        (callArg['where'] as Record<string, unknown>)['aiSummaryStatus'],
+      ).toBe('not_requested');
+      expect(callArg['take']).toBe(50);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        num: 1001,
+        subject: '백필 테스트 법률안',
+        proposerCategory: '정부',
+        committee: '국방위원회',
+        link: 'https://example.com/1001',
+        contentId: 'PRC_BACKFILL_1',
+        attachments: { pdfFile: 'test.pdf', hwpFile: 'test.hwp' },
+        aiSummary: null,
+        aiSummaryStatus: 'not_requested',
+      });
+    });
+
+    it('returns an empty array when no pending rows exist', async () => {
+      const findMock = jest
+        .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+        .mockResolvedValue([]);
+      const repoMock = { ...createRepositoryMock(), find: findMock };
+      const service = new NoticeArchiveService(repoMock as any);
+
+      const result = await service.getPendingSummaryPage(50);
+
+      expect(result).toEqual([]);
+    });
+  });
 });

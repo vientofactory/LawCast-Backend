@@ -30,7 +30,7 @@ import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
 import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
 import { APP_CONSTANTS } from '../config/app.config';
 import { RuntimeStatsService } from '../services/runtime-stats.service';
-import { IsDoneSyncService } from '../services/is-done-sync.service';
+import { ArchiveSyncService } from '../services/archive-sync.service';
 
 @Controller('api')
 export class ApiController {
@@ -46,7 +46,7 @@ export class ApiController {
     private readonly noticesQueryService: NoticesQueryService,
     private readonly noticeSearchService: NoticeSearchService,
     private readonly runtimeStatsService: RuntimeStatsService,
-    private readonly isDoneSyncService: IsDoneSyncService,
+    private readonly archiveSyncService: ArchiveSyncService,
   ) {}
 
   @Post('webhooks')
@@ -227,7 +227,7 @@ export class ApiController {
       this.crawlingService,
       this.batchProcessingService,
       this.noticeArchiveService,
-      this.isDoneSyncService,
+      this.archiveSyncService,
     );
     return ApiResponseUtils.success(stats);
   }

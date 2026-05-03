@@ -12,7 +12,7 @@ import { NoticeArchiveService } from '../services/notice-archive.service';
 import { NoticesQueryService } from '../services/notices-query.service';
 import { NoticeSearchService } from '../services/notice-search.service';
 import { RuntimeStatsService } from '../services/runtime-stats.service';
-import { IsDoneSyncService } from '../services/is-done-sync.service';
+import { ArchiveSyncService } from '../services/archive-sync.service';
 
 // NoticeArchiveService 모킹
 const mockBuildArchiveExportZip = jest.fn();
@@ -104,9 +104,9 @@ describe('ApiController archive export', () => {
           },
         },
         {
-          provide: IsDoneSyncService,
+          provide: ArchiveSyncService,
           useValue: {
-            getSyncStatus: jest.fn().mockReturnValue({
+            getIsDoneSyncStatus: jest.fn().mockReturnValue({
               status: 'idle',
               lastRunAt: null,
               lastResult: null,

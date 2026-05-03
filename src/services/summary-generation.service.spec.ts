@@ -124,6 +124,32 @@ describe('SummaryGenerationService', () => {
       expect(ollamaClientService.summarizeProposal).not.toHaveBeenCalled();
     });
 
+    it('should generate a new summary when archive state is not_requested', async () => {
+      // Simulates a notice archived by executeFullSync without a summary
+      const archiveSummaryStates = new Map([
+        [1, { aiSummary: null, aiSummaryStatus: 'not_requested' as const }],
+      ]);
+
+      (ollamaClientService.isEnabled as jest.Mock).mockReturnValue(true);
+      (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
+        title: 'Test Title',
+        proposalReason: 'Test Proposal Reason',
+      });
+      (ollamaClientService.summarizeProposal as jest.Mock).mockResolvedValue(
+        '새로운 요약',
+      );
+
+      const result = await service.enrichNoticesWithSummary(
+        [mockNotice],
+        new Map(),
+        archiveSummaryStates,
+      );
+
+      expect(result[0].aiSummary).toBe('새로운 요약');
+      expect(result[0].aiSummaryStatus).toBe('ready');
+      expect(ollamaClientService.summarizeProposal).toHaveBeenCalled();
+    });
+
     it('should retry unavailable archived summaries when option is enabled', async () => {
       const archiveSummaryStates = new Map([
         [1, { aiSummary: null, aiSummaryStatus: 'unavailable' as const }],

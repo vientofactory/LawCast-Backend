@@ -23,11 +23,11 @@ export class ArchiveOrchestratorService {
    * Archives the given notices by fetching their content and source HTML, then saving them to the archive database. This method processes notices in batches
    * to optimize performance and resource usage.
    * @param notices An array of notices to be archived.
-   * @returns A promise that resolves when all notices have been processed.
+   * @returns The number of notices successfully saved to the archive.
    */
-  async archiveNotices(notices: CachedNotice[]): Promise<void> {
+  async archiveNotices(notices: CachedNotice[]): Promise<number> {
     if (notices.length === 0) {
-      return;
+      return 0;
     }
 
     void this.discordBridge?.logEvent(
@@ -38,11 +38,12 @@ export class ArchiveOrchestratorService {
     );
 
     const concurrency = 5;
+    let savedCount = 0;
 
     for (let i = 0; i < notices.length; i += concurrency) {
       const chunk = notices.slice(i, i + concurrency);
 
-      await Promise.all(
+      const chunkResults = await Promise.all(
         chunk.map(async (notice) => {
           let proposalReason = '';
           let sourceTitle: string | null = notice.subject;
@@ -124,6 +125,7 @@ export class ArchiveOrchestratorService {
               archivedAt,
               httpMetadata,
             });
+            return true;
           } catch (error) {
             const message =
               error instanceof Error ? error.message : String(error);
@@ -131,10 +133,15 @@ export class ArchiveOrchestratorService {
               `Failed to archive notice ${notice.num}: ${message}`,
               error,
             );
+            return false;
           }
         }),
       );
+
+      savedCount += chunkResults.filter(Boolean).length;
     }
+
+    return savedCount;
   }
 
   /**

@@ -109,6 +109,26 @@ export class CrawlingCoreService {
   }
 
   /**
+   * Async generator that yields every page of active notices from the crawler.
+   * Use `query.pageUnit` (max 100) to control items-per-page, and
+   * `options.delayMs` to throttle between requests.
+   * @param query Search query parameters (excluding pageIndex).
+   * @param options Bulk fetching options (e.g., delayMs for throttling).
+   * @returns An async generator yielding search results for all active notices.
+   */
+  async *getAllPages(
+    query?: Omit<ISearchQuery, 'pageIndex'>,
+    options?: IBulkOptions,
+  ): AsyncGenerator<ISearchResult> {
+    try {
+      yield* this.createClient().getAllPages(query, options);
+    } catch (error) {
+      this.logger.error('Error streaming active notice pages:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Async generator that yields every page of done notices from the crawler.
    * Use `query.pageUnit` (max 100) to control items-per-page, and
    * `options.delayMs` to throttle between requests.
