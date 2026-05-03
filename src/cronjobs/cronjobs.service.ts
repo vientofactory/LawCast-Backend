@@ -22,7 +22,9 @@ export class CronJobsService {
   ) {}
 
   /**
-   * 로깅을 위한 공통 실행 래퍼
+   * Wraps the execution of a scheduled task with standardized logging and error handling.
+   * @param taskName A descriptive name of the task for logging purposes.
+   * @param task An asynchronous function that performs the actual work of the scheduled task.
    */
   private async execute(
     taskName: string,
@@ -53,7 +55,7 @@ export class CronJobsService {
       void this.discordBridge.logEvent(
         BridgeLogLevel.ERROR,
         CronJobsService.name,
-        `Scheduled task failed: **${taskName}** — ${(error as Error).message}`,
+        `Scheduled task failed: **${taskName}** - ${(error as Error).message}`,
       );
     }
   }

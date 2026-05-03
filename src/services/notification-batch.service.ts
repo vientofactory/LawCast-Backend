@@ -137,7 +137,7 @@ export class NotificationBatchService {
     void this.discordBridge.logEvent(
       BridgeLogLevel.VERBOSE,
       NotificationBatchService.name,
-      `Starting notification dispatch — **${activeWebhooks.length}** active webhook(s) found`,
+      `Starting notification dispatch - **${activeWebhooks.length}** active webhook(s) found`,
       { webhookCount: activeWebhooks.length },
     );
 

@@ -100,7 +100,7 @@ DISCORD_BRIDGE_ADMIN_USER_IDS=
 | ------------------------------- | ---- | ---------------------------------------------------------------------------------------- |
 | `DISCORD_BRIDGE_ENABLED`        | -    | `true`로 설정해야 활성화 (기본값: `false`)                                               |
 | `DISCORD_BRIDGE_BOT_TOKEN`      | ✅   | Discord 봇 토큰 (Developer Portal > Bot > Token)                                         |
-| `DISCORD_BRIDGE_GUILD_ID`       | -    | 길드(서버) ID — 설정 시 슬래시 명령어 즉시 등록, 미설정 시 글로벌 등록 (최대 1시간 소요) |
+| `DISCORD_BRIDGE_GUILD_ID`       | -    | 길드(서버) ID - 설정 시 슬래시 명령어 즉시 등록, 미설정 시 글로벌 등록 (최대 1시간 소요) |
 | `DISCORD_BRIDGE_CHANNEL_ID`     | ✅   | 슬래시 명령어를 입력할 채널 Snowflake ID                                                 |
 | `DISCORD_BRIDGE_LOG_CHANNEL_ID` | ✅   | 이벤트 로그가 전송될 채널 Snowflake ID                                                   |
 | `DISCORD_BRIDGE_LOG_LEVEL`      | -    | 최대 로그 레벨: `ERROR` `WARN` `LOG` `DEBUG` `VERBOSE` (기본값: `LOG`)                   |

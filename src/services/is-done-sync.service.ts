@@ -1,8 +1,9 @@
-import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
 import { CrawlingCoreService } from './crawling-core.service';
 import { NoticeArchiveService } from './notice-archive.service';
 import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
+import { LoggerUtils } from '../utils/logger.utils';
 
 /** DB rows fetched per revert-pass batch. Larger = fewer round-trips, more memory. */
 const BATCH_SIZE = 500;
@@ -39,7 +40,6 @@ interface RevertPassResult {
 
 @Injectable()
 export class IsDoneSyncService implements OnModuleInit {
-  private readonly logger = new Logger(IsDoneSyncService.name);
   private isSyncing = false;
   private lastStatus: IsDoneSyncStatus = {
     status: 'idle',
@@ -60,13 +60,16 @@ export class IsDoneSyncService implements OnModuleInit {
    * before the first scheduled cron tick.
    */
   onModuleInit(): void {
-    this.logger.log('Scheduling initial isDone sync in background...');
+    LoggerUtils.logDev(
+      IsDoneSyncService.name,
+      'Scheduling initial isDone sync in background...',
+    );
     void this.runSync('bootstrap');
   }
 
   /**
    * Returns a snapshot of the current sync state for metrics/status endpoints.
-   * The returned object is immutable — callers must not mutate it.
+   * The returned object is immutable - callers must not mutate it.
    */
   getSyncStatus(): IsDoneSyncStatus {
     return { ...this.lastStatus };
@@ -80,8 +83,9 @@ export class IsDoneSyncService implements OnModuleInit {
    */
   async runSync(trigger: string): Promise<IsDoneSyncResult | null> {
     if (this.isSyncing) {
-      this.logger.warn(
-        `isDone sync already in progress — skipping [${trigger}]`,
+      LoggerUtils.warn(
+        IsDoneSyncService.name,
+        `isDone sync already in progress - skipping [${trigger}]`,
       );
       return null;
     }
@@ -130,13 +134,14 @@ export class IsDoneSyncService implements OnModuleInit {
    * final result. Delegates each phase to a focused private method.
    */
   private async reconcile(): Promise<IsDoneSyncResult> {
-    this.logger.log('isDone reconciliation started');
+    LoggerUtils.logDev(IsDoneSyncService.name, 'isDone reconciliation started');
 
     const { doneNumSet, markedDoneCount } = await this.fetchAndMarkDonePages();
 
     if (doneNumSet.size === 0) {
-      this.logger.warn(
-        'Crawler returned zero done notices — reconciliation skipped',
+      LoggerUtils.warn(
+        IsDoneSyncService.name,
+        'Crawler returned zero done notices - reconciliation skipped',
       );
       return {
         fetchedDoneCount: 0,
@@ -149,8 +154,9 @@ export class IsDoneSyncService implements OnModuleInit {
     const { revertedCount, totalScanned } =
       await this.revertStaleDoneRows(doneNumSet);
 
-    this.logger.log(
-      `isDone reconciliation done — ` +
+    LoggerUtils.log(
+      IsDoneSyncService.name,
+      `isDone reconciliation done - ` +
         `fetched=${doneNumSet.size} marked=${markedDoneCount} ` +
         `reverted=${revertedCount} scanned=${totalScanned}`,
     );
@@ -168,7 +174,7 @@ export class IsDoneSyncService implements OnModuleInit {
   /**
    * Streams all done-notice pages from the crawler. For each page that
    * arrives, `isDone` is immediately set to true in the DB for that page's
-   * notice nums — overlapping DB writes with the crawler's inter-page delay.
+   * notice nums - overlapping DB writes with the crawler's inter-page delay.
    *
    * Safe to mark eagerly: `isDone false→true` is fully determined the moment
    * a num appears on any crawler page.
@@ -188,14 +194,16 @@ export class IsDoneSyncService implements OnModuleInit {
         await this.noticeArchiveService.markNoticesDoneByNums(pageNums);
       markedDoneCount += marked;
 
-      this.logger.debug(
+      LoggerUtils.debugDev(
+        IsDoneSyncService.name,
         `Page ${page.currentPage}/${page.totalPages}: ` +
           `+${page.items.length} nums, ${marked} newly marked`,
       );
     }
 
-    this.logger.log(
-      `Phase 1 complete — ${doneNumSet.size} done num(s) fetched, ${markedDoneCount} marked`,
+    LoggerUtils.logDev(
+      IsDoneSyncService.name,
+      `Phase 1 complete - ${doneNumSet.size} done num(s) fetched, ${markedDoneCount} marked`,
     );
 
     return { doneNumSet, markedDoneCount };
@@ -208,7 +216,7 @@ export class IsDoneSyncService implements OnModuleInit {
    * whose noticeNum is absent from `doneNumSet`.
    *
    * By querying only already-marked rows we skip the entire `isDone=false`
-   * population, so each record independently qualifies itself — no full-table
+   * population, so each record independently qualifies itself - no full-table
    * scan needed.
    *
    * Must run after Phase 1: a row is safe to revert only after the complete
@@ -237,7 +245,8 @@ export class IsDoneSyncService implements OnModuleInit {
           await this.noticeArchiveService.revertNoticesDoneByNums(toRevert);
       }
 
-      this.logger.debug(
+      LoggerUtils.debugDev(
+        IsDoneSyncService.name,
         `Phase 2 [${skip}-${skip + batch.length - 1}]: ` +
           `scanned=${batch.length} reverted=${toRevert.length}`,
       );
@@ -246,8 +255,9 @@ export class IsDoneSyncService implements OnModuleInit {
       skip += BATCH_SIZE;
     }
 
-    this.logger.log(
-      `Phase 2 complete — scanned=${totalScanned} reverted=${revertedCount}`,
+    LoggerUtils.logDev(
+      IsDoneSyncService.name,
+      `Phase 2 complete - scanned=${totalScanned} reverted=${revertedCount}`,
     );
 
     return { revertedCount, totalScanned };

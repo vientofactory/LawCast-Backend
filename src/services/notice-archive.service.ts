@@ -223,7 +223,7 @@ export class NoticeArchiveService {
   /**
    * Returns one page of noticeNums that are currently marked isDone=true,
    * ordered by noticeNum ASC. Used by the revert pass to scan only the
-   * records that could potentially need reverting — skips isDone=false rows
+   * records that could potentially need reverting - skips isDone=false rows
    * entirely.
    */
   async getDoneMarkedNumsPage(skip: number, take: number): Promise<number[]> {
