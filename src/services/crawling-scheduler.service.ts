@@ -41,7 +41,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
   private async initializeCacheInBackground(): Promise<void> {
     this.logger.log('Initializing cache with recent legislative notices...');
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.LOG,
       CrawlingSchedulerService.name,
       'Cache initialization started',
@@ -49,14 +49,14 @@ export class CrawlingSchedulerService implements OnModuleInit {
     try {
       await this.initializeCache();
       this.logger.log('Cache initialization completed successfully');
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.LOG,
         CrawlingSchedulerService.name,
         'Cache initialization completed successfully',
       );
     } catch (error) {
       this.logger.error('Failed to initialize cache:', error);
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.ERROR,
         CrawlingSchedulerService.name,
         `Cache initialization failed: ${(error as Error).message}`,
@@ -73,7 +73,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     }
 
     if (this.isProcessing) {
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.WARN,
         CrawlingSchedulerService.name,
         'Previous crawling process is still running, skipping...',
@@ -90,7 +90,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       await this.performCrawlingAndNotification();
     } catch (error) {
       this.logger.error('Error during crawling process', error);
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.ERROR,
         CrawlingSchedulerService.name,
         `Crawling process failed: ${(error as Error).message}`,
@@ -107,7 +107,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     const crawledData = await this.crawlingCoreService.crawlData();
 
     if (!crawledData || crawledData.length === 0) {
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.WARN,
         CrawlingSchedulerService.name,
         'No data received from crawler during initialization',
@@ -150,7 +150,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       this.logger.log(
         `Archived ${missingArchiveNotices.length} missing notices during bootstrap initialization`,
       );
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.VERBOSE,
         CrawlingSchedulerService.name,
         `Bootstrap archived **${missingArchiveNotices.length}** missing notice(s)`,
@@ -163,7 +163,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     this.logger.log(
       `Initialized Redis cache with ${noticesWithSummary.length} notices`,
     );
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.VERBOSE,
       CrawlingSchedulerService.name,
       `Bootstrap cache loaded: **${noticesWithSummary.length}** notice(s) stored in Redis`,
@@ -179,7 +179,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
     if (!crawledData || crawledData.length === 0) {
       this.logger.warn('No data received from crawler');
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.WARN,
         CrawlingSchedulerService.name,
         'No data received from crawler',
@@ -197,10 +197,10 @@ export class CrawlingSchedulerService implements OnModuleInit {
     const existingNotices = await this.cacheService.getRecentNotices(1000);
     const existingNoticeMap = this.buildNoticeMap(existingNotices);
 
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.VERBOSE,
       CrawlingSchedulerService.name,
-      `Crawl stats — crawled: **${crawledData.length}**, cache diff: **${cacheDiffNotices.length}**, new: **${newNotices.length}**`,
+      `Crawl stats - crawled: **${crawledData.length}**, cache diff: **${cacheDiffNotices.length}**, new: **${newNotices.length}**`,
       {
         totalCrawled: crawledData.length,
         cacheDiff: cacheDiffNotices.length,
@@ -210,7 +210,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
     if (newNotices.length > 0) {
       this.logger.log(`Found ${newNotices.length} new legislative notices`);
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.LOG,
         CrawlingSchedulerService.name,
         `Found **${newNotices.length}** new legislative notice(s)`,
@@ -280,7 +280,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
         .sendNotifications(newNoticesWithSummary)
         .catch((error) => {
           this.logger.error('Background notification dispatch failed:', error);
-          void this.discordBridge.logEvent(
+          void this.discordBridge?.logEvent(
             BridgeLogLevel.ERROR,
             CrawlingSchedulerService.name,
             'Background notification dispatch failed',
@@ -315,10 +315,10 @@ export class CrawlingSchedulerService implements OnModuleInit {
         );
 
       await this.cacheService.updateCache(noticesWithRetriedSummary);
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.VERBOSE,
         CrawlingSchedulerService.name,
-        `No new notices — cache refreshed with **${crawledData.length}** existing notice(s)`,
+        `No new notices - cache refreshed with **${crawledData.length}** existing notice(s)`,
         { total: crawledData.length },
       );
     }
@@ -343,7 +343,18 @@ export class CrawlingSchedulerService implements OnModuleInit {
     const changedRetriedNotices = noticesWithSummary.filter((notice) => {
       const previousState = archiveSummaryStates.get(notice.num);
 
-      if (!previousState || previousState.aiSummaryStatus !== 'unavailable') {
+      if (!previousState) {
+        return false;
+      }
+
+      // Persist when the previous state was either:
+      //  - 'not_requested': archive row saved without a summary (e.g. full-sync bootstrap)
+      //  - 'unavailable': previous generation failed and was just retried
+      const wasPending =
+        previousState.aiSummaryStatus === 'not_requested' ||
+        previousState.aiSummaryStatus === 'unavailable';
+
+      if (!wasPending) {
         return false;
       }
 
@@ -398,7 +409,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     this.logger.log(
       `Retrying unavailable summaries for ${retryCandidates.length} notices`,
     );
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.WARN,
       CrawlingSchedulerService.name,
       `Retrying unavailable summaries for ${retryCandidates.length} notices`,
@@ -429,7 +440,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     const recoveredCount = retryResults.filter(
       (r) => r.aiSummaryStatus === 'ready',
     ).length;
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.DEBUG,
       CrawlingSchedulerService.name,
       `Summary retry: **${recoveredCount}/${retryCandidates.length}** recovered`,

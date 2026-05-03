@@ -1,8 +1,3 @@
-import JSZip from 'jszip';
-/**
- * 아카이브 zip 파일 생성 및 buffer 반환 (컨트롤러 위임용)
- */
-
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
@@ -21,6 +16,7 @@ import {
 import { type AISummaryStatus, type CachedNotice } from '../types/cache.types';
 import { NoticeArchive } from '../entities/notice-archive.entity';
 import { buildArchiveExportArtifacts } from './archive-export.builder';
+import JSZip from 'jszip';
 
 export interface ArchiveListQuery {
   page: number;
@@ -29,6 +25,7 @@ export interface ArchiveListQuery {
   startDate?: Date;
   endDate?: Date;
   sortOrder?: 'asc' | 'desc';
+  isDone?: boolean;
 }
 
 export interface ArchiveOffsetQuery {
@@ -38,6 +35,7 @@ export interface ArchiveOffsetQuery {
   startDate?: Date;
   endDate?: Date;
   sortOrder?: 'asc' | 'desc';
+  isDone?: boolean;
 }
 
 export interface ArchiveNumCompareCountQuery {
@@ -55,6 +53,7 @@ export interface ArchiveNoticeItem {
   committee: string;
   link: string;
   contentId: string | null;
+  isDone: boolean;
   aiSummary: string | null;
   aiSummaryStatus: AISummaryStatus;
   attachments: {
@@ -138,6 +137,7 @@ export class NoticeArchiveService {
   async upsertNoticeArchive(
     notice: CachedNotice,
     originalContent: {
+      isDone?: boolean;
       proposalReason: string;
       title?: string | null;
       billNumber?: string | null;
@@ -186,9 +186,96 @@ export class NoticeArchiveService {
       httpContentType: normalizedHttpMetadata?.contentType ?? null,
       httpEtag: normalizedHttpMetadata?.etag ?? null,
       httpLastModified: normalizedHttpMetadata?.lastModified ?? null,
+      isDone: originalContent.isDone ?? false,
     });
 
     await this.archiveRepository.upsert(entity, ['noticeNum']);
+  }
+
+  /**
+   * Bulk-updates archive records matching the given notice numbers to isDone=true.
+   * Records already marked as done are not touched.
+   * @returns Number of rows actually changed
+   */
+  async markNoticesDoneByNums(nums: number[]): Promise<number> {
+    if (nums.length === 0) return 0;
+    const result = await this.archiveRepository.update(
+      { noticeNum: In(nums), isDone: false },
+      { isDone: true },
+    );
+    return result.affected ?? 0;
+  }
+
+  /**
+   * Bulk-reverts archive records matching the given notice numbers to isDone=false.
+   * Records already marked as active are not touched.
+   * @returns Number of rows actually changed
+   */
+  async revertNoticesDoneByNums(nums: number[]): Promise<number> {
+    if (nums.length === 0) return 0;
+    const result = await this.archiveRepository.update(
+      { noticeNum: In(nums), isDone: true },
+      { isDone: false },
+    );
+    return result.affected ?? 0;
+  }
+
+  /**
+   * Returns one page of noticeNums that are currently marked isDone=true,
+   * ordered by noticeNum ASC. Used by the revert pass to scan only the
+   * records that could potentially need reverting - skips isDone=false rows
+   * entirely.
+   */
+  async getDoneMarkedNumsPage(skip: number, take: number): Promise<number[]> {
+    const rows = await this.archiveRepository.find({
+      select: { noticeNum: true },
+      where: { isDone: true },
+      order: { noticeNum: 'ASC' },
+      skip,
+      take,
+    });
+    return rows.map((row) => row.noticeNum);
+  }
+
+  /**
+   * Returns the first `take` archive rows whose `aiSummaryStatus` is
+   * `'not_requested'`, ordered by `noticeNum` ascending.
+   *
+   * Intended for a **drain loop** - callers should always pass `skip=0`
+   * because processed rows transition away from `'not_requested'` and
+   * naturally drop out of subsequent calls.
+   */
+  async getPendingSummaryPage(take: number): Promise<CachedNotice[]> {
+    const rows = await this.archiveRepository.find({
+      where: { aiSummaryStatus: 'not_requested' },
+      select: {
+        noticeNum: true,
+        subject: true,
+        proposerCategory: true,
+        committee: true,
+        assemblyLink: true,
+        contentId: true,
+        attachmentPdfFile: true,
+        attachmentHwpFile: true,
+      },
+      order: { noticeNum: 'ASC' },
+      take,
+    });
+
+    return rows.map((row) => ({
+      num: row.noticeNum,
+      subject: row.subject,
+      proposerCategory: row.proposerCategory,
+      committee: row.committee,
+      link: row.assemblyLink,
+      contentId: row.contentId,
+      attachments: {
+        pdfFile: row.attachmentPdfFile ?? '',
+        hwpFile: row.attachmentHwpFile ?? '',
+      },
+      aiSummary: null,
+      aiSummaryStatus: 'not_requested' as const,
+    }));
   }
 
   async getArchiveNotices(query: ArchiveListQuery): Promise<{
@@ -207,6 +294,7 @@ export class NoticeArchiveService {
       search,
       startDate: query.startDate,
       endDate: query.endDate,
+      isDone: query.isDone,
     });
     const sortOrder = this.normalizeSortOrder(query.sortOrder);
 
@@ -259,6 +347,7 @@ export class NoticeArchiveService {
       search,
       startDate: query.startDate,
       endDate: query.endDate,
+      isDone: query.isDone,
     });
     const sortOrder = this.normalizeSortOrder(query.sortOrder);
 
@@ -383,13 +472,13 @@ export class NoticeArchiveService {
 
     const zip = new JSZip();
 
-    // JSON 파일 추가
+    // JSON Artifacts
     zip.file(artifacts.jsonFileName, artifacts.jsonContent);
 
-    // 무결성 메타데이터 파일 추가
+    // Integrity Snapshot
     zip.file(artifacts.integrityFileName, artifacts.integrityContent);
 
-    // 검증 스크립트 추가
+    // Verification Scripts
     for (const script of artifacts.verificationScripts) {
       zip.file(script.fileName, script.content);
     }
@@ -427,6 +516,92 @@ export class NoticeArchiveService {
 
   async getArchiveCount(): Promise<number> {
     return this.archiveRepository.count();
+  }
+
+  /**
+   * Paginates through every archive record and verifies its stored SHA-256
+   * hash against a freshly computed hash of `sourceHtml`.  Results are
+   * persisted back to `integrityVerifiedAt` / `integrityCheckPassed` so
+   * subsequent detail views reflect the latest check.
+   *
+   * Rows without `sourceHtml` or `sourceHtmlSha256` are counted as skipped.
+   *
+   * @param batchSize Number of rows fetched per round-trip (default 200).
+   */
+  async runIntegrityScan(batchSize = 200): Promise<{
+    scanned: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+  }> {
+    let skip = 0;
+    let scanned = 0;
+    let passed = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    for (;;) {
+      const rows = await this.archiveRepository.find({
+        select: {
+          id: true,
+          sourceHtml: true,
+          sourceHtmlSha256: true,
+          integrityCheckPassed: true,
+          integrityVerifiedAt: true,
+        },
+        order: { id: 'ASC' },
+        skip,
+        take: batchSize,
+      });
+
+      if (rows.length === 0) break;
+
+      const checkedAt = new Date();
+      const updates: Array<{
+        id: number;
+        integrityCheckPassed: boolean;
+        integrityVerifiedAt: Date;
+      }> = [];
+
+      for (const row of rows) {
+        scanned++;
+        if (!row.sourceHtml || !row.sourceHtmlSha256) {
+          skipped++;
+          continue;
+        }
+        const computed = this.computeSha256(row.sourceHtml);
+        const ok = computed === row.sourceHtmlSha256;
+        if (ok) passed++;
+        else failed++;
+
+        if (row.integrityCheckPassed !== ok || !row.integrityVerifiedAt) {
+          updates.push({
+            id: row.id,
+            integrityCheckPassed: ok,
+            integrityVerifiedAt: checkedAt,
+          });
+        }
+      }
+
+      if (updates.length > 0) {
+        await Promise.all(
+          updates.map((u) =>
+            this.archiveRepository.update(
+              { id: u.id },
+              {
+                integrityCheckPassed: u.integrityCheckPassed,
+                integrityVerifiedAt: u.integrityVerifiedAt,
+              },
+            ),
+          ),
+        );
+      }
+
+      if (rows.length < batchSize) break;
+      skip += batchSize;
+    }
+
+    return { scanned, passed, failed, skipped };
   }
 
   async getArchiveStartedAtByNoticeNums(
@@ -519,6 +694,7 @@ export class NoticeArchiveService {
       committee: row.committee,
       link: row.assemblyLink,
       contentId: row.contentId,
+      isDone: row.isDone ?? false,
       aiSummary: row.aiSummary,
       aiSummaryStatus: (row.aiSummaryStatus ||
         'not_requested') as AISummaryStatus,
@@ -578,6 +754,7 @@ export class NoticeArchiveService {
     startDate?: Date;
     endDate?: Date;
     noticeNumCondition?: FindOperator<number>;
+    isDone?: boolean;
   }):
     | FindOptionsWhere<NoticeArchive>
     | FindOptionsWhere<NoticeArchive>[]
@@ -587,6 +764,10 @@ export class NoticeArchiveService {
 
     if (params.noticeNumCondition) {
       baseWhere.noticeNum = params.noticeNumCondition;
+    }
+
+    if (params.isDone !== undefined) {
+      baseWhere.isDone = params.isDone;
     }
 
     if (params.startDate && params.endDate) {

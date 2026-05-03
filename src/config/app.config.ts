@@ -133,6 +133,7 @@ export const APP_CONSTANTS = {
       WEBHOOK_CLEANUP: '0 0 0 * * *', // 매일 자정
       WEBHOOK_OPTIMIZATION: '0 0 2 * * *', // 매일 새벽 2시
       SYSTEM_MONITORING: '0 0 * * * *', // 매시간
+      IS_DONE_SYNC: '0 0 */6 * * *', // every 6 hours - sync isDone flags for expired notices
     },
   },
 } as const;

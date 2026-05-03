@@ -49,7 +49,7 @@ export class NotificationBatchService {
       `Starting notification batch processing for ${notices.length} notices`,
     );
 
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.LOG,
       NotificationBatchService.name,
       `Notification batch started for **${notices.length}** notice(s)`,
@@ -90,7 +90,7 @@ export class NotificationBatchService {
             ` (webhooks: ${totalWebhooks}, deactivated: ${deactivated}, temporary failures: ${temporaryFailures})`,
         );
 
-        void this.discordBridge.logEvent(
+        void this.discordBridge?.logEvent(
           failureCount > 0 ? BridgeLogLevel.WARN : BridgeLogLevel.LOG,
           NotificationBatchService.name,
           `Batch **${batchRunId}** completed: ${successCount} success, ${failureCount} failed`,
@@ -106,7 +106,7 @@ export class NotificationBatchService {
       })
       .catch((error) => {
         this.logger.error(`Batch ${batchRunId} processing error:`, error);
-        void this.discordBridge.logEvent(
+        void this.discordBridge?.logEvent(
           BridgeLogLevel.ERROR,
           NotificationBatchService.name,
           `Batch **${batchRunId}** failed: ${(error as Error).message}`,
@@ -134,10 +134,10 @@ export class NotificationBatchService {
   ): Promise<BatchJobResult<NotificationJobResult>[]> {
     const activeWebhooks = (await this.webhookService.findAll()) ?? [];
 
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.VERBOSE,
       NotificationBatchService.name,
-      `Starting notification dispatch — **${activeWebhooks.length}** active webhook(s) found`,
+      `Starting notification dispatch - **${activeWebhooks.length}** active webhook(s) found`,
       { webhookCount: activeWebhooks.length },
     );
 
@@ -208,7 +208,7 @@ export class NotificationBatchService {
             `Immediately deactivated ${permanentFailures.length} webhooks that failed on first attempt`,
           );
 
-          void this.discordBridge.logEvent(
+          void this.discordBridge?.logEvent(
             BridgeLogLevel.WARN,
             NotificationBatchService.name,
             `Deactivated **${permanentFailures.length}** permanently-failing webhook(s) for notice: **${notice.subject}**`,

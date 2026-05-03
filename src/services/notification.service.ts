@@ -14,13 +14,13 @@ import { type CachedNotice } from '../types/cache.types';
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
 
-  // 레이트 리밋 키
+  // Rate limit keys
   private readonly RATE_LIMIT_KEYS = {
     GLOBAL: 'rate_limit:global',
     WEBHOOK: (webhookId: number) => `rate_limit:webhook:${webhookId}`,
   };
 
-  // 영구적으로 실패한 웹훅들을 추적하여 중복 시도 방지
+  // Tracks permanently failed webhooks to prevent duplicate attempts
   private readonly permanentlyFailedWebhooks = new Set<number>();
   private globalLastSendAt = 0;
   private readonly webhookLastSendAt = new Map<number, number>();
@@ -31,29 +31,12 @@ export class NotificationService {
     private configService: ConfigService,
   ) {}
 
-  async sendDiscordNotification(
-    notice: CachedNotice,
-    webhooks: Webhook[],
-  ): Promise<void> {
-    const embed = await this.createNotificationEmbed(notice);
-
-    for (const webhook of webhooks) {
-      try {
-        const discordWebhook = new DiscordWebhook(webhook.url);
-        discordWebhook.setUsername('LawCast 알리미');
-
-        await discordWebhook.send(embed);
-      } catch (error) {
-        this.logger.error(
-          `Failed to send notification to webhook ${webhook.id}:`,
-          error,
-        );
-      }
-    }
-  }
-
   /**
-   * 병렬로 여러 웹훅에 알림을 전송하고 결과를 반환
+   * Sends notifications to multiple webhooks in parallel and returns the results.
+   * @param notice The cached notice to be sent.
+   * @param webhooks The array of webhooks to send the notification to.
+   * @param abortSignal Optional signal to abort the batch operation.
+   * @returns A promise that resolves to an array of results for each webhook.
    */
   async sendDiscordNotificationBatch(
     notice: CachedNotice,
@@ -77,13 +60,13 @@ export class NotificationService {
       shouldDelete?: boolean;
     }> = [];
 
-    // Discord 레이트 리밋을 준수하며 순차적으로 처리
+    // Process webhooks sequentially while respecting Discord rate limits
     for (const webhook of webhooks) {
       if (abortSignal?.aborted) {
         throw new Error('Notification batch aborted');
       }
 
-      // 이미 영구적으로 실패한 웹훅은 건너뛰기
+      // Skip webhooks that have already permanently failed
       if (this.permanentlyFailedWebhooks.has(webhook.id)) {
         results.push({
           webhookId: webhook.id,
@@ -94,7 +77,7 @@ export class NotificationService {
         continue;
       }
 
-      // 레이트 리밋 준수를 위한 대기
+      // Wait for rate limit if necessary before sending the notification
       await this.waitForRateLimit(webhook.id, abortSignal);
 
       try {
@@ -103,10 +86,10 @@ export class NotificationService {
 
         await discordWebhook.send(embed);
 
-        // 성공 시 마지막 전송 시간 기록
+        // Record the last send time on success
         await this.updateRateLimitTimestamp(webhook.id);
 
-        // 성공한 경우 실패 목록에서 제거
+        // Remove from the permanently failed list on success
         this.permanentlyFailedWebhooks.delete(webhook.id);
 
         results.push({ webhookId: webhook.id, success: true });
@@ -118,7 +101,7 @@ export class NotificationService {
         const shouldDelete = this.shouldDeleteWebhook(error);
 
         if (shouldDelete) {
-          // 영구 실패 시 즉시 실패 목록에 추가하여 향후 재시도 방지
+          // Mark this webhook as permanently failed to avoid future attempts
           this.permanentlyFailedWebhooks.add(webhook.id);
 
           LoggerUtils.debugDev(
@@ -145,7 +128,9 @@ export class NotificationService {
   }
 
   /**
-   * 알림 임베드 메시지를 생성
+   * Creates a notification embed message.
+   * @param notice The cached notice to be included in the embed.
+   * @returns A promise that resolves to a MessageBuilder instance.
    */
   private async createNotificationEmbed(
     notice: CachedNotice,
@@ -209,7 +194,9 @@ export class NotificationService {
   }
 
   /**
-   * 웹훅 에러를 분석하여 삭제 여부를 결정
+   * Determines whether a webhook should be deleted based on the error.
+   * @param error The error object to analyze.
+   * @returns A boolean indicating whether the webhook should be deleted.
    */
   private shouldDeleteWebhook(error: any): boolean {
     if (error.response?.status) {
@@ -248,6 +235,11 @@ export class NotificationService {
     return false;
   }
 
+  /**
+   * Tests a webhook by sending a test notification.
+   * @param webhookUrl The URL of the webhook to test.
+   * @returns An object containing the test result, including success status, deletion recommendation, and error details if any.
+   */
   async testWebhook(webhookUrl: string): Promise<{
     success: boolean;
     shouldDelete: boolean;
@@ -287,10 +279,11 @@ export class NotificationService {
   }
 
   /**
-   * 웹훅 에러를 카테고리별로 분류
+   * Categorizes a webhook error into specific types.
+   * @param error The error object to categorize.
+   * @returns A string representing the error category.
    */
   private categorizeWebhookError(error: any): string {
-    // axios 스타일 에러 처리
     if (error.response?.status) {
       const status = error.response.status;
       const { NOT_FOUND, UNAUTHORIZED, FORBIDDEN, TOO_MANY_REQUESTS } =
@@ -310,11 +303,11 @@ export class NotificationService {
       }
     }
 
-    // discord-webhook-node 라이브러리의 에러 메시지에서 정보 추출
+    // Extract information from discord-webhook-node library error messages
     if (error.message && typeof error.message === 'string') {
       const message = error.message;
 
-      // HTTP status code 추출
+      // Extract HTTP status code
       const statusMatch = message.match(/(\d{3}) status code/);
       if (statusMatch) {
         const status = parseInt(statusMatch[1]);
@@ -335,7 +328,7 @@ export class NotificationService {
         }
       }
 
-      // Discord API 에러 코드 추출
+      // Extract Discord API error codes
       const codeMatch = message.match(/"code":\s*(\d+)/);
       if (codeMatch) {
         const code = parseInt(codeMatch[1]);
@@ -348,7 +341,7 @@ export class NotificationService {
       }
     }
 
-    // 네트워크 관련 에러
+    // Network-related errors
     if (
       error.code === 'ENOTFOUND' ||
       error.code === 'ECONNREFUSED' ||
@@ -357,7 +350,7 @@ export class NotificationService {
       return 'NETWORK_ERROR';
     }
 
-    // URL 파싱 에러나 기타 클라이언트 에러
+    // URL parsing errors or other client errors
     if (
       error.message?.includes('Invalid URL') ||
       error.message?.includes('webhook')
@@ -369,7 +362,9 @@ export class NotificationService {
   }
 
   /**
-   * Discord 레이트 리밋을 준수하기 위해 필요한 대기 시간을 계산하고 대기
+   * Calculates the necessary wait time to comply with Discord rate limits and waits.
+   * @param webhookId The ID of the webhook to check rate limits for.
+   * @param abortSignal Optional AbortSignal to cancel the wait.
    */
   private async waitForRateLimit(
     webhookId: number,
@@ -393,7 +388,7 @@ export class NotificationService {
       (60 * 1000) / PER_WEBHOOK_PER_MINUTE - timeSinceLastWebhook,
     );
 
-    // 더 긴 대기 시간 적용
+    // More restrictive wait time applies
     const waitTime = Math.max(globalWaitTime, webhookWaitTime);
 
     if (waitTime > 0) {
@@ -406,7 +401,8 @@ export class NotificationService {
   }
 
   /**
-   * 레이트 리밋 타임스탬프를 Redis에 업데이트
+   * Updates the rate limit timestamps in Redis.
+   * @param webhookId The ID of the webhook to update the rate limit for.
    */
   private async updateRateLimitTimestamp(webhookId: number): Promise<void> {
     const now = Date.now();
@@ -423,6 +419,10 @@ export class NotificationService {
     ]);
   }
 
+  /**
+   * Hydrates the rate limit state from Redis.
+   * This ensures that the service has the latest rate limit timestamps.
+   */
   private async hydrateRateLimitState(): Promise<void> {
     if (this.isRateLimitStateHydrated) {
       return;
@@ -436,6 +436,12 @@ export class NotificationService {
     this.isRateLimitStateHydrated = true;
   }
 
+  /**
+   * Waits for the specified duration, with support for aborting via an AbortSignal.
+   * @param ms The duration to wait in milliseconds.
+   * @param abortSignal Optional AbortSignal to cancel the wait.
+   * @returns A promise that resolves after the wait or rejects if aborted.
+   */
   private waitWithAbort(ms: number, abortSignal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
       if (abortSignal?.aborted) {
@@ -459,7 +465,8 @@ export class NotificationService {
   }
 
   /**
-   * 웹훅이 삭제될 때 실패 목록에서 제거
+   * Clears the permanent failure flag for a webhook when it is deleted.
+   * @param webhookId The ID of the webhook to clear the flag for.
    */
   clearPermanentFailureFlag(webhookId: number): void {
     this.permanentlyFailedWebhooks.delete(webhookId);
@@ -467,12 +474,5 @@ export class NotificationService {
       NotificationService.name,
       `Cleared permanent failure flag for webhook ${webhookId}`,
     );
-  }
-
-  /**
-   * 영구적으로 실패한 웹훅 목록 반환 (디버깅/모니터링용)
-   */
-  getPermanentlyFailedWebhooks(): number[] {
-    return Array.from(this.permanentlyFailedWebhooks);
   }
 }
