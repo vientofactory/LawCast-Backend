@@ -137,6 +137,8 @@ export class DiscordBridgeCommandsService {
       await import('../../services/batch-processing.service');
     const { NoticeArchiveService } =
       await import('../../services/notice-archive.service');
+    const { IsDoneSyncService } =
+      await import('../../services/is-done-sync.service');
 
     const runtimeStats = this.moduleRef.get(RuntimeStatsService, {
       strict: false,
@@ -149,6 +151,9 @@ export class DiscordBridgeCommandsService {
     const archiveSvc = this.moduleRef.get(NoticeArchiveService, {
       strict: false,
     });
+    const isDoneSyncSvc = this.moduleRef.get(IsDoneSyncService, {
+      strict: false,
+    });
 
     const stats = await runtimeStats.getAggregatedStats(
       { nodeEnv: process.env.NODE_ENV },
@@ -156,6 +161,7 @@ export class DiscordBridgeCommandsService {
       crawlingSvc,
       batchSvc,
       archiveSvc,
+      isDoneSyncSvc,
     );
 
     const raw = JSON.stringify(stats, null, 2);

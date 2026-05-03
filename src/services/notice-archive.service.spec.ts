@@ -56,6 +56,7 @@ describe('NoticeArchiveService', () => {
       httpContentType: 'text/html; charset=utf-8',
       httpEtag: null,
       httpLastModified: null,
+      isDone: false,
       archiveStartedAt: new Date('2026-04-17T00:00:02.000Z'),
       lastUpdatedAt: new Date('2026-04-17T00:00:03.000Z'),
       ...overrides,

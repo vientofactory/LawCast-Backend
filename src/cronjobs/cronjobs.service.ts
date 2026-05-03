@@ -6,6 +6,7 @@ import appConfig, { APP_CONSTANTS } from '../config/app.config';
 import { LoggerUtils } from '../utils/logger.utils';
 import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
+import { IsDoneSyncService } from '../services/is-done-sync.service';
 
 const CRON_TIMEZONE = appConfig().cron.timezone;
 
@@ -16,6 +17,7 @@ export class CronJobsService {
   constructor(
     private readonly webhookCleanupService: WebhookCleanupService,
     private readonly crawlingService: CrawlingService,
+    private readonly isDoneSyncService: IsDoneSyncService,
     @Optional() private readonly discordBridge: DiscordBridgeService,
   ) {}
 
@@ -57,7 +59,7 @@ export class CronJobsService {
   }
 
   /**
-   * 매일 자정에 웹훅 정리 수행
+   * Runs webhook cleanup daily at midnight
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP, {
     timeZone: CRON_TIMEZONE,
@@ -69,7 +71,7 @@ export class CronJobsService {
   }
 
   /**
-   * 매일 새벽 2시에 심층 시스템 최적화 수행
+   * Runs deep system optimization daily at 2 AM
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION, {
     timeZone: CRON_TIMEZONE,
@@ -81,7 +83,7 @@ export class CronJobsService {
   }
 
   /**
-   * 매시간 실시간 시스템 모니터링 및 자가 치유
+   * Runs real-time system monitoring and self-healing every hour
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING, {
     timeZone: CRON_TIMEZONE,
@@ -93,7 +95,7 @@ export class CronJobsService {
   }
 
   /**
-   * 새로운 입법예고 크롤링 및 알림 전송
+   * Crawls for new legislative notices and dispatches notifications
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK, {
     timeZone: CRON_TIMEZONE,
@@ -101,6 +103,18 @@ export class CronJobsService {
   async handleCrawlingCheck(): Promise<void> {
     await this.execute('crawling and notification', () =>
       this.crawlingService.handleCron(),
+    );
+  }
+
+  /**
+   * Syncs isDone flags for expired legislative notices every 6 hours
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleIsDoneSync(): Promise<void> {
+    await this.execute('isDone sync', () =>
+      this.isDoneSyncService.runSync('cron').then(() => undefined),
     );
   }
 }

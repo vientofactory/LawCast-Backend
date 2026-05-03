@@ -1,5 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PalCrawl, type ITableData, type PalCrawlConfig } from 'pal-crawl';
+import {
+  PalCrawl,
+  type ITableData,
+  type IContentData,
+  type PalCrawlConfig,
+  type ISearchResult,
+  type ISearchQuery,
+  type IBulkOptions,
+} from 'pal-crawl';
 import { APP_CONSTANTS } from '../config/app.config';
 
 @Injectable()
@@ -16,14 +24,17 @@ export class CrawlingCoreService {
     };
   }
 
+  private createClient(): PalCrawl {
+    return new PalCrawl(this.crawlConfig);
+  }
+
   /**
-   * 크롤링 데이터를 가져옵니다.
+   * Get the list of active notices from the crawler.
+   * @returns An array of notice summaries.
    */
   async crawlData(): Promise<ITableData[]> {
-    const palCrawl = new PalCrawl(this.crawlConfig);
-
     try {
-      const crawledData = await palCrawl.get();
+      const crawledData = await this.createClient().get();
 
       if (!crawledData || crawledData.length === 0) {
         this.logger.warn('No data received from crawler');
@@ -38,10 +49,82 @@ export class CrawlingCoreService {
   }
 
   /**
-   * 특정 contentId의 상세 내용을 가져옵니다.
+   * Get the detailed content of a specific notice by its content ID.
+   * @param contentId The unique identifier for the notice content.
+   * @returns The detailed content data of the notice.
    */
-  async getContent(contentId: string): Promise<any> {
-    const palCrawl = new PalCrawl(this.crawlConfig);
-    return await palCrawl.getContent(contentId);
+  async getContent(contentId: string): Promise<IContentData> {
+    return this.createClient().getContent(contentId);
+  }
+
+  /**
+   * Get the list of done notices from the crawler.
+   * @returns An array of done notice summaries.
+   */
+  async getDone(): Promise<ITableData[]> {
+    try {
+      const data = await this.createClient().getDone();
+      return data ?? [];
+    } catch (error) {
+      this.logger.error('Error fetching done notices:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the detailed content of a done notice by its content ID.
+   * @param contentId The unique identifier for the done notice content.
+   * @returns The detailed content data of the done notice.
+   */
+  async getDoneContent(contentId: string): Promise<IContentData> {
+    return this.createClient().getDoneContent(contentId);
+  }
+
+  /**
+   * Search for active notices.
+   * @param query The search query parameters.
+   * @returns The search results for active notices.
+   */
+  async search(query?: ISearchQuery): Promise<ISearchResult> {
+    try {
+      return await this.createClient().search(query);
+    } catch (error) {
+      this.logger.error('Error searching active notices:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Search for done notices.
+   * @param query The search query parameters.
+   * @returns The search results for done notices.
+   */
+  async searchDone(query?: ISearchQuery): Promise<ISearchResult> {
+    try {
+      return await this.createClient().searchDone(query);
+    } catch (error) {
+      this.logger.error('Error searching done notices:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Async generator that yields every page of done notices from the crawler.
+   * Use `query.pageUnit` (max 100) to control items-per-page, and
+   * `options.delayMs` to throttle between requests.
+   * @param query Search query parameters (excluding pageIndex).
+   * @param options Bulk fetching options (e.g., delayMs for throttling).
+   * @returns An async generator yielding search results for done notices.
+   */
+  async *getAllDonePages(
+    query?: Omit<ISearchQuery, 'pageIndex'>,
+    options?: IBulkOptions,
+  ): AsyncGenerator<ISearchResult> {
+    try {
+      yield* this.createClient().getAllDonePages(query, options);
+    } catch (error) {
+      this.logger.error('Error streaming done notice pages:', error);
+      throw error;
+    }
   }
 }
