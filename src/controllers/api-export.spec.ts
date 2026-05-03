@@ -106,14 +106,12 @@ describe('ApiController archive export', () => {
         {
           provide: IsDoneSyncService,
           useValue: {
-            getSyncStatus: jest
-              .fn()
-              .mockReturnValue({
-                status: 'idle',
-                lastRunAt: null,
-                lastResult: null,
-                lastError: null,
-              }),
+            getSyncStatus: jest.fn().mockReturnValue({
+              status: 'idle',
+              lastRunAt: null,
+              lastResult: null,
+              lastError: null,
+            }),
           },
         },
       ],

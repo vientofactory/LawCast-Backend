@@ -233,14 +233,12 @@ describe('HTTP-Batch Processing Isolation', () => {
         {
           provide: IsDoneSyncService,
           useValue: {
-            getSyncStatus: jest
-              .fn()
-              .mockReturnValue({
-                status: 'idle',
-                lastRunAt: null,
-                lastResult: null,
-                lastError: null,
-              }),
+            getSyncStatus: jest.fn().mockReturnValue({
+              status: 'idle',
+              lastRunAt: null,
+              lastResult: null,
+              lastError: null,
+            }),
           },
         },
         {
