@@ -30,7 +30,7 @@ export class CrawlingCoreService {
 
   /**
    * Get the list of active notices from the crawler.
-   * @returns An array of notice summaries.
+   * @returns A promise that resolves to an array of notice summaries.
    */
   async crawlData(): Promise<ITableData[]> {
     try {
@@ -51,7 +51,7 @@ export class CrawlingCoreService {
   /**
    * Get the detailed content of a specific notice by its content ID.
    * @param contentId The unique identifier for the notice content.
-   * @returns The detailed content data of the notice.
+   * @returns A promise that resolves to the detailed content data of the notice.
    */
   async getContent(contentId: string): Promise<IContentData> {
     return this.createClient().getContent(contentId);
@@ -59,7 +59,7 @@ export class CrawlingCoreService {
 
   /**
    * Get the list of done notices from the crawler.
-   * @returns An array of done notice summaries.
+   * @returns A promise that resolves to an array of done notice summaries.
    */
   async getDone(): Promise<ITableData[]> {
     try {
@@ -74,7 +74,7 @@ export class CrawlingCoreService {
   /**
    * Get the detailed content of a done notice by its content ID.
    * @param contentId The unique identifier for the done notice content.
-   * @returns The detailed content data of the done notice.
+   * @returns A promise that resolves to the detailed content data of the done notice.
    */
   async getDoneContent(contentId: string): Promise<IContentData> {
     return this.createClient().getDoneContent(contentId);
@@ -83,7 +83,7 @@ export class CrawlingCoreService {
   /**
    * Search for active notices.
    * @param query The search query parameters.
-   * @returns The search results for active notices.
+   * @returns A promise that resolves to the search results for active notices.
    */
   async search(query?: ISearchQuery): Promise<ISearchResult> {
     try {
@@ -97,7 +97,7 @@ export class CrawlingCoreService {
   /**
    * Search for done notices.
    * @param query The search query parameters.
-   * @returns The search results for done notices.
+   * @returns A promise that resolves to the search results for done notices.
    */
   async searchDone(query?: ISearchQuery): Promise<ISearchResult> {
     try {

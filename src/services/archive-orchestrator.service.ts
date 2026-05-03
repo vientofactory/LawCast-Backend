@@ -20,7 +20,10 @@ export class ArchiveOrchestratorService {
   ) {}
 
   /**
-   * 공지들을 아카이브합니다.
+   * Archives the given notices by fetching their content and source HTML, then saving them to the archive database. This method processes notices in batches
+   * to optimize performance and resource usage.
+   * @param notices An array of notices to be archived.
+   * @returns A promise that resolves when all notices have been processed.
    */
   async archiveNotices(notices: CachedNotice[]): Promise<void> {
     if (notices.length === 0) {
@@ -135,7 +138,9 @@ export class ArchiveOrchestratorService {
   }
 
   /**
-   * 이미 아카이브된 공지들을 필터링합니다.
+   * Filters out notices that have already been archived.
+   * @param notices An array of notices to be filtered.
+   * @returns A promise that resolves to an array of notices that are not yet archived.
    */
   async filterAlreadyArchivedNotices<T extends { num: number }>(
     notices: T[],
@@ -167,10 +172,21 @@ export class ArchiveOrchestratorService {
     return filtered;
   }
 
+  /**
+   * Computes the SHA-256 hash of the given input string.
+   * @param input The input string to hash.
+   * @returns The SHA-256 hash of the input string.
+   */
   private computeSha256(input: string): string {
     return createHash('sha256').update(input, 'utf8').digest('hex');
   }
 
+  /**
+   * Fetches the HTML source of the notice page and captures relevant HTTP metadata.
+   * @param link The URL of the notice page to capture.
+   * @returns An object containing the captured HTML, its SHA-256 hash, and HTTP metadata.
+   * @throws Will throw an error if the fetch operation fails or if the captured HTML is empty.
+   */
   private async captureNoticePageSource(link: string): Promise<{
     html: string;
     sha256: string;

@@ -3,10 +3,7 @@ import { type ITableData } from 'pal-crawl';
 import { APP_CONSTANTS } from '../config/app.config';
 import { type AISummaryStatus, type CachedNotice } from '../types/cache.types';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
-import {
-  NoticeArchiveService,
-  type ArchiveSummaryState,
-} from './notice-archive.service';
+import { type ArchiveSummaryState } from './notice-archive.service';
 import { CrawlingCoreService } from './crawling-core.service';
 
 @Injectable()
@@ -18,12 +15,16 @@ export class SummaryGenerationService {
 
   constructor(
     private ollamaClientService: OllamaClientService,
-    private noticeArchiveService: NoticeArchiveService,
     private crawlingCoreService: CrawlingCoreService,
   ) {}
 
   /**
-   * 공지에 요약을 추가합니다.
+   * Adds summaries to the provided notices.
+   * @param notices The list of notices to enrich with summaries.
+   * @param existingNotices A map of notice numbers to existing cached notices, used for cache lookups.
+   * @param archiveSummaryStates A map of notice numbers to their archive summary states, used for archive lookups.
+   * @param options Additional options for logging and retry behavior.
+   * @returns A new list of notices with summaries added where applicable.
    */
   async enrichNoticesWithSummary(
     notices: ITableData[],
@@ -124,7 +125,10 @@ export class SummaryGenerationService {
   }
 
   /**
-   * 단일 공지에 대한 요약을 생성합니다.
+   * Generates a summary for a single notice.
+   * @param notice The notice to generate a summary for.
+   * @param options Additional options for logging and progress tracking.
+   * @returns An object containing the generated summary and its status.
    */
   async generateSummaryForNotice(
     notice: ITableData | CachedNotice,
@@ -237,10 +241,19 @@ export class SummaryGenerationService {
     }
   }
 
+  /**
+   * Checks if AI summary generation is enabled.
+   * @returns A boolean indicating whether AI summary generation is enabled.
+   */
   private isAiSummaryEnabled(): boolean {
     return this.ollamaClientService.isEnabled();
   }
 
+  /**
+   * Gets the log prefix for Ollama-related messages.
+   * @param phase Optional phase to include in the prefix.
+   * @returns The log prefix string.
+   */
   private getOllamaPrefix(phase?: string): string {
     if (!phase) {
       return this.LOG_PREFIX.OLLAMA;
@@ -249,14 +262,31 @@ export class SummaryGenerationService {
     return `${this.LOG_PREFIX.OLLAMA}[${phase}]`;
   }
 
+  /**
+   * Logs an Ollama-related message.
+   * @param message The message to log.
+   * @param phase Optional phase to include in the log prefix.
+   */
   private logOllama(message: string, phase?: string): void {
     this.logger.log(`${this.getOllamaPrefix(phase)} ${message}`);
   }
 
+  /**
+   * Logs a warning for Ollama-related messages.
+   * @param message The warning message to log.
+   * @param phase Optional phase to include in the log prefix.
+   */
   private warnOllama(message: string, phase?: string): void {
     this.logger.warn(`${this.getOllamaPrefix(phase)} ${message}`);
   }
 
+  /**
+   * Maps an array of items to a new array using a mapper function with concurrency control.
+   * @param items The array of items to map.
+   * @param concurrency The maximum number of concurrent operations.
+   * @param mapper The async mapper function to apply to each item.
+   * @returns A promise that resolves to an array of mapped results.
+   */
   private async mapWithConcurrency<T, R>(
     items: T[],
     concurrency: number,

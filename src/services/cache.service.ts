@@ -14,9 +14,6 @@ export class CacheService implements OnModuleDestroy {
 
   constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache) {}
 
-  /**
-   * 모듈 종료 시 정리 작업
-   */
   async onModuleDestroy() {
     try {
       await this.clearCache();
@@ -30,7 +27,9 @@ export class CacheService implements OnModuleDestroy {
   }
 
   /**
-   * 캐시된 최근 입법예고 목록을 반환합니다.
+   * Returns the cached list of recent legislative notices.
+   * @param limit The maximum number of notices to return.
+   * @returns A promise that resolves to an array of cached notices.
    */
   async getRecentNotices(
     limit: number = APP_CONSTANTS.CACHE.DEFAULT_LIMIT,
@@ -56,17 +55,16 @@ export class CacheService implements OnModuleDestroy {
   }
 
   /**
-   * 캐시를 초기화하거나 업데이트합니다.
-   * 기존 데이터와 새 데이터를 병합하여 최신 순으로 유지합니다.
+   * Initializes or updates the cache.
+   * Merges existing data with new data to maintain the most recent order.
+   * @param notices An array of notices to be cached.
    */
   async updateCache(notices: CachedNotice[]): Promise<void> {
     try {
-      // 최신 순으로 정렬
       const sortedNotices = notices
         .map((notice) => this.sanitizeNotice(notice))
         .sort((a, b) => b.num - a.num);
 
-      // 기존 캐시 데이터 가져오기
       const existingNotices =
         (await this.cacheManager.get<CachedNotice[]>(
           this.CACHE_KEYS.RECENT_NOTICES,
@@ -76,10 +74,8 @@ export class CacheService implements OnModuleDestroy {
         this.sanitizeNotice(notice),
       );
 
-      // 기존 데이터와 새 데이터를 병합
       const mergedNotices = [...sortedNotices, ...normalizedExistingNotices];
 
-      // 중복 제거 중 기존 요약(aiSummary)은 보존
       const dedupedNotices = new Map<number, CachedNotice>();
       for (const notice of mergedNotices) {
         const existingNotice = dedupedNotices.get(notice.num);
@@ -114,7 +110,6 @@ export class CacheService implements OnModuleDestroy {
         .sort((a, b) => b.num - a.num)
         .slice(0, this.MAX_CACHE_SIZE);
 
-      // 캐시 저장
       await Promise.all([
         this.cacheManager.set(this.CACHE_KEYS.RECENT_NOTICES, uniqueNotices, 0),
         this.cacheManager.set(this.CACHE_KEYS.LAST_UPDATED, new Date(), 0),
@@ -131,7 +126,9 @@ export class CacheService implements OnModuleDestroy {
   }
 
   /**
-   * 새로운 입법예고들을 찾습니다.
+   * Finds new legislative notices that are not yet cached.
+   * @param crawledData An array of crawled legislative notices.
+   * @returns A promise that resolves to an array of new notices.
    */
   async findNewNotices(crawledData: ITableData[]): Promise<ITableData[]> {
     try {
@@ -152,12 +149,10 @@ export class CacheService implements OnModuleDestroy {
         return crawledData;
       }
 
-      // 기존 데이터의 num 집합 생성
       const existingNums = new Set(
         normalizedExistingNotices.map((notice) => notice.num),
       );
 
-      // 새로운 데이터만 필터링 (num 기준)
       const newNotices = crawledData.filter(
         (item) => !existingNums.has(item.num),
       );
@@ -179,7 +174,8 @@ export class CacheService implements OnModuleDestroy {
   }
 
   /**
-   * 캐시 정보를 반환합니다.
+   * Returns cache information.
+   * @returns A promise that resolves to an object containing cache information.
    */
   async getCacheInfo(): Promise<CacheInfo> {
     try {
@@ -210,7 +206,7 @@ export class CacheService implements OnModuleDestroy {
   }
 
   /**
-   * 캐시를 완전히 초기화합니다.
+   * Clears the entire cache.
    */
   async clearCache(): Promise<void> {
     try {
@@ -226,7 +222,8 @@ export class CacheService implements OnModuleDestroy {
   }
 
   /**
-   * Redis 연결 상태 확인
+   * Checks the Redis connection status.
+   * @returns A promise that resolves to a boolean indicating whether Redis is connected.
    */
   async isRedisConnected(): Promise<boolean> {
     try {
@@ -240,7 +237,8 @@ export class CacheService implements OnModuleDestroy {
   }
 
   /**
-   * Redis 상태 및 성능 정보를 상세히 확인합니다
+   * Retrieves detailed Redis status and performance information.
+   * @returns A promise that resolves to an object containing Redis status, response time, cache information, and any error message.
    */
   async getRedisStatus(): Promise<{
     connected: boolean;
@@ -291,6 +289,11 @@ export class CacheService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * Retrieves a numeric value from the cache.
+   * @param key The cache key to retrieve.
+   * @returns A promise that resolves to the numeric value or null if not found or invalid.
+   */
   async getNumber(key: string): Promise<number | null> {
     try {
       const value = await this.cacheManager.get<number>(key);
@@ -304,6 +307,13 @@ export class CacheService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * Sets a numeric value in the cache.
+   * @param key The cache key to set.
+   * @param value The numeric value to store.
+   * @param ttl The time-to-live (TTL) in seconds. Defaults to 0 (no expiration).
+   * @returns A promise that resolves when the value is set.
+   */
   async setNumber(key: string, value: number, ttl = 0): Promise<void> {
     try {
       await this.cacheManager.set(key, value, ttl);
@@ -312,6 +322,11 @@ export class CacheService implements OnModuleDestroy {
     }
   }
 
+  /**
+   * Sanitizes a cached notice by removing unnecessary properties.
+   * @param notice The cached notice to sanitize.
+   * @returns The sanitized cached notice.
+   */
   private sanitizeNotice(notice: CachedNotice): CachedNotice {
     const { numComments: _numComments, ...rest } = notice as CachedNotice & {
       numComments?: number;
