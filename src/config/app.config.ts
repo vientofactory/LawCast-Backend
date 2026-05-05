@@ -54,7 +54,9 @@ export const APP_CONSTANTS = {
     },
   },
   CACHE: {
-    MAX_SIZE: 10,
+    /** Internal storage cap — large enough to hold all active notices. */
+    MAX_SIZE: 10000,
+    /** Default limit for API responses that expose recent notices. */
     DEFAULT_LIMIT: 10,
     NOTICES_RECENT_LIMIT: 10,
     TTL: {
@@ -130,8 +132,10 @@ export const APP_CONSTANTS = {
   ARCHIVE_SYNC: {
     /** Items per crawler HTTP request (max 100). */
     CRAWLER_PAGE_UNIT: 100,
-    /** Inter-page delay forwarded to pal-crawl (ms). */
+    /** Inter-page delay for bootstrap/full-sync crawls (ms). */
     CRAWLER_DELAY_MS: 500,
+    /** Inter-page delay for hot-path cron crawls (ms). */
+    CRAWLER_CRON_DELAY_MS: 150,
     /** DB rows fetched per revert-pass batch. */
     DONE_BATCH_SIZE: 500,
     /** Archive rows per integrity-scan batch. */

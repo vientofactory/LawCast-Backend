@@ -10,6 +10,7 @@ import {
   NoticeArchiveService,
   type ArchiveSummaryState,
 } from './notice-archive.service';
+import { APP_CONSTANTS } from '../config/app.config';
 import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
 
@@ -104,7 +105,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
    * 초기 캐시 로드 (알림 전송 없이)
    */
   private async initializeCache(): Promise<void> {
-    const crawledData = await this.crawlingCoreService.crawlData();
+    const crawledData = await this.crawlingCoreService.crawlAllPages();
 
     if (!crawledData || crawledData.length === 0) {
       void this.discordBridge?.logEvent(
@@ -175,7 +176,19 @@ export class CrawlingSchedulerService implements OnModuleInit {
    * 크롤링과 알림을 수행하는 메인 로직
    */
   private async performCrawlingAndNotification(): Promise<ITableData[]> {
-    const crawledData = await this.crawlingCoreService.crawlData();
+    // 기존 캐시를 먼저 조회한다.
+    // - existingNoticeMap: 요약 상태 보존에 사용
+    // - maxCachedNum: crawlAllPages의 early-exit 기준점 (최신 num 이하 페이지 스킵)
+    const existingNotices = await this.cacheService.getRecentNotices(
+      APP_CONSTANTS.CACHE.MAX_SIZE,
+    );
+    const existingNoticeMap = this.buildNoticeMap(existingNotices);
+    const maxCachedNum = existingNotices[0]?.num;
+
+    const crawledData = await this.crawlingCoreService.crawlAllPages({
+      stopBelowNum: maxCachedNum,
+      delayMs: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_CRON_DELAY_MS,
+    });
 
     if (!crawledData || crawledData.length === 0) {
       this.logger.warn('No data received from crawler');
@@ -187,24 +200,39 @@ export class CrawlingSchedulerService implements OnModuleInit {
       return [];
     }
 
-    // 새로운 입법예고 찾기
-    const cacheDiffNotices =
-      await this.cacheService.findNewNotices(crawledData);
+    // 새로운 입법예고 찾기.
+    // Redis 장애 시 cacheDiffNotices = crawledData 전체로 폴백 -> archive dedup이 최종 가드 역할.
+    let cacheDiffNotices: ITableData[];
+    let cacheAvailable = true;
+    try {
+      cacheDiffNotices = await this.cacheService.findNewNotices(crawledData);
+    } catch {
+      cacheAvailable = false;
+      cacheDiffNotices = crawledData;
+      this.logger.warn(
+        'Redis unavailable — falling back to archive-based deduplication',
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        CrawlingSchedulerService.name,
+        'Redis unavailable — falling back to archive-based deduplication for this cycle',
+      );
+    }
+
     const newNotices =
       await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
         cacheDiffNotices,
       );
-    const existingNotices = await this.cacheService.getRecentNotices(1000);
-    const existingNoticeMap = this.buildNoticeMap(existingNotices);
 
     void this.discordBridge?.logEvent(
       BridgeLogLevel.VERBOSE,
       CrawlingSchedulerService.name,
-      `Crawl stats - crawled: **${crawledData.length}**, cache diff: **${cacheDiffNotices.length}**, new: **${newNotices.length}**`,
+      `Crawl stats - crawled: **${crawledData.length}**, cache diff: **${cacheDiffNotices.length}**, new: **${newNotices.length}**${cacheAvailable ? '' : ' *(cache fallback)*'}`,
       {
         totalCrawled: crawledData.length,
         cacheDiff: cacheDiffNotices.length,
         newAfterArchiveFilter: newNotices.length,
+        cacheAvailable,
       },
     );
 

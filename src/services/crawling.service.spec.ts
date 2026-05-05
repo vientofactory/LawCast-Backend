@@ -6,6 +6,7 @@ import { CrawlingSchedulerService } from './crawling-scheduler.service';
 import { HealthCheckService } from './health-check.service';
 import { ArchiveOrchestratorService } from './archive-orchestrator.service';
 import { CrawlingCoreService } from './crawling-core.service';
+import { APP_CONSTANTS } from '../config/app.config';
 
 describe('CrawlingService', () => {
   let service: CrawlingService;
@@ -111,7 +112,9 @@ describe('CrawlingService', () => {
 
       const result = await service.getRecentNotices();
 
-      expect(cacheService.getRecentNotices).toHaveBeenCalledWith(10);
+      expect(cacheService.getRecentNotices).toHaveBeenCalledWith(
+        APP_CONSTANTS.CACHE.MAX_SIZE,
+      );
       expect(
         noticeArchiveService.getArchiveStartedAtByNoticeNums,
       ).toHaveBeenCalledWith([1, 2]);
@@ -142,7 +145,9 @@ describe('CrawlingService', () => {
 
       const result = await service.getRecentNotices(2);
 
-      expect(cacheService.getRecentNotices).toHaveBeenCalledWith(10);
+      expect(cacheService.getRecentNotices).toHaveBeenCalledWith(
+        APP_CONSTANTS.CACHE.MAX_SIZE,
+      );
       expect(
         noticeArchiveService.getArchiveStartedAtByNoticeNums,
       ).toHaveBeenCalledWith([1, 2, 3]);
@@ -157,7 +162,9 @@ describe('CrawlingService', () => {
 
       const result = await service.getRecentNotices();
 
-      expect(cacheService.getRecentNotices).toHaveBeenCalledWith(10);
+      expect(cacheService.getRecentNotices).toHaveBeenCalledWith(
+        APP_CONSTANTS.CACHE.MAX_SIZE,
+      );
       expect(
         noticeArchiveService.getArchiveStartedAtByNoticeNums,
       ).not.toHaveBeenCalled();
@@ -217,7 +224,9 @@ describe('CrawlingService', () => {
 
       const result = await service.getNoticeDetail(1);
 
-      expect(cacheService.getRecentNotices).toHaveBeenCalledWith(10);
+      expect(cacheService.getRecentNotices).toHaveBeenCalledWith(
+        APP_CONSTANTS.CACHE.MAX_SIZE,
+      );
       expect(
         (service as any).crawlingCoreService.getContent,
       ).toHaveBeenCalledWith('content-1');

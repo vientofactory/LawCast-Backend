@@ -55,7 +55,7 @@ describe('CrawlingSchedulerService', () => {
         {
           provide: CrawlingCoreService,
           useValue: {
-            crawlData: jest.fn(),
+            crawlAllPages: jest.fn(),
           },
         },
         {
@@ -116,7 +116,7 @@ describe('CrawlingSchedulerService', () => {
 
   describe('onModuleInit', () => {
     it('should initialize cache in background', async () => {
-      (crawlingCoreService.crawlData as jest.Mock).mockResolvedValue(
+      (crawlingCoreService.crawlAllPages as jest.Mock).mockResolvedValue(
         mockTableData,
       );
       (
@@ -141,7 +141,7 @@ describe('CrawlingSchedulerService', () => {
       // Wait for background initialization
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      expect(crawlingCoreService.crawlData).toHaveBeenCalled();
+      expect(crawlingCoreService.crawlAllPages).toHaveBeenCalled();
       expect(
         summaryGenerationService.enrichNoticesWithSummary,
       ).toHaveBeenCalledWith(mockTableData, new Map(), new Map(), {
@@ -154,14 +154,14 @@ describe('CrawlingSchedulerService', () => {
 
     it('should handle initialization errors gracefully', async () => {
       const error = new Error('Initialization failed');
-      (crawlingCoreService.crawlData as jest.Mock).mockRejectedValue(error);
+      (crawlingCoreService.crawlAllPages as jest.Mock).mockRejectedValue(error);
 
       await service.onModuleInit();
 
       // Wait for background initialization
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      expect(crawlingCoreService.crawlData).toHaveBeenCalled();
+      expect(crawlingCoreService.crawlAllPages).toHaveBeenCalled();
       // Service should still be marked as initialized even on error
     });
   });
@@ -178,7 +178,7 @@ describe('CrawlingSchedulerService', () => {
 
       await service.handleCron();
 
-      expect(crawlingCoreService.crawlData).not.toHaveBeenCalled();
+      expect(crawlingCoreService.crawlAllPages).not.toHaveBeenCalled();
     });
 
     it('should skip if already processing', async () => {
@@ -186,14 +186,14 @@ describe('CrawlingSchedulerService', () => {
 
       await service.handleCron();
 
-      expect(crawlingCoreService.crawlData).not.toHaveBeenCalled();
+      expect(crawlingCoreService.crawlAllPages).not.toHaveBeenCalled();
     });
 
     it('should perform crawling and notification when new notices found', async () => {
       const newNotices = [mockTableData[0]];
       const existingNotices = [mockTableData[1]];
 
-      (crawlingCoreService.crawlData as jest.Mock).mockResolvedValue(
+      (crawlingCoreService.crawlAllPages as jest.Mock).mockResolvedValue(
         mockTableData,
       );
       (cacheService.findNewNotices as jest.Mock).mockResolvedValue(newNotices);
@@ -222,7 +222,7 @@ describe('CrawlingSchedulerService', () => {
 
       await service.handleCron();
 
-      expect(crawlingCoreService.crawlData).toHaveBeenCalled();
+      expect(crawlingCoreService.crawlAllPages).toHaveBeenCalled();
       expect(cacheService.findNewNotices).toHaveBeenCalledWith(mockTableData);
       expect(
         archiveOrchestratorService.filterAlreadyArchivedNotices,
@@ -238,7 +238,7 @@ describe('CrawlingSchedulerService', () => {
     });
 
     it('should handle no new notices gracefully', async () => {
-      (crawlingCoreService.crawlData as jest.Mock).mockResolvedValue(
+      (crawlingCoreService.crawlAllPages as jest.Mock).mockResolvedValue(
         mockTableData,
       );
       (cacheService.findNewNotices as jest.Mock).mockResolvedValue([]);
@@ -255,11 +255,7 @@ describe('CrawlingSchedulerService', () => {
 
       await service.handleCron();
 
-      expect(crawlingCoreService.crawlData).toHaveBeenCalled();
-      expect(cacheService.findNewNotices).toHaveBeenCalledWith(mockTableData);
-      expect(
-        archiveOrchestratorService.filterAlreadyArchivedNotices,
-      ).toHaveBeenCalledWith([]);
+      expect(crawlingCoreService.crawlAllPages).toHaveBeenCalled();
       expect(archiveOrchestratorService.archiveNotices).not.toHaveBeenCalled();
       expect(
         notificationOrchestratorService.sendNotifications,
@@ -269,16 +265,60 @@ describe('CrawlingSchedulerService', () => {
 
     it('should handle errors gracefully', async () => {
       const error = new Error('Crawling failed');
-      (crawlingCoreService.crawlData as jest.Mock).mockRejectedValue(error);
+      (cacheService.getRecentNotices as jest.Mock).mockResolvedValue([]);
+      (crawlingCoreService.crawlAllPages as jest.Mock).mockRejectedValue(error);
 
       await service.handleCron();
 
-      expect(crawlingCoreService.crawlData).toHaveBeenCalled();
+      expect(crawlingCoreService.crawlAllPages).toHaveBeenCalled();
       // Should not throw, just log error
     });
 
+    it('should fall back to archive-based dedup when Redis is unavailable', async () => {
+      const existingNotices = [mockTableData[1]];
+
+      (cacheService.getRecentNotices as jest.Mock).mockResolvedValue(
+        existingNotices,
+      );
+      (crawlingCoreService.crawlAllPages as jest.Mock).mockResolvedValue(
+        mockTableData,
+      );
+      // findNewNotices throws -> cache fallback path
+      (cacheService.findNewNotices as jest.Mock).mockRejectedValue(
+        new Error('Redis connection refused'),
+      );
+      // archive filter receives full crawledData and keeps only truly new items
+      (
+        archiveOrchestratorService.filterAlreadyArchivedNotices as jest.Mock
+      ).mockResolvedValue([mockTableData[0]]);
+      (
+        noticeArchiveService.getSummaryStateByNoticeNums as jest.Mock
+      ).mockResolvedValue(new Map());
+      (
+        summaryGenerationService.enrichNoticesWithSummary as jest.Mock
+      ).mockResolvedValue([
+        { ...mockTableData[0], aiSummary: '요약', aiSummaryStatus: 'ready' },
+      ]);
+      (cacheService.updateCache as jest.Mock).mockResolvedValue(undefined);
+      (
+        notificationOrchestratorService.sendNotifications as jest.Mock
+      ).mockResolvedValue(undefined);
+
+      await service.handleCron();
+
+      // archive filter should receive the full crawledData as the fallback
+      expect(
+        archiveOrchestratorService.filterAlreadyArchivedNotices,
+      ).toHaveBeenCalledWith(mockTableData);
+      // notifications must still fire for genuinely new items
+      expect(
+        notificationOrchestratorService.sendNotifications,
+      ).toHaveBeenCalled();
+    });
+
     it('should reset processing flag after completion', async () => {
-      (crawlingCoreService.crawlData as jest.Mock).mockResolvedValue([]);
+      (cacheService.getRecentNotices as jest.Mock).mockResolvedValue([]);
+      (crawlingCoreService.crawlAllPages as jest.Mock).mockResolvedValue([]);
       (cacheService.findNewNotices as jest.Mock).mockResolvedValue([]);
 
       await service.handleCron();
@@ -288,7 +328,8 @@ describe('CrawlingSchedulerService', () => {
 
     it('should reset processing flag even on error', async () => {
       const error = new Error('Processing failed');
-      (crawlingCoreService.crawlData as jest.Mock).mockRejectedValue(error);
+      (cacheService.getRecentNotices as jest.Mock).mockResolvedValue([]);
+      (crawlingCoreService.crawlAllPages as jest.Mock).mockRejectedValue(error);
 
       await service.handleCron();
 
