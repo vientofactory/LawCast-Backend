@@ -56,6 +56,7 @@ describe('NoticeArchiveService', () => {
       httpContentType: 'text/html; charset=utf-8',
       httpEtag: null,
       httpLastModified: null,
+      isDone: false,
       archiveStartedAt: new Date('2026-04-17T00:00:02.000Z'),
       lastUpdatedAt: new Date('2026-04-17T00:00:03.000Z'),
       ...overrides,
@@ -204,5 +205,124 @@ describe('NoticeArchiveService', () => {
     const result = await service.buildArchiveExportFile(1234567);
 
     expect(result).toBeNull();
+  });
+
+  describe('getPendingSummaryPage', () => {
+    it('queries only not_requested rows and maps fields to CachedNotice shape', async () => {
+      const pendingRows: NoticeArchive[] = [
+        buildRow({
+          noticeNum: 1001,
+          subject: '백필 테스트 법률안',
+          proposerCategory: '정부',
+          committee: '국방위원회',
+          assemblyLink: 'https://example.com/1001',
+          contentId: 'PRC_BACKFILL_1',
+          attachmentPdfFile: 'test.pdf',
+          attachmentHwpFile: 'test.hwp',
+          aiSummaryStatus: 'not_requested',
+          aiSummary: null,
+        }),
+      ];
+
+      const findMock = jest
+        .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+        .mockResolvedValue(pendingRows);
+      const repoMock = { ...createRepositoryMock(), find: findMock };
+      const service = new NoticeArchiveService(repoMock as any);
+
+      const result = await service.getPendingSummaryPage(50);
+
+      expect(findMock).toHaveBeenCalledTimes(1);
+      const callArg = findMock.mock.calls[0][0] as Record<string, unknown>;
+      expect(
+        (callArg['where'] as Record<string, unknown>)['aiSummaryStatus'],
+      ).toBe('not_requested');
+      expect(callArg['take']).toBe(50);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        num: 1001,
+        subject: '백필 테스트 법률안',
+        proposerCategory: '정부',
+        committee: '국방위원회',
+        link: 'https://example.com/1001',
+        contentId: 'PRC_BACKFILL_1',
+        attachments: { pdfFile: 'test.pdf', hwpFile: 'test.hwp' },
+        aiSummary: null,
+        aiSummaryStatus: 'not_requested',
+      });
+    });
+
+    it('returns an empty array when no pending rows exist', async () => {
+      const findMock = jest
+        .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+        .mockResolvedValue([]);
+      const repoMock = { ...createRepositoryMock(), find: findMock };
+      const service = new NoticeArchiveService(repoMock as any);
+
+      const result = await service.getPendingSummaryPage(50);
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('getUnavailableSummaryPage', () => {
+    it('queries only unavailable rows, applies skip/take, and maps fields to CachedNotice shape', async () => {
+      const unavailableRows: NoticeArchive[] = [
+        buildRow({
+          noticeNum: 2002,
+          subject: '재시도 테스트 법률안',
+          proposerCategory: '의원',
+          committee: '법사위',
+          assemblyLink: 'https://example.com/2002',
+          contentId: 'PRC_RETRY_2',
+          attachmentPdfFile: 'retry.pdf',
+          attachmentHwpFile: 'retry.hwp',
+          aiSummaryStatus: 'unavailable',
+          aiSummary: null,
+        }),
+      ];
+
+      const findMock = jest
+        .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+        .mockResolvedValue(unavailableRows);
+      const repoMock = { ...createRepositoryMock(), find: findMock };
+      const service = new NoticeArchiveService(repoMock as any);
+
+      const result = await service.getUnavailableSummaryPage(50, 25);
+
+      expect(findMock).toHaveBeenCalledTimes(1);
+      const callArg = findMock.mock.calls[0][0] as Record<string, unknown>;
+      expect(
+        (callArg['where'] as Record<string, unknown>)['aiSummaryStatus'],
+      ).toBe('unavailable');
+      expect(callArg['skip']).toBe(50);
+      expect(callArg['take']).toBe(25);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        num: 2002,
+        subject: '재시도 테스트 법률안',
+        proposerCategory: '의원',
+        committee: '법사위',
+        link: 'https://example.com/2002',
+        contentId: 'PRC_RETRY_2',
+        attachments: { pdfFile: 'retry.pdf', hwpFile: 'retry.hwp' },
+        aiSummary: null,
+        aiSummaryStatus: 'unavailable',
+      });
+    });
+
+    it('returns an empty array when no unavailable rows exist', async () => {
+      const findMock = jest
+        .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+        .mockResolvedValue([]);
+      const repoMock = { ...createRepositoryMock(), find: findMock };
+      const service = new NoticeArchiveService(repoMock as any);
+
+      const result = await service.getUnavailableSummaryPage(0, 50);
+
+      expect(result).toEqual([]);
+    });
   });
 });

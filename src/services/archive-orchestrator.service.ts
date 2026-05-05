@@ -20,14 +20,17 @@ export class ArchiveOrchestratorService {
   ) {}
 
   /**
-   * 공지들을 아카이브합니다.
+   * Archives the given notices by fetching their content and source HTML, then saving them to the archive database. This method processes notices in batches
+   * to optimize performance and resource usage.
+   * @param notices An array of notices to be archived.
+   * @returns The number of notices successfully saved to the archive.
    */
-  async archiveNotices(notices: CachedNotice[]): Promise<void> {
+  async archiveNotices(notices: CachedNotice[]): Promise<number> {
     if (notices.length === 0) {
-      return;
+      return 0;
     }
 
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.LOG,
       ArchiveOrchestratorService.name,
       `Archiving **${notices.length}** notice(s)`,
@@ -35,11 +38,12 @@ export class ArchiveOrchestratorService {
     );
 
     const concurrency = 5;
+    let savedCount = 0;
 
     for (let i = 0; i < notices.length; i += concurrency) {
       const chunk = notices.slice(i, i + concurrency);
 
-      await Promise.all(
+      const chunkResults = await Promise.all(
         chunk.map(async (notice) => {
           let proposalReason = '';
           let sourceTitle: string | null = notice.subject;
@@ -75,7 +79,7 @@ export class ArchiveOrchestratorService {
               this.logger.warn(
                 `Failed to fetch original content for archive notice ${notice.num}: ${message}`,
               );
-              void this.discordBridge.logEvent(
+              void this.discordBridge?.logEvent(
                 BridgeLogLevel.VERBOSE,
                 ArchiveOrchestratorService.name,
                 `Content fetch failed for notice **${notice.num}**: ${message}`,
@@ -97,7 +101,7 @@ export class ArchiveOrchestratorService {
             this.logger.warn(
               `Failed to capture source HTML for archive notice ${notice.num}: ${message}`,
             );
-            void this.discordBridge.logEvent(
+            void this.discordBridge?.logEvent(
               BridgeLogLevel.VERBOSE,
               ArchiveOrchestratorService.name,
               `HTML capture failed for notice **${notice.num}**: ${message}`,
@@ -121,6 +125,7 @@ export class ArchiveOrchestratorService {
               archivedAt,
               httpMetadata,
             });
+            return true;
           } catch (error) {
             const message =
               error instanceof Error ? error.message : String(error);
@@ -128,14 +133,21 @@ export class ArchiveOrchestratorService {
               `Failed to archive notice ${notice.num}: ${message}`,
               error,
             );
+            return false;
           }
         }),
       );
+
+      savedCount += chunkResults.filter(Boolean).length;
     }
+
+    return savedCount;
   }
 
   /**
-   * 이미 아카이브된 공지들을 필터링합니다.
+   * Filters out notices that have already been archived.
+   * @param notices An array of notices to be filtered.
+   * @returns A promise that resolves to an array of notices that are not yet archived.
    */
   async filterAlreadyArchivedNotices<T extends { num: number }>(
     notices: T[],
@@ -153,7 +165,7 @@ export class ArchiveOrchestratorService {
       (notice) => !existingNoticeNums.has(notice.num),
     );
 
-    void this.discordBridge.logEvent(
+    void this.discordBridge?.logEvent(
       BridgeLogLevel.VERBOSE,
       ArchiveOrchestratorService.name,
       `Archive filter: **${filtered.length}** new out of **${notices.length}** (${notices.length - filtered.length} already archived)`,
@@ -167,10 +179,21 @@ export class ArchiveOrchestratorService {
     return filtered;
   }
 
+  /**
+   * Computes the SHA-256 hash of the given input string.
+   * @param input The input string to hash.
+   * @returns The SHA-256 hash of the input string.
+   */
   private computeSha256(input: string): string {
     return createHash('sha256').update(input, 'utf8').digest('hex');
   }
 
+  /**
+   * Fetches the HTML source of the notice page and captures relevant HTTP metadata.
+   * @param link The URL of the notice page to capture.
+   * @returns An object containing the captured HTML, its SHA-256 hash, and HTTP metadata.
+   * @throws Will throw an error if the fetch operation fails or if the captured HTML is empty.
+   */
   private async captureNoticePageSource(link: string): Promise<{
     html: string;
     sha256: string;

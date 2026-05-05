@@ -24,11 +24,13 @@ import { HashguardService } from '../services/hashguard.service';
 import { BatchProcessingService } from '../services/batch-processing.service';
 import { NoticeArchiveService } from '../services/notice-archive.service';
 import { NoticesQueryService } from '../services/notices-query.service';
+import { NoticeSearchService } from '../services/notice-search.service';
 import { CreateWebhookDto } from '../dto/create-webhook.dto';
 import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
 import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
 import { APP_CONSTANTS } from '../config/app.config';
 import { RuntimeStatsService } from '../services/runtime-stats.service';
+import { ArchiveSyncService } from '../services/archive-sync.service';
 
 @Controller('api')
 export class ApiController {
@@ -42,7 +44,9 @@ export class ApiController {
     private readonly batchProcessingService: BatchProcessingService,
     private readonly noticeArchiveService: NoticeArchiveService,
     private readonly noticesQueryService: NoticesQueryService,
+    private readonly noticeSearchService: NoticeSearchService,
     private readonly runtimeStatsService: RuntimeStatsService,
+    private readonly archiveSyncService: ArchiveSyncService,
   ) {}
 
   @Post('webhooks')
@@ -121,7 +125,10 @@ export class ApiController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('sortOrder') sortOrder?: string,
+    @Query('isDone') isDoneRaw?: string,
   ) {
+    const isDone =
+      isDoneRaw === 'true' ? true : isDoneRaw === 'false' ? false : undefined;
     const archiveResult = await this.noticesQueryService.getArchivedNotices({
       page,
       limit,
@@ -129,8 +136,48 @@ export class ApiController {
       startDate,
       endDate,
       sortOrder: sortOrder === 'asc' ? 'asc' : 'desc',
+      isDone,
     });
     return ApiResponseUtils.success(archiveResult);
+  }
+
+  @Get('notices/search')
+  async searchNotices(
+    @Query('q') q: string,
+    @Query(
+      'page',
+      new DefaultValuePipe(APP_CONSTANTS.API.PAGINATION.MIN_PAGE),
+      ParseIntPipe,
+    )
+    page: number,
+    @Query(
+      'limit',
+      new DefaultValuePipe(APP_CONSTANTS.API.PAGINATION.DEFAULT_LIMIT),
+      ParseIntPipe,
+    )
+    limit: number,
+    @Query('includeDone') includeDoneRaw?: string,
+  ) {
+    const keyword = (q || '').trim();
+    if (!keyword) {
+      return ApiResponseUtils.success({
+        items: [],
+        total: 0,
+        page,
+        limit,
+        totalPages: 1,
+        keyword: '',
+        source: 'archive',
+      });
+    }
+    const includeDone = includeDoneRaw !== 'false';
+    const result = await this.noticeSearchService.searchNotices({
+      keyword,
+      page,
+      limit,
+      includeDone,
+    });
+    return ApiResponseUtils.success(result);
   }
 
   @Get('notices/:num/detail')
@@ -180,6 +227,7 @@ export class ApiController {
       this.crawlingService,
       this.batchProcessingService,
       this.noticeArchiveService,
+      this.archiveSyncService,
     );
     return ApiResponseUtils.success(stats);
   }

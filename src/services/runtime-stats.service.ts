@@ -4,6 +4,7 @@ import { WebhookService } from './webhook.service';
 import { CrawlingService } from './crawling.service';
 import { BatchProcessingService } from './batch-processing.service';
 import { NoticeArchiveService } from './notice-archive.service';
+import { ArchiveSyncService } from './archive-sync.service';
 
 @Injectable()
 export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
@@ -49,6 +50,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     crawlingService: CrawlingService,
     batchProcessingService: BatchProcessingService,
     noticeArchiveService: NoticeArchiveService,
+    archiveSyncService?: ArchiveSyncService,
   ) {
     const nodeEnv = params.nodeEnv;
     if (
@@ -81,6 +83,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         : cacheInfo,
       archive: {
         count: archiveCount,
+        isDoneSync: archiveSyncService?.getIsDoneSyncStatus() ?? null,
       },
       batchProcessing: batchStatus,
       ollama: isProduction
