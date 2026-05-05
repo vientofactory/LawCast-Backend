@@ -10,7 +10,6 @@ import { NoticeArchiveService } from './notice-archive.service';
 import { CacheService } from './cache.service';
 import { CrawlingSchedulerService } from './crawling-scheduler.service';
 import { HealthCheckService } from './health-check.service';
-import { ArchiveOrchestratorService } from './archive-orchestrator.service';
 import { CrawlingCoreService } from './crawling-core.service';
 
 @Injectable()
@@ -22,19 +21,20 @@ export class CrawlingService {
     private noticeArchiveService: NoticeArchiveService,
     private crawlingSchedulerService: CrawlingSchedulerService,
     private healthCheckService: HealthCheckService,
-    private archiveOrchestratorService: ArchiveOrchestratorService,
     private crawlingCoreService: CrawlingCoreService,
   ) {}
 
   /**
-   * 크론 작업을 처리합니다.
+   * Handles the cron job.
    */
   async handleCron() {
     await this.crawlingSchedulerService.handleCron();
   }
 
   /**
-   * 캐시된 최근 입법예고를 반환
+   * Retrieves the cached recent notices.
+   * @param limit The maximum number of notices to retrieve. Defaults to the configured cache limit.
+   * @returns A promise that resolves to an array of cached notices.
    */
   async getRecentNotices(
     limit: number = APP_CONSTANTS.CACHE.DEFAULT_LIMIT,
@@ -71,6 +71,11 @@ export class CrawlingService {
     return sorted.slice(0, safeLimit);
   }
 
+  /**
+   * Retrieves the detailed content of a specific notice by its notice number.
+   * @param noticeNum The unique identifier for the notice.
+   * @returns A promise that resolves to the detailed content of the notice.
+   */
   async getNoticeDetail(noticeNum: number): Promise<{
     notice: CachedNotice;
     originalContent: {
@@ -146,39 +151,44 @@ export class CrawlingService {
   }
 
   /**
-   * 캐시 정보를 반환
+   * Retrieves the cache information.
+   * @returns A promise that resolves to the cache information.
    */
   async getCacheInfo(): Promise<CacheInfo> {
     return await this.cacheService.getCacheInfo();
   }
 
   /**
-   * Redis 연결 상태 확인
+   * Checks if Redis is connected.
+   * @returns A promise that resolves to a boolean indicating Redis connection status.
    */
   async isRedisConnected(): Promise<boolean> {
     return await this.cacheService.isRedisConnected();
   }
 
   /**
-   * Redis 상태 및 성능 정보를 상세히 확인
+   * Retrieves the API health payload.
+   * @param params Optional parameters for the health check.
+   * @returns A promise that resolves to the API health payload.
    */
-  async getRedisStatus(): Promise<{
-    connected: boolean;
-    responseTime?: number;
-    cacheInfo: CacheInfo;
-    error?: string;
-  }> {
-    return await this.cacheService.getRedisStatus();
-  }
-
   async getApiHealthPayload(params: { nodeEnv?: string }) {
     return await this.healthCheckService.getApiHealthPayload(params);
   }
 
+  /**
+   * Retrieves the Redis status for the API.
+   * @param params Optional parameters for the health check.
+   * @returns A promise that resolves to the Redis status for the API.
+   */
   async getRedisStatusForApi(params: { nodeEnv?: string }) {
     return await this.healthCheckService.getRedisStatusForApi(params);
   }
 
+  /**
+   * Retrieves the Ollama metrics.
+   * @param options Optional parameters for the metrics retrieval.
+   * @returns A promise that resolves to the Ollama metrics.
+   */
   async getOllamaMetrics(options: { forceHealthCheck?: boolean } = {}) {
     return await this.healthCheckService.getOllamaMetrics(options);
   }

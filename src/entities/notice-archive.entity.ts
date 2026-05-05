@@ -154,6 +154,9 @@ export class NoticeArchive {
   })
   httpLastModified: string | null;
 
+  @Column({ type: 'boolean', name: 'is_done', default: false })
+  isDone: boolean;
+
   @CreateDateColumn({ name: 'archive_started_at' })
   archiveStartedAt: Date;
 

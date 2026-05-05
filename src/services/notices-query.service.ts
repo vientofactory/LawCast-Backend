@@ -11,6 +11,7 @@ interface ArchivedNoticesQuery {
   startDate?: string;
   endDate?: string;
   sortOrder?: 'asc' | 'desc';
+  isDone?: boolean;
 }
 
 @Injectable()
@@ -27,6 +28,7 @@ export class NoticesQueryService {
     startDate,
     endDate,
     sortOrder,
+    isDone,
   }: ArchivedNoticesQuery) {
     const safePage = Math.max(APP_CONSTANTS.API.PAGINATION.MIN_PAGE, page);
     const safeLimit = Math.min(
@@ -53,7 +55,9 @@ export class NoticesQueryService {
       searchedCached.map((notice) => [notice.num, notice]),
     );
 
-    const cacheCandidates: CachedNotice[] = hasDateFilter ? [] : searchedCached;
+    // When filtering by isDone=true, cache items (active notices) never qualify
+    const cacheCandidates: CachedNotice[] =
+      hasDateFilter || isDone === true ? [] : searchedCached;
 
     const existingArchivedNums =
       await this.noticeArchiveService.getExistingNoticeNumSet(
@@ -75,6 +79,7 @@ export class NoticesQueryService {
         startDate: parsedDateRange.startDate,
         endDate: parsedDateRange.endDate,
         sortOrder: normalizedSortOrder,
+        isDone,
       });
 
     const cacheInsertionEntries = this.buildCacheInsertionEntries({
@@ -116,6 +121,7 @@ export class NoticesQueryService {
         startDate: parsedDateRange.startDate,
         endDate: parsedDateRange.endDate,
         sortOrder: normalizedSortOrder,
+        isDone,
       });
 
     const totalArchiveCount =

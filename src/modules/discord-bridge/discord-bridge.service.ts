@@ -98,7 +98,7 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
     }
     if (!this.botToken) {
       this.logger.warn(
-        'DISCORD_BRIDGE_BOT_TOKEN is not set — bridge will not start',
+        'DISCORD_BRIDGE_BOT_TOKEN is not set - bridge will not start',
       );
       return;
     }
@@ -146,7 +146,7 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Send a structured log event to the Discord log channel.
-   * Filtered by the configured log level — events above the threshold are silently dropped.
+   * Filtered by the configured log level - events above the threshold are silently dropped.
    */
   async logEvent(
     level: BridgeLogLevel,

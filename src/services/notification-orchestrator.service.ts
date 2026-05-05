@@ -15,11 +15,12 @@ export class NotificationOrchestratorService {
   ) {}
 
   /**
-   * 알림 배치 처리를 실행하고 완료를 기다림
+   * Executes the notification batch processing and waits for completion.
+   * @param notices The array of cached notices to be processed.
    */
   async sendNotifications(notices: CachedNotice[]): Promise<void> {
     try {
-      // 대량 알림의 경우 배치 크기 제한 적용
+      // Apply batch size limit for large notification batches
       const options: BatchProcessingOptions = {
         concurrency: 5,
         timeout: 30000,
@@ -27,21 +28,21 @@ export class NotificationOrchestratorService {
         retryDelay: 1000,
       };
 
-      // 50개 이상의 알림이 있는 경우 배치 크기 제한 적용
+      // Apply batch size limit if there are more than 50 notifications
       if (notices.length > 50) {
         options.batchSize = 50;
         this.logger.log(
           `Large notification batch detected (${notices.length} notices), applying batch size limit of 50`,
         );
-        void this.discordBridge.logEvent(
+        void this.discordBridge?.logEvent(
           BridgeLogLevel.DEBUG,
           NotificationOrchestratorService.name,
-          `Large batch detected: **${notices.length}** notices — applying batch size limit of 50`,
+          `Large batch detected: **${notices.length}** notices - applying batch size limit of 50`,
           { noticeCount: notices.length, batchSizeLimit: 50 },
         );
       }
 
-      // 배치 처리 시작하고 jobId 받기
+      // Start batch processing and get the jobId
       const jobId =
         await this.notificationBatchService.processNotificationBatch(
           notices,
@@ -51,7 +52,7 @@ export class NotificationOrchestratorService {
       this.logger.log(
         `Started notification batch processing for ${notices.length} notices (job: ${jobId})`,
       );
-      void this.discordBridge.logEvent(
+      void this.discordBridge?.logEvent(
         BridgeLogLevel.DEBUG,
         NotificationOrchestratorService.name,
         `Notification batch dispatched: **${notices.length}** notice(s) (job: \`${jobId}\`)`,
