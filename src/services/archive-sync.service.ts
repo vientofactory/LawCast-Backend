@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
 import { type ITableData } from 'pal-crawl';
+import { APP_CONSTANTS } from '../config/app.config';
 import { CrawlingCoreService } from './crawling-core.service';
 import { NoticeArchiveService } from './notice-archive.service';
 import { ArchiveOrchestratorService } from './archive-orchestrator.service';
@@ -8,18 +9,17 @@ import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.s
 import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../utils/logger.utils';
 
-// ─── Tuning constants ─────────────────────────────────────────────────────────
+// ─── Tuning constants (sourced from APP_CONSTANTS.ARCHIVE_SYNC) ───────────────
 
-/** Items per crawler HTTP request (max 100). */
-const CRAWLER_PAGE_UNIT = 100;
-/** Inter-page delay forwarded to pal-crawl (ms). */
-const CRAWLER_DELAY_MS = 500;
-/** DB rows fetched per revert-pass batch. */
-const DONE_BATCH_SIZE = 500;
-/** Archive rows per integrity-scan batch. */
-const INTEGRITY_BATCH_SIZE = 200;
-/** Archive rows fetched per summary-backfill batch. */
-const SUMMARY_BACKFILL_BATCH_SIZE = 50;
+const {
+  CRAWLER_PAGE_UNIT,
+  CRAWLER_DELAY_MS,
+  DONE_BATCH_SIZE,
+  INTEGRITY_BATCH_SIZE,
+  SUMMARY_BACKFILL_BATCH_SIZE,
+} = APP_CONSTANTS.ARCHIVE_SYNC;
+/** Max concurrent Ollama calls within a single backfill / retry batch. */
+const SUMMARY_BACKFILL_CONCURRENCY = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -63,10 +63,25 @@ export interface SummaryBackfillResult {
   failed: number;
 }
 
+/**
+ * Result of a single unavailable-summary retry pass.
+ * `recovered` = rows that transitioned to `'ready'`;
+ * `skipped` = rows that became `'not_supported'`;
+ * `stillFailed` = rows that remain `'unavailable'` after retry.
+ */
+export interface SummaryUnavailableRetryResult {
+  scanned: number;
+  recovered: number;
+  skipped: number;
+  stillFailed: number;
+}
+
 export type FullSyncStatus = PhaseStatus<FullSyncResult>;
 export type IsDoneSyncStatus = PhaseStatus<IsDoneSyncResult>;
 export type IntegrityCheckStatus = PhaseStatus<IntegrityCheckResult>;
 export type SummaryBackfillStatus = PhaseStatus<SummaryBackfillResult>;
+export type SummaryUnavailableRetryStatus =
+  PhaseStatus<SummaryUnavailableRetryResult>;
 
 // ─── Internal tracker ─────────────────────────────────────────────────────────
 
@@ -113,6 +128,8 @@ export class ArchiveSyncService implements OnModuleInit {
   private readonly isDoneSync = makeTracker<IsDoneSyncResult>();
   private readonly integrityCheck = makeTracker<IntegrityCheckResult>();
   private readonly summaryBackfill = makeTracker<SummaryBackfillResult>();
+  private readonly unavailableRetry =
+    makeTracker<SummaryUnavailableRetryResult>();
 
   constructor(
     private readonly crawlingCoreService: CrawlingCoreService,
@@ -153,6 +170,9 @@ export class ArchiveSyncService implements OnModuleInit {
     );
     await this.safeRun('summary backfill', () =>
       this.runSummaryBackfill('bootstrap'),
+    );
+    await this.safeRun('unavailable retry', () =>
+      this.runUnavailableRetry('bootstrap'),
     );
 
     LoggerUtils.log(
@@ -449,6 +469,38 @@ export class ArchiveSyncService implements OnModuleInit {
     return ArchiveSyncService.toStatus(this.summaryBackfill);
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 5 – Unavailable summary retry
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Retries archive rows with `aiSummaryStatus = 'unavailable'` (e.g. rows
+   * that failed during a previous backfill due to a transient Ollama outage).
+   *
+   * Unlike the backfill drain loop this uses **offset-based pagination** so
+   * rows that remain `'unavailable'` after a failed retry do not cause an
+   * infinite loop.
+   *
+   * Can be triggered manually via the admin API or runs automatically at the
+   * end of the bootstrap pipeline (after the backfill phase).
+   */
+  async runUnavailableRetry(
+    trigger: string,
+  ): Promise<SummaryUnavailableRetryResult | null> {
+    return this.runPhase(
+      'Unavailable summary retry',
+      this.unavailableRetry,
+      trigger,
+      () => this.executeUnavailableRetry(),
+      (r) =>
+        `scanned=${r.scanned} recovered=${r.recovered} skipped=${r.skipped} stillFailed=${r.stillFailed}`,
+    );
+  }
+
+  getUnavailableRetryStatus(): SummaryUnavailableRetryStatus {
+    return ArchiveSyncService.toStatus(this.unavailableRetry);
+  }
+
   /**
    * Iterates all archive rows with `aiSummaryStatus = 'not_requested'` using
    * a drain loop (always skip=0) and generates summaries via Ollama.
@@ -483,20 +535,27 @@ export class ArchiveSyncService implements OnModuleInit {
       );
       if (batch.length === 0) break;
 
-      for (const notice of batch) {
-        const result =
-          await this.summaryGenerationService.generateSummaryForNotice(notice, {
-            phase: 'summary-backfill',
-          });
+      const batchStatuses = await this.mapConcurrently(
+        batch,
+        SUMMARY_BACKFILL_CONCURRENCY,
+        async (notice) => {
+          const result =
+            await this.summaryGenerationService.generateSummaryForNotice(
+              notice,
+              { phase: 'summary-backfill' },
+            );
+          await this.noticeArchiveService.updateSummaryStateByNoticeNum(
+            notice.num,
+            result.aiSummary,
+            result.aiSummaryStatus,
+          );
+          return result.aiSummaryStatus;
+        },
+      );
 
-        await this.noticeArchiveService.updateSummaryStateByNoticeNum(
-          notice.num,
-          result.aiSummary,
-          result.aiSummaryStatus,
-        );
-
-        if (result.aiSummaryStatus === 'ready') generated++;
-        else if (result.aiSummaryStatus === 'not_supported') skipped++;
+      for (const status of batchStatuses) {
+        if (status === 'ready') generated++;
+        else if (status === 'not_supported') skipped++;
         else failed++; // 'unavailable'
       }
 
@@ -506,6 +565,12 @@ export class ArchiveSyncService implements OnModuleInit {
         ArchiveSyncService.name,
         `Summary backfill batch [${scanned - batch.length}–${scanned - 1}]: ` +
           `generated=${generated} skipped=${skipped} failed=${failed}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.VERBOSE,
+        ArchiveSyncService.name,
+        `Summary backfill batch: scanned=${scanned} generated=${generated} skipped=${skipped} failed=${failed}`,
+        { scanned, generated, skipped, failed },
       );
 
       if (batch.length < SUMMARY_BACKFILL_BATCH_SIZE) break;
@@ -518,5 +583,115 @@ export class ArchiveSyncService implements OnModuleInit {
     );
 
     return { scanned, generated, skipped, failed };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 5 – Unavailable summary retry (implementation)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private async executeUnavailableRetry(): Promise<SummaryUnavailableRetryResult> {
+    if (!this.summaryGenerationService.isAiSummaryEnabled()) {
+      LoggerUtils.logDev(
+        ArchiveSyncService.name,
+        'Unavailable summary retry skipped - AI summary disabled',
+      );
+      return { scanned: 0, recovered: 0, skipped: 0, stillFailed: 0 };
+    }
+
+    let scanned = 0;
+    let recovered = 0;
+    let skipped = 0;
+    let stillFailed = 0;
+    let skip = 0;
+
+    for (;;) {
+      // Offset-based pagination (NOT a drain loop).
+      // Rows that remain 'unavailable' after retry stay in the set, so we
+      // must advance skip to avoid an infinite loop.
+      const batch = await this.noticeArchiveService.getUnavailableSummaryPage(
+        skip,
+        SUMMARY_BACKFILL_BATCH_SIZE,
+      );
+      if (batch.length === 0) break;
+
+      const batchStatuses = await this.mapConcurrently(
+        batch,
+        SUMMARY_BACKFILL_CONCURRENCY,
+        async (notice) => {
+          const result =
+            await this.summaryGenerationService.generateSummaryForNotice(
+              notice,
+              { phase: 'unavailable-retry' },
+            );
+          await this.noticeArchiveService.updateSummaryStateByNoticeNum(
+            notice.num,
+            result.aiSummary,
+            result.aiSummaryStatus,
+          );
+          return result.aiSummaryStatus;
+        },
+      );
+
+      for (const status of batchStatuses) {
+        if (status === 'ready') recovered++;
+        else if (status === 'not_supported') skipped++;
+        else stillFailed++; // 'unavailable'
+      }
+
+      scanned += batch.length;
+
+      LoggerUtils.debugDev(
+        ArchiveSyncService.name,
+        `Unavailable retry batch [${skip}–${skip + batch.length - 1}]: ` +
+          `recovered=${recovered} skipped=${skipped} stillFailed=${stillFailed}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.VERBOSE,
+        ArchiveSyncService.name,
+        `Unavailable retry batch: scanned=${scanned} recovered=${recovered} skipped=${skipped} stillFailed=${stillFailed}`,
+        { scanned, recovered, skipped, stillFailed },
+      );
+
+      if (batch.length < SUMMARY_BACKFILL_BATCH_SIZE) break;
+      skip += SUMMARY_BACKFILL_BATCH_SIZE;
+    }
+
+    LoggerUtils.log(
+      ArchiveSyncService.name,
+      `Unavailable summary retry done - scanned=${scanned} recovered=${recovered} ` +
+        `skipped=${skipped} stillFailed=${stillFailed}`,
+    );
+
+    return { scanned, recovered, skipped, stillFailed };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Utilities
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Maps `items` through `mapper` with at most `concurrency` parallel calls.
+   * Preserves input order in the returned array.
+   */
+  private async mapConcurrently<T, R>(
+    items: T[],
+    concurrency: number,
+    mapper: (item: T) => Promise<R>,
+  ): Promise<R[]> {
+    if (items.length === 0) return [];
+    const limit = Math.max(1, concurrency);
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+    const worker = async () => {
+      for (;;) {
+        const idx = nextIndex++;
+        if (idx >= items.length) return;
+        results[idx] = await mapper(items[idx]);
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(limit, items.length) }, worker),
+    );
+    return results;
   }
 }

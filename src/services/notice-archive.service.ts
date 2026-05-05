@@ -278,6 +278,53 @@ export class NoticeArchiveService {
     }));
   }
 
+  /**
+   * Returns one page of archive rows whose `aiSummaryStatus` is `'unavailable'`,
+   * ordered by `noticeNum` ascending.
+   *
+   * Intended for an **offset-based single-pass retry** - callers should
+   * advance `skip` by the batch size on each iteration.  Unlike
+   * `getPendingSummaryPage` this is NOT a drain loop: rows that remain
+   * `'unavailable'` after a retry do not drop out of subsequent queries, so
+   * the caller must increment `skip` to make forward progress.
+   */
+  async getUnavailableSummaryPage(
+    skip: number,
+    take: number,
+  ): Promise<CachedNotice[]> {
+    const rows = await this.archiveRepository.find({
+      where: { aiSummaryStatus: 'unavailable' },
+      select: {
+        noticeNum: true,
+        subject: true,
+        proposerCategory: true,
+        committee: true,
+        assemblyLink: true,
+        contentId: true,
+        attachmentPdfFile: true,
+        attachmentHwpFile: true,
+      },
+      order: { noticeNum: 'ASC' },
+      skip,
+      take,
+    });
+
+    return rows.map((row) => ({
+      num: row.noticeNum,
+      subject: row.subject,
+      proposerCategory: row.proposerCategory,
+      committee: row.committee,
+      link: row.assemblyLink,
+      contentId: row.contentId,
+      attachments: {
+        pdfFile: row.attachmentPdfFile ?? '',
+        hwpFile: row.attachmentHwpFile ?? '',
+      },
+      aiSummary: null,
+      aiSummaryStatus: 'unavailable' as const,
+    }));
+  }
+
   async getArchiveNotices(query: ArchiveListQuery): Promise<{
     items: ArchiveNoticeItem[];
     page: number;

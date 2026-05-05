@@ -47,7 +47,7 @@ export const APP_CONSTANTS = {
       DEBUG: 3,
       VERBOSE: 4,
     },
-    // 개발 환경에서만 디버그 로그 출력
+    // Only output debug logs in development environment
     DEVELOPMENT_ONLY: {
       DEBUG: true,
       VERBOSE: true,
@@ -58,9 +58,9 @@ export const APP_CONSTANTS = {
     DEFAULT_LIMIT: 10,
     NOTICES_RECENT_LIMIT: 10,
     TTL: {
-      NOTICES: 30 * 60 * 1000, // 30분 (밀리초)
-      CACHE_INFO: 60 * 1000, // 1분 (밀리초)
-      STATS: 5 * 60 * 1000, // 5분 (밀리초)
+      NOTICES: 30 * 60 * 1000, // 30 minutes (milliseconds)
+      CACHE_INFO: 60 * 1000, // 1 minute (milliseconds)
+      STATS: 5 * 60 * 1000, // 5 minutes (milliseconds)
     },
     KEYS: {
       RECENT_NOTICES: 'recent_notices',
@@ -102,8 +102,8 @@ export const APP_CONSTANTS = {
         INTERNAL_SERVER_ERROR: 500,
       },
       RATE_LIMITS: {
-        GLOBAL_PER_SECOND: 30, // 초당 30개 메시지 (글로벌)
-        PER_WEBHOOK_PER_MINUTE: 60, // 웹훅별 분당 60개 메시지
+        GLOBAL_PER_SECOND: 30, // 30 messages per second (global)
+        PER_WEBHOOK_PER_MINUTE: 60, // 60 messages per minute per webhook
         RETRY_AFTER_HEADER: 'Retry-After',
         RESET_HEADER: 'X-RateLimit-Reset',
         REMAINING_HEADER: 'X-RateLimit-Remaining',
@@ -118,8 +118,8 @@ export const APP_CONSTANTS = {
   },
   CRAWLING: {
     USER_AGENT: 'LawCast/1.0 (Legislative Notice Crawler)',
-    TIMEOUT: 15000, // 15초 타임아웃
-    RETRY_COUNT: 3, // 3회 재시도
+    TIMEOUT: 15000, // 15 seconds timeout
+    RETRY_COUNT: 3, // 3 retries
     SUMMARY_CONCURRENCY: 3,
     HEADERS: {
       'Accept-Language': 'ko-KR,ko;q=0.9',
@@ -127,13 +127,25 @@ export const APP_CONSTANTS = {
       'Cache-Control': 'no-cache',
     },
   },
+  ARCHIVE_SYNC: {
+    /** Items per crawler HTTP request (max 100). */
+    CRAWLER_PAGE_UNIT: 100,
+    /** Inter-page delay forwarded to pal-crawl (ms). */
+    CRAWLER_DELAY_MS: 500,
+    /** DB rows fetched per revert-pass batch. */
+    DONE_BATCH_SIZE: 500,
+    /** Archive rows per integrity-scan batch. */
+    INTEGRITY_BATCH_SIZE: 200,
+    /** Archive rows fetched per summary-backfill / retry batch. */
+    SUMMARY_BACKFILL_BATCH_SIZE: 50,
+  },
   CRON: {
     EXPRESSIONS: {
-      CRAWLING_CHECK: '0 */5 * * * *', // 5분마다
-      WEBHOOK_CLEANUP: '0 0 0 * * *', // 매일 자정
-      WEBHOOK_OPTIMIZATION: '0 0 2 * * *', // 매일 새벽 2시
-      SYSTEM_MONITORING: '0 0 * * * *', // 매시간
-      IS_DONE_SYNC: '0 0 */6 * * *', // every 6 hours - sync isDone flags for expired notices
+      CRAWLING_CHECK: '0 */5 * * * *', // Every 5 minutes
+      WEBHOOK_CLEANUP: '0 0 0 * * *', // Every day at midnight
+      WEBHOOK_OPTIMIZATION: '0 0 2 * * *', // Every day at 2 AM
+      SYSTEM_MONITORING: '0 0 * * * *', // Every hour
+      IS_DONE_SYNC: '0 0 */6 * * *', // Every 6 hours - sync isDone flags for expired notices
     },
   },
 } as const;
@@ -148,7 +160,7 @@ export default (): AppConfig => ({
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
     keyPrefix: process.env.REDIS_KEY_PREFIX || 'lawcast:',
-    ttl: parseInt(process.env.REDIS_TTL, 10) || 30 * 60, // 30분 (초 단위)
+    ttl: parseInt(process.env.REDIS_TTL, 10) || 30 * 60, // 30 minutes (seconds)
   },
   hashguard: {
     apiUrl: process.env.HASHGUARD_API_URL || 'https://hashguard.viento.me',
