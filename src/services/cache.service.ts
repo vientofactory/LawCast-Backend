@@ -164,12 +164,11 @@ export class CacheService implements OnModuleDestroy {
 
       return newNotices;
     } catch (error) {
-      this.logger.error('Error finding new notices:', error);
-      LoggerUtils.logDev(
-        CacheService.name,
-        'Error in findNewNotices, returning empty array to prevent false notifications',
+      this.logger.error(
+        'Redis unavailable in findNewNotices — caller should fall back to archive-based deduplication',
+        error,
       );
-      return [];
+      throw error;
     }
   }
 

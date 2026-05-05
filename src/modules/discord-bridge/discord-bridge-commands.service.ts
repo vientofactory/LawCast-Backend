@@ -312,7 +312,7 @@ export class DiscordBridgeCommandsService {
     ctx.setLogLevel(levelMap[requested]);
     await interaction
       .reply(
-        `✅ Log level changed: **${BRIDGE_LOG_LEVEL_LABELS[oldLevel]}** → **${BRIDGE_LOG_LEVEL_LABELS[levelMap[requested]]}**`,
+        `✅ Log level changed: **${BRIDGE_LOG_LEVEL_LABELS[oldLevel]}** -> **${BRIDGE_LOG_LEVEL_LABELS[levelMap[requested]]}**`,
       )
       .catch(() => {});
   }
