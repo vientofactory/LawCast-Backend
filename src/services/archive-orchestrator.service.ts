@@ -45,92 +45,105 @@ export class ArchiveOrchestratorService {
 
       const chunkResults = await Promise.all(
         chunk.map(async (notice) => {
-          let proposalReason = '';
-          let sourceTitle: string | null = notice.subject;
-          let contentBillNumber: string | null = null;
-          let contentProposer: string | null = null;
-          let contentProposalDate: string | null = null;
-          let contentCommittee: string | null = null;
-          let contentReferralDate: string | null = null;
-          let contentNoticePeriod: string | null = null;
-          let contentProposalSession: string | null = null;
-          let sourceHtml: string | null = null;
-          let sourceHtmlSha256: string | null = null;
-          let httpMetadata: ArchiveHttpMetadata | null = null;
-          const archivedAt = new Date();
+          // Outer guard: any unexpected throw must not reject the whole Promise.all chunk
+          try {
+            let proposalReason = '';
+            let sourceTitle: string | null = notice.subject;
+            let contentBillNumber: string | null = null;
+            let contentProposer: string | null = null;
+            let contentProposalDate: string | null = null;
+            let contentCommittee: string | null = null;
+            let contentReferralDate: string | null = null;
+            let contentNoticePeriod: string | null = null;
+            let contentProposalSession: string | null = null;
+            let sourceHtml: string | null = null;
+            let sourceHtmlSha256: string | null = null;
+            let httpMetadata: ArchiveHttpMetadata | null = null;
+            const archivedAt = new Date();
 
-          if (notice.contentId) {
+            if (notice.contentId) {
+              try {
+                const content = await this.crawlingCoreService.getContent(
+                  notice.contentId,
+                );
+                proposalReason = content?.proposalReason?.trim() || '';
+                sourceTitle = content?.title?.trim() || notice.subject;
+                contentBillNumber = content?.billNumber?.trim() || null;
+                contentProposer = content?.proposer?.trim() || null;
+                contentProposalDate = content?.proposalDate?.trim() || null;
+                contentCommittee = content?.committee?.trim() || null;
+                contentReferralDate = content?.referralDate?.trim() || null;
+                contentNoticePeriod = content?.noticePeriod?.trim() || null;
+                contentProposalSession =
+                  content?.proposalSession?.trim() || null;
+              } catch (error) {
+                const message =
+                  error instanceof Error ? error.message : String(error);
+                this.logger.warn(
+                  `Failed to fetch original content for archive notice ${notice.num}: ${message}`,
+                );
+                void this.discordBridge?.logEvent(
+                  BridgeLogLevel.VERBOSE,
+                  ArchiveOrchestratorService.name,
+                  `Content fetch failed for notice **${notice.num}**: ${message}`,
+                  { noticeNum: notice.num, contentId: notice.contentId },
+                );
+              }
+            }
+
             try {
-              const content = await this.crawlingCoreService.getContent(
-                notice.contentId,
+              const sourceCapture = await this.captureNoticePageSource(
+                notice.link,
               );
-              proposalReason = content?.proposalReason?.trim() || '';
-              sourceTitle = content?.title?.trim() || notice.subject;
-              contentBillNumber = content?.billNumber?.trim() || null;
-              contentProposer = content?.proposer?.trim() || null;
-              contentProposalDate = content?.proposalDate?.trim() || null;
-              contentCommittee = content?.committee?.trim() || null;
-              contentReferralDate = content?.referralDate?.trim() || null;
-              contentNoticePeriod = content?.noticePeriod?.trim() || null;
-              contentProposalSession = content?.proposalSession?.trim() || null;
+              sourceHtml = sourceCapture.html;
+              sourceHtmlSha256 = sourceCapture.sha256;
+              httpMetadata = sourceCapture.httpMetadata;
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : String(error);
               this.logger.warn(
-                `Failed to fetch original content for archive notice ${notice.num}: ${message}`,
+                `Failed to capture source HTML for archive notice ${notice.num}: ${message}`,
               );
               void this.discordBridge?.logEvent(
                 BridgeLogLevel.VERBOSE,
                 ArchiveOrchestratorService.name,
-                `Content fetch failed for notice **${notice.num}**: ${message}`,
-                { noticeNum: notice.num, contentId: notice.contentId },
+                `HTML capture failed for notice **${notice.num}**: ${message}`,
+                { noticeNum: notice.num, link: notice.link },
               );
             }
-          }
 
-          try {
-            const sourceCapture = await this.captureNoticePageSource(
-              notice.link,
-            );
-            sourceHtml = sourceCapture.html;
-            sourceHtmlSha256 = sourceCapture.sha256;
-            httpMetadata = sourceCapture.httpMetadata;
+            try {
+              await this.noticeArchiveService.upsertNoticeArchive(notice, {
+                proposalReason,
+                title: sourceTitle,
+                billNumber: contentBillNumber,
+                proposer: contentProposer,
+                proposalDate: contentProposalDate,
+                committee: contentCommittee,
+                referralDate: contentReferralDate,
+                noticePeriod: contentNoticePeriod,
+                proposalSession: contentProposalSession,
+                sourceHtml,
+                htmlSha256: sourceHtmlSha256,
+                archivedAt,
+                httpMetadata,
+              });
+              return true;
+            } catch (error) {
+              const message =
+                error instanceof Error ? error.message : String(error);
+              this.logger.error(
+                `Failed to archive notice ${notice.num}: ${message}`,
+                error,
+              );
+              return false;
+            }
           } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            this.logger.warn(
-              `Failed to capture source HTML for archive notice ${notice.num}: ${message}`,
-            );
-            void this.discordBridge?.logEvent(
-              BridgeLogLevel.VERBOSE,
-              ArchiveOrchestratorService.name,
-              `HTML capture failed for notice **${notice.num}**: ${message}`,
-              { noticeNum: notice.num, link: notice.link },
-            );
-          }
-
-          try {
-            await this.noticeArchiveService.upsertNoticeArchive(notice, {
-              proposalReason,
-              title: sourceTitle,
-              billNumber: contentBillNumber,
-              proposer: contentProposer,
-              proposalDate: contentProposalDate,
-              committee: contentCommittee,
-              referralDate: contentReferralDate,
-              noticePeriod: contentNoticePeriod,
-              proposalSession: contentProposalSession,
-              sourceHtml,
-              htmlSha256: sourceHtmlSha256,
-              archivedAt,
-              httpMetadata,
-            });
-            return true;
-          } catch (error) {
+            // Catch-all for unexpected throws outside the inner try/catch blocks
             const message =
               error instanceof Error ? error.message : String(error);
             this.logger.error(
-              `Failed to archive notice ${notice.num}: ${message}`,
+              `Unexpected error while archiving notice ${notice.num}: ${message}`,
               error,
             );
             return false;
