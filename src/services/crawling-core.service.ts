@@ -54,7 +54,15 @@ export class CrawlingCoreService {
    * @returns A promise that resolves to the detailed content data of the notice.
    */
   async getContent(contentId: string): Promise<IContentData> {
-    return this.createClient().getContent(contentId);
+    try {
+      return await this.createClient().getContent(contentId);
+    } catch (error) {
+      this.logger.error(
+        `Error fetching content for contentId ${contentId}:`,
+        error,
+      );
+      throw error;
+    }
   }
 
   /**
@@ -77,7 +85,15 @@ export class CrawlingCoreService {
    * @returns A promise that resolves to the detailed content data of the done notice.
    */
   async getDoneContent(contentId: string): Promise<IContentData> {
-    return this.createClient().getDoneContent(contentId);
+    try {
+      return await this.createClient().getDoneContent(contentId);
+    } catch (error) {
+      this.logger.error(
+        `Error fetching done content for contentId ${contentId}:`,
+        error,
+      );
+      throw error;
+    }
   }
 
   /**
@@ -177,7 +193,9 @@ export class CrawlingCoreService {
         { pageUnit: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_PAGE_UNIT },
         { delayMs, concurrency: 1 },
       )) {
-        for (const item of page.items) {
+        // Guard against unexpected null/undefined items from the crawler
+        const pageItems: ITableData[] = page.items ?? [];
+        for (const item of pageItems) {
           if (!seen.has(item.num)) {
             seen.add(item.num);
             allItems.push(item);
@@ -188,8 +206,8 @@ export class CrawlingCoreService {
         // fetch older pages (notices are ordered newest-first).
         if (
           stopBelowNum !== undefined &&
-          page.items.length > 0 &&
-          page.items.every((item) => item.num <= stopBelowNum)
+          pageItems.length > 0 &&
+          pageItems.every((item) => item.num <= stopBelowNum)
         ) {
           this.logger.debug(
             `Early exit: all items on page have num ≤ ${stopBelowNum} — skipping older pages`,

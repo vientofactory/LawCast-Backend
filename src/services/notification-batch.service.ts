@@ -132,7 +132,21 @@ export class NotificationBatchService {
     notices: CachedNotice[],
     options: BatchProcessingOptions = {},
   ): Promise<BatchJobResult<NotificationJobResult>[]> {
-    const activeWebhooks = (await this.webhookService.findAll()) ?? [];
+    // Guard: DB failure must not crash the entire notification pipeline
+    let activeWebhooks: Awaited<ReturnType<typeof this.webhookService.findAll>>;
+    try {
+      activeWebhooks = (await this.webhookService.findAll()) ?? [];
+    } catch (error) {
+      this.logger.error(
+        `Failed to load webhooks for notification batch, skipping dispatch: ${(error as Error).message}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.ERROR,
+        NotificationBatchService.name,
+        `Webhook load failed, notifications skipped: ${(error as Error).message}`,
+      );
+      return [];
+    }
 
     void this.discordBridge?.logEvent(
       BridgeLogLevel.VERBOSE,

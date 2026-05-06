@@ -117,49 +117,95 @@ export class CrawlingSchedulerService implements OnModuleInit {
       return;
     }
 
-    const archiveSummaryStates =
-      await this.noticeArchiveService.getSummaryStateByNoticeNums(
-        crawledData.map((notice) => notice.num),
+    // Stage 1: Archive summary states — fallback to empty map on DB failure
+    let archiveSummaryStates: Map<number, ArchiveSummaryState>;
+    try {
+      archiveSummaryStates =
+        await this.noticeArchiveService.getSummaryStateByNoticeNums(
+          crawledData.map((notice) => notice.num),
+        );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to load archive summary states during init, falling back to empty map: ${(error as Error).message}`,
       );
+      archiveSummaryStates = new Map();
+    }
 
-    const noticesWithSummary =
-      await this.summaryGenerationService.enrichNoticesWithSummary(
-        crawledData,
-        new Map(),
-        archiveSummaryStates,
-        {
-          logOllamaActivity: true,
-          phase: 'init-cache',
-          retryUnavailableArchiveSummary: true,
-        },
-      );
-
-    await this.persistRetriedArchiveSummaryStates(
-      noticesWithSummary,
-      archiveSummaryStates,
-    );
-
-    const missingArchiveNotices =
-      await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
-        noticesWithSummary,
-      );
-
-    if (missingArchiveNotices.length > 0) {
-      await this.archiveOrchestratorService.archiveNotices(
-        missingArchiveNotices,
-      );
-      this.logger.log(
-        `Archived ${missingArchiveNotices.length} missing notices during bootstrap initialization`,
+    // Stage 2: AI summary enrichment — fallback to raw notices on Ollama/crawl failure
+    let noticesWithSummary: CachedNotice[];
+    try {
+      noticesWithSummary =
+        await this.summaryGenerationService.enrichNoticesWithSummary(
+          crawledData,
+          new Map(),
+          archiveSummaryStates,
+          {
+            logOllamaActivity: true,
+            phase: 'init-cache',
+            retryUnavailableArchiveSummary: true,
+          },
+        );
+    } catch (error) {
+      this.logger.warn(
+        `Summary enrichment failed during init, using raw crawled data: ${(error as Error).message}`,
       );
       void this.discordBridge?.logEvent(
-        BridgeLogLevel.VERBOSE,
+        BridgeLogLevel.WARN,
         CrawlingSchedulerService.name,
-        `Bootstrap archived **${missingArchiveNotices.length}** missing notice(s)`,
-        { count: missingArchiveNotices.length },
+        `Summary enrichment failed during init: ${(error as Error).message}`,
+      );
+      noticesWithSummary = crawledData.map((notice) => ({
+        ...notice,
+        aiSummary: null,
+        aiSummaryStatus: 'not_requested' as const,
+      }));
+    }
+
+    // Stage 3: Persist retried summary states — log and continue on failure
+    try {
+      await this.persistRetriedArchiveSummaryStates(
+        noticesWithSummary,
+        archiveSummaryStates,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to persist retried summary states during init: ${(error as Error).message}`,
       );
     }
 
-    // 초기 캐시 업데이트
+    // Stage 4: Archive missing notices — log and continue on failure
+    try {
+      const missingArchiveNotices =
+        await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
+          noticesWithSummary,
+        );
+
+      if (missingArchiveNotices.length > 0) {
+        await this.archiveOrchestratorService.archiveNotices(
+          missingArchiveNotices,
+        );
+        this.logger.log(
+          `Archived ${missingArchiveNotices.length} missing notices during bootstrap initialization`,
+        );
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.VERBOSE,
+          CrawlingSchedulerService.name,
+          `Bootstrap archived **${missingArchiveNotices.length}** missing notice(s)`,
+          { count: missingArchiveNotices.length },
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Archive stage failed during init, proceeding with cache update: ${(error as Error).message}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.ERROR,
+        CrawlingSchedulerService.name,
+        `Bootstrap archive stage failed: ${(error as Error).message}`,
+      );
+    }
+
+    // Stage 5: Cache update — always runs with whatever data we have
     await this.cacheService.updateCache(noticesWithSummary);
     this.logger.log(
       `Initialized Redis cache with ${noticesWithSummary.length} notices`,
@@ -248,21 +294,60 @@ export class CrawlingSchedulerService implements OnModuleInit {
         },
       );
 
-      const archiveSummaryStates =
-        await this.noticeArchiveService.getSummaryStateByNoticeNums(
-          newNotices.map((notice) => notice.num),
+      // Stage: Archive summary states — fallback to empty map on DB failure
+      let archiveSummaryStates: Map<number, ArchiveSummaryState>;
+      try {
+        archiveSummaryStates =
+          await this.noticeArchiveService.getSummaryStateByNoticeNums(
+            newNotices.map((notice) => notice.num),
+          );
+      } catch (error) {
+        this.logger.warn(
+          `Failed to load archive summary states, falling back to empty map: ${(error as Error).message}`,
         );
+        archiveSummaryStates = new Map();
+      }
 
-      const newNoticesWithSummary =
-        await this.summaryGenerationService.enrichNoticesWithSummary(
-          newNotices,
-          existingNoticeMap,
-          archiveSummaryStates,
+      // Stage: AI summary enrichment — fallback to raw notices on Ollama/crawl failure
+      let newNoticesWithSummary: CachedNotice[];
+      try {
+        newNoticesWithSummary =
+          await this.summaryGenerationService.enrichNoticesWithSummary(
+            newNotices,
+            existingNoticeMap,
+            archiveSummaryStates,
+          );
+      } catch (error) {
+        this.logger.error(
+          `Summary enrichment failed for new notices, using raw data: ${(error as Error).message}`,
         );
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.ERROR,
+          CrawlingSchedulerService.name,
+          `Summary enrichment failed: ${(error as Error).message}`,
+        );
+        newNoticesWithSummary = newNotices.map((notice) => ({
+          ...notice,
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested' as const,
+        }));
+      }
 
-      await this.archiveOrchestratorService.archiveNotices(
-        newNoticesWithSummary,
-      );
+      // Stage: Archive — log and continue so cache + notifications are never blocked
+      try {
+        await this.archiveOrchestratorService.archiveNotices(
+          newNoticesWithSummary,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Archive stage failed for new notices, proceeding with cache and notifications: ${(error as Error).message}`,
+        );
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.ERROR,
+          CrawlingSchedulerService.name,
+          `Archive stage failed: ${(error as Error).message}`,
+        );
+      }
 
       const newNoticeMap = this.buildNoticeMap(newNoticesWithSummary);
       const noticesWithSummary = crawledData.map((notice) => {
@@ -293,11 +378,20 @@ export class CrawlingSchedulerService implements OnModuleInit {
         };
       });
 
-      const noticesWithRetriedSummary =
-        await this.retryUnavailableSummariesFromPreviousCycle(
-          noticesWithSummary,
-          existingNoticeMap,
+      // Stage: Retry unavailable summaries — fallback to current notices on failure
+      let noticesWithRetriedSummary: CachedNotice[];
+      try {
+        noticesWithRetriedSummary =
+          await this.retryUnavailableSummariesFromPreviousCycle(
+            noticesWithSummary,
+            existingNoticeMap,
+          );
+      } catch (error) {
+        this.logger.warn(
+          `Unavailable summary retry failed, using current notices: ${(error as Error).message}`,
         );
+        noticesWithRetriedSummary = noticesWithSummary;
+      }
 
       await this.cacheService.updateCache(noticesWithRetriedSummary);
       this.logger.log(
@@ -336,11 +430,20 @@ export class CrawlingSchedulerService implements OnModuleInit {
         };
       });
 
-      const noticesWithRetriedSummary =
-        await this.retryUnavailableSummariesFromPreviousCycle(
-          noticesWithExistingSummary,
-          existingNoticeMap,
+      // Stage: Retry unavailable summaries — fallback to current notices on failure
+      let noticesWithRetriedSummary: CachedNotice[];
+      try {
+        noticesWithRetriedSummary =
+          await this.retryUnavailableSummariesFromPreviousCycle(
+            noticesWithExistingSummary,
+            existingNoticeMap,
+          );
+      } catch (error) {
+        this.logger.warn(
+          `Unavailable summary retry failed, using current notices: ${(error as Error).message}`,
         );
+        noticesWithRetriedSummary = noticesWithExistingSummary;
+      }
 
       await this.cacheService.updateCache(noticesWithRetriedSummary);
       void this.discordBridge?.logEvent(
@@ -400,7 +503,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       return;
     }
 
-    await Promise.all(
+    const persistResults = await Promise.allSettled(
       changedRetriedNotices.map(async (notice) => {
         await this.noticeArchiveService.updateSummaryStateByNoticeNum(
           notice.num,
@@ -410,8 +513,17 @@ export class CrawlingSchedulerService implements OnModuleInit {
       }),
     );
 
+    const persistFailed = persistResults.filter(
+      (r) => r.status === 'rejected',
+    ).length;
+    if (persistFailed > 0) {
+      this.logger.warn(
+        `Failed to persist ${persistFailed}/${changedRetriedNotices.length} retried summary states`,
+      );
+    }
+
     this.logger.log(
-      `Persisted retried summary state for ${changedRetriedNotices.length} archived notices`,
+      `Persisted retried summary state for ${changedRetriedNotices.length - persistFailed} archived notices`,
     );
   }
 
@@ -514,7 +626,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       return mergedNotices;
     }
 
-    await Promise.all(
+    const cronPersistResults = await Promise.allSettled(
       changedRetriedNotices.map(async (notice) => {
         await this.noticeArchiveService.updateSummaryStateByNoticeNum(
           notice.num,
@@ -524,8 +636,17 @@ export class CrawlingSchedulerService implements OnModuleInit {
       }),
     );
 
+    const cronPersistFailed = cronPersistResults.filter(
+      (r) => r.status === 'rejected',
+    ).length;
+    if (cronPersistFailed > 0) {
+      this.logger.warn(
+        `Failed to persist ${cronPersistFailed}/${changedRetriedNotices.length} cron retried summary states`,
+      );
+    }
+
     this.logger.log(
-      `Persisted cron retried summary state for ${changedRetriedNotices.length} notices`,
+      `Persisted cron retried summary state for ${changedRetriedNotices.length - cronPersistFailed} notices`,
     );
 
     return mergedNotices;

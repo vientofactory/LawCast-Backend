@@ -292,11 +292,13 @@ export class ArchiveSyncService implements OnModuleInit {
       { delayMs: CRAWLER_DELAY_MS, concurrency: 1 },
     )) {
       totalPagesScanned++;
-      totalNoticesScanned += page.items.length;
+      // Guard against unexpected null/undefined items from the crawler
+      const pageItems: ITableData[] = page.items ?? [];
+      totalNoticesScanned += pageItems.length;
 
       const newNotices =
         await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
-          page.items as ITableData[],
+          pageItems,
         );
 
       if (newNotices.length > 0) {
@@ -313,7 +315,7 @@ export class ArchiveSyncService implements OnModuleInit {
       LoggerUtils.debugDev(
         ArchiveSyncService.name,
         `Page ${page.currentPage}/${page.totalPages}: ` +
-          `total=${page.items.length} new=${newNotices.length}`,
+          `total=${pageItems.length} new=${newNotices.length}`,
       );
     }
 
@@ -359,7 +361,8 @@ export class ArchiveSyncService implements OnModuleInit {
       { pageUnit: CRAWLER_PAGE_UNIT },
       { delayMs: CRAWLER_DELAY_MS, concurrency: 1 },
     )) {
-      const pageNums = page.items.map((item) => item.num);
+      // Guard against unexpected null/undefined items from the crawler
+      const pageNums = (page.items ?? []).map((item) => item.num);
       for (const num of pageNums) doneNumSet.add(num);
       markedDoneCount +=
         await this.noticeArchiveService.markNoticesDoneByNums(pageNums);
@@ -367,7 +370,7 @@ export class ArchiveSyncService implements OnModuleInit {
       LoggerUtils.debugDev(
         ArchiveSyncService.name,
         `isDone page ${page.currentPage}/${page.totalPages}: ` +
-          `+${page.items.length} nums, ${markedDoneCount} total marked`,
+          `+${pageNums.length} nums, ${markedDoneCount} total marked`,
       );
     }
 
@@ -539,17 +542,25 @@ export class ArchiveSyncService implements OnModuleInit {
         batch,
         SUMMARY_BACKFILL_CONCURRENCY,
         async (notice) => {
-          const result =
-            await this.summaryGenerationService.generateSummaryForNotice(
-              notice,
-              { phase: 'summary-backfill' },
+          try {
+            const result =
+              await this.summaryGenerationService.generateSummaryForNotice(
+                notice,
+                { phase: 'summary-backfill' },
+              );
+            await this.noticeArchiveService.updateSummaryStateByNoticeNum(
+              notice.num,
+              result.aiSummary,
+              result.aiSummaryStatus,
             );
-          await this.noticeArchiveService.updateSummaryStateByNoticeNum(
-            notice.num,
-            result.aiSummary,
-            result.aiSummaryStatus,
-          );
-          return result.aiSummaryStatus;
+            return result.aiSummaryStatus;
+          } catch (error) {
+            LoggerUtils.error(
+              ArchiveSyncService.name,
+              `Summary backfill failed for notice ${notice.num}: ${(error as Error).message}`,
+            );
+            return 'unavailable' as const;
+          }
         },
       );
 
@@ -618,17 +629,25 @@ export class ArchiveSyncService implements OnModuleInit {
         batch,
         SUMMARY_BACKFILL_CONCURRENCY,
         async (notice) => {
-          const result =
-            await this.summaryGenerationService.generateSummaryForNotice(
-              notice,
-              { phase: 'unavailable-retry' },
+          try {
+            const result =
+              await this.summaryGenerationService.generateSummaryForNotice(
+                notice,
+                { phase: 'unavailable-retry' },
+              );
+            await this.noticeArchiveService.updateSummaryStateByNoticeNum(
+              notice.num,
+              result.aiSummary,
+              result.aiSummaryStatus,
             );
-          await this.noticeArchiveService.updateSummaryStateByNoticeNum(
-            notice.num,
-            result.aiSummary,
-            result.aiSummaryStatus,
-          );
-          return result.aiSummaryStatus;
+            return result.aiSummaryStatus;
+          } catch (error) {
+            LoggerUtils.error(
+              ArchiveSyncService.name,
+              `Unavailable retry failed for notice ${notice.num}: ${(error as Error).message}`,
+            );
+            return 'unavailable' as const;
+          }
         },
       );
 
