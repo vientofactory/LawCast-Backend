@@ -119,4 +119,20 @@ export class CronJobsService {
       this.archiveSyncService.runIsDoneSync('cron').then(() => undefined),
     );
   }
+
+  /**
+   * Re-validates the SHA-256 integrity of every archive record once a day.
+   * Forces `integrityVerifiedAt` to be refreshed on all verifiable rows so
+   * operators can confirm recency of the last check.
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleIntegrityRescan(): Promise<void> {
+    await this.execute('integrity re-scan', () =>
+      this.archiveSyncService
+        .runScheduledIntegrityRescan('cron')
+        .then(() => undefined),
+    );
+  }
 }

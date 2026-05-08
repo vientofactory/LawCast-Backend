@@ -312,7 +312,7 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
   const mockFetch = jest.fn();
 
   beforeAll(() => {
-    (global as any).fetch = mockFetch;
+    globalThis.fetch = mockFetch;
   });
 
   beforeEach(async () => {
@@ -452,7 +452,6 @@ describe('[Fault Isolation] NotificationBatchService', () => {
   let service: NotificationBatchService;
   let webhookService: jest.Mocked<WebhookService>;
   let notificationService: jest.Mocked<NotificationService>;
-  let batchProcessingService: jest.Mocked<BatchProcessingService>;
 
   const notice = makeCachedNotice(1);
 
@@ -498,7 +497,6 @@ describe('[Fault Isolation] NotificationBatchService', () => {
     service = module.get(NotificationBatchService);
     webhookService = module.get(WebhookService);
     notificationService = module.get(NotificationService);
-    batchProcessingService = module.get(BatchProcessingService);
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -843,9 +841,6 @@ describe('[Fault Isolation] CrawlingCoreService.crawlAllPages partial failure', 
     // We cannot easily instantiate CrawlingCoreService directly without real
     // pal-crawl config, so we test the behaviour via a minimal integration
     // using a spy on getAllPages.
-
-    // Build a minimal service shell that owns only crawlAllPages logic
-    const mockLogger = { warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
 
     // The actual crawlAllPages code lives in CrawlingCoreService; test it
     // indirectly through CrawlingSchedulerService's initializeCache, which

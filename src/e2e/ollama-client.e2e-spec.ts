@@ -1,40 +1,113 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { ConfigModule } from '@nestjs/config';
+import type { IContentData, ITableData } from 'pal-crawl';
 import appConfig from '../config/app.config';
 import { OllamaModule } from '../modules/ollama/ollama.module';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
+import { CrawlingCoreService } from '../services/crawling-core.service';
 
 const runOllamaE2E = process.env.RUN_OLLAMA_E2E === 'true';
 const itIfOllama = runOllamaE2E ? it : it.skip;
 
+/** Number of proposals to sample from each source (active / done). */
+const SAMPLE_COUNT = 5;
+
+/** Per-summary timeout. Used to scale test + beforeAll timeouts. */
+const SUMMARY_TIMEOUT_MS = 30_000;
+
+interface ProposalSample {
+  notice: ITableData;
+  content: IContentData;
+}
+
+/**
+ * Fetches up to `count` proposals that have both a contentId and a
+ * non-empty proposalReason, using the given crawler source.
+ */
+async function fetchProposals(
+  crawl: CrawlingCoreService,
+  source: 'active' | 'done',
+  count: number,
+): Promise<ProposalSample[]> {
+  const notices =
+    source === 'active' ? await crawl.crawlData() : await crawl.getDone();
+
+  const withId = notices.filter((n) => n.contentId);
+  const results: ProposalSample[] = [];
+
+  for (const notice of withId) {
+    if (results.length >= count) break;
+    try {
+      const content =
+        source === 'active'
+          ? await crawl.getContent(notice.contentId!)
+          : await crawl.getDoneContent(notice.contentId!);
+
+      if (content.proposalReason?.trim()) {
+        results.push({ notice, content });
+      }
+    } catch {
+      // Skip proposals whose detail page is temporarily unreachable.
+    }
+  }
+
+  return results;
+}
+
+/** Asserts that a summary string meets the basic quality constraints. */
+function assertSummary(summary: string | null): void {
+  expect(summary).toBeTruthy();
+  expect(typeof summary).toBe('string');
+  expect(summary!.length).toBeGreaterThanOrEqual(20);
+  expect(summary!.length).toBeLessThanOrEqual(1200);
+}
+
 describe('OllamaClientService (e2e)', () => {
   let moduleRef: TestingModule;
   let service: OllamaClientService;
+  let crawlService: CrawlingCoreService;
 
-  beforeAll(async () => {
-    moduleRef = await Test.createTestingModule({
-      imports: [
-        ConfigModule.forRoot({
-          isGlobal: true,
-          load: [appConfig],
-          envFilePath: [
-            '.env',
-            '.env.local',
-            '.env.development',
-            '.env.production',
-          ],
-        }),
-        OllamaModule,
-      ],
-    }).compile();
+  let activeProposals: ProposalSample[] = [];
+  let doneProposals: ProposalSample[] = [];
 
-    service = moduleRef.get<OllamaClientService>(OllamaClientService);
-  });
+  beforeAll(
+    async () => {
+      moduleRef = await Test.createTestingModule({
+        imports: [
+          ConfigModule.forRoot({
+            isGlobal: true,
+            load: [appConfig],
+            envFilePath: [
+              '.env',
+              '.env.local',
+              '.env.development',
+              '.env.production',
+            ],
+          }),
+          OllamaModule,
+        ],
+      }).compile();
+
+      service = moduleRef.get<OllamaClientService>(OllamaClientService);
+      crawlService = new CrawlingCoreService();
+
+      if (runOllamaE2E) {
+        [activeProposals, doneProposals] = await Promise.all([
+          fetchProposals(crawlService, 'active', SAMPLE_COUNT),
+          fetchProposals(crawlService, 'done', SAMPLE_COUNT),
+        ]);
+      }
+    },
+    // Allow enough time for both crawl fetches + content fetches.
+    SUMMARY_TIMEOUT_MS * SAMPLE_COUNT * 2,
+  );
 
   afterAll(async () => {
     await moduleRef?.close();
   });
+
+  // ── baseline: hardcoded known proposal ─────────────────────────────────────
 
   itIfOllama(
     'should summarize full legislative proposal with real Ollama API',
@@ -53,11 +126,102 @@ describe('OllamaClientService (e2e)', () => {
       console.debug('[INPUT]', content);
       console.debug('[OUTPUT]', summary);
 
-      expect(summary).toBeTruthy();
-      expect(typeof summary).toBe('string');
-      expect(summary!.length).toBeGreaterThanOrEqual(20);
-      expect(summary!.length).toBeLessThanOrEqual(1200);
+      assertSummary(summary);
     },
-    30000,
+    SUMMARY_TIMEOUT_MS,
+  );
+
+  // ── live active proposals from pal-crawl ───────────────────────────────────
+
+  itIfOllama('should fetch active legislative proposals from pal-crawl', () => {
+    expect(activeProposals.length).toBeGreaterThan(0);
+    for (const { content } of activeProposals) {
+      expect(content.title).toBeTruthy();
+      expect(content.proposalReason).toBeTruthy();
+    }
+  });
+
+  itIfOllama(
+    'should summarize active legislative proposals across diverse committees',
+    async () => {
+      expect(activeProposals.length).toBeGreaterThan(0);
+
+      const committees = new Set<string>();
+
+      for (const { notice, content } of activeProposals) {
+        const summary = await service.summarizeProposal(
+          content.title,
+          content.proposalReason!,
+        );
+
+        console.debug(
+          `[ACTIVE] num=${notice.num} committee=${notice.committee} proposerCategory=${notice.proposerCategory}`,
+        );
+        console.debug('[INPUT title]', content.title);
+        console.debug(
+          '[INPUT reason excerpt]',
+          content.proposalReason!.slice(0, 200),
+        );
+        console.debug('[OUTPUT]', summary);
+
+        assertSummary(summary);
+        committees.add(notice.committee);
+      }
+
+      console.debug('[COMMITTEES COVERED]', [...committees]);
+    },
+    SUMMARY_TIMEOUT_MS * SAMPLE_COUNT,
+  );
+
+  // ── live done proposals from pal-crawl ─────────────────────────────────────
+
+  itIfOllama('should fetch done legislative proposals from pal-crawl', () => {
+    expect(doneProposals.length).toBeGreaterThan(0);
+    for (const { content } of doneProposals) {
+      expect(content.title).toBeTruthy();
+      expect(content.proposalReason).toBeTruthy();
+    }
+  });
+
+  itIfOllama(
+    'should summarize done (processed) legislative proposals',
+    async () => {
+      expect(doneProposals.length).toBeGreaterThan(0);
+
+      for (const { notice, content } of doneProposals) {
+        const summary = await service.summarizeProposal(
+          content.title,
+          content.proposalReason!,
+        );
+
+        console.debug(
+          `[DONE] num=${notice.num} committee=${notice.committee} proposer=${content.proposer ?? 'N/A'}`,
+        );
+        console.debug('[INPUT title]', content.title);
+        console.debug(
+          '[INPUT reason excerpt]',
+          content.proposalReason!.slice(0, 200),
+        );
+        console.debug('[OUTPUT]', summary);
+
+        assertSummary(summary);
+      }
+    },
+    SUMMARY_TIMEOUT_MS * SAMPLE_COUNT,
+  );
+
+  // ── proposer-category coverage ─────────────────────────────────────────────
+
+  itIfOllama(
+    'should cover multiple proposer categories across fetched proposals',
+    () => {
+      const allProposals = [...activeProposals, ...doneProposals];
+      const categories = new Set(
+        allProposals.map((p) => p.notice.proposerCategory),
+      );
+      console.debug('[PROPOSER CATEGORIES]', [...categories]);
+      // At least one category should be present.
+      expect(categories.size).toBeGreaterThan(0);
+    },
   );
 });

@@ -574,8 +574,14 @@ export class NoticeArchiveService {
    * Rows without `sourceHtml` or `sourceHtmlSha256` are counted as skipped.
    *
    * @param batchSize Number of rows fetched per round-trip (default 200).
+   * @param forceUpdate When `true`, always writes `integrityVerifiedAt` even
+   *   when the result is unchanged. Use for scheduled re-validation passes so
+   *   the timestamp always reflects the most recent check time.
    */
-  async runIntegrityScan(batchSize = 200): Promise<{
+  async runIntegrityScan(
+    batchSize = 200,
+    forceUpdate = false,
+  ): Promise<{
     scanned: number;
     passed: number;
     failed: number;
@@ -621,7 +627,9 @@ export class NoticeArchiveService {
         if (ok) passed++;
         else failed++;
 
-        if (row.integrityCheckPassed !== ok || !row.integrityVerifiedAt) {
+        const resultChanged = row.integrityCheckPassed !== ok;
+        const neverChecked = !row.integrityVerifiedAt;
+        if (forceUpdate || resultChanged || neverChecked) {
           updates.push({
             id: row.id,
             integrityCheckPassed: ok,
