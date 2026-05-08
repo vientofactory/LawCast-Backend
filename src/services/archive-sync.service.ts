@@ -447,6 +447,28 @@ export class ArchiveSyncService implements OnModuleInit {
     );
   }
 
+  /**
+   * Scheduled full integrity re-validation pass.
+   * @param trigger Describes what triggered the rescan (e.g. cron vs manual API call) for logging purposes.
+   * @return Result summary, or `null` if a rescan is already in progress.
+   */
+  async runScheduledIntegrityRescan(
+    trigger: string,
+  ): Promise<IntegrityCheckResult | null> {
+    return this.runPhase(
+      'Integrity rescan',
+      this.integrityCheck,
+      trigger,
+      () =>
+        this.noticeArchiveService.runIntegrityScan(
+          INTEGRITY_BATCH_SIZE,
+          /* forceUpdate */ true,
+        ),
+      (r) =>
+        `scanned=${r.scanned} passed=${r.passed} failed=${r.failed} skipped=${r.skipped}`,
+    );
+  }
+
   getIntegrityCheckStatus(): IntegrityCheckStatus {
     return ArchiveSyncService.toStatus(this.integrityCheck);
   }

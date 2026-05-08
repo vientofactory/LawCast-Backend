@@ -150,6 +150,7 @@ export const APP_CONSTANTS = {
       WEBHOOK_OPTIMIZATION: '0 0 2 * * *', // Every day at 2 AM
       SYSTEM_MONITORING: '0 0 * * * *', // Every hour
       IS_DONE_SYNC: '0 0 */6 * * *', // Every 6 hours - sync isDone flags for expired notices
+      INTEGRITY_RESCAN: '0 0 3 * * *', // Every day at 3 AM - full archive integrity re-validation
     },
   },
 } as const;
