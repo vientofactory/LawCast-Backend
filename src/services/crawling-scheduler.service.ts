@@ -103,8 +103,107 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
   /**
    * Performs the initial cache load without sending any notifications.
+   *
+   * Fast path (normal restarts): if the archive DB already has data, load
+   * notices directly from the DB. This avoids a full crawl that would run
+   * concurrently with ArchiveSyncService.runBootstrapPipeline(), halving the
+   * external API load on every service restart.
+   *
+   * Crawl fallback (first-ever startup): if the archive is empty there is no
+   * historical data to load from, so we crawl as usual. ArchiveSyncService
+   * will archive everything — this service only needs to populate the cache.
    */
   private async initializeCache(): Promise<void> {
+    let archivedCount = 0;
+    try {
+      archivedCount = await this.noticeArchiveService.getArchiveCount();
+    } catch (error) {
+      this.logger.warn(
+        `Failed to read archive count, falling back to crawl: ${(error as Error).message}`,
+      );
+    }
+
+    if (archivedCount > 0) {
+      await this.initializeCacheFromArchive(archivedCount);
+    } else {
+      await this.initializeCacheFromCrawl();
+    }
+  }
+
+  /**
+   * Loads the cache directly from the archive DB — no external crawl, no
+   * Ollama calls. The archive already has the authoritative summary state for
+   * every notice so we can populate Redis immediately on restart.
+   */
+  private async initializeCacheFromArchive(
+    archivedCount: number,
+  ): Promise<void> {
+    this.logger.log(
+      `Archive has ${archivedCount} notices — loading cache from DB (no external crawl)`,
+    );
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.LOG,
+      CrawlingSchedulerService.name,
+      `Cache initialization: loading **${archivedCount}** notice(s) from archive DB`,
+    );
+
+    let notices: CachedNotice[];
+    try {
+      notices = await this.noticeArchiveService.getRecentNoticesForCache(
+        APP_CONSTANTS.CACHE.MAX_SIZE,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Archive load failed, falling back to crawl: ${(error as Error).message}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        CrawlingSchedulerService.name,
+        `Cache init archive load failed, falling back to crawl: ${(error as Error).message}`,
+      );
+      await this.initializeCacheFromCrawl();
+      return;
+    }
+
+    if (notices.length === 0) {
+      this.logger.warn(
+        'Archive returned no active notices — falling back to crawl',
+      );
+      await this.initializeCacheFromCrawl();
+      return;
+    }
+
+    await this.cacheService.updateCache(notices);
+    this.logger.log(
+      `Initialized Redis cache with ${notices.length} notices (from archive DB, no crawl)`,
+    );
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.VERBOSE,
+      CrawlingSchedulerService.name,
+      `Bootstrap cache loaded: **${notices.length}** notice(s) from archive DB`,
+      { count: notices.length, source: 'archive' },
+    );
+  }
+
+  /**
+   * Crawls all pages and loads the result into the Redis cache.
+   * Used only when the archive is empty (first-ever startup).
+   *
+   * Archiving and summary persistence are intentionally omitted here —
+   * ArchiveSyncService.runBootstrapPipeline() owns those responsibilities and
+   * runs concurrently. Duplicating that work would cause redundant writes and
+   * double the external API load.
+   */
+  private async initializeCacheFromCrawl(): Promise<void> {
+    this.logger.log(
+      'Archive is empty — crawling to populate cache (first-ever startup)',
+    );
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.LOG,
+      CrawlingSchedulerService.name,
+      'Cache initialization: archive is empty, crawling for initial data',
+    );
+
     const crawledData = await this.crawlingCoreService.crawlAllPages();
 
     if (!crawledData || crawledData.length === 0) {
@@ -117,7 +216,8 @@ export class CrawlingSchedulerService implements OnModuleInit {
       return;
     }
 
-    // Stage 1: Archive summary states — fallback to empty map on DB failure
+    // Load any summary states already written by the concurrent ArchiveSyncService
+    // bootstrap (unlikely on first startup but safe to check).
     let archiveSummaryStates: Map<number, ArchiveSummaryState>;
     try {
       archiveSummaryStates =
@@ -131,7 +231,9 @@ export class CrawlingSchedulerService implements OnModuleInit {
       archiveSummaryStates = new Map();
     }
 
-    // Stage 2: AI summary enrichment — fallback to raw notices on Ollama/crawl failure
+    // Enrich with AI summaries — fallback to raw notices on Ollama failure.
+    // ArchiveSyncService.runSummaryBackfill() will handle any 'not_requested'
+    // rows after the full sync, so no need to retry 'unavailable' states here.
     let noticesWithSummary: CachedNotice[];
     try {
       noticesWithSummary =
@@ -139,11 +241,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
           crawledData,
           new Map(),
           archiveSummaryStates,
-          {
-            logOllamaActivity: true,
-            phase: 'init-cache',
-            retryUnavailableArchiveSummary: true,
-          },
+          { logOllamaActivity: true, phase: 'init-cache' },
         );
     } catch (error) {
       this.logger.warn(
@@ -161,60 +259,15 @@ export class CrawlingSchedulerService implements OnModuleInit {
       }));
     }
 
-    // Stage 3: Persist retried summary states — log and continue on failure
-    try {
-      await this.persistRetriedArchiveSummaryStates(
-        noticesWithSummary,
-        archiveSummaryStates,
-      );
-    } catch (error) {
-      this.logger.warn(
-        `Failed to persist retried summary states during init: ${(error as Error).message}`,
-      );
-    }
-
-    // Stage 4: Archive missing notices — log and continue on failure
-    try {
-      const missingArchiveNotices =
-        await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
-          noticesWithSummary,
-        );
-
-      if (missingArchiveNotices.length > 0) {
-        await this.archiveOrchestratorService.archiveNotices(
-          missingArchiveNotices,
-        );
-        this.logger.log(
-          `Archived ${missingArchiveNotices.length} missing notices during bootstrap initialization`,
-        );
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.VERBOSE,
-          CrawlingSchedulerService.name,
-          `Bootstrap archived **${missingArchiveNotices.length}** missing notice(s)`,
-          { count: missingArchiveNotices.length },
-        );
-      }
-    } catch (error) {
-      this.logger.error(
-        `Archive stage failed during init, proceeding with cache update: ${(error as Error).message}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        CrawlingSchedulerService.name,
-        `Bootstrap archive stage failed: ${(error as Error).message}`,
-      );
-    }
-
-    // Stage 5: Cache update — always runs with whatever data we have
     await this.cacheService.updateCache(noticesWithSummary);
     this.logger.log(
-      `Initialized Redis cache with ${noticesWithSummary.length} notices`,
+      `Initialized Redis cache with ${noticesWithSummary.length} notices (crawled)`,
     );
     void this.discordBridge?.logEvent(
       BridgeLogLevel.VERBOSE,
       CrawlingSchedulerService.name,
       `Bootstrap cache loaded: **${noticesWithSummary.length}** notice(s) stored in Redis`,
-      { count: noticesWithSummary.length },
+      { count: noticesWithSummary.length, source: 'crawl' },
     );
   }
 

@@ -566,6 +566,51 @@ export class NoticeArchiveService {
   }
 
   /**
+   * Returns the most recent active (isDone=false) archive rows as CachedNotice objects,
+   * ordered newest-first by noticeNum. Intended exclusively for bootstrap cache
+   * initialization — avoids a redundant full crawl when the archive already has data.
+   *
+   * The returned notices include their persisted aiSummary / aiSummaryStatus so
+   * the cache is immediately populated with the latest known summary state without
+   * any Ollama calls.
+   */
+  async getRecentNoticesForCache(limit: number): Promise<CachedNotice[]> {
+    const rows = await this.archiveRepository.find({
+      select: {
+        noticeNum: true,
+        subject: true,
+        proposerCategory: true,
+        committee: true,
+        assemblyLink: true,
+        contentId: true,
+        attachmentPdfFile: true,
+        attachmentHwpFile: true,
+        aiSummary: true,
+        aiSummaryStatus: true,
+      },
+      where: { isDone: false },
+      order: { noticeNum: 'DESC' },
+      take: limit,
+    });
+
+    return rows.map((row) => ({
+      num: row.noticeNum,
+      subject: row.subject,
+      proposerCategory: row.proposerCategory,
+      committee: row.committee,
+      link: row.assemblyLink,
+      contentId: row.contentId,
+      attachments: {
+        pdfFile: row.attachmentPdfFile ?? '',
+        hwpFile: row.attachmentHwpFile ?? '',
+      },
+      aiSummary: row.aiSummary ?? null,
+      aiSummaryStatus: (row.aiSummaryStatus ??
+        'not_requested') as AISummaryStatus,
+    }));
+  }
+
+  /**
    * Paginates through every archive record and verifies its stored SHA-256
    * hash against a freshly computed hash of `sourceHtml`.  Results are
    * persisted back to `integrityVerifiedAt` / `integrityCheckPassed` so
