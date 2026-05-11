@@ -206,10 +206,41 @@ export class ArchiveSyncService implements OnModuleInit {
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
+   * Returns true if any phase is currently executing.
+   * Used by cron-triggered phases to avoid starting while another
+   * heavy phase (e.g. isDone sync vs integrity rescan) is in progress.
+   */
+  isAnyPhaseRunning(): boolean {
+    return (
+      this.fullSync.isRunning ||
+      this.isDoneSync.isRunning ||
+      this.integrityCheck.isRunning ||
+      this.summaryBackfill.isRunning ||
+      this.unavailableRetry.isRunning
+    );
+  }
+
+  /**
+   * Returns the name of the currently running phase, or null if idle.
+   * Used for logging when a cron-triggered phase is skipped.
+   */
+  private runningPhaseName(): string | null {
+    if (this.fullSync.isRunning) return 'full sync';
+    if (this.isDoneSync.isRunning) return 'isDone sync';
+    if (this.integrityCheck.isRunning) return 'integrity check';
+    if (this.summaryBackfill.isRunning) return 'summary backfill';
+    if (this.unavailableRetry.isRunning) return 'unavailable retry';
+    return null;
+  }
+
+  /**
    * Guards against concurrent runs, tracks phase state, fires a Discord log
    * on success, and re-throws on failure after setting `status='failed'`.
    *
-   * @returns `null` if the phase is already running, otherwise the task result.
+   * @param crossPhaseGuard When true (default for cron-triggered phases),
+   *   also skips if any *other* phase is already running to prevent
+   *   concurrent DB writes across phases.
+   * @returns `null` if a phase is already running, otherwise the task result.
    */
   private async runPhase<T>(
     phaseName: string,
@@ -217,6 +248,7 @@ export class ArchiveSyncService implements OnModuleInit {
     trigger: string,
     task: () => Promise<T>,
     formatResult?: (result: T) => string,
+    crossPhaseGuard = false,
   ): Promise<T | null> {
     if (tracker.isRunning) {
       LoggerUtils.warn(
@@ -224,6 +256,22 @@ export class ArchiveSyncService implements OnModuleInit {
         `${phaseName} already in progress - skipping [${trigger}]`,
       );
       return null;
+    }
+
+    if (crossPhaseGuard) {
+      const running = this.runningPhaseName();
+      if (running) {
+        LoggerUtils.warn(
+          ArchiveSyncService.name,
+          `${phaseName} skipped - another phase is in progress (${running}) [${trigger}]`,
+        );
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.WARN,
+          ArchiveSyncService.name,
+          `**${phaseName}** skipped — \`${running}\` is already running [${trigger}]`,
+        );
+        return null;
+      }
     }
 
     tracker.isRunning = true;
@@ -334,6 +382,7 @@ export class ArchiveSyncService implements OnModuleInit {
       () => this.reconcileIsDone(),
       (r) =>
         `fetched=${r.fetchedDoneCount} marked=${r.markedDoneCount} reverted=${r.revertedCount} scanned=${r.totalScanned}`,
+      /* crossPhaseGuard */ true,
     );
   }
 
@@ -466,6 +515,7 @@ export class ArchiveSyncService implements OnModuleInit {
         ),
       (r) =>
         `scanned=${r.scanned} passed=${r.passed} failed=${r.failed} skipped=${r.skipped}`,
+      /* crossPhaseGuard */ true,
     );
   }
 

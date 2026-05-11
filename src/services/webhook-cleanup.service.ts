@@ -5,6 +5,15 @@ import { WebhookService } from './webhook.service';
 export class WebhookCleanupService {
   private readonly logger = new Logger(WebhookCleanupService.name);
 
+  /**
+   * Shared execution lock for all cleanup methods.
+   * All three cron-triggered methods (intelligentWebhookCleanup,
+   * runSystemOptimization, realTimeSystemMonitoring) operate on the same
+   * webhook table, so only one should run at a time to prevent concurrent
+   * reads and deletes from interfering with each other.
+   */
+  private isRunning = false;
+
   constructor(private readonly webhookService: WebhookService) {}
 
   /**
@@ -12,6 +21,13 @@ export class WebhookCleanupService {
    * @returns void
    */
   async intelligentWebhookCleanup(): Promise<void> {
+    if (this.isRunning) {
+      this.logger.warn(
+        'Webhook cleanup already in progress, skipping intelligentWebhookCleanup',
+      );
+      return;
+    }
+    this.isRunning = true;
     try {
       this.logger.log('Starting intelligent webhook cleanup analysis...');
 
@@ -69,6 +85,8 @@ export class WebhookCleanupService {
         'Failed to perform intelligent webhook cleanup:',
         error,
       );
+    } finally {
+      this.isRunning = false;
     }
   }
 
@@ -77,6 +95,13 @@ export class WebhookCleanupService {
    * @returns void
    */
   async runSystemOptimization(): Promise<void> {
+    if (this.isRunning) {
+      this.logger.warn(
+        'Webhook cleanup already in progress, skipping runSystemOptimization',
+      );
+      return;
+    }
+    this.isRunning = true;
     try {
       this.logger.log('Starting weekly system optimization...');
 
@@ -112,6 +137,8 @@ export class WebhookCleanupService {
       }
     } catch (error) {
       this.logger.error('Failed to perform weekly system optimization:', error);
+    } finally {
+      this.isRunning = false;
     }
   }
 
@@ -120,6 +147,13 @@ export class WebhookCleanupService {
    * @returns void
    */
   async realTimeSystemMonitoring(): Promise<void> {
+    if (this.isRunning) {
+      this.logger.warn(
+        'Webhook cleanup already in progress, skipping realTimeSystemMonitoring',
+      );
+      return;
+    }
+    this.isRunning = true;
     try {
       const stats = await this.webhookService.getDetailedStats();
       const efficiency =
@@ -142,6 +176,8 @@ export class WebhookCleanupService {
         'Failed to perform real-time system monitoring:',
         error,
       );
+    } finally {
+      this.isRunning = false;
     }
   }
 

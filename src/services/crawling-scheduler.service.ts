@@ -31,7 +31,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
   ) {}
 
   /**
-   * 서버 시작 시 초기 데이터 캐싱
+   * Initializes the cache in the background on module startup.
    */
   async onModuleInit() {
     this.isInitialized = false;
@@ -102,7 +102,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
   }
 
   /**
-   * 초기 캐시 로드 (알림 전송 없이)
+   * Performs the initial cache load without sending any notifications.
    */
   private async initializeCache(): Promise<void> {
     const crawledData = await this.crawlingCoreService.crawlAllPages();
@@ -219,12 +219,21 @@ export class CrawlingSchedulerService implements OnModuleInit {
   }
 
   /**
-   * 크롤링과 알림을 수행하는 메인 로직
+   * Core logic for crawling and dispatching notifications.
+   *
+   * ─ Fast path (isProcessing lock held) ───────────────────────────────────
+   *   Crawl → detect new notices → immediate cache update (preserving existing summaries).
+   *   Completes within seconds, so it never conflicts with the 5-minute cron cycle.
+   *
+   * ─ Background path (runs after lock is released) ────────────────────────
+   *   AI summary generation → archiving → cache re-update → notification dispatch.
+   *   Long-running work (Ollama calls, HTTP archiving) is offloaded so that the
+   *   next cron cycle can start on schedule without being blocked.
    */
   private async performCrawlingAndNotification(): Promise<ITableData[]> {
-    // 기존 캐시를 먼저 조회한다.
-    // - existingNoticeMap: 요약 상태 보존에 사용
-    // - maxCachedNum: crawlAllPages의 early-exit 기준점 (최신 num 이하 페이지 스킵)
+    // Fetch the current cache first.
+    // - existingNoticeMap: used to preserve existing summary states
+    // - maxCachedNum: early-exit threshold for crawlAllPages (skips pages below the latest cached num)
     const existingNotices = await this.cacheService.getRecentNotices(
       APP_CONSTANTS.CACHE.MAX_SIZE,
     );
@@ -246,8 +255,8 @@ export class CrawlingSchedulerService implements OnModuleInit {
       return [];
     }
 
-    // 새로운 입법예고 찾기.
-    // Redis 장애 시 cacheDiffNotices = crawledData 전체로 폴백 -> archive dedup이 최종 가드 역할.
+    // Detect new legislative notices.
+    // On Redis failure, cacheDiffNotices falls back to the full crawledData — archive dedup acts as the final guard.
     let cacheDiffNotices: ITableData[];
     let cacheAvailable = true;
     try {
@@ -282,6 +291,27 @@ export class CrawlingSchedulerService implements OnModuleInit {
       },
     );
 
+    // ── Fast path: immediately update the cache while preserving existing summary states ──
+    // Reflect the crawl result in the cache without waiting for AI summarisation or archiving.
+    const noticesWithExistingSummary = crawledData.map((notice) => {
+      const existingNotice = existingNoticeMap.get(notice.num);
+      if (existingNotice) {
+        return {
+          ...notice,
+          aiSummary: existingNotice.aiSummary ?? null,
+          aiSummaryStatus:
+            existingNotice.aiSummaryStatus ??
+            this.resolveSummaryStatus(existingNotice.aiSummary),
+        };
+      }
+      return {
+        ...notice,
+        aiSummary: null,
+        aiSummaryStatus: 'not_requested' as const,
+      };
+    });
+    await this.cacheService.updateCache(noticesWithExistingSummary);
+
     if (newNotices.length > 0) {
       this.logger.log(`Found ${newNotices.length} new legislative notices`);
       void this.discordBridge?.logEvent(
@@ -294,167 +324,181 @@ export class CrawlingSchedulerService implements OnModuleInit {
         },
       );
 
-      // Stage: Archive summary states — fallback to empty map on DB failure
-      let archiveSummaryStates: Map<number, ArchiveSummaryState>;
-      try {
-        archiveSummaryStates =
-          await this.noticeArchiveService.getSummaryStateByNoticeNums(
-            newNotices.map((notice) => notice.num),
-          );
-      } catch (error) {
-        this.logger.warn(
-          `Failed to load archive summary states, falling back to empty map: ${(error as Error).message}`,
-        );
-        archiveSummaryStates = new Map();
-      }
-
-      // Stage: AI summary enrichment — fallback to raw notices on Ollama/crawl failure
-      let newNoticesWithSummary: CachedNotice[];
-      try {
-        newNoticesWithSummary =
-          await this.summaryGenerationService.enrichNoticesWithSummary(
-            newNotices,
-            existingNoticeMap,
-            archiveSummaryStates,
-          );
-      } catch (error) {
+      // ── Background path: AI summary → archiving → cache re-update → notifications ──
+      // Runs independently after the isProcessing lock is released, so it never blocks the cron cycle.
+      void this.processNewNoticesInBackground(
+        newNotices,
+        existingNoticeMap,
+      ).catch((error) => {
         this.logger.error(
-          `Summary enrichment failed for new notices, using raw data: ${(error as Error).message}`,
+          'Background processing for new notices failed:',
+          error,
         );
         void this.discordBridge?.logEvent(
           BridgeLogLevel.ERROR,
           CrawlingSchedulerService.name,
-          `Summary enrichment failed: ${(error as Error).message}`,
+          `Background new notice processing failed: ${(error as Error).message}`,
         );
-        newNoticesWithSummary = newNotices.map((notice) => ({
-          ...notice,
-          aiSummary: null,
-          aiSummaryStatus: 'not_requested' as const,
-        }));
-      }
-
-      // Stage: Archive — log and continue so cache + notifications are never blocked
-      try {
-        await this.archiveOrchestratorService.archiveNotices(
-          newNoticesWithSummary,
-        );
-      } catch (error) {
-        this.logger.error(
-          `Archive stage failed for new notices, proceeding with cache and notifications: ${(error as Error).message}`,
-        );
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.ERROR,
-          CrawlingSchedulerService.name,
-          `Archive stage failed: ${(error as Error).message}`,
-        );
-      }
-
-      const newNoticeMap = this.buildNoticeMap(newNoticesWithSummary);
-      const noticesWithSummary = crawledData.map((notice) => {
-        const newNotice = newNoticeMap.get(notice.num);
-        if (newNotice) {
-          return {
-            ...notice,
-            aiSummary: newNotice.aiSummary ?? null,
-            aiSummaryStatus: newNotice.aiSummaryStatus ?? 'not_requested',
-          };
-        }
-
-        const existingNotice = existingNoticeMap.get(notice.num);
-        if (existingNotice) {
-          return {
-            ...notice,
-            aiSummary: existingNotice.aiSummary ?? null,
-            aiSummaryStatus:
-              existingNotice.aiSummaryStatus ??
-              this.resolveSummaryStatus(existingNotice.aiSummary),
-          };
-        }
-
-        return {
-          ...notice,
-          aiSummary: null,
-          aiSummaryStatus: 'not_requested' as const,
-        };
       });
-
-      // Stage: Retry unavailable summaries — fallback to current notices on failure
-      let noticesWithRetriedSummary: CachedNotice[];
-      try {
-        noticesWithRetriedSummary =
-          await this.retryUnavailableSummariesFromPreviousCycle(
-            noticesWithSummary,
-            existingNoticeMap,
-          );
-      } catch (error) {
-        this.logger.warn(
-          `Unavailable summary retry failed, using current notices: ${(error as Error).message}`,
-        );
-        noticesWithRetriedSummary = noticesWithSummary;
-      }
-
-      await this.cacheService.updateCache(noticesWithRetriedSummary);
-      this.logger.log(
-        `Cache updated for ${newNotices.length} new notices; notification dispatch will continue in background`,
-      );
-
-      void this.notificationOrchestratorService
-        .sendNotifications(newNoticesWithSummary)
-        .catch((error) => {
-          this.logger.error('Background notification dispatch failed:', error);
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.ERROR,
-            CrawlingSchedulerService.name,
-            'Background notification dispatch failed',
-          );
-        });
     } else {
-      // 새 데이터가 없어도 기존 요약 상태를 보존하며 전체 캐시 업데이트
-      const noticesWithExistingSummary = crawledData.map((notice) => {
-        const existingNotice = existingNoticeMap.get(notice.num);
-
-        if (!existingNotice) {
-          return {
-            ...notice,
-            aiSummary: null,
-            aiSummaryStatus: 'not_requested' as const,
-          };
-        }
-
-        return {
-          ...notice,
-          aiSummary: existingNotice.aiSummary ?? null,
-          aiSummaryStatus:
-            existingNotice.aiSummaryStatus ??
-            this.resolveSummaryStatus(existingNotice.aiSummary),
-        };
-      });
-
-      // Stage: Retry unavailable summaries — fallback to current notices on failure
-      let noticesWithRetriedSummary: CachedNotice[];
-      try {
-        noticesWithRetriedSummary =
-          await this.retryUnavailableSummariesFromPreviousCycle(
-            noticesWithExistingSummary,
-            existingNoticeMap,
-          );
-      } catch (error) {
-        this.logger.warn(
-          `Unavailable summary retry failed, using current notices: ${(error as Error).message}`,
-        );
-        noticesWithRetriedSummary = noticesWithExistingSummary;
-      }
-
-      await this.cacheService.updateCache(noticesWithRetriedSummary);
       void this.discordBridge?.logEvent(
         BridgeLogLevel.VERBOSE,
         CrawlingSchedulerService.name,
         `No new notices - cache refreshed with **${crawledData.length}** existing notice(s)`,
         { total: crawledData.length },
       );
+
+      // ── Background path: retry summaries that failed to generate in a previous cycle ──
+      void this.retryUnavailableSummariesInBackground(
+        noticesWithExistingSummary,
+        existingNoticeMap,
+      ).catch((error) => {
+        this.logger.warn(
+          `Background summary retry failed: ${(error as Error).message}`,
+        );
+      });
     }
 
     return newNotices;
+  }
+
+  /**
+   * Handles AI summary generation, archiving, cache re-update, and notification dispatch
+   * for newly detected legislative notices in the background.
+   *
+   * Runs outside the isProcessing lock, so it never blocks the 5-minute cron cycle.
+   * Re-fetches the latest cache before merging summaries to avoid race conditions
+   * with a concurrently running cron cycle.
+   */
+  private async processNewNoticesInBackground(
+    newNotices: ITableData[],
+    existingNoticeMap: Map<number, CachedNotice>,
+  ): Promise<void> {
+    // Stage: Archive summary states — fallback to empty map on DB failure
+    let archiveSummaryStates: Map<number, ArchiveSummaryState>;
+    try {
+      archiveSummaryStates =
+        await this.noticeArchiveService.getSummaryStateByNoticeNums(
+          newNotices.map((notice) => notice.num),
+        );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to load archive summary states, falling back to empty map: ${(error as Error).message}`,
+      );
+      archiveSummaryStates = new Map();
+    }
+
+    // Stage: AI summary enrichment — fallback to raw notices on Ollama/crawl failure
+    let newNoticesWithSummary: CachedNotice[];
+    try {
+      newNoticesWithSummary =
+        await this.summaryGenerationService.enrichNoticesWithSummary(
+          newNotices,
+          existingNoticeMap,
+          archiveSummaryStates,
+        );
+    } catch (error) {
+      this.logger.error(
+        `Summary enrichment failed for new notices, using raw data: ${(error as Error).message}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.ERROR,
+        CrawlingSchedulerService.name,
+        `Summary enrichment failed: ${(error as Error).message}`,
+      );
+      newNoticesWithSummary = newNotices.map((notice) => ({
+        ...notice,
+        aiSummary: null,
+        aiSummaryStatus: 'not_requested' as const,
+      }));
+    }
+
+    // Stage: Archive — log and continue so cache + notifications are never blocked
+    try {
+      await this.archiveOrchestratorService.archiveNotices(
+        newNoticesWithSummary,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Archive stage failed for new notices, proceeding with cache and notifications: ${(error as Error).message}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.ERROR,
+        CrawlingSchedulerService.name,
+        `Archive stage failed: ${(error as Error).message}`,
+      );
+    }
+
+    // Stage: Merge summaries into freshest cache snapshot (race-safe re-fetch)
+    // Another cron cycle may have updated the cache while this background task was running,
+    // so re-fetch the latest cache before merging the newly generated summaries.
+    const freshCacheNotices = await this.cacheService.getRecentNotices(
+      APP_CONSTANTS.CACHE.MAX_SIZE,
+    );
+    const newNoticeMap = this.buildNoticeMap(newNoticesWithSummary);
+    const mergedNotices = freshCacheNotices.map((notice) => {
+      const withSummary = newNoticeMap.get(notice.num);
+      if (withSummary) {
+        return {
+          ...notice,
+          aiSummary: withSummary.aiSummary ?? null,
+          aiSummaryStatus: withSummary.aiSummaryStatus ?? 'not_requested',
+        };
+      }
+      return notice;
+    });
+
+    // Stage: Retry unavailable summaries — fallback to merged notices on failure
+    let finalNotices: CachedNotice[];
+    try {
+      finalNotices = await this.retryUnavailableSummariesFromPreviousCycle(
+        mergedNotices,
+        existingNoticeMap,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Unavailable summary retry failed, using merged notices: ${(error as Error).message}`,
+      );
+      finalNotices = mergedNotices;
+    }
+
+    await this.cacheService.updateCache(finalNotices);
+    this.logger.log(
+      `Background processing complete: cache updated with summaries for ${newNotices.length} new notice(s)`,
+    );
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.DEBUG,
+      CrawlingSchedulerService.name,
+      `Background processing complete: cache updated with summaries for **${newNotices.length}** new notice(s)`,
+      { count: newNotices.length },
+    );
+
+    // Stage: Send notifications (already dispatched asynchronously)
+    void this.notificationOrchestratorService
+      .sendNotifications(newNoticesWithSummary)
+      .catch((error) => {
+        this.logger.error('Background notification dispatch failed:', error);
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.ERROR,
+          CrawlingSchedulerService.name,
+          'Background notification dispatch failed',
+        );
+      });
+  }
+
+  /**
+   * Retries AI summaries that failed to generate in a previous cycle,
+   * running in the background during cycles where no new notices are detected.
+   */
+  private async retryUnavailableSummariesInBackground(
+    notices: CachedNotice[],
+    existingNoticeMap: Map<number, CachedNotice>,
+  ): Promise<void> {
+    const retried = await this.retryUnavailableSummariesFromPreviousCycle(
+      notices,
+      existingNoticeMap,
+    );
+    await this.cacheService.updateCache(retried);
   }
 
   private buildNoticeMap(notices: CachedNotice[]): Map<number, CachedNotice> {
