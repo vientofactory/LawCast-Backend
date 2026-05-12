@@ -226,7 +226,10 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
     );
 
     await expect(service.handleCron()).resolves.not.toThrow();
-    expect(cacheService.updateCache).toHaveBeenCalledTimes(1);
+    // Flush microtask queue to allow fire-and-forget background tasks to complete
+    await new Promise((resolve) => setImmediate(resolve));
+    // Cache must be updated at least once (fast path + background retry both call updateCache)
+    expect(cacheService.updateCache).toHaveBeenCalled();
   });
 
   it('DB failure (getSummaryStateByNoticeNums) during cron with new notices → falls back to empty map, notifications still sent', async () => {
@@ -245,6 +248,8 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
     );
 
     await expect(service.handleCron()).resolves.not.toThrow();
+    // Flush microtask queue so processNewNoticesInBackground (fire-and-forget) completes
+    await new Promise((resolve) => setImmediate(resolve));
 
     // Notifications must still be dispatched
     expect(
@@ -268,8 +273,11 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
     );
 
     await expect(service.handleCron()).resolves.not.toThrow();
+    // Flush microtask queue so processNewNoticesInBackground (fire-and-forget) completes
+    await new Promise((resolve) => setImmediate(resolve));
 
-    expect(cacheService.updateCache).toHaveBeenCalledTimes(1);
+    // Cache is updated at least once (fast path + background both call updateCache)
+    expect(cacheService.updateCache).toHaveBeenCalled();
     expect(
       notificationOrchestratorService.sendNotifications,
     ).toHaveBeenCalledTimes(1);
@@ -294,8 +302,11 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
     );
 
     await expect(service.handleCron()).resolves.not.toThrow();
+    // Flush microtask queue so processNewNoticesInBackground (fire-and-forget) completes
+    await new Promise((resolve) => setImmediate(resolve));
 
-    expect(cacheService.updateCache).toHaveBeenCalledTimes(1);
+    // Cache is updated at least once (fast path + background both call updateCache)
+    expect(cacheService.updateCache).toHaveBeenCalled();
     expect(
       notificationOrchestratorService.sendNotifications,
     ).toHaveBeenCalledTimes(1);

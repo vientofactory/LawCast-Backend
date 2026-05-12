@@ -221,6 +221,9 @@ describe('CrawlingSchedulerService', () => {
       ).mockResolvedValue(undefined);
 
       await service.handleCron();
+      // processNewNoticesInBackground is fire-and-forget; flush microtasks so
+      // sendNotifications (also void'd inside it) has a chance to execute
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(crawlingCoreService.crawlAllPages).toHaveBeenCalled();
       expect(cacheService.findNewNotices).toHaveBeenCalledWith(mockTableData);
@@ -305,6 +308,9 @@ describe('CrawlingSchedulerService', () => {
       ).mockResolvedValue(undefined);
 
       await service.handleCron();
+      // processNewNoticesInBackground is fire-and-forget; flush microtasks so
+      // sendNotifications (also void'd inside it) has a chance to execute
+      await new Promise((resolve) => setImmediate(resolve));
 
       // archive filter should receive the full crawledData as the fallback
       expect(

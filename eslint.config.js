@@ -31,6 +31,8 @@ module.exports = [
         clearTimeout: 'readonly',
         setInterval: 'readonly',
         clearInterval: 'readonly',
+        setImmediate: 'readonly',
+        clearImmediate: 'readonly',
         NodeJS: 'readonly',
 
         // Jest globals
