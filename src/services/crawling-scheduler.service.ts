@@ -241,7 +241,11 @@ export class CrawlingSchedulerService implements OnModuleInit {
           crawledData,
           new Map(),
           archiveSummaryStates,
-          { logOllamaActivity: true, phase: 'init-cache' },
+          {
+            logOllamaActivity: true,
+            phase: 'init-cache',
+            retryUnavailableArchiveSummary: true,
+          },
         );
     } catch (error) {
       this.logger.warn(

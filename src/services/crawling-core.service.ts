@@ -9,6 +9,7 @@ import {
   type IBulkOptions,
 } from 'pal-crawl';
 import { APP_CONSTANTS } from '../config/app.config';
+import { LoggerUtils } from '../utils/logger.utils';
 
 @Injectable()
 export class CrawlingCoreService {
@@ -209,7 +210,7 @@ export class CrawlingCoreService {
           pageItems.length > 0 &&
           pageItems.every((item) => item.num <= stopBelowNum)
         ) {
-          this.logger.debug(
+          LoggerUtils.logDev(
             `Early exit: all items on page have num ≤ ${stopBelowNum} — skipping older pages`,
           );
           break;
