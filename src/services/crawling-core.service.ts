@@ -211,6 +211,7 @@ export class CrawlingCoreService {
           pageItems.every((item) => item.num <= stopBelowNum)
         ) {
           LoggerUtils.logDev(
+            CrawlingCoreService.name,
             `Early exit: all items on page have num ≤ ${stopBelowNum} — skipping older pages`,
           );
           break;
