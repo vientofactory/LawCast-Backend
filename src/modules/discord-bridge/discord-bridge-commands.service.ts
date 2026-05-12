@@ -164,13 +164,118 @@ export class DiscordBridgeCommandsService {
       archiveSyncSvc,
     );
 
-    const raw = JSON.stringify(stats, null, 2);
-    const truncated = raw.length > 3800 ? raw.slice(0, 3797) + '…' : raw;
+    const fmtMB = (b: number) => `${(b / 1024 / 1024).toFixed(1)} MB`;
+    const fmtMs = (ms: number | null | undefined) =>
+      ms != null ? `${ms} ms` : 'N/A';
+    const fmtBool = (v: boolean | null | undefined) =>
+      v == null ? 'N/A' : v ? '✅' : '❌';
+    const fmtPct = (v: number | null | undefined) =>
+      v != null ? `${v.toFixed(1)}%` : 'N/A';
+
+    const mem = stats.nodeRuntime.memory;
+    const el = stats.nodeRuntime.eventLoopDelay as {
+      mean: number;
+      percentiles: { p50: number; p90: number; p99: number };
+      exceeds: number;
+    } | null;
+    const wh = stats.webhooks as {
+      total: number;
+      active: number;
+      efficiency: number;
+    };
+    const cache = stats.cache as {
+      size: number;
+      maxSize: number;
+      isInitialized: boolean;
+    };
+    const archive = stats.archive;
+    const batch = stats.batchProcessing as { jobCount: number };
+    const ollama = stats.ollama as {
+      model: string;
+      summary: {
+        total: number;
+        success: number;
+        failed: number;
+        successRate: number;
+      };
+      health: { status: string; lastLatencyMs: number | null };
+    };
 
     const embed = new EmbedBuilder()
       .setColor(0x3b82f6)
       .setTitle('📈 Runtime Stats')
-      .setDescription(`\`\`\`json\n${truncated}\n\`\`\``)
+      .addFields(
+        // ── Memory ──────────────────────────────────────────────────────────
+        { name: 'Mem · RSS', value: fmtMB(mem.rss), inline: true },
+        { name: 'Mem · Heap', value: fmtMB(mem.heapUsed), inline: true },
+        { name: 'Mem · Total', value: fmtMB(mem.heapTotal), inline: true },
+        // ── Event Loop ──────────────────────────────────────────────────────
+        { name: 'EL · Mean', value: fmtMs(el?.mean), inline: true },
+        { name: 'EL · P99', value: fmtMs(el?.percentiles?.p99), inline: true },
+        {
+          name: 'EL · Over',
+          value: el != null ? String(el.exceeds) : 'N/A',
+          inline: true,
+        },
+        // ── Webhooks ────────────────────────────────────────────────────────
+        { name: 'WH · Total', value: String(wh.total), inline: true },
+        { name: 'WH · Active', value: String(wh.active), inline: true },
+        { name: 'WH · Eff.', value: fmtPct(wh.efficiency), inline: true },
+        // ── Archive ─────────────────────────────────────────────────────────
+        { name: 'Archives', value: String(archive.count), inline: true },
+        {
+          name: 'Sync Done',
+          value: archive.isDoneSync?.status ?? 'N/A',
+          inline: true,
+        },
+        {
+          name: 'AI Enabled',
+          value: fmtBool(stats.aiSummaryEnabled),
+          inline: true,
+        },
+        // ── Cache ───────────────────────────────────────────────────────────
+        { name: 'Cache Size', value: String(cache.size), inline: true },
+        { name: 'Cache Max', value: String(cache.maxSize), inline: true },
+        {
+          name: 'Cache Init',
+          value: fmtBool(cache.isInitialized),
+          inline: true,
+        },
+        // ── Batch / Ollama ──────────────────────────────────────────────────
+        { name: 'Batch Jobs', value: String(batch.jobCount), inline: true },
+        { name: 'Ollama Model', value: ollama.model ?? 'N/A', inline: true },
+        {
+          name: 'Ollama Health',
+          value: ollama.health?.status ?? 'N/A',
+          inline: true,
+        },
+        // ── AI Summary ──────────────────────────────────────────────────────
+        {
+          name: 'AI · Total',
+          value: String(ollama.summary?.total ?? 0),
+          inline: true,
+        },
+        {
+          name: 'AI · Success',
+          value: String(ollama.summary?.success ?? 0),
+          inline: true,
+        },
+        {
+          name: 'AI · Failed',
+          value: String(ollama.summary?.failed ?? 0),
+          inline: true,
+        },
+        {
+          name: 'AI · Rate',
+          value: fmtPct(ollama.summary?.successRate),
+          inline: true,
+        },
+        {
+          name: 'AI · Latency',
+          value: fmtMs(ollama.health?.lastLatencyMs),
+          inline: true,
+        },
+      )
       .setTimestamp()
       .setFooter({ text: 'LawCast Debug Bridge' });
 
