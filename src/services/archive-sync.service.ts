@@ -297,6 +297,11 @@ export class ArchiveSyncService implements OnModuleInit {
       tracker.lastRunAt = new Date().toISOString();
       tracker.lastError =
         error instanceof Error ? error.message : String(error);
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.ERROR,
+        ArchiveSyncService.name,
+        `[${trigger}] **${phaseName}** failed — ${(error as Error).message}`,
+      );
       throw error;
     } finally {
       tracker.isRunning = false;
@@ -504,7 +509,7 @@ export class ArchiveSyncService implements OnModuleInit {
   async runScheduledIntegrityRescan(
     trigger: string,
   ): Promise<IntegrityCheckResult | null> {
-    return this.runPhase(
+    const result = await this.runPhase(
       'Integrity rescan',
       this.integrityCheck,
       trigger,
@@ -517,6 +522,16 @@ export class ArchiveSyncService implements OnModuleInit {
         `scanned=${r.scanned} passed=${r.passed} failed=${r.failed} skipped=${r.skipped}`,
       /* crossPhaseGuard */ true,
     );
+
+    if (result !== null && result.failed > 0) {
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        ArchiveSyncService.name,
+        `[${trigger}] Integrity rescan detected **${result.failed}** fingerprint mismatch(es) — scanned=${result.scanned} passed=${result.passed} skipped=${result.skipped}`,
+      );
+    }
+
+    return result;
   }
 
   getIntegrityCheckStatus(): IntegrityCheckStatus {
