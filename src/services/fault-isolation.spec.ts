@@ -181,7 +181,7 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
 
     await expect((service as any).initializeCache()).resolves.not.toThrow();
 
-    // Cache must still be populated — even without AI summaries
+    // Cache must still be populated - even without AI summaries
     expect(cacheService.updateCache).toHaveBeenCalledTimes(1);
     const cachedNotices: CachedNotice[] =
       cacheService.updateCache.mock.calls[0][0];
@@ -566,11 +566,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
           provide: CrawlingCoreService,
           useValue: {
             getAllPages: jest.fn().mockImplementation(twoPageGen),
-            getAllDonePages: jest
-              .fn()
-              .mockImplementation(() =>
-                makePageGenerator([makeSearchResult([1, 2])]),
-              ),
+            searchDone: jest.fn().mockResolvedValue(makeSearchResult([1, 2])),
           },
         },
         {
@@ -670,9 +666,9 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
 
   // ── reconcileIsDone (Phase 2) ─────────────────────────────────────────────
 
-  it('pal-crawl getAllDonePages throws → runIsDoneSync throws (phase tracker set to failed)', async () => {
-    crawlingCoreService.getAllDonePages.mockImplementation(() =>
-      makeFailingPageGenerator([], 0),
+  it('pal-crawl searchDone throws on first page → runIsDoneSync throws (phase tracker set to failed)', async () => {
+    crawlingCoreService.searchDone.mockRejectedValue(
+      new Error('pal-crawl: simulated network failure'),
     );
 
     // runPhase re-throws after recording status='failed'
@@ -680,14 +676,14 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
       'pal-crawl: simulated network failure',
     );
     expect(service.getIsDoneSyncStatus().status).toBe('failed');
-  });
+  }, 10_000); // allow time for per-page retry backoff
 
-  it('pal-crawl getAllDonePages returns null items → reconcileIsDone completes, markNoticesDoneByNums called with []', async () => {
-    crawlingCoreService.getAllDonePages.mockImplementation(() =>
-      makePageGenerator([
-        { ...makeSearchResult([]), items: null as any, totalPages: 0 },
-      ]),
-    );
+  it('pal-crawl searchDone returns null items → reconcileIsDone completes, markNoticesDoneByNums called with []', async () => {
+    crawlingCoreService.searchDone.mockResolvedValue({
+      ...makeSearchResult([]),
+      items: null as any,
+      totalPages: 1,
+    });
 
     // When zero done notices are fetched, isDone reconciliation returns early
     const result = await service.runIsDoneSync('fault-test');
@@ -696,9 +692,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
   });
 
   it('DB markNoticesDoneByNums throws → runIsDoneSync throws (phase tracker set to failed)', async () => {
-    crawlingCoreService.getAllDonePages.mockImplementation(() =>
-      makePageGenerator([makeSearchResult([1, 2])]),
-    );
+    crawlingCoreService.searchDone.mockResolvedValue(makeSearchResult([1, 2]));
     noticeArchiveService.markNoticesDoneByNums.mockRejectedValue(
       new Error('DB: write timeout'),
     );
@@ -828,7 +822,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     // Start first call (will block until resolveFirst)
     const firstCall = service.runFullSync('first');
 
-    // Attempt second call immediately — phase is running, should return null
+    // Attempt second call immediately - phase is running, should return null
     const secondResult = await service.runFullSync('second');
     expect(secondResult).toBeNull();
 

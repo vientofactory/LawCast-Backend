@@ -111,7 +111,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
    *
    * Crawl fallback (first-ever startup): if the archive is empty there is no
    * historical data to load from, so we crawl as usual. ArchiveSyncService
-   * will archive everything — this service only needs to populate the cache.
+   * will archive everything - this service only needs to populate the cache.
    */
   private async initializeCache(): Promise<void> {
     let archivedCount = 0;
@@ -131,7 +131,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
   }
 
   /**
-   * Loads the cache directly from the archive DB — no external crawl, no
+   * Loads the cache directly from the archive DB - no external crawl, no
    * Ollama calls. The archive already has the authoritative summary state for
    * every notice so we can populate Redis immediately on restart.
    */
@@ -139,7 +139,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     archivedCount: number,
   ): Promise<void> {
     this.logger.log(
-      `Archive has ${archivedCount} notices — loading cache from DB (no external crawl)`,
+      `Archive has ${archivedCount} notices - loading cache from DB (no external crawl)`,
     );
     void this.discordBridge?.logEvent(
       BridgeLogLevel.LOG,
@@ -167,7 +167,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
     if (notices.length === 0) {
       this.logger.warn(
-        'Archive returned no active notices — falling back to crawl',
+        'Archive returned no active notices - falling back to crawl',
       );
       await this.initializeCacheFromCrawl();
       return;
@@ -189,14 +189,14 @@ export class CrawlingSchedulerService implements OnModuleInit {
    * Crawls all pages and loads the result into the Redis cache.
    * Used only when the archive is empty (first-ever startup).
    *
-   * Archiving and summary persistence are intentionally omitted here —
+   * Archiving and summary persistence are intentionally omitted here -
    * ArchiveSyncService.runBootstrapPipeline() owns those responsibilities and
    * runs concurrently. Duplicating that work would cause redundant writes and
    * double the external API load.
    */
   private async initializeCacheFromCrawl(): Promise<void> {
     this.logger.log(
-      'Archive is empty — crawling to populate cache (first-ever startup)',
+      'Archive is empty - crawling to populate cache (first-ever startup)',
     );
     void this.discordBridge?.logEvent(
       BridgeLogLevel.LOG,
@@ -231,7 +231,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       archiveSummaryStates = new Map();
     }
 
-    // Enrich with AI summaries — fallback to raw notices on Ollama failure.
+    // Enrich with AI summaries - fallback to raw notices on Ollama failure.
     // ArchiveSyncService.runSummaryBackfill() will handle any 'not_requested'
     // rows after the full sync, so no need to retry 'unavailable' states here.
     let noticesWithSummary: CachedNotice[];
@@ -313,7 +313,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     }
 
     // Detect new legislative notices.
-    // On Redis failure, cacheDiffNotices falls back to the full crawledData — archive dedup acts as the final guard.
+    // On Redis failure, cacheDiffNotices falls back to the full crawledData - archive dedup acts as the final guard.
     let cacheDiffNotices: ITableData[];
     let cacheAvailable = true;
     try {
@@ -322,12 +322,12 @@ export class CrawlingSchedulerService implements OnModuleInit {
       cacheAvailable = false;
       cacheDiffNotices = crawledData;
       this.logger.warn(
-        'Redis unavailable — falling back to archive-based deduplication',
+        'Redis unavailable - falling back to archive-based deduplication',
       );
       void this.discordBridge?.logEvent(
         BridgeLogLevel.WARN,
         CrawlingSchedulerService.name,
-        'Redis unavailable — falling back to archive-based deduplication for this cycle',
+        'Redis unavailable - falling back to archive-based deduplication for this cycle',
       );
     }
 
@@ -431,7 +431,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     newNotices: ITableData[],
     existingNoticeMap: Map<number, CachedNotice>,
   ): Promise<void> {
-    // Stage: Archive summary states — fallback to empty map on DB failure
+    // Stage: Archive summary states - fallback to empty map on DB failure
     let archiveSummaryStates: Map<number, ArchiveSummaryState>;
     try {
       archiveSummaryStates =
@@ -445,7 +445,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       archiveSummaryStates = new Map();
     }
 
-    // Stage: AI summary enrichment — fallback to raw notices on Ollama/crawl failure
+    // Stage: AI summary enrichment - fallback to raw notices on Ollama/crawl failure
     let newNoticesWithSummary: CachedNotice[];
     try {
       newNoticesWithSummary =
@@ -470,7 +470,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       }));
     }
 
-    // Stage: Archive — log and continue so cache + notifications are never blocked
+    // Stage: Archive - log and continue so cache + notifications are never blocked
     try {
       await this.archiveOrchestratorService.archiveNotices(
         newNoticesWithSummary,
@@ -505,7 +505,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       return notice;
     });
 
-    // Stage: Retry unavailable summaries — fallback to merged notices on failure
+    // Stage: Retry unavailable summaries - fallback to merged notices on failure
     let finalNotices: CachedNotice[];
     try {
       finalNotices = await this.retryUnavailableSummariesFromPreviousCycle(

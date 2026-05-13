@@ -212,7 +212,7 @@ export class CrawlingCoreService {
         ) {
           LoggerUtils.logDev(
             CrawlingCoreService.name,
-            `Early exit: all items on page have num ≤ ${stopBelowNum} — skipping older pages`,
+            `Early exit: all items on page have num ≤ ${stopBelowNum} - skipping older pages`,
           );
           break;
         }
@@ -223,7 +223,7 @@ export class CrawlingCoreService {
       // guard ensures consistency even with an incomplete page set.
       if (allItems.length > 0) {
         this.logger.warn(
-          `Stream error after collecting ${allItems.length} items — returning partial data`,
+          `Stream error after collecting ${allItems.length} items - returning partial data`,
           error,
         );
         return allItems;

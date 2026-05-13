@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
-import { type ITableData } from 'pal-crawl';
+import { type ITableData, type ISearchResult } from 'pal-crawl';
 import { APP_CONSTANTS } from '../config/app.config';
 import { CrawlingCoreService } from './crawling-core.service';
 import { NoticeArchiveService } from './notice-archive.service';
@@ -20,6 +20,16 @@ const {
 } = APP_CONSTANTS.ARCHIVE_SYNC;
 /** Max concurrent Ollama calls within a single backfill / retry batch. */
 const SUMMARY_BACKFILL_CONCURRENCY = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
+
+/**
+ * Application-level per-page retry budget for the isDone done-page crawler.
+ * Operates on top of pal-crawl's own HTTP-level retries so a brief server
+ * outage that exhausts the lower-level retries is still recoverable without
+ * restarting the entire sync from page 1.
+ */
+const DONE_PAGE_MAX_RETRIES = 2;
+/** Base backoff between done-page retry attempts (ms); multiplied by attempt number. */
+const DONE_PAGE_RETRY_BASE_MS = 500;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -268,7 +278,7 @@ export class ArchiveSyncService implements OnModuleInit {
         void this.discordBridge?.logEvent(
           BridgeLogLevel.WARN,
           ArchiveSyncService.name,
-          `**${phaseName}** skipped — \`${running}\` is already running [${trigger}]`,
+          `**${phaseName}** skipped - \`${running}\` is already running [${trigger}]`,
         );
         return null;
       }
@@ -300,7 +310,7 @@ export class ArchiveSyncService implements OnModuleInit {
       void this.discordBridge?.logEvent(
         BridgeLogLevel.ERROR,
         ArchiveSyncService.name,
-        `[${trigger}] **${phaseName}** failed — ${(error as Error).message}`,
+        `[${trigger}] **${phaseName}** failed - ${(error as Error).message}`,
       );
       throw error;
     } finally {
@@ -396,8 +406,47 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   /**
-   * Phase A - streams all done pages, populates `doneNumSet`, eagerly marks
-   *            matching archive rows as `isDone=true`.
+   * Fetches a single page of done notices, retrying up to
+   * {@link DONE_PAGE_MAX_RETRIES} times with linear backoff so a transient
+   * HTTP timeout on page N does not abort the entire isDone sync.
+   */
+  private async fetchDonePageWithRetry(
+    pageIndex: number,
+  ): Promise<ISearchResult> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= DONE_PAGE_MAX_RETRIES; attempt++) {
+      try {
+        return await this.crawlingCoreService.searchDone({
+          pageIndex,
+          pageUnit: CRAWLER_PAGE_UNIT,
+        });
+      } catch (error) {
+        lastError = error;
+        if (attempt < DONE_PAGE_MAX_RETRIES) {
+          const backoff = DONE_PAGE_RETRY_BASE_MS * (attempt + 1);
+          LoggerUtils.warn(
+            ArchiveSyncService.name,
+            `isDone page ${pageIndex} failed ` +
+              `(attempt ${attempt + 1}/${DONE_PAGE_MAX_RETRIES + 1}): ` +
+              `${(error as Error).message} - retrying in ${backoff}ms`,
+          );
+          void this.discordBridge?.logEvent(
+            BridgeLogLevel.WARN,
+            ArchiveSyncService.name,
+            `isDone page **${pageIndex}** failed (attempt ${attempt + 1}/${DONE_PAGE_MAX_RETRIES + 1}): ` +
+              `${(error as Error).message} - retrying in ${backoff}ms`,
+          );
+          await new Promise<void>((resolve) => setTimeout(resolve, backoff));
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  /**
+   * Phase A - fetches all done pages with per-page retry, populates
+   *            `doneNumSet`, eagerly marks matching archive rows as
+   *            `isDone=true`.
    * Phase B - paginates `isDone=true` archive rows and reverts any whose
    *            noticeNum is absent from the fetched done-set.
    */
@@ -407,24 +456,38 @@ export class ArchiveSyncService implements OnModuleInit {
       'isDone reconciliation started',
     );
 
-    // Phase A
+    // Phase A - manual page-by-page iteration with per-page retry
+    // Using searchDone() instead of the streaming getAllDonePages() generator
+    // so a timeout on page N can be retried in-place rather than restarting
+    // the entire sync from page 1.
     const doneNumSet = new Set<number>();
     let markedDoneCount = 0;
 
-    for await (const page of this.crawlingCoreService.getAllDonePages(
-      { pageUnit: CRAWLER_PAGE_UNIT },
-      { delayMs: CRAWLER_DELAY_MS, concurrency: 1 },
-    )) {
-      // Guard against unexpected null/undefined items from the crawler
-      const pageNums = (page.items ?? []).map((item) => item.num);
+    // Fetch page 1 first to learn totalPages, then iterate the rest.
+    const firstPage = await this.fetchDonePageWithRetry(1);
+    const totalPages = firstPage.totalPages;
+
+    let pageNums = (firstPage.items ?? []).map((item) => item.num);
+    for (const num of pageNums) doneNumSet.add(num);
+    markedDoneCount +=
+      await this.noticeArchiveService.markNoticesDoneByNums(pageNums);
+    LoggerUtils.debugDev(
+      ArchiveSyncService.name,
+      `isDone page 1/${totalPages}: +${pageNums.length} nums, ${markedDoneCount} total marked`,
+    );
+
+    for (let pageIndex = 2; pageIndex <= totalPages; pageIndex++) {
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, CRAWLER_DELAY_MS),
+      );
+      const page = await this.fetchDonePageWithRetry(pageIndex);
+      pageNums = (page.items ?? []).map((item) => item.num);
       for (const num of pageNums) doneNumSet.add(num);
       markedDoneCount +=
         await this.noticeArchiveService.markNoticesDoneByNums(pageNums);
-
       LoggerUtils.debugDev(
         ArchiveSyncService.name,
-        `isDone page ${page.currentPage}/${page.totalPages}: ` +
-          `+${pageNums.length} nums, ${markedDoneCount} total marked`,
+        `isDone page ${pageIndex}/${totalPages}: +${pageNums.length} nums, ${markedDoneCount} total marked`,
       );
     }
 
@@ -432,6 +495,11 @@ export class ArchiveSyncService implements OnModuleInit {
       LoggerUtils.warn(
         ArchiveSyncService.name,
         'Crawler returned zero done notices - isDone reconciliation skipped',
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        ArchiveSyncService.name,
+        'isDone sync: crawler returned **zero** done notices - reconciliation skipped',
       );
       return {
         fetchedDoneCount: 0,
@@ -475,6 +543,20 @@ export class ArchiveSyncService implements OnModuleInit {
       `isDone reconciliation done - fetched=${doneNumSet.size} ` +
         `marked=${markedDoneCount} reverted=${revertedCount} scanned=${totalScanned}`,
     );
+    if (revertedCount > 0) {
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        ArchiveSyncService.name,
+        `isDone sync: reverted **${revertedCount}** stale done-flag(s) - ` +
+          `fetched=${doneNumSet.size} marked=${markedDoneCount} scanned=${totalScanned}`,
+      );
+    } else {
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.LOG,
+        ArchiveSyncService.name,
+        `isDone sync complete - fetched=${doneNumSet.size} marked=${markedDoneCount} reverted=${revertedCount} scanned=${totalScanned}`,
+      );
+    }
 
     return {
       fetchedDoneCount: doneNumSet.size,
@@ -527,7 +609,7 @@ export class ArchiveSyncService implements OnModuleInit {
       void this.discordBridge?.logEvent(
         BridgeLogLevel.WARN,
         ArchiveSyncService.name,
-        `[${trigger}] Integrity rescan detected **${result.failed}** fingerprint mismatch(es) — scanned=${result.scanned} passed=${result.passed} skipped=${result.skipped}`,
+        `[${trigger}] Integrity rescan detected **${result.failed}** fingerprint mismatch(es) - scanned=${result.scanned} passed=${result.passed} skipped=${result.skipped}`,
       );
     }
 

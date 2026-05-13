@@ -165,7 +165,7 @@ export class CacheService implements OnModuleDestroy {
       return newNotices;
     } catch (error) {
       this.logger.error(
-        'Redis unavailable in findNewNotices — caller should fall back to archive-based deduplication',
+        'Redis unavailable in findNewNotices - caller should fall back to archive-based deduplication',
         error,
       );
       throw error;

@@ -54,7 +54,7 @@ export const APP_CONSTANTS = {
     },
   },
   CACHE: {
-    /** Internal storage cap — large enough to hold all active notices. */
+    /** Internal storage cap - large enough to hold all active notices. */
     MAX_SIZE: 10000,
     /** Default limit for API responses that expose recent notices. */
     DEFAULT_LIMIT: 10,
