@@ -568,7 +568,7 @@ export class NoticeArchiveService {
   /**
    * Returns the most recent active (isDone=false) archive rows as CachedNotice objects,
    * ordered newest-first by noticeNum. Intended exclusively for bootstrap cache
-   * initialization — avoids a redundant full crawl when the archive already has data.
+   * initialization - avoids a redundant full crawl when the archive already has data.
    *
    * The returned notices include their persisted aiSummary / aiSummaryStatus so
    * the cache is immediately populated with the latest known summary state without
