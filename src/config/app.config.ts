@@ -12,6 +12,7 @@ export interface AppConfig {
   };
   hashguard: {
     apiUrl: string;
+    apiKey: string;
   };
   ollama: {
     enabled: boolean;
@@ -169,6 +170,7 @@ export default (): AppConfig => ({
   },
   hashguard: {
     apiUrl: process.env.HASHGUARD_API_URL || 'https://hashguard.viento.me',
+    apiKey: process.env.HASHGUARD_API_KEY || '',
   },
   ollama: {
     enabled:
