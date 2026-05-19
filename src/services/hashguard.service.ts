@@ -12,7 +12,12 @@ export class HashguardService {
       'hashguard.apiUrl',
       'https://hashguard.viento.me',
     );
-    this.client = new HashGuardClient({ baseUrl });
+    const apiKey = this.configService.get<string>('hashguard.apiKey', '');
+    const headers: Record<string, string> = {};
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+    this.client = new HashGuardClient({ baseUrl, headers });
   }
 
   async verifyProof(proof: string, _remoteIp?: string): Promise<boolean> {
