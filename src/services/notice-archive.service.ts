@@ -20,6 +20,25 @@ import { NoticeArchive } from '../entities/notice-archive.entity';
 import { buildArchiveExportArtifacts } from './archive-export.builder';
 import JSZip from 'jszip';
 
+/**
+ * Columns required by mapArchiveEntityToNoticeItem
+ */
+const NOTICE_ITEM_SELECT = {
+  noticeNum: true,
+  subject: true,
+  proposerCategory: true,
+  committee: true,
+  assemblyLink: true,
+  contentId: true,
+  isDone: true,
+  aiSummary: true,
+  aiSummaryStatus: true,
+  attachmentPdfFile: true,
+  attachmentHwpFile: true,
+  archiveStartedAt: true,
+  lastUpdatedAt: true,
+} as const;
+
 export interface ArchiveListQuery {
   page: number;
   limit: number;
@@ -385,6 +404,7 @@ export class NoticeArchiveService {
 
     const [rows, total] = await this.archiveRepository.findAndCount({
       where,
+      select: NOTICE_ITEM_SELECT,
       order: {
         archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
         noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',
@@ -411,6 +431,7 @@ export class NoticeArchiveService {
 
     const rows = await this.archiveRepository.find({
       where,
+      select: NOTICE_ITEM_SELECT,
       order: {
         archiveStartedAt: 'DESC',
         noticeNum: 'DESC',
@@ -448,6 +469,7 @@ export class NoticeArchiveService {
 
     const rows = await this.archiveRepository.find({
       where,
+      select: NOTICE_ITEM_SELECT,
       order: {
         archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
         noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',

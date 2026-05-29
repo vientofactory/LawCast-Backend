@@ -21,7 +21,7 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Skip Puppeteer's bundled Chrome download — we use system Chromium at runtime
+# Skip Puppeteer's bundled Chrome download - we use system Chromium at runtime
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
 # Install all dependencies (including devDependencies for build)
@@ -34,7 +34,7 @@ WORKDIR /app
 # Copy package files for full installation
 COPY package*.json ./
 
-# Skip Puppeteer's bundled Chrome download — not needed at build time
+# Skip Puppeteer's bundled Chrome download - not needed at build time
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
 # Install all dependencies including devDependencies
