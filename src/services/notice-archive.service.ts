@@ -525,7 +525,10 @@ export class NoticeArchiveService {
   async buildArchiveExportZip(
     noticeNum: number,
   ): Promise<{ zipFileName: string; zipBuffer: Buffer } | null> {
-    const artifacts = await this.buildArchiveExportFile(noticeNum);
+    const [artifacts, screenshot] = await Promise.all([
+      this.buildArchiveExportFile(noticeNum),
+      this.getScreenshotByNoticeNum(noticeNum),
+    ]);
 
     if (!artifacts) {
       return null;
@@ -542,6 +545,11 @@ export class NoticeArchiveService {
     // Verification Scripts
     for (const script of artifacts.verificationScripts) {
       zip.file(script.fileName, script.content);
+    }
+
+    // Screenshot (if available)
+    if (screenshot) {
+      zip.file(`screenshot.${screenshot.format}`, screenshot.blob);
     }
 
     const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
