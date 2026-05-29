@@ -292,66 +292,64 @@ export class CrawlingCoreService {
       return result.length <= maxBytes ? result : null;
     };
 
-    try {
-      // ── Step 1: full-page capture at configured quality ──────────────────
-      const raw = await doCapture(true);
+    // ── Step 1: full-page capture at configured quality ──────────────────
+    const raw = await doCapture(true);
 
-      if (raw.length <= maxBytes) {
-        return raw;
-      }
-
-      this.logger.debug(
-        `Screenshot for ${contentId} is ${raw.length} B - attempting recompression`,
-      );
-
-      // ── Step 2: recompress with decreasing quality levels ────────────────
-      for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
-        const recompressed = await recompress(raw, quality);
-        if (recompressed) {
-          this.logger.debug(
-            `Recompressed screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
-          );
-          return recompressed;
-        }
-      }
-
-      // ── Step 3: viewport-only (non-full-page) shot ───────────────────────
-      this.logger.debug(
-        `Full-page recompression exhausted for ${contentId} - retrying viewport-only`,
-      );
-
-      const viewport = await doCapture(false);
-
-      if (viewport.length <= maxBytes) {
-        this.logger.debug(
-          `Viewport screenshot for ${contentId} fits: ${viewport.length} B`,
-        );
-        return viewport;
-      }
-
-      // Try recompressing the viewport shot as a last resort
-      for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
-        const recompressed = await recompress(viewport, quality);
-        if (recompressed) {
-          this.logger.debug(
-            `Recompressed viewport screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
-          );
-          return recompressed;
-        }
-      }
-
-      this.logger.warn(
-        `Screenshot for ${contentId} could not be reduced below ` +
-          `${maxBytes} B - discarding`,
-      );
-      return null;
-    } catch (error) {
-      this.logger.warn(
-        `Screenshot capture failed for ${contentId}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return null;
+    if (raw.length <= maxBytes) {
+      return raw;
     }
+
+    this.logger.debug(
+      `Screenshot for ${contentId} is ${raw.length} B - attempting recompression`,
+    );
+
+    // ── Step 2: recompress with decreasing quality levels ────────────────
+    for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
+      const recompressed = await recompress(raw, quality);
+      if (recompressed) {
+        this.logger.debug(
+          `Recompressed screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
+        );
+        return recompressed;
+      }
+    }
+
+    // ── Step 3: viewport-only (non-full-page) shot ───────────────────────
+    this.logger.debug(
+      `Full-page recompression exhausted for ${contentId} - retrying viewport-only`,
+    );
+
+    const viewport = await doCapture(false);
+
+    if (viewport.length <= maxBytes) {
+      this.logger.debug(
+        `Viewport screenshot for ${contentId} fits: ${viewport.length} B`,
+      );
+      return viewport;
+    }
+
+    // Try recompressing the viewport shot as a last resort
+    for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
+      const recompressed = await recompress(viewport, quality);
+      if (recompressed) {
+        this.logger.debug(
+          `Recompressed viewport screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
+        );
+        return recompressed;
+      }
+    }
+
+    // All size-reduction strategies exhausted - this is a deterministic
+    // permanent failure (content is simply too large).  Return null so the
+    // caller knows not to retry.
+    this.logger.warn(
+      `Screenshot for ${contentId} could not be reduced below ` +
+        `${maxBytes} B - discarding`,
+    );
+    return null;
+    // NOTE: Exceptions from doCapture / recompress are intentionally NOT
+    // caught here.  Transient failures (Puppeteer crash, network timeout,
+    // sharp error) propagate to the caller so that the drain loop can decide
+    // whether to retry.  Only the size-exceeded case above returns null.
   }
 }
