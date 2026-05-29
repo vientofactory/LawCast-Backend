@@ -163,7 +163,8 @@ export class NoticeArchiveService {
   ): Promise<void> {
     const normalizedHttpMetadata = originalContent.httpMetadata || null;
 
-    const entity = this.archiveRepository.create({
+    // Core content fields — always written on both INSERT and UPDATE.
+    const coreFields = {
       noticeNum: notice.num,
       subject: notice.subject,
       proposerCategory: notice.proposerCategory,
@@ -195,11 +196,38 @@ export class NoticeArchiveService {
       httpEtag: normalizedHttpMetadata?.etag ?? null,
       httpLastModified: normalizedHttpMetadata?.lastModified ?? null,
       isDone: originalContent.isDone ?? false,
-      screenshotBlob: originalContent.screenshotBlob ?? null,
-      screenshotFormat: originalContent.screenshotFormat ?? null,
+    };
+
+    const existing = await this.archiveRepository.findOne({
+      where: { noticeNum: notice.num },
+      select: { id: true },
     });
 
-    await this.archiveRepository.upsert(entity, ['noticeNum']);
+    if (existing) {
+      // On UPDATE, only include screenshot fields when they were explicitly
+      // provided — this prevents wiping a screenshot that was captured
+      // asynchronously via updateScreenshot() after the initial archive.
+      const screenshotUpdate =
+        originalContent.screenshotBlob !== undefined
+          ? {
+              screenshotBlob: originalContent.screenshotBlob,
+              screenshotFormat: originalContent.screenshotFormat ?? null,
+            }
+          : {};
+
+      await this.archiveRepository.update(
+        { noticeNum: notice.num },
+        { ...coreFields, ...screenshotUpdate },
+      );
+    } else {
+      await this.archiveRepository.save(
+        this.archiveRepository.create({
+          ...coreFields,
+          screenshotBlob: originalContent.screenshotBlob ?? null,
+          screenshotFormat: originalContent.screenshotFormat ?? null,
+        }),
+      );
+    }
   }
 
   /**
