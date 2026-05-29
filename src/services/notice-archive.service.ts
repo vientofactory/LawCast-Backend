@@ -163,7 +163,7 @@ export class NoticeArchiveService {
   ): Promise<void> {
     const normalizedHttpMetadata = originalContent.httpMetadata || null;
 
-    // Core content fields — always written on both INSERT and UPDATE.
+    // Core content fields - always written on both INSERT and UPDATE.
     const coreFields = {
       noticeNum: notice.num,
       subject: notice.subject,
@@ -205,7 +205,7 @@ export class NoticeArchiveService {
 
     if (existing) {
       // On UPDATE, only include screenshot fields when they were explicitly
-      // provided — this prevents wiping a screenshot that was captured
+      // provided - this prevents wiping a screenshot that was captured
       // asynchronously via updateScreenshot() after the initial archive.
       const screenshotUpdate =
         originalContent.screenshotBlob !== undefined
