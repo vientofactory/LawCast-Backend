@@ -157,6 +157,17 @@ export class NoticeArchive {
   @Column({ type: 'boolean', name: 'is_done', default: false })
   isDone: boolean;
 
+  @Column({ type: 'blob', name: 'screenshot_blob', nullable: true })
+  screenshotBlob: Buffer | null;
+
+  @Column({
+    type: 'varchar',
+    length: 10,
+    name: 'screenshot_format',
+    nullable: true,
+  })
+  screenshotFormat: string | null;
+
   @CreateDateColumn({ name: 'archive_started_at' })
   archiveStartedAt: Date;
 

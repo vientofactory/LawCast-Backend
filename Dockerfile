@@ -1,14 +1,14 @@
 # Backend Dockerfile
 
-# hardened_malloc build stage – security-focused memory allocator (GrapheneOS)
+# hardened_malloc build stage - security-focused memory allocator (GrapheneOS)
 # NOTE: Requires host vm.max_map_count >= 1048576:
 #   sysctl -w vm.max_map_count=1048576  (host)  or  docker-compose sysctls
 FROM node:24-alpine AS hardened-malloc
 RUN apk add --no-cache git build-base linux-headers
 RUN git clone --depth 1 https://github.com/GrapheneOS/hardened_malloc.git /hardened_malloc
 WORKDIR /hardened_malloc
-# CONFIG_NATIVE=false  – portable build for Alpine/musl (no host-specific CET/AVX instructions)
-# CONFIG_CXX_ALLOCATOR=false – skips libstdc++ linkage so the .so has no extra runtime deps
+# CONFIG_NATIVE=false  - portable build for Alpine/musl (no host-specific CET/AVX instructions)
+# CONFIG_CXX_ALLOCATOR=false - skips libstdc++ linkage so the .so has no extra runtime deps
 RUN make CONFIG_NATIVE=false CONFIG_CXX_ALLOCATOR=false
 
 FROM node:24-alpine AS base
