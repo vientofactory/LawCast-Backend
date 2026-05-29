@@ -47,12 +47,15 @@ describe('ArchiveOrchestratorService', () => {
           useValue: {
             upsertNoticeArchive: jest.fn(),
             getExistingNoticeNumSet: jest.fn(),
+            updateScreenshot: jest.fn().mockResolvedValue(undefined),
+            getNoticesWithMissingScreenshots: jest.fn().mockResolvedValue([]),
           },
         },
         {
           provide: CrawlingCoreService,
           useValue: {
             getContent: jest.fn(),
+            captureContentScreenshot: jest.fn().mockResolvedValue(null),
           },
         },
       ],

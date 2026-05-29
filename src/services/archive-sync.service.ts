@@ -325,7 +325,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Phase 1 – Full archive sync
+  // Phase 1 - Full archive sync
   // ─────────────────────────────────────────────────────────────────────────
 
   async runFullSync(trigger: string): Promise<FullSyncResult | null> {
@@ -386,7 +386,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Phase 2 – isDone sync
+  // Phase 2 - isDone sync
   // ─────────────────────────────────────────────────────────────────────────
 
   async runIsDoneSync(trigger: string): Promise<IsDoneSyncResult | null> {
@@ -530,7 +530,7 @@ export class ArchiveSyncService implements OnModuleInit {
 
       LoggerUtils.debugDev(
         ArchiveSyncService.name,
-        `isDone Phase B [${skip}–${skip + batch.length - 1}]: ` +
+        `isDone Phase B [${skip}-${skip + batch.length - 1}]: ` +
           `scanned=${batch.length} reverted=${toRevert.length}`,
       );
 
@@ -567,7 +567,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Phase 3 – Integrity check
+  // Phase 3 - Integrity check
   // ─────────────────────────────────────────────────────────────────────────
 
   async runIntegrityCheck(
@@ -621,7 +621,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Phase 4 – Summary backfill
+  // Phase 4 - Summary backfill
   // ─────────────────────────────────────────────────────────────────────────
 
   async runSummaryBackfill(
@@ -642,7 +642,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Phase 5 – Unavailable summary retry
+  // Phase 5 - Unavailable summary retry
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
@@ -743,7 +743,7 @@ export class ArchiveSyncService implements OnModuleInit {
 
       LoggerUtils.debugDev(
         ArchiveSyncService.name,
-        `Summary backfill batch [${scanned - batch.length}–${scanned - 1}]: ` +
+        `Summary backfill batch [${scanned - batch.length}-${scanned - 1}]: ` +
           `generated=${generated} skipped=${skipped} failed=${failed}`,
       );
       void this.discordBridge?.logEvent(
@@ -766,7 +766,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Phase 5 – Unavailable summary retry (implementation)
+  // Phase 5 - Unavailable summary retry (implementation)
   // ─────────────────────────────────────────────────────────────────────────
 
   private async executeUnavailableRetry(): Promise<SummaryUnavailableRetryResult> {
@@ -830,7 +830,7 @@ export class ArchiveSyncService implements OnModuleInit {
 
       LoggerUtils.debugDev(
         ArchiveSyncService.name,
-        `Unavailable retry batch [${skip}–${skip + batch.length - 1}]: ` +
+        `Unavailable retry batch [${skip}-${skip + batch.length - 1}]: ` +
           `recovered=${recovered} skipped=${skipped} stillFailed=${stillFailed}`,
       );
       void this.discordBridge?.logEvent(

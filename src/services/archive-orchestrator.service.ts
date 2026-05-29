@@ -1,5 +1,16 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnApplicationShutdown,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
+import appConfig from '../config/app.config';
+
+const CRON_TIMEZONE = appConfig().cron.timezone;
 import { createHash } from 'crypto';
+import { APP_CONSTANTS } from '../config/app.config';
 import { type CachedNotice } from '../types/cache.types';
 import {
   NoticeArchiveService,
@@ -8,16 +19,37 @@ import {
 import { CrawlingCoreService } from './crawling-core.service';
 import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
+import { LoggerUtils } from '../utils/logger.utils';
 
 @Injectable()
-export class ArchiveOrchestratorService {
+export class ArchiveOrchestratorService
+  implements OnModuleInit, OnApplicationShutdown
+{
   private readonly logger = new Logger(ArchiveOrchestratorService.name);
+
+  /** Minimal payload stored in the screenshot queue. */
+  private readonly screenshotQueue: Array<{
+    num: number;
+    contentId: string;
+    isDone: boolean;
+    retryCount: number;
+  }> = [];
+  /** Prevents two concurrent Puppeteer screenshot runs. */
+  private isCaptureRunning = false;
 
   constructor(
     private noticeArchiveService: NoticeArchiveService,
     private crawlingCoreService: CrawlingCoreService,
     @Optional() private discordBridge: DiscordBridgeService,
   ) {}
+
+  onModuleInit(): void {
+    // Backfill screenshots for already-archived notices that have never had
+    // a screenshot captured (e.g. pre-screenshot-feature rows, or notices
+    // where the previous Puppeteer session crashed).
+    // Fire-and-forget so it never delays module initialization.
+    void this.backfillMissingScreenshots();
+  }
 
   /**
    * Archives the given notices by fetching their content and source HTML, then saving them to the archive database. This method processes notices in batches
@@ -39,6 +71,7 @@ export class ArchiveOrchestratorService {
 
     const concurrency = 5;
     let savedCount = 0;
+    const archivedNotices: CachedNotice[] = [];
 
     for (let i = 0; i < notices.length; i += concurrency) {
       const chunk = notices.slice(i, i + concurrency);
@@ -128,7 +161,7 @@ export class ArchiveOrchestratorService {
                 archivedAt,
                 httpMetadata,
               });
-              return true;
+              return notice;
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : String(error);
@@ -136,7 +169,7 @@ export class ArchiveOrchestratorService {
                 `Failed to archive notice ${notice.num}: ${message}`,
                 error,
               );
-              return false;
+              return null;
             }
           } catch (error) {
             // Catch-all for unexpected throws outside the inner try/catch blocks
@@ -146,15 +179,234 @@ export class ArchiveOrchestratorService {
               `Unexpected error while archiving notice ${notice.num}: ${message}`,
               error,
             );
-            return false;
+            return null;
           }
         }),
       );
 
-      savedCount += chunkResults.filter(Boolean).length;
+      const saved = chunkResults.filter((r): r is CachedNotice => r !== null);
+      savedCount += saved.length;
+      archivedNotices.push(...saved);
     }
 
+    // Fire-and-forget: screenshots run in the background so archiveNotices
+    // returns immediately.  A single drain loop (guarded by isCaptureRunning)
+    // ensures at most one Puppeteer instance is live at any time.
+    this.scheduleScreenshots(
+      archivedNotices
+        .filter((n) => n.contentId)
+        .map((n) => ({ num: n.num, contentId: n.contentId!, isDone: false })),
+    );
+
     return savedCount;
+  }
+
+  /**
+   * Enqueues notices for background screenshot capture.
+   * Safe to call from outside this class (e.g. bootstrap backfill).
+   * If a drain loop is already running the items are appended to the queue
+   * and will be processed automatically - no second Puppeteer instance starts.
+   */
+  scheduleScreenshots(
+    items: Array<{ num: number; contentId: string; isDone: boolean }>,
+  ): void {
+    if (items.length === 0) return;
+
+    // Deduplicate: skip notices already waiting in the queue to avoid
+    // redundant Puppeteer captures when backfill and a cron cycle overlap.
+    const queuedNums = new Set(this.screenshotQueue.map((q) => q.num));
+    const deduped = items.filter((item) => !queuedNums.has(item.num));
+
+    if (deduped.length === 0) return;
+
+    this.screenshotQueue.push(
+      ...deduped.map((item) => ({ ...item, retryCount: 0 })),
+    );
+    LoggerUtils.debug(
+      ArchiveOrchestratorService.name,
+      `Queued ${deduped.length} notice(s) for screenshot capture ` +
+        `(${items.length - deduped.length} duplicate(s) skipped, ` +
+        `queue depth: ${this.screenshotQueue.length}, running: ${this.isCaptureRunning})`,
+    );
+
+    if (!this.isCaptureRunning) {
+      // Start the drain loop asynchronously
+      void this.drainScreenshotQueue();
+    }
+  }
+
+  /**
+   * Drain loop: processes every notice in `screenshotQueue` one at a time
+   * (sequential, bounded Puppeteer memory) until the queue is empty.
+   * Sets `isCaptureRunning` for the duration so concurrent archiving cycles
+   * that call `scheduleScreenshots` simply append to the queue instead of
+   * spawning a second loop.
+   */
+  private async drainScreenshotQueue(): Promise<void> {
+    if (this.isCaptureRunning) return;
+    this.isCaptureRunning = true;
+
+    try {
+      while (this.screenshotQueue.length > 0) {
+        const notice = this.screenshotQueue.shift()!;
+
+        try {
+          // Back-off delay before each retry attempt.
+          if (notice.retryCount > 0) {
+            await new Promise<void>((resolve) =>
+              setTimeout(resolve, APP_CONSTANTS.SCREENSHOT.RETRY_DELAY_MS),
+            );
+          }
+
+          const screenshot =
+            await this.crawlingCoreService.captureContentScreenshot(
+              notice.contentId,
+              notice.isDone,
+            );
+
+          if (screenshot) {
+            await this.noticeArchiveService.updateScreenshot(
+              notice.num,
+              screenshot,
+              'jpeg',
+            );
+            LoggerUtils.debug(
+              ArchiveOrchestratorService.name,
+              `Screenshot stored for notice ${notice.num} (${screenshot.length.toLocaleString()} Bytes)`,
+            );
+          } else {
+            // null means the capture was deterministically too large after all
+            // compression strategies - retrying would produce the same result.
+            this.logger.warn(
+              `Screenshot permanently skipped for notice ${notice.num}: ` +
+                `content exceeds size limit after all compression strategies`,
+            );
+          }
+        } catch (error) {
+          // Transient failure (Puppeteer crash, network timeout, etc.) -
+          // re-queue with an incremented retry counter and a back-off delay.
+          const message =
+            error instanceof Error ? error.message : String(error);
+          this.requeueOrSkip(notice, message);
+        }
+      }
+    } finally {
+      this.isCaptureRunning = false;
+    }
+  }
+
+  /**
+   * Re-queues a notice for another capture attempt or skips it permanently.
+   *
+   * Items are pushed to the **end** of the queue so that the current backlog
+   * is not blocked.  Once `MAX_RETRIES` is exhausted the notice stays in the
+   * database with `screenshotBlob = null` and will be picked up again by the
+   * next backfill cron or server restart.
+   */
+  private requeueOrSkip(
+    notice: (typeof this.screenshotQueue)[number],
+    reason: string,
+  ): void {
+    const max = APP_CONSTANTS.SCREENSHOT.MAX_RETRIES;
+    const nextAttempt = notice.retryCount + 1;
+
+    if (notice.retryCount < max) {
+      this.screenshotQueue.push({ ...notice, retryCount: nextAttempt });
+      this.logger.warn(
+        `Screenshot failed for notice ${notice.num} ` +
+          `(attempt ${nextAttempt}/${max + 1}): ${reason} - re-queued`,
+      );
+    } else {
+      this.logger.warn(
+        `Screenshot permanently skipped for notice ${notice.num} ` +
+          `after ${max + 1} attempt(s): ${reason} - will retry on next backfill`,
+      );
+    }
+  }
+
+  /**
+   * NestJS OnApplicationShutdown hook.
+   * Logs any notices that are still waiting to be screenshotted so operators
+   * know work was left pending (screenshots are non-critical and will be
+   * retried on the next archiving cycle).
+   */
+  async onApplicationShutdown(signal?: string): Promise<void> {
+    const pending = this.screenshotQueue.length;
+    const inProgress = this.isCaptureRunning ? 1 : 0;
+
+    if (pending > 0 || inProgress > 0) {
+      this.logger.warn(
+        `Shutdown (${signal ?? 'unknown'}) with ${pending} screenshot(s) ` +
+          `queued and ${inProgress} in progress - they will be skipped.`,
+      );
+    }
+
+    // Clear the queue so the drain loop exits on its next iteration.
+    this.screenshotQueue.length = 0;
+  }
+
+  /**
+   * Finds archived notices that have a contentId but no screenshot and feeds
+   * them into the screenshot queue.
+   *
+   * Capped at SCREENSHOT.BACKFILL_BATCH_SIZE per startup so a large legacy DB
+   * doesn't flood Puppeteer.  Subsequent restarts will backfill the next batch,
+   * gradually filling in every missing screenshot over time.
+   */
+  private async backfillMissingScreenshots(): Promise<void> {
+    try {
+      const missing =
+        await this.noticeArchiveService.getNoticesWithMissingScreenshots(
+          APP_CONSTANTS.SCREENSHOT.BACKFILL_BATCH_SIZE,
+        );
+
+      if (missing.length === 0) {
+        LoggerUtils.debug(
+          ArchiveOrchestratorService.name,
+          'Screenshot backfill: no missing screenshots found',
+        );
+        return;
+      }
+
+      this.logger.log(
+        `Screenshot backfill: queuing ${missing.length} notice(s) with missing screenshots`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.LOG,
+        ArchiveOrchestratorService.name,
+        `Screenshot backfill: queuing **${missing.length}** notice(s)`,
+        { count: missing.length },
+      );
+
+      this.scheduleScreenshots(missing);
+    } catch (error) {
+      this.logger.warn(
+        `Screenshot backfill failed: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Periodically re-triggers the screenshot backfill so notices that were
+   * permanently skipped in a previous session are retried without a full
+   * server restart.
+   *
+   * The cron fires every 6 hours (offset 30 min from the IS_DONE_SYNC job to
+   * spread I/O).  It is skipped when a capture is already in progress or the
+   * queue still has pending items, preventing work duplication.
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SCREENSHOT_BACKFILL, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleScreenshotBackfill(): Promise<void> {
+    if (this.isCaptureRunning || this.screenshotQueue.length > 0) {
+      LoggerUtils.debugDev(
+        ArchiveOrchestratorService.name,
+        'Screenshot backfill cron skipped: capture already running or queue not empty',
+      );
+      return;
+    }
+    await this.backfillMissingScreenshots();
   }
 
   /**

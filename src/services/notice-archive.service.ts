@@ -7,10 +7,12 @@ import {
   FindOperator,
   ILike,
   In,
+  IsNull,
   LessThan,
   LessThanOrEqual,
   MoreThan,
   MoreThanOrEqual,
+  Not,
   Repository,
 } from 'typeorm';
 import { type AISummaryStatus, type CachedNotice } from '../types/cache.types';
@@ -97,6 +99,10 @@ export interface ArchiveDetailResult {
       responseUrl?: string;
     };
   };
+  screenshotMeta: {
+    hasScreenshot: boolean;
+    format: string | null;
+  };
 }
 
 export interface ArchiveSummaryState {
@@ -151,6 +157,8 @@ export class NoticeArchiveService {
       htmlSha256?: string | null;
       archivedAt?: Date;
       httpMetadata?: ArchiveHttpMetadata | null;
+      screenshotBlob?: Buffer | null;
+      screenshotFormat?: string | null;
     },
   ): Promise<void> {
     const normalizedHttpMetadata = originalContent.httpMetadata || null;
@@ -187,6 +195,8 @@ export class NoticeArchiveService {
       httpEtag: normalizedHttpMetadata?.etag ?? null,
       httpLastModified: normalizedHttpMetadata?.lastModified ?? null,
       isDone: originalContent.isDone ?? false,
+      screenshotBlob: originalContent.screenshotBlob ?? null,
+      screenshotFormat: originalContent.screenshotFormat ?? null,
     });
 
     await this.archiveRepository.upsert(entity, ['noticeNum']);
@@ -480,6 +490,10 @@ export class NoticeArchiveService {
               : undefined,
         },
       },
+      screenshotMeta: {
+        hasScreenshot: row.screenshotBlob != null,
+        format: row.screenshotFormat ?? null,
+      },
     };
   }
 
@@ -540,6 +554,68 @@ export class NoticeArchiveService {
 
   async existsByNoticeNum(noticeNum: number): Promise<boolean> {
     return this.archiveRepository.exists({ where: { noticeNum } });
+  }
+
+  /**
+   * Returns up to `limit` archived notices that have a contentId but no
+   * screenshot yet, ordered oldest-first so early notices are backfilled first.
+   * Used by the bootstrap screenshot-backfill pipeline.
+   */
+  async getNoticesWithMissingScreenshots(
+    limit: number,
+  ): Promise<Array<{ num: number; contentId: string; isDone: boolean }>> {
+    const rows = await this.archiveRepository.find({
+      select: { noticeNum: true, contentId: true, isDone: true },
+      where: {
+        screenshotBlob: IsNull(),
+        contentId: Not(IsNull()),
+      },
+      order: { noticeNum: 'ASC' },
+      take: limit,
+    });
+
+    return rows.map((row) => ({
+      num: row.noticeNum,
+      contentId: row.contentId!,
+      isDone: row.isDone,
+    }));
+  }
+
+  /**
+   * Returns the raw screenshot blob and its MIME format for the given notice,
+   * or null if no screenshot has been captured yet.
+   */
+  async getScreenshotByNoticeNum(
+    noticeNum: number,
+  ): Promise<{ blob: Buffer; format: string } | null> {
+    const row = await this.archiveRepository.findOne({
+      where: { noticeNum },
+      select: { screenshotBlob: true, screenshotFormat: true },
+    });
+
+    if (!row?.screenshotBlob) {
+      return null;
+    }
+
+    return {
+      blob: row.screenshotBlob,
+      format: row.screenshotFormat ?? 'jpeg',
+    };
+  }
+
+  /**
+   * Stores (or replaces) the screenshot for an existing archive record.
+   * Does nothing if no record with the given noticeNum exists.
+   */
+  async updateScreenshot(
+    noticeNum: number,
+    blob: Buffer,
+    format: string,
+  ): Promise<void> {
+    await this.archiveRepository.update(
+      { noticeNum },
+      { screenshotBlob: blob, screenshotFormat: format },
+    );
   }
 
   async getExistingNoticeNumSet(noticeNums: number[]): Promise<Set<number>> {

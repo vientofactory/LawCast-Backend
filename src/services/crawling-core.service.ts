@@ -8,8 +8,22 @@ import {
   type ISearchQuery,
   type IBulkOptions,
 } from 'pal-crawl';
+import sharp from 'sharp';
 import { APP_CONSTANTS } from '../config/app.config';
 import { LoggerUtils } from '../utils/logger.utils';
+
+const SCREENSHOT_CONFIG = {
+  enabled: true,
+  fullPage: true,
+  width: APP_CONSTANTS.SCREENSHOT.WIDTH,
+  height: APP_CONSTANTS.SCREENSHOT.HEIGHT,
+  format: 'jpeg' as const,
+  quality: APP_CONSTANTS.SCREENSHOT.QUALITY,
+} as const;
+
+/** JPEG quality levels tried in order when the full-page capture is too large. */
+const SCREENSHOT_FALLBACK_QUALITIES =
+  APP_CONSTANTS.SCREENSHOT.FALLBACK_QUALITIES;
 
 @Injectable()
 export class CrawlingCoreService {
@@ -233,5 +247,109 @@ export class CrawlingCoreService {
     }
 
     return allItems;
+  }
+
+  /**
+   * Captures a full-page JPEG screenshot of a notice's content page.
+   *
+   * If the raw capture exceeds MAX_SIZE_BYTES, the buffer is recompressed
+   * with progressively lower JPEG quality values before falling back to a
+   * viewport-only (non-full-page) shot.  Returns null only when every
+   * strategy still exceeds the limit or an unrecoverable error occurs.
+   *
+   * @param contentId The content ID of the notice.
+   * @param isDone When true, uses the done-notice screenshot endpoint.
+   */
+  async captureContentScreenshot(
+    contentId: string,
+    isDone = false,
+  ): Promise<Buffer | null> {
+    const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
+
+    const doCapture = async (fullPage: boolean): Promise<Buffer> => {
+      const client = new PalCrawl({
+        ...this.crawlConfig,
+        screenshot: { ...SCREENSHOT_CONFIG, fullPage },
+      });
+      try {
+        return isDone
+          ? await client.getDoneContentScreenshot(contentId)
+          : await client.getContentScreenshot(contentId);
+      } finally {
+        await client.closeBrowser();
+      }
+    };
+
+    /**
+     * Re-encode a raw JPEG buffer at a lower quality using sharp.
+     * Returns the recompressed buffer, or null if still over the limit.
+     */
+    const recompress = async (
+      input: Buffer,
+      quality: number,
+    ): Promise<Buffer | null> => {
+      const result = await sharp(input).jpeg({ quality }).toBuffer();
+      return result.length <= maxBytes ? result : null;
+    };
+
+    // ── Step 1: full-page capture at configured quality ──────────────────
+    const raw = await doCapture(true);
+
+    if (raw.length <= maxBytes) {
+      return raw;
+    }
+
+    this.logger.debug(
+      `Screenshot for ${contentId} is ${raw.length} B - attempting recompression`,
+    );
+
+    // ── Step 2: recompress with decreasing quality levels ────────────────
+    for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
+      const recompressed = await recompress(raw, quality);
+      if (recompressed) {
+        this.logger.debug(
+          `Recompressed screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
+        );
+        return recompressed;
+      }
+    }
+
+    // ── Step 3: viewport-only (non-full-page) shot ───────────────────────
+    this.logger.debug(
+      `Full-page recompression exhausted for ${contentId} - retrying viewport-only`,
+    );
+
+    const viewport = await doCapture(false);
+
+    if (viewport.length <= maxBytes) {
+      this.logger.debug(
+        `Viewport screenshot for ${contentId} fits: ${viewport.length} B`,
+      );
+      return viewport;
+    }
+
+    // Try recompressing the viewport shot as a last resort
+    for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
+      const recompressed = await recompress(viewport, quality);
+      if (recompressed) {
+        this.logger.debug(
+          `Recompressed viewport screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
+        );
+        return recompressed;
+      }
+    }
+
+    // All size-reduction strategies exhausted - this is a deterministic
+    // permanent failure (content is simply too large).  Return null so the
+    // caller knows not to retry.
+    this.logger.warn(
+      `Screenshot for ${contentId} could not be reduced below ` +
+        `${maxBytes} B - discarding`,
+    );
+    return null;
+    // NOTE: Exceptions from doCapture / recompress are intentionally NOT
+    // caught here.  Transient failures (Puppeteer crash, network timeout,
+    // sharp error) propagate to the caller so that the drain loop can decide
+    // whether to retry.  Only the size-exceeded case above returns null.
   }
 }

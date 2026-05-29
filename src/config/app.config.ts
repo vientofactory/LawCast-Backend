@@ -130,6 +130,24 @@ export const APP_CONSTANTS = {
       'Cache-Control': 'no-cache',
     },
   },
+  SCREENSHOT: {
+    /** Headless Chromium viewport width (px). Narrower viewport → smaller file. */
+    WIDTH: 1280,
+    /** Initial viewport height (px). Actual capture height is determined by fullPage. */
+    HEIGHT: 900,
+    /** JPEG quality 0-100. 65 yields ~100-400KB for text-heavy government pages. */
+    QUALITY: 65,
+    /** Hard upper limit per screenshot - discard anything exceeding this. */
+    MAX_SIZE_BYTES: 512 * 1024, // 500 KiB
+    /** Max notices to backfill per bootstrap run (prevents runaway Chromium sessions on large DBs). */
+    BACKFILL_BATCH_SIZE: 200,
+    /** JPEG quality levels tried in order when the raw capture exceeds MAX_SIZE_BYTES. */
+    FALLBACK_QUALITIES: [50, 35, 20] as const,
+    /** Max retry attempts per notice before the item is skipped for this session. */
+    MAX_RETRIES: 3,
+    /** Delay (ms) before each retry attempt to avoid hammering the target server. */
+    RETRY_DELAY_MS: 5000,
+  },
   ARCHIVE_SYNC: {
     /** Items per crawler HTTP request (max 100). */
     CRAWLER_PAGE_UNIT: 100,
@@ -152,6 +170,7 @@ export const APP_CONSTANTS = {
       SYSTEM_MONITORING: '0 0 * * * *', // Every hour
       IS_DONE_SYNC: '0 0 */6 * * *', // Every 6 hours - sync isDone flags for expired notices
       INTEGRITY_RESCAN: '0 0 3 * * *', // Every day at 3 AM - full archive integrity re-validation
+      SCREENSHOT_BACKFILL: '0 30 */6 * * *', // Every 6 hours (offset 30 min) - retry missing screenshots
     },
   },
 } as const;

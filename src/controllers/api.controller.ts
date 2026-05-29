@@ -197,6 +197,27 @@ export class ApiController {
     });
   }
 
+  @Get('notices/:num/screenshot')
+  async getNoticeScreenshot(
+    @Param('num', ParseIntPipe) num: number,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result =
+      await this.noticeArchiveService.getScreenshotByNoticeNum(num);
+
+    if (!result) {
+      throw new NotFoundException(
+        `의안번호 ${num}에 해당하는 스크린샷을 찾을 수 없습니다.`,
+      );
+    }
+
+    const mimeType = result.format === 'png' ? 'image/png' : 'image/jpeg';
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return new StreamableFile(result.blob);
+  }
+
   @Get('notices/:num/export')
   async exportNoticeArchive(
     @Param('num', ParseIntPipe) num: number,
