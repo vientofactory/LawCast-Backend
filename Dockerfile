@@ -21,6 +21,9 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
+# Skip Puppeteer's bundled Chrome download — we use system Chromium at runtime
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
 # Install all dependencies (including devDependencies for build)
 RUN npm ci --omit=dev && npm cache clean --force
 
@@ -30,6 +33,9 @@ WORKDIR /app
 
 # Copy package files for full installation
 COPY package*.json ./
+
+# Skip Puppeteer's bundled Chrome download — not needed at build time
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 
 # Install all dependencies including devDependencies
 RUN npm ci
@@ -50,6 +56,18 @@ COPY --from=hardened-malloc /hardened_malloc/out/libhardened_malloc.so /usr/loca
 
 ENV NODE_ENV=production
 ENV LD_PRELOAD=/usr/local/lib/libhardened_malloc.so
+
+# Install system Chromium for Puppeteer
+# - chromium:      headless browser
+# - nss:           SSL/TLS support
+# - freetype:      font rasterisation
+# - harfbuzz:      text shaping
+# - ttf-freefont:  basic Unicode font coverage
+# PUPPETEER_EXECUTABLE_PATH tells puppeteer to use this binary instead of the
+# bundled Chrome that was skipped during npm install.
+RUN apk add --no-cache chromium nss freetype harfbuzz ttf-freefont
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 
 # Create a non-root user
 RUN addgroup -g 1001 -S nodejs && \
