@@ -24,6 +24,7 @@ import { InitialSchemaMigration1744953900000 } from './migrations/202604170001-i
 import { AddContentMetadataColumns1745001601000 } from './migrations/202604180001-add-content-metadata-columns.migration';
 import { AddIsDoneColumn1746316801000 } from './migrations/202605030001-add-is-done-column.migration';
 import { AddScreenshotBlob1748476800000 } from './migrations/202605290001-add-screenshot-blob.migration';
+import { RestoreNoticeNumUniqueIndex1748563200000 } from './migrations/202605300001-restore-notice-num-unique-index.migration';
 import { CrawlingCoreService } from './services/crawling-core.service';
 import { SummaryGenerationService } from './services/summary-generation.service';
 import { ArchiveOrchestratorService } from './services/archive-orchestrator.service';
@@ -76,6 +77,7 @@ import appConfig from './config/app.config';
           AddContentMetadataColumns1745001601000,
           AddIsDoneColumn1746316801000,
           AddScreenshotBlob1748476800000,
+          RestoreNoticeNumUniqueIndex1748563200000,
         ],
       }),
     }),
