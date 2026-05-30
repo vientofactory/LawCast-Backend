@@ -293,7 +293,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
     timeout: number,
     jobId: string,
   ): Promise<T> {
-    let lastError: Error;
+    let lastError: Error | undefined;
 
     for (let attempt = 1; attempt <= retryCount + 1; attempt++) {
       const abortController = new AbortController();
@@ -317,7 +317,7 @@ export class BatchProcessingService implements OnApplicationShutdown {
       }
     }
 
-    throw lastError!;
+    throw lastError ?? new Error(`Job ${jobId} failed: no attempts were made`);
   }
 
   /**

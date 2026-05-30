@@ -7,6 +7,7 @@ import { LoggerUtils } from '../utils/logger.utils';
 import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
 import { ArchiveSyncService } from '../services/archive-sync.service';
+import { ArchiveOrchestratorService } from '../services/archive-orchestrator.service';
 
 const CRON_TIMEZONE = appConfig().cron.timezone;
 
@@ -18,6 +19,7 @@ export class CronJobsService {
     private readonly webhookCleanupService: WebhookCleanupService,
     private readonly crawlingService: CrawlingService,
     private readonly archiveSyncService: ArchiveSyncService,
+    private readonly archiveOrchestratorService: ArchiveOrchestratorService,
     @Optional() private readonly discordBridge: DiscordBridgeService,
   ) {}
 
@@ -133,6 +135,21 @@ export class CronJobsService {
       this.archiveSyncService
         .runScheduledIntegrityRescan('cron')
         .then(() => undefined),
+    );
+  }
+
+  /**
+   * Periodically re-triggers the screenshot backfill so notices that were
+   * permanently skipped in a previous session are retried without a full
+   * server restart. Skipped when a capture is already in progress or the
+   * queue still has pending items.
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SCREENSHOT_BACKFILL, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleScreenshotBackfill(): Promise<void> {
+    await this.execute('screenshot backfill', () =>
+      this.archiveOrchestratorService.handleScreenshotBackfill(),
     );
   }
 }

@@ -5,10 +5,6 @@ import {
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import appConfig from '../config/app.config';
-
-const CRON_TIMEZONE = appConfig().cron.timezone;
 import { createHash } from 'crypto';
 import { APP_CONSTANTS } from '../config/app.config';
 import { type CachedNotice } from '../types/cache.types';
@@ -361,7 +357,7 @@ export class ArchiveOrchestratorService
         );
 
       if (missing.length === 0) {
-        LoggerUtils.debug(
+        LoggerUtils.debugDev(
           ArchiveOrchestratorService.name,
           'Screenshot backfill: no missing screenshots found',
         );
@@ -387,17 +383,10 @@ export class ArchiveOrchestratorService
   }
 
   /**
-   * Periodically re-triggers the screenshot backfill so notices that were
-   * permanently skipped in a previous session are retried without a full
-   * server restart.
-   *
-   * The cron fires every 6 hours (offset 30 min from the IS_DONE_SYNC job to
-   * spread I/O).  It is skipped when a capture is already in progress or the
-   * queue still has pending items, preventing work duplication.
+   * Re-triggers the screenshot backfill, skipping silently when a capture is
+   * already in progress or the queue still has pending items.
+   * Called by the cron job in CronJobsService.
    */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SCREENSHOT_BACKFILL, {
-    timeZone: CRON_TIMEZONE,
-  })
   async handleScreenshotBackfill(): Promise<void> {
     if (this.isCaptureRunning || this.screenshotQueue.length > 0) {
       LoggerUtils.debugDev(
@@ -457,7 +446,8 @@ export class ArchiveOrchestratorService
    * Fetches the HTML source of the notice page and captures relevant HTTP metadata.
    * @param link The URL of the notice page to capture.
    * @returns An object containing the captured HTML, its SHA-256 hash, and HTTP metadata.
-   * @throws Will throw an error if the fetch operation fails or if the captured HTML is empty.
+   * @throws Will throw an error if the fetch operation fails, returns a non-2xx status,
+   *   or if the captured HTML is empty.
    */
   private async captureNoticePageSource(link: string): Promise<{
     html: string;
@@ -469,10 +459,17 @@ export class ArchiveOrchestratorService
       headers: {
         Accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'User-Agent': 'Mozilla/5.0 (compatible; Lawcast/1.0)',
+        'User-Agent': APP_CONSTANTS.CRAWLING.USER_AGENT,
       },
       redirect: 'follow',
+      signal: AbortSignal.timeout(15_000),
     });
+
+    if (!response.ok) {
+      throw new Error(
+        `HTTP ${response.status} ${response.statusText} fetching ${link}`,
+      );
+    }
 
     const html = await response.text();
 

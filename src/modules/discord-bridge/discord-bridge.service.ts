@@ -171,6 +171,56 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Sends a critical process-level alert to the Discord log channel,
+   * bypassing the configured log level filter entirely.
+   * Intended for use in Node.js global error handlers (uncaughtException,
+   * unhandledRejection) where the normal log level threshold should not apply.
+   * This method is guaranteed not to throw.
+   */
+  async sendCriticalAlert(
+    context: string,
+    message: string,
+    error?: unknown,
+  ): Promise<void> {
+    if (!this.enabled || !this.isReady || !this.client || !this.logChannelId)
+      return;
+
+    try {
+      const channel = await this.client.channels.fetch(this.logChannelId);
+      if (!channel?.isTextBased()) return;
+
+      const data: Record<string, unknown> = {};
+      if (error instanceof Error) {
+        if (error.stack) data['stack'] = error.stack;
+        const cause = (error as Error & { cause?: unknown }).cause;
+        if (cause !== undefined) data['cause'] = String(cause);
+      } else if (error !== undefined) {
+        data['reason'] = String(error);
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor(0xcc0000)
+        .setTitle(`💀 [FATAL] ${context}`)
+        .setDescription(message)
+        .setTimestamp()
+        .setFooter({ text: 'LawCast Debug Bridge' });
+
+      if (Object.keys(data).length > 0) {
+        const raw = JSON.stringify(data, null, 2);
+        const truncated = raw.length > 950 ? raw.slice(0, 947) + '…' : raw;
+        embed.addFields({
+          name: 'Details',
+          value: `\`\`\`json\n${truncated}\n\`\`\``,
+        });
+      }
+
+      await (channel as TextChannel).send({ embeds: [embed] });
+    } catch {
+      // Intentionally swallow - we are already inside an error handler
+    }
+  }
+
   // ─── Embed builder ────────────────────────────────────────────────────────
 
   private buildLogEmbed(
