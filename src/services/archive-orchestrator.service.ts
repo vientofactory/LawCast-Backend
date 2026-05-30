@@ -5,10 +5,6 @@ import {
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
-import appConfig from '../config/app.config';
-
-const CRON_TIMEZONE = appConfig().cron.timezone;
 import { createHash } from 'crypto';
 import { APP_CONSTANTS } from '../config/app.config';
 import { type CachedNotice } from '../types/cache.types';
@@ -387,17 +383,10 @@ export class ArchiveOrchestratorService
   }
 
   /**
-   * Periodically re-triggers the screenshot backfill so notices that were
-   * permanently skipped in a previous session are retried without a full
-   * server restart.
-   *
-   * The cron fires every 6 hours (offset 30 min from the IS_DONE_SYNC job to
-   * spread I/O).  It is skipped when a capture is already in progress or the
-   * queue still has pending items, preventing work duplication.
+   * Re-triggers the screenshot backfill, skipping silently when a capture is
+   * already in progress or the queue still has pending items.
+   * Called by the cron job in CronJobsService.
    */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SCREENSHOT_BACKFILL, {
-    timeZone: CRON_TIMEZONE,
-  })
   async handleScreenshotBackfill(): Promise<void> {
     if (this.isCaptureRunning || this.screenshotQueue.length > 0) {
       LoggerUtils.debugDev(

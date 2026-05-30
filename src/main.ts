@@ -6,19 +6,22 @@ import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { BatchProcessingService } from './services/batch-processing.service';
 import { WebhookValidationUtils } from './utils/webhook-validation.utils';
+import { DiscordBridgeService } from './modules/discord-bridge/discord-bridge.service';
+import { BridgeLogLevel } from './modules/discord-bridge/discord-bridge.types';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
   const dataSource = app.get(DataSource);
   const batchProcessingService = app.get(BatchProcessingService);
+  const discordBridge = app.get(DiscordBridgeService);
   const logger = new Logger('Bootstrap');
   const frontendUrls = configService.get<string[]>('frontend.urls');
   const { getValidationPipeOptions } = WebhookValidationUtils;
 
   // Initialize shutdown handlers
   app.enableShutdownHooks();
-  initShutdownHandlers(app, batchProcessingService, logger);
+  initShutdownHandlers(app, batchProcessingService, logger, discordBridge);
 
   // Ensure database migrations are applied before starting the application
   await ensureDatabaseMigrations(dataSource, logger);
@@ -121,15 +124,20 @@ async function gracefulShutdown(
 }
 
 /**
- * Initializes handlers for graceful shutdown on SIGTERM and SIGINT signals, as well as unexpected errors.
+ * Initializes handlers for graceful shutdown on SIGTERM and SIGINT signals,
+ * as well as Node.js global runtime errors.
+ * When the Discord bridge is connected, critical errors are also sent as alerts
+ * to the configured Discord log channel before shutdown.
  * @param app The NestJS application instance to be closed during shutdown.
  * @param batchProcessingService The BatchProcessingService instance to ensure batch jobs are completed before shutdown.
  * @param logger The NestJS Logger instance for logging shutdown events and errors.
+ * @param discordBridge The DiscordBridgeService instance used to forward critical alerts to Discord.
  */
 function initShutdownHandlers(
   app: NestExpressApplication,
   batchProcessingService: BatchProcessingService,
   logger: Logger,
+  discordBridge: DiscordBridgeService,
 ): void {
   process.on('SIGTERM', async () => {
     logger.log('SIGTERM received, starting graceful shutdown...');
@@ -141,14 +149,39 @@ function initShutdownHandlers(
     await gracefulShutdown(app, batchProcessingService, logger);
   });
 
+  // Node.js runtime warnings (e.g. MaxListenersExceeded, DeprecationWarning)
+  process.on('warning', (warning) => {
+    logger.warn(`Node.js Warning [${warning.name}]: ${warning.message}`);
+    void discordBridge.logEvent(
+      BridgeLogLevel.WARN,
+      `Warning:${warning.name}`,
+      warning.message,
+      warning.stack ? { stack: warning.stack } : undefined,
+    );
+  });
+
   // Unexpected error handling
   process.on('uncaughtException', async (error) => {
     logger.error('Uncaught Exception:', error);
+    await discordBridge.sendCriticalAlert(
+      'UncaughtException',
+      error.message,
+      error,
+    );
     await gracefulShutdown(app, batchProcessingService, logger, 1);
   });
 
   process.on('unhandledRejection', async (reason, promise) => {
     logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    const message =
+      reason instanceof Error
+        ? reason.message
+        : `Unhandled promise rejection: ${String(reason)}`;
+    await discordBridge.sendCriticalAlert(
+      'UnhandledRejection',
+      message,
+      reason,
+    );
     await gracefulShutdown(app, batchProcessingService, logger, 1);
   });
 }
