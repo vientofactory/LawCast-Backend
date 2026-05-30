@@ -232,8 +232,10 @@ export class CrawlingSchedulerService implements OnModuleInit {
     }
 
     // Enrich with AI summaries - fallback to raw notices on Ollama failure.
-    // ArchiveSyncService.runSummaryBackfill() will handle any 'not_requested'
-    // rows after the full sync, so no need to retry 'unavailable' states here.
+    // retryUnavailableArchiveSummary=true: proactively retry any 'unavailable'
+    // archive states so the initial cache is as complete as possible.
+    // ArchiveSyncService.runSummaryBackfill() will also handle remaining
+    // 'not_requested' rows after the full sync completes.
     let noticesWithSummary: CachedNotice[];
     try {
       noticesWithSummary =

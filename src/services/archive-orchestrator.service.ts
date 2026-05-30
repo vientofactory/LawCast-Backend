@@ -357,7 +357,7 @@ export class ArchiveOrchestratorService
         );
 
       if (missing.length === 0) {
-        LoggerUtils.debug(
+        LoggerUtils.debugDev(
           ArchiveOrchestratorService.name,
           'Screenshot backfill: no missing screenshots found',
         );
@@ -446,7 +446,8 @@ export class ArchiveOrchestratorService
    * Fetches the HTML source of the notice page and captures relevant HTTP metadata.
    * @param link The URL of the notice page to capture.
    * @returns An object containing the captured HTML, its SHA-256 hash, and HTTP metadata.
-   * @throws Will throw an error if the fetch operation fails or if the captured HTML is empty.
+   * @throws Will throw an error if the fetch operation fails, returns a non-2xx status,
+   *   or if the captured HTML is empty.
    */
   private async captureNoticePageSource(link: string): Promise<{
     html: string;
@@ -458,10 +459,17 @@ export class ArchiveOrchestratorService
       headers: {
         Accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'User-Agent': 'Mozilla/5.0 (compatible; Lawcast/1.0)',
+        'User-Agent': APP_CONSTANTS.CRAWLING.USER_AGENT,
       },
       redirect: 'follow',
+      signal: AbortSignal.timeout(15_000),
     });
+
+    if (!response.ok) {
+      throw new Error(
+        `HTTP ${response.status} ${response.statusText} fetching ${link}`,
+      );
+    }
 
     const html = await response.text();
 

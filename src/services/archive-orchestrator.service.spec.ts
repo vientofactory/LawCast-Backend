@@ -99,6 +99,7 @@ describe('ArchiveOrchestratorService', () => {
       };
 
       const mockResponse = {
+        ok: true,
         text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
         url: 'https://example.com/notice/1',
         status: 200,
@@ -125,15 +126,17 @@ describe('ArchiveOrchestratorService', () => {
       await service.archiveNotices([mockNotice]);
 
       expect(crawlingCoreService.getContent).toHaveBeenCalledWith('content-1');
-      expect(mockFetch).toHaveBeenCalledWith('https://example.com/notice/1', {
-        method: 'GET',
-        headers: {
-          Accept:
-            'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'User-Agent': 'Mozilla/5.0 (compatible; Lawcast/1.0)',
-        },
-        redirect: 'follow',
-      });
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/notice/1',
+        expect.objectContaining({
+          method: 'GET',
+          headers: expect.objectContaining({
+            'User-Agent': 'LawCast/1.0 (Legislative Notice Crawler)',
+          }),
+          redirect: 'follow',
+          signal: expect.any(Object),
+        }),
+      );
       expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalledWith(
         mockNotice,
         expect.objectContaining({
@@ -163,6 +166,7 @@ describe('ArchiveOrchestratorService', () => {
 
     it('should archive notices without contentId', async () => {
       const mockResponse = {
+        ok: true,
         text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
         url: 'https://example.com/notice/2',
         status: 200,
@@ -205,6 +209,7 @@ describe('ArchiveOrchestratorService', () => {
 
     it('should handle content fetch errors gracefully', async () => {
       const mockResponse = {
+        ok: true,
         text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
         url: 'https://example.com/notice/1',
         status: 200,
@@ -258,6 +263,7 @@ describe('ArchiveOrchestratorService', () => {
 
     it('should handle archive upsert errors gracefully', async () => {
       const mockResponse = {
+        ok: true,
         text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
         url: 'https://example.com/notice/1',
         status: 200,
@@ -290,6 +296,7 @@ describe('ArchiveOrchestratorService', () => {
       }));
 
       const mockResponse = {
+        ok: true,
         text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
         url: 'https://example.com/notice/1',
         status: 200,
