@@ -165,8 +165,8 @@ export const APP_CONSTANTS = {
   CRON: {
     EXPRESSIONS: {
       CRAWLING_CHECK: '0 */5 * * * *', // Every 5 minutes
-      WEBHOOK_CLEANUP: '0 0 0 * * *', // Every day at midnight
-      WEBHOOK_OPTIMIZATION: '0 0 2 * * *', // Every day at 2 AM
+      WEBHOOK_CLEANUP: '0 1 0 * * *', // Every day at 00:01
+      WEBHOOK_OPTIMIZATION: '0 1 2 * * *', // Every day at 02:01
       SYSTEM_MONITORING: '0 0 * * * *', // Every hour
       IS_DONE_SYNC: '0 0 */6 * * *', // Every 6 hours - sync isDone flags for expired notices
       INTEGRITY_RESCAN: '0 0 3 * * *', // Every day at 3 AM - full archive integrity re-validation
