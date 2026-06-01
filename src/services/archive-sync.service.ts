@@ -14,7 +14,6 @@ import { LoggerUtils } from '../utils/logger.utils';
 const {
   CRAWLER_PAGE_UNIT,
   CRAWLER_DELAY_MS,
-  DONE_BATCH_SIZE,
   INTEGRITY_BATCH_SIZE,
   SUMMARY_BACKFILL_BATCH_SIZE,
 } = APP_CONSTANTS.ARCHIVE_SYNC;
@@ -55,8 +54,6 @@ export interface FullSyncResult {
 export interface IsDoneSyncResult {
   fetchedDoneCount: number;
   markedDoneCount: number;
-  revertedCount: number;
-  totalScanned: number;
 }
 
 export interface IntegrityCheckResult {
@@ -395,8 +392,7 @@ export class ArchiveSyncService implements OnModuleInit {
       this.isDoneSync,
       trigger,
       () => this.reconcileIsDone(),
-      (r) =>
-        `fetched=${r.fetchedDoneCount} marked=${r.markedDoneCount} reverted=${r.revertedCount} scanned=${r.totalScanned}`,
+      (r) => `fetched=${r.fetchedDoneCount} marked=${r.markedDoneCount}`,
       /* crossPhaseGuard */ true,
     );
   }
@@ -456,19 +452,17 @@ export class ArchiveSyncService implements OnModuleInit {
       'isDone reconciliation started',
     );
 
-    // Phase A - manual page-by-page iteration with per-page retry
-    // Using searchDone() instead of the streaming getAllDonePages() generator
-    // so a timeout on page N can be retried in-place rather than restarting
-    // the entire sync from page 1.
-    const doneNumSet = new Set<number>();
+    // Iterates all done-notice pages and marks matching archive rows as
+    // isDone=true. Marks are never reverted - once done, always done.
     let markedDoneCount = 0;
+    let fetchedDoneCount = 0;
 
     // Fetch page 1 first to learn totalPages, then iterate the rest.
     const firstPage = await this.fetchDonePageWithRetry(1);
     const totalPages = firstPage.totalPages;
 
     let pageNums = (firstPage.items ?? []).map((item) => item.num);
-    for (const num of pageNums) doneNumSet.add(num);
+    fetchedDoneCount += pageNums.length;
     markedDoneCount +=
       await this.noticeArchiveService.markNoticesDoneByNums(pageNums);
     LoggerUtils.debugDev(
@@ -482,7 +476,7 @@ export class ArchiveSyncService implements OnModuleInit {
       );
       const page = await this.fetchDonePageWithRetry(pageIndex);
       pageNums = (page.items ?? []).map((item) => item.num);
-      for (const num of pageNums) doneNumSet.add(num);
+      fetchedDoneCount += pageNums.length;
       markedDoneCount +=
         await this.noticeArchiveService.markNoticesDoneByNums(pageNums);
       LoggerUtils.debugDev(
@@ -491,79 +485,17 @@ export class ArchiveSyncService implements OnModuleInit {
       );
     }
 
-    if (doneNumSet.size === 0) {
-      LoggerUtils.warn(
-        ArchiveSyncService.name,
-        'Crawler returned zero done notices - isDone reconciliation skipped',
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        ArchiveSyncService.name,
-        'isDone sync: crawler returned **zero** done notices - reconciliation skipped',
-      );
-      return {
-        fetchedDoneCount: 0,
-        markedDoneCount: 0,
-        revertedCount: 0,
-        totalScanned: 0,
-      };
-    }
-
-    // Phase B
-    let totalScanned = 0;
-    let revertedCount = 0;
-    let skip = 0;
-
-    for (;;) {
-      const batch = await this.noticeArchiveService.getDoneMarkedNumsPage(
-        skip,
-        DONE_BATCH_SIZE,
-      );
-      if (batch.length === 0) break;
-
-      totalScanned += batch.length;
-      const toRevert = batch.filter((num) => !doneNumSet.has(num));
-      if (toRevert.length > 0) {
-        revertedCount +=
-          await this.noticeArchiveService.revertNoticesDoneByNums(toRevert);
-      }
-
-      LoggerUtils.debugDev(
-        ArchiveSyncService.name,
-        `isDone Phase B [${skip}-${skip + batch.length - 1}]: ` +
-          `scanned=${batch.length} reverted=${toRevert.length}`,
-      );
-
-      if (batch.length < DONE_BATCH_SIZE) break;
-      skip += DONE_BATCH_SIZE;
-    }
-
     LoggerUtils.log(
       ArchiveSyncService.name,
-      `isDone reconciliation done - fetched=${doneNumSet.size} ` +
-        `marked=${markedDoneCount} reverted=${revertedCount} scanned=${totalScanned}`,
+      `isDone reconciliation done - fetched=${fetchedDoneCount} marked=${markedDoneCount}`,
     );
-    if (revertedCount > 0) {
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        ArchiveSyncService.name,
-        `isDone sync: reverted **${revertedCount}** stale done-flag(s) - ` +
-          `fetched=${doneNumSet.size} marked=${markedDoneCount} scanned=${totalScanned}`,
-      );
-    } else {
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
-        ArchiveSyncService.name,
-        `isDone sync complete - fetched=${doneNumSet.size} marked=${markedDoneCount} reverted=${revertedCount} scanned=${totalScanned}`,
-      );
-    }
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.LOG,
+      ArchiveSyncService.name,
+      `isDone sync complete - fetched=${fetchedDoneCount} marked=${markedDoneCount}`,
+    );
 
-    return {
-      fetchedDoneCount: doneNumSet.size,
-      markedDoneCount,
-      revertedCount,
-      totalScanned,
-    };
+    return { fetchedDoneCount, markedDoneCount };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
