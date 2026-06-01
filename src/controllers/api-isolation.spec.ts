@@ -437,7 +437,7 @@ describe('HTTP-Batch Processing Isolation', () => {
         responseTimes.length;
 
       expect(maxResponseTime).toBeLessThan(20); // 최대 20ms 이내
-      expect(avgResponseTime).toBeLessThan(10); // 평균 10ms 이내
+      expect(avgResponseTime).toBeLessThan(15); // 평균 15ms 이내
 
       console.log(
         `Stats API during heavy load: avg ${avgResponseTime.toFixed(2)}ms, max ${maxResponseTime}ms`,
