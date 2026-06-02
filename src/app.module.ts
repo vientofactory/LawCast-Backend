@@ -5,32 +5,21 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { CacheModule } from '@nestjs/cache-manager';
 import { createKeyv } from '@keyv/redis';
 import { ApiController } from './controllers/api.controller';
-import { WebhookService } from './services/webhook.service';
-import { CrawlingService } from './services/crawling.service';
-import { NotificationService } from './services/notification.service';
-import { CacheService } from './services/cache.service';
-import { HashguardService } from './services/hashguard.service';
-import { BatchProcessingService } from './services/batch-processing.service';
-import { CronJobsService } from './cronjobs/cronjobs.service';
-import { WebhookCleanupService } from './services/webhook-cleanup.service';
-import { RuntimeStatsService } from './services/runtime-stats.service';
-import { NoticesQueryService } from './services/notices-query.service';
-import { Webhook } from './entities/webhook.entity';
-import { NoticeArchive } from './entities/notice-archive.entity';
-import { OllamaModule } from './modules/ollama/ollama.module';
-import { NoticeArchiveService } from './services/notice-archive.service';
-import { NotificationBatchService } from './services/notification-batch.service';
+import { Webhook } from './modules/webhook/webhook.entity';
+import { NoticeArchive } from './modules/notice/notice-archive.entity';
 import { migrations } from './migrations';
-import { CrawlingCoreService } from './services/crawling-core.service';
-import { SummaryGenerationService } from './services/summary-generation.service';
-import { ArchiveOrchestratorService } from './services/archive-orchestrator.service';
-import { NotificationOrchestratorService } from './services/notification-orchestrator.service';
-import { CrawlingSchedulerService } from './services/crawling-scheduler.service';
-import { HealthCheckService } from './services/health-check.service';
-import { NoticeSearchService } from './services/notice-search.service';
-import { ArchiveSyncService } from './services/archive-sync.service';
-import { DiscordBridgeModule } from './modules/discord-bridge/discord-bridge.module';
 import appConfig from './config/app.config';
+// Feature modules
+import { CacheInfraModule } from './modules/cache/cache.module';
+import { SharedModule } from './modules/shared/shared.module';
+import { NoticeModule } from './modules/notice/notice.module';
+import { WebhookModule } from './modules/webhook/webhook.module';
+import { NotificationModule } from './modules/notification/notification.module';
+import { CrawlingModule } from './modules/crawling/crawling.module';
+import { HealthModule } from './modules/health/health.module';
+import { SchedulingModule } from './modules/scheduling/scheduling.module';
+import { OllamaModule } from './modules/ollama/ollama.module';
+import { DiscordBridgeModule } from './modules/discord-bridge/discord-bridge.module';
 
 @Module({
   imports: [
@@ -71,33 +60,21 @@ import appConfig from './config/app.config';
         migrations,
       }),
     }),
-    TypeOrmModule.forFeature([Webhook, NoticeArchive]),
     ScheduleModule.forRoot(),
+    // Infrastructure
+    CacheInfraModule,
+    SharedModule,
+    // Feature modules
+    NoticeModule,
+    WebhookModule,
+    NotificationModule,
+    CrawlingModule,
+    HealthModule,
+    SchedulingModule,
+    // Third-party integration modules
     OllamaModule,
     DiscordBridgeModule,
   ],
   controllers: [ApiController],
-  providers: [
-    WebhookService,
-    CrawlingService,
-    NotificationService,
-    CacheService,
-    HashguardService,
-    BatchProcessingService,
-    NotificationBatchService,
-    NoticeArchiveService,
-    NoticesQueryService,
-    WebhookCleanupService,
-    CronJobsService,
-    RuntimeStatsService,
-    CrawlingCoreService,
-    SummaryGenerationService,
-    ArchiveOrchestratorService,
-    NotificationOrchestratorService,
-    CrawlingSchedulerService,
-    HealthCheckService,
-    NoticeSearchService,
-    ArchiveSyncService,
-  ],
 })
 export class AppModule {}

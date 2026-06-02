@@ -1,4 +1,4 @@
-import { MigrationInterface } from 'typeorm';
+import type { MigrationInterface } from 'typeorm';
 import { InitialSchemaMigration1744953900000 } from './202604170001-initial-schema.migration';
 import { AddContentMetadataColumns1745001601000 } from './202604180001-add-content-metadata-columns.migration';
 import { AddIsDoneColumn1746316801000 } from './202605030001-add-is-done-column.migration';

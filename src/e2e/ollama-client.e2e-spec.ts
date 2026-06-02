@@ -5,7 +5,7 @@ import type { IContentData, ITableData } from 'pal-crawl';
 import appConfig from '../config/app.config';
 import { OllamaModule } from '../modules/ollama/ollama.module';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
-import { CrawlingCoreService } from '../services/crawling-core.service';
+import { CrawlingCoreService } from '../modules/crawling/crawling-core.service';
 
 const runOllamaE2E = process.env.RUN_OLLAMA_E2E === 'true';
 const itIfOllama = runOllamaE2E ? it : it.skip;

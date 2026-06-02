@@ -4,7 +4,7 @@ import { AppModule } from './app.module';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
-import { BatchProcessingService } from './services/batch-processing.service';
+import { BatchProcessingService } from './modules/shared/batch-processing.service';
 import { WebhookValidationUtils } from './utils/webhook-validation.utils';
 import { DiscordBridgeService } from './modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from './modules/discord-bridge/discord-bridge.types';
