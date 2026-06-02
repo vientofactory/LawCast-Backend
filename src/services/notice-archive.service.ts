@@ -47,6 +47,8 @@ export interface ArchiveListQuery {
   endDate?: Date;
   sortOrder?: 'asc' | 'desc';
   isDone?: boolean;
+  /** When true, also searches proposalReason (원문). Expensive on large tables. */
+  fullText?: boolean;
 }
 
 export interface ArchiveOffsetQuery {
@@ -57,6 +59,10 @@ export interface ArchiveOffsetQuery {
   endDate?: Date;
   sortOrder?: 'asc' | 'desc';
   isDone?: boolean;
+  /** Pre-computed total; when provided, the COUNT query is skipped. */
+  knownTotal?: number;
+  /** When true, also searches proposalReason (원문). Expensive on large tables. */
+  fullText?: boolean;
 }
 
 export interface ArchiveNumCompareCountQuery {
@@ -399,6 +405,7 @@ export class NoticeArchiveService {
       startDate: query.startDate,
       endDate: query.endDate,
       isDone: query.isDone,
+      fullText: query.fullText,
     });
     const sortOrder = this.normalizeSortOrder(query.sortOrder);
 
@@ -406,8 +413,8 @@ export class NoticeArchiveService {
       where,
       select: NOTICE_ITEM_SELECT,
       order: {
-        archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
         noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',
+        archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
       },
       skip,
       take: limit,
@@ -454,10 +461,13 @@ export class NoticeArchiveService {
       startDate: query.startDate,
       endDate: query.endDate,
       isDone: query.isDone,
+      fullText: query.fullText,
     });
     const sortOrder = this.normalizeSortOrder(query.sortOrder);
 
-    const total = await this.archiveRepository.count({ where });
+    // Use knownTotal when provided to avoid a redundant COUNT query.
+    const total =
+      query.knownTotal ?? (await this.archiveRepository.count({ where }));
 
     if (take === 0) {
       return {
@@ -471,8 +481,8 @@ export class NoticeArchiveService {
       where,
       select: NOTICE_ITEM_SELECT,
       order: {
-        archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
         noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',
+        archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
       },
       skip,
       take,
@@ -989,6 +999,7 @@ export class NoticeArchiveService {
     endDate?: Date;
     noticeNumCondition?: FindOperator<number>;
     isDone?: boolean;
+    fullText?: boolean;
   }):
     | FindOptionsWhere<NoticeArchive>
     | FindOptionsWhere<NoticeArchive>[]
@@ -1019,11 +1030,21 @@ export class NoticeArchiveService {
       return Object.keys(baseWhere).length > 0 ? baseWhere : undefined;
     }
 
-    return [
+    const conditions: FindOptionsWhere<NoticeArchive>[] = [
       { ...baseWhere, subject: ILike(`%${normalizedSearch}%`) },
-      { ...baseWhere, proposalReason: ILike(`%${normalizedSearch}%`) },
       { ...baseWhere, committee: ILike(`%${normalizedSearch}%`) },
     ];
+
+    // proposalReason is a large TEXT column; ILIKE without FTS is expensive.
+    // Only include when fullText is explicitly requested.
+    if (params.fullText) {
+      conditions.push({
+        ...baseWhere,
+        proposalReason: ILike(`%${normalizedSearch}%`),
+      });
+    }
+
+    return conditions;
   }
 
   private parseHttpMetadata(raw: string | null): ArchiveHttpMetadata {

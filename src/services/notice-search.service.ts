@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { type ISearchQuery } from 'pal-crawl';
+import { APP_CONSTANTS } from '../config/app.config';
 import { type AISummaryStatus } from '../types/cache.types';
 import { CrawlingCoreService } from './crawling-core.service';
 import { NoticeArchiveService } from './notice-archive.service';
@@ -78,6 +79,7 @@ export class NoticeSearchService {
           limit: 200,
           search: keyword,
           sortOrder: 'desc',
+          fullText: true,
         }),
         this.crawlingCoreService.search(crawlerQuery),
         includeDone
@@ -115,7 +117,7 @@ export class NoticeSearchService {
     } else {
       this.logger.warn(
         'DB search failed:',
-        (crawlerActiveResult as PromiseRejectedResult).reason,
+        (dbResult as PromiseRejectedResult).reason,
       );
     }
 
@@ -178,9 +180,19 @@ export class NoticeSearchService {
 
     items.sort((a, b) => b.num - a.num);
 
-    const total = items.length;
-    const startIdx = (page - 1) * limit;
-    const pageItems = items.slice(startIdx, startIdx + limit);
+    // Use the real DB total for accurate pagination. The in-memory merge caps
+    // DB results at 200 records, so total could be understated without this.
+    const dbActualTotal =
+      dbResult.status === 'fulfilled' ? dbResult.value.total : 0;
+    const crawlerOnlyCount = items.filter((i) => !i.isArchived).length;
+    const total = dbActualTotal + crawlerOnlyCount;
+
+    const safeLimit = Math.min(
+      APP_CONSTANTS.API.PAGINATION.MAX_LIMIT,
+      Math.max(APP_CONSTANTS.API.PAGINATION.MIN_LIMIT, limit),
+    );
+    const startIdx = (page - 1) * safeLimit;
+    const pageItems = items.slice(startIdx, startIdx + safeLimit);
 
     const hasArchived = items.some((i) => i.isArchived);
     const hasCrawler = items.some((i) => !i.isArchived);
@@ -191,8 +203,8 @@ export class NoticeSearchService {
       items: pageItems,
       total,
       page,
-      limit,
-      totalPages: Math.max(1, Math.ceil(total / limit)),
+      limit: safeLimit,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
       keyword,
       source,
     };
