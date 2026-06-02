@@ -12,6 +12,7 @@ interface ArchivedNoticesQuery {
   endDate?: string;
   sortOrder?: 'asc' | 'desc';
   isDone?: boolean;
+  fullText?: boolean;
 }
 
 @Injectable()
@@ -29,6 +30,7 @@ export class NoticesQueryService {
     endDate,
     sortOrder,
     isDone,
+    fullText,
   }: ArchivedNoticesQuery) {
     const safePage = Math.max(APP_CONSTANTS.API.PAGINATION.MIN_PAGE, page);
     const safeLimit = Math.min(
@@ -80,6 +82,7 @@ export class NoticesQueryService {
         endDate: parsedDateRange.endDate,
         sortOrder: normalizedSortOrder,
         isDone,
+        fullText,
       });
 
     const cacheInsertionEntries = this.buildCacheInsertionEntries({
@@ -122,6 +125,8 @@ export class NoticesQueryService {
         endDate: parsedDateRange.endDate,
         sortOrder: normalizedSortOrder,
         isDone,
+        knownTotal: archiveFilteredTotal.total,
+        fullText,
       });
 
     const totalArchiveCount =
@@ -192,6 +197,10 @@ export class NoticesQueryService {
 
   private matchesSearchKeyword(notice: CachedNotice, search: string): boolean {
     const keyword = search.toLowerCase();
+    // NOTE: proposalReason (원문 텍스트) is intentionally excluded because
+    // CachedNotice does not carry that field. A cache-only item whose keyword
+    // appears only in the original text will therefore not match here, which
+    // is an acceptable trade-off to keep the cache lightweight.
     const target = [
       notice.subject,
       notice.proposerCategory,
@@ -235,8 +244,11 @@ export class NoticesQueryService {
       return undefined;
     }
 
-    const time = endOfDay ? 'T23:59:59.999Z' : 'T00:00:00.000Z';
-    const parsed = new Date(`${raw}${time}`);
+    // Interpret user-supplied dates in KST (UTC+9) since this is a Korean
+    // service. e.g., "2026-05-30" start → 2026-05-29T15:00:00.000Z (UTC)
+    //                              end   → 2026-05-30T14:59:59.999Z (UTC)
+    const timeSuffix = endOfDay ? 'T23:59:59.999+09:00' : 'T00:00:00.000+09:00';
+    const parsed = new Date(`${raw}${timeSuffix}`);
     return Number.isNaN(parsed.getTime()) ? undefined : parsed;
   }
 

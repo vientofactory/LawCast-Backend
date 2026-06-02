@@ -126,9 +126,11 @@ export class ApiController {
     @Query('endDate') endDate?: string,
     @Query('sortOrder') sortOrder?: string,
     @Query('isDone') isDoneRaw?: string,
+    @Query('fullText') fullTextRaw?: string,
   ) {
     const isDone =
       isDoneRaw === 'true' ? true : isDoneRaw === 'false' ? false : undefined;
+    const fullText = fullTextRaw === 'true';
     const archiveResult = await this.noticesQueryService.getArchivedNotices({
       page,
       limit,
@@ -137,6 +139,7 @@ export class ApiController {
       endDate,
       sortOrder: sortOrder === 'asc' ? 'asc' : 'desc',
       isDone,
+      fullText,
     });
     return ApiResponseUtils.success(archiveResult);
   }

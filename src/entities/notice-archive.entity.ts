@@ -10,6 +10,8 @@ import {
 @Entity('notice_archives')
 @Index('idx_notice_archives_notice_num', ['noticeNum'], { unique: true })
 @Index('idx_notice_archives_subject', ['subject'])
+@Index('idx_notice_archives_archive_started_at', ['archiveStartedAt'])
+@Index('idx_notice_archives_is_done', ['isDone'])
 export class NoticeArchive {
   @PrimaryGeneratedColumn()
   id: number;
