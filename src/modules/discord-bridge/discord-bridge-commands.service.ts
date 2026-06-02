@@ -95,7 +95,7 @@ export class DiscordBridgeCommandsService {
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
     const { HealthCheckService } =
-      await import('../../services/health-check.service');
+      await import('../health/health-check.service');
     const healthCheckService = this.moduleRef.get(HealthCheckService, {
       strict: false,
     });
@@ -130,15 +130,15 @@ export class DiscordBridgeCommandsService {
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
     const { RuntimeStatsService } =
-      await import('../../services/runtime-stats.service');
-    const { WebhookService } = await import('../../services/webhook.service');
-    const { CrawlingService } = await import('../../services/crawling.service');
+      await import('../health/runtime-stats.service');
+    const { WebhookService } = await import('../webhook/webhook.service');
+    const { CrawlingService } = await import('../crawling/crawling.service');
     const { BatchProcessingService } =
-      await import('../../services/batch-processing.service');
+      await import('../shared/batch-processing.service');
     const { NoticeArchiveService } =
-      await import('../../services/notice-archive.service');
+      await import('../notice/notice-archive.service');
     const { ArchiveSyncService } =
-      await import('../../services/archive-sync.service');
+      await import('../crawling/archive-sync.service');
 
     const runtimeStats = this.moduleRef.get(RuntimeStatsService, {
       strict: false,
@@ -285,7 +285,7 @@ export class DiscordBridgeCommandsService {
   private async cmdCache(
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
-    const { CacheService } = await import('../../services/cache.service');
+    const { CacheService } = await import('../cache/cache.service');
     const cacheService = this.moduleRef.get(CacheService, { strict: false });
     const info = await cacheService.getCacheInfo();
 
@@ -319,7 +319,7 @@ export class DiscordBridgeCommandsService {
   ): Promise<void> {
     await interaction.deferReply().catch(() => {});
 
-    const { CrawlingService } = await import('../../services/crawling.service');
+    const { CrawlingService } = await import('../crawling/crawling.service');
     const crawlingService = this.moduleRef.get(CrawlingService, {
       strict: false,
     });
@@ -340,7 +340,7 @@ export class DiscordBridgeCommandsService {
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
     const { BatchProcessingService } =
-      await import('../../services/batch-processing.service');
+      await import('../shared/batch-processing.service');
     const batchService = this.moduleRef.get(BatchProcessingService, {
       strict: false,
     });
@@ -369,7 +369,7 @@ export class DiscordBridgeCommandsService {
   private async cmdWebhooks(
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
-    const { WebhookService } = await import('../../services/webhook.service');
+    const { WebhookService } = await import('../webhook/webhook.service');
     const webhookService = this.moduleRef.get(WebhookService, {
       strict: false,
     });

@@ -7,19 +7,19 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { ApiController } from '../controllers/api.controller';
-import { BatchProcessingService } from '../services/batch-processing.service';
-import { CrawlingService } from '../services/crawling.service';
-import { WebhookService } from '../services/webhook.service';
-import { NotificationService } from '../services/notification.service';
-import { HashguardService } from '../services/hashguard.service';
-import { WebhookCleanupService } from '../services/webhook-cleanup.service';
-import { NoticeArchiveService } from '../services/notice-archive.service';
-import { NoticesQueryService } from '../services/notices-query.service';
-import { NotificationBatchService } from '../services/notification-batch.service';
-import { HealthCheckService } from '../services/health-check.service';
-import { RuntimeStatsService } from '../services/runtime-stats.service';
-import { NoticeSearchService } from '../services/notice-search.service';
-import { ArchiveSyncService } from '../services/archive-sync.service';
+import { BatchProcessingService } from '../modules/shared/batch-processing.service';
+import { CrawlingService } from '../modules/crawling/crawling.service';
+import { WebhookService } from '../modules/webhook/webhook.service';
+import { NotificationService } from '../modules/notification/notification.service';
+import { HashguardService } from '../modules/shared/hashguard.service';
+import { WebhookCleanupService } from '../modules/webhook/webhook-cleanup.service';
+import { NoticeArchiveService } from '../modules/notice/notice-archive.service';
+import { NoticesQueryService } from '../modules/crawling/notices-query.service';
+import { NotificationBatchService } from '../modules/notification/notification-batch.service';
+import { HealthCheckService } from '../modules/health/health-check.service';
+import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
+import { NoticeSearchService } from '../modules/crawling/notice-search.service';
+import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;

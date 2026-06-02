@@ -16,21 +16,21 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
-import { WebhookService } from '../services/webhook.service';
-import { CrawlingService } from '../services/crawling.service';
-import { HealthCheckService } from '../services/health-check.service';
-import { NotificationService } from '../services/notification.service';
-import { HashguardService } from '../services/hashguard.service';
-import { BatchProcessingService } from '../services/batch-processing.service';
-import { NoticeArchiveService } from '../services/notice-archive.service';
-import { NoticesQueryService } from '../services/notices-query.service';
-import { NoticeSearchService } from '../services/notice-search.service';
-import { CreateWebhookDto } from '../dto/create-webhook.dto';
+import { WebhookService } from '../modules/webhook/webhook.service';
+import { CrawlingService } from '../modules/crawling/crawling.service';
+import { HealthCheckService } from '../modules/health/health-check.service';
+import { NotificationService } from '../modules/notification/notification.service';
+import { HashguardService } from '../modules/shared/hashguard.service';
+import { BatchProcessingService } from '../modules/shared/batch-processing.service';
+import { NoticeArchiveService } from '../modules/notice/notice-archive.service';
+import { NoticesQueryService } from '../modules/crawling/notices-query.service';
+import { NoticeSearchService } from '../modules/crawling/notice-search.service';
+import { CreateWebhookDto } from '../modules/webhook/dto/create-webhook.dto';
 import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
 import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
 import { APP_CONSTANTS } from '../config/app.config';
-import { RuntimeStatsService } from '../services/runtime-stats.service';
-import { ArchiveSyncService } from '../services/archive-sync.service';
+import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
+import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 
 @Controller('api')
 export class ApiController {
