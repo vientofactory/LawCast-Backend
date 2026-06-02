@@ -547,6 +547,7 @@ describe('[Fault Isolation] NotificationBatchService', () => {
 
 describe('[Fault Isolation] ArchiveSyncService', () => {
   let service: ArchiveSyncService;
+  let cacheService: jest.Mocked<CacheService>;
   let crawlingCoreService: jest.Mocked<CrawlingCoreService>;
   let noticeArchiveService: jest.Mocked<NoticeArchiveService>;
   let archiveOrchestratorService: jest.Mocked<ArchiveOrchestratorService>;
@@ -607,10 +608,17 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
             }),
           },
         },
+        {
+          provide: CacheService,
+          useValue: {
+            updateCache: jest.fn().mockResolvedValue(undefined),
+          },
+        },
       ],
     }).compile();
 
     service = module.get(ArchiveSyncService);
+    cacheService = module.get(CacheService);
     crawlingCoreService = module.get(CrawlingCoreService);
     noticeArchiveService = module.get(NoticeArchiveService);
     archiveOrchestratorService = module.get(ArchiveOrchestratorService);
