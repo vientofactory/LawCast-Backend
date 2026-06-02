@@ -5,9 +5,11 @@ import { CrawlingCoreService } from './crawling-core.service';
 import { NoticeArchiveService } from './notice-archive.service';
 import { ArchiveOrchestratorService } from './archive-orchestrator.service';
 import { SummaryGenerationService } from './summary-generation.service';
+import { CacheService } from './cache.service';
 import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../utils/logger.utils';
+import { type CachedNotice } from '../types/cache.types';
 
 // ─── Tuning constants (sourced from APP_CONSTANTS.ARCHIVE_SYNC) ───────────────
 
@@ -143,6 +145,7 @@ export class ArchiveSyncService implements OnModuleInit {
     private readonly noticeArchiveService: NoticeArchiveService,
     private readonly archiveOrchestratorService: ArchiveOrchestratorService,
     private readonly summaryGenerationService: SummaryGenerationService,
+    private readonly cacheService: CacheService,
     @Optional() private readonly discordBridge: DiscordBridgeService,
   ) {}
 
@@ -639,6 +642,7 @@ export class ArchiveSyncService implements OnModuleInit {
       );
       if (batch.length === 0) break;
 
+      const batchCacheUpdates: CachedNotice[] = [];
       const batchStatuses = await this.mapConcurrently(
         batch,
         SUMMARY_BACKFILL_CONCURRENCY,
@@ -654,6 +658,11 @@ export class ArchiveSyncService implements OnModuleInit {
               result.aiSummary,
               result.aiSummaryStatus,
             );
+            batchCacheUpdates.push({
+              ...notice,
+              aiSummary: result.aiSummary,
+              aiSummaryStatus: result.aiSummaryStatus,
+            });
             return result.aiSummaryStatus;
           } catch (error) {
             LoggerUtils.error(
@@ -664,6 +673,13 @@ export class ArchiveSyncService implements OnModuleInit {
           }
         },
       );
+
+      // Reflect the backfill results in the Redis cache immediately so the
+      // API response shows the freshly-generated summaries without waiting
+      // for the next crawl cycle or a backend restart.
+      if (batchCacheUpdates.length > 0) {
+        await this.cacheService.updateCache(batchCacheUpdates);
+      }
 
       for (const status of batchStatuses) {
         if (status === 'ready') generated++;
@@ -726,6 +742,7 @@ export class ArchiveSyncService implements OnModuleInit {
       );
       if (batch.length === 0) break;
 
+      const batchCacheUpdates: CachedNotice[] = [];
       const batchStatuses = await this.mapConcurrently(
         batch,
         SUMMARY_BACKFILL_CONCURRENCY,
@@ -741,6 +758,11 @@ export class ArchiveSyncService implements OnModuleInit {
               result.aiSummary,
               result.aiSummaryStatus,
             );
+            batchCacheUpdates.push({
+              ...notice,
+              aiSummary: result.aiSummary,
+              aiSummaryStatus: result.aiSummaryStatus,
+            });
             return result.aiSummaryStatus;
           } catch (error) {
             LoggerUtils.error(
@@ -751,6 +773,13 @@ export class ArchiveSyncService implements OnModuleInit {
           }
         },
       );
+
+      // Reflect the retry results in the Redis cache immediately so the
+      // API response shows recovered summaries without waiting for the
+      // next crawl cycle or a backend restart.
+      if (batchCacheUpdates.length > 0) {
+        await this.cacheService.updateCache(batchCacheUpdates);
+      }
 
       for (const status of batchStatuses) {
         if (status === 'ready') recovered++;
