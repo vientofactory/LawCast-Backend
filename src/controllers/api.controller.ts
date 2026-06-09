@@ -31,6 +31,7 @@ import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
 import { APP_CONSTANTS } from '../config/app.config';
 import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
+import { PackagesService } from '../modules/shared/packages.service';
 
 @Controller('api')
 export class ApiController {
@@ -47,6 +48,7 @@ export class ApiController {
     private readonly noticeSearchService: NoticeSearchService,
     private readonly runtimeStatsService: RuntimeStatsService,
     private readonly archiveSyncService: ArchiveSyncService,
+    private readonly packagesService: PackagesService,
   ) {}
 
   @Post('webhooks')
@@ -319,5 +321,10 @@ export class ApiController {
       },
       isConnected ? 'Redis is connected' : 'Redis connection failed',
     );
+  }
+
+  @Get('packages')
+  getPackages() {
+    return ApiResponseUtils.success(this.packagesService.getPackages());
   }
 }
