@@ -168,6 +168,8 @@ export const APP_CONSTANTS = {
     INTEGRITY_BATCH_SIZE: 200,
     /** Archive rows fetched per summary-backfill / retry batch. */
     SUMMARY_BACKFILL_BATCH_SIZE: 50,
+    /** Max rows fetched per HTML-backfill pass (PAL + NSM combined). */
+    HTML_BACKFILL_BATCH_SIZE: 100,
   },
   CRON: {
     EXPRESSIONS: {

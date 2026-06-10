@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
   NsmLmSts,
+  NsmLmStsParser,
   PalCrawl,
   type IBulkOptions,
   type IContentData,
@@ -354,26 +355,35 @@ export class CrawlingCoreService {
    * @param billNo The 의안번호 of the bill (e.g. "2200001").
    */
   /**
-   * Fetches the fully-rendered HTML of a NSM bill detail page via Puppeteer,
-   * bypassing the Waitingroom JS anti-bot challenge that blocks plain HTTP
-   * requests made by NsmLmSts.httpClient.
+   * Captures everything needed to archive a NSM (opinion.lawmaking.go.kr) bill
+   * detail page in a **single Puppeteer session**:
    *
-   * The same Puppeteer infrastructure used by {@link captureNsmDetailScreenshot}
-   * is reused so no extra browser binary is needed.
+   * - HTML source (bypasses the Waitingroom JS anti-bot challenge that blocks
+   *   plain HTTP requests from NsmLmSts.httpClient)
+   * - Full-page JPEG screenshot (same recompression pipeline as the old
+   *   captureNsmDetailScreenshot)
+   * - Parsed INsmBillDetail (proposalReason, proposer, session …) from the
+   *   already-loaded page HTML, using NsmLmStsParser from pal-crawl
    *
-   * @param billNo The 의안번호 of the bill (e.g. "2219152").
+   * Previously these required two separate Puppeteer launches and one plain
+   * HTTP request (getNsmDetail), all of which hit the same URL.
+   * This method collapses all three into one browser session.
+   *
+   * @param billNo 의안번호 (e.g. "2219152")
    */
-  async captureNsmDetailHtml(
-    billNo: string,
-  ): Promise<{ html: string; responseUrl: string; statusCode: number }> {
+  async captureNsmDetailFull(billNo: string): Promise<{
+    html: string;
+    screenshot: Buffer | null;
+    detail: INsmBillDetail | null;
+    responseUrl: string;
+    statusCode: number;
+  }> {
     const normalized = billNo.trim();
     if (!normalized) throw new Error('billNo is required');
 
     const detailUrl = `https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/${normalized}/detailRP`;
+    const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
 
-    // NsmLmSts.httpClient uses plain HTTP and gets blocked by the Waitingroom
-    // challenge.  We reuse the same Puppeteer setup that getDetailScreenshot
-    // uses so the JS challenge is handled transparently.
     const client = new NsmLmSts({
       ...this.crawlConfig,
       screenshot: SCREENSHOT_CONFIG,
@@ -382,19 +392,32 @@ export class CrawlingCoreService {
     try {
       await client.initBrowser();
 
-      // `browser` is typed `private` in the .d.ts but is a plain JS property
-      // at runtime - safe to access here since we own the lifecycle.
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      // `browser` is a private JS property — safe to access at runtime.
+
       const browser = (
         client as unknown as {
           browser: {
             newPage: () => Promise<{
+              setViewport: (v: {
+                width: number;
+                height: number;
+              }) => Promise<void>;
               goto: (
                 url: string,
                 opts: { waitUntil: string; timeout: number },
               ) => Promise<{ status: () => number } | null>;
+              waitForNavigation: (opts: {
+                waitUntil: string;
+                timeout: number;
+              }) => Promise<{ status: () => number } | null>;
+              title: () => Promise<string>;
               content: () => Promise<string>;
               url: () => string;
+              screenshot: (opts: {
+                fullPage: boolean;
+                type: string;
+                quality?: number;
+              }) => Promise<Buffer>;
               close: () => Promise<void>;
             }>;
           };
@@ -403,16 +426,131 @@ export class CrawlingCoreService {
 
       const page = await browser.newPage();
       try {
-        const response = await page.goto(detailUrl, {
-          waitUntil: 'networkidle0',
+        await page.setViewport({
+          width: APP_CONSTANTS.SCREENSHOT.WIDTH,
+          height: APP_CONSTANTS.SCREENSHOT.HEIGHT,
+        });
+
+        // ── Navigate with Waitingroom bypass ──────────────────────────────
+        //
+        // opinion.lawmaking.go.kr serves a <title>Waitingroom</title> page
+        // that uses a JavaScript polling timer before redirecting to the real
+        // detail page.  Using `networkidle0` on the initial goto() resolves as
+        // soon as the Waitingroom itself becomes idle (before the JS redirect),
+        // so we end up capturing the wrong HTML.
+        //
+        // Fix:
+        //   1. Use `domcontentloaded` — resolves immediately on either the real
+        //      page or the Waitingroom without waiting for networkidle.
+        //   2. Inspect the page title.  If it's Waitingroom, call
+        //      waitForNavigation(networkidle0) to wait for the JS redirect.
+        //   3. Up to MAX_WAITINGROOM_RETRIES: if waitForNavigation times out,
+        //      reload the URL with a back-off delay and try again.
+
+        const MAX_WAITINGROOM_RETRIES = 2;
+        const WAITINGROOM_RETRY_DELAY_MS = 5_000;
+        let response: { status: () => number } | null = null;
+        let waitingroomHits = 0;
+
+        response = await page.goto(detailUrl, {
+          waitUntil: 'domcontentloaded',
           timeout: 30_000,
         });
+
+        for (let attempt = 0; attempt <= MAX_WAITINGROOM_RETRIES; attempt++) {
+          const pageTitle = await page.title();
+          if (!pageTitle.toLowerCase().includes('waitingroom')) break;
+
+          waitingroomHits++;
+          this.logger.debug(
+            `NSM bill ${billNo}: Waitingroom hit (attempt ${
+              attempt + 1
+            }/${MAX_WAITINGROOM_RETRIES + 1}), waiting for redirect…`,
+          );
+
+          if (attempt < MAX_WAITINGROOM_RETRIES) {
+            try {
+              // Wait for the JS redirect to fire and the real page to load.
+              const nav = await page.waitForNavigation({
+                waitUntil: 'networkidle0',
+                timeout: 30_000,
+              });
+              if (nav) response = nav;
+            } catch {
+              // waitForNavigation timed out — pause then reload.
+              await new Promise<void>((r) =>
+                setTimeout(r, WAITINGROOM_RETRY_DELAY_MS * (attempt + 1)),
+              );
+              response = await page.goto(detailUrl, {
+                waitUntil: 'domcontentloaded',
+                timeout: 30_000,
+              });
+            }
+          }
+        }
+
+        if (waitingroomHits > MAX_WAITINGROOM_RETRIES) {
+          this.logger.warn(
+            `NSM bill ${billNo}: Waitingroom not resolved after ${
+              MAX_WAITINGROOM_RETRIES + 1
+            } attempts — HTML may be a Waitingroom page`,
+          );
+        }
+
         const html = await page.content();
-        return {
-          html,
-          responseUrl: page.url(),
-          statusCode: response?.status() ?? 200,
-        };
+        const responseUrl = page.url();
+        const statusCode = response?.status() ?? 200;
+
+        // Parse detail from the already-loaded HTML — no extra HTTP request.
+        let detail: INsmBillDetail | null = null;
+        try {
+          detail = new NsmLmStsParser().parseDetail(html);
+        } catch (err) {
+          this.logger.warn(
+            `NSM detail parse failed for bill ${billNo}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+
+        // Take screenshot in the same session.
+        let screenshot: Buffer | null = null;
+        try {
+          const raw = await page.screenshot({
+            fullPage: true,
+            type: 'jpeg',
+            quality: APP_CONSTANTS.SCREENSHOT.QUALITY,
+          });
+
+          if (raw.length <= maxBytes) {
+            screenshot = raw;
+          } else {
+            for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
+              const recompressed = await sharp(raw)
+                .jpeg({ quality })
+                .toBuffer();
+              if (recompressed.length <= maxBytes) {
+                screenshot = recompressed;
+                break;
+              }
+            }
+            if (!screenshot) {
+              this.logger.warn(
+                `NSM screenshot for bill ${billNo} could not be reduced below ${
+                  maxBytes
+                }B - discarding`,
+              );
+            }
+          }
+        } catch (err) {
+          this.logger.warn(
+            `NSM screenshot capture failed for bill ${billNo}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+
+        return { html, screenshot, detail, responseUrl, statusCode };
       } finally {
         await page.close();
       }
@@ -421,6 +559,13 @@ export class CrawlingCoreService {
     }
   }
 
+  /**
+   * Captures a full-page JPEG screenshot of a NSM bill detail page.
+   * Used by the screenshot backfill queue for bills whose screenshot is still
+   * missing after the initial archive (e.g. when captureNsmDetailFull failed).
+   *
+   * @param billNo 의안번호 (e.g. "2200001")
+   */
   async captureNsmDetailScreenshot(billNo: string): Promise<Buffer | null> {
     const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
 

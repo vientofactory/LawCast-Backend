@@ -735,6 +735,112 @@ export class NoticeArchiveService {
     );
   }
 
+  /**
+   * Returns up to `limit` archived notices whose `sourceHtml` is NULL,
+   * split by source:
+   *  - `pal`: pal.assembly.go.kr bills (contentId NOT NULL) — HTML can be
+   *    re-fetched via a plain HTTP request to `assemblyLink`.
+   *  - `nsm`: NsmLmSts bills (contentId IS NULL) — HTML must be captured
+   *    via Puppeteer to bypass the Waitingroom anti-bot challenge; the
+   *    detail parse also yields `proposalReason`, `proposer`, etc.
+   *
+   * Rows are ordered oldest-first so early notices are backfilled first.
+   */
+  async getNoticesWithMissingHtml(limit: number): Promise<{
+    pal: Array<{ num: number; assemblyLink: string }>;
+    nsm: Array<{ num: number }>;
+  }> {
+    const [palRows, nsmRows] = await Promise.all([
+      this.archiveRepository.find({
+        select: { noticeNum: true, assemblyLink: true },
+        where: { sourceHtml: IsNull(), contentId: Not(IsNull()) },
+        order: { noticeNum: 'ASC' },
+        take: limit,
+      }),
+      this.archiveRepository.find({
+        select: { noticeNum: true },
+        where: { sourceHtml: IsNull(), contentId: IsNull() },
+        order: { noticeNum: 'ASC' },
+        take: limit,
+      }),
+    ]);
+
+    return {
+      pal: palRows.map((row) => ({
+        num: row.noticeNum,
+        assemblyLink: row.assemblyLink,
+      })),
+      nsm: nsmRows.map((row) => ({ num: row.noticeNum })),
+    };
+  }
+
+  /**
+   * Updates only the `sourceHtml`, `sourceHtmlSha256`, and HTTP-metadata
+   * columns for a pal.assembly.go.kr notice.
+   * Used by the HTML backfill pipeline to fill rows that were archived before
+   * the source-HTML capture was added (or when the initial capture failed).
+   */
+  async updateSourceHtml(
+    noticeNum: number,
+    html: string,
+    sha256: string,
+    httpMetadata: ArchiveHttpMetadata | null,
+  ): Promise<void> {
+    const normalized = httpMetadata || null;
+    await this.archiveRepository.update(
+      { noticeNum },
+      {
+        sourceHtml: html,
+        sourceHtmlSha256: sha256,
+        httpMetadataJson: normalized ? JSON.stringify(normalized) : null,
+        httpFetchedAt: this.parseOptionalDate(normalized?.fetchedAt),
+        httpStatusCode: normalized?.statusCode ?? null,
+        httpContentType: normalized?.contentType ?? null,
+        httpEtag: normalized?.etag ?? null,
+        httpLastModified: normalized?.lastModified ?? null,
+      },
+    );
+  }
+
+  /**
+   * Updates `sourceHtml`, `sourceHtmlSha256`, `proposalReason`, HTTP-metadata,
+   * and optionally `screenshotBlob` for a NsmLmSts bill in a single DB write.
+   * Used by the HTML backfill pipeline when `captureNsmDetailFull` succeeds.
+   * `screenshotBlob` is only written when explicitly provided (non-undefined).
+   */
+  async updateNsmHtmlAndDetail(
+    noticeNum: number,
+    payload: {
+      html: string;
+      sha256: string;
+      proposalReason: string;
+      httpMetadata: ArchiveHttpMetadata | null;
+      screenshotBlob?: Buffer;
+      screenshotFormat?: string;
+    },
+  ): Promise<void> {
+    const normalized = payload.httpMetadata || null;
+
+    const baseUpdate: Partial<NoticeArchive> = {
+      sourceHtml: payload.html,
+      sourceHtmlSha256: payload.sha256,
+      proposalReason: payload.proposalReason,
+      httpMetadataJson: normalized ? JSON.stringify(normalized) : null,
+      httpFetchedAt: this.parseOptionalDate(normalized?.fetchedAt),
+      httpStatusCode: normalized?.statusCode ?? null,
+      httpContentType: normalized?.contentType ?? null,
+      httpEtag: normalized?.etag ?? null,
+      httpLastModified: normalized?.lastModified ?? null,
+    };
+
+    if (payload.screenshotBlob !== undefined) {
+      baseUpdate.screenshotBlob = payload.screenshotBlob;
+      baseUpdate.screenshotFormat = payload.screenshotFormat ?? 'jpeg';
+    }
+
+    await this.archiveRepository.update({ noticeNum }, baseUpdate);
+  }
+
   async getExistingNoticeNumSet(noticeNums: number[]): Promise<Set<number>> {
     const uniqueNums = Array.from(new Set(noticeNums));
 

@@ -22,6 +22,7 @@ const {
   CRAWLER_DELAY_MS,
   INTEGRITY_BATCH_SIZE,
   SUMMARY_BACKFILL_BATCH_SIZE,
+  HTML_BACKFILL_BATCH_SIZE,
 } = APP_CONSTANTS.ARCHIVE_SYNC;
 /** Max concurrent Ollama calls within a single backfill / retry batch. */
 const SUMMARY_BACKFILL_CONCURRENCY = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
@@ -76,6 +77,11 @@ export interface SummaryBackfillResult {
   failed: number;
 }
 
+export interface HtmlBackfillResult {
+  pal: { processed: number; failed: number };
+  nsm: { processed: number; failed: number };
+}
+
 /**
  * Result of a single unavailable-summary retry pass.
  * `recovered` = rows that transitioned to `'ready'`;
@@ -99,6 +105,7 @@ export type FullSyncStatus = PhaseStatus<FullSyncResult>;
 export type IsDoneSyncStatus = PhaseStatus<IsDoneSyncResult>;
 export type IntegrityCheckStatus = PhaseStatus<IntegrityCheckResult>;
 export type SummaryBackfillStatus = PhaseStatus<SummaryBackfillResult>;
+export type HtmlBackfillStatus = PhaseStatus<HtmlBackfillResult>;
 export type SummaryUnavailableRetryStatus =
   PhaseStatus<SummaryUnavailableRetryResult>;
 export type PendingSyncStatus = PhaseStatus<PendingSyncResult>;
@@ -148,6 +155,7 @@ export class ArchiveSyncService implements OnModuleInit {
   private readonly isDoneSync = makeTracker<IsDoneSyncResult>();
   private readonly integrityCheck = makeTracker<IntegrityCheckResult>();
   private readonly summaryBackfill = makeTracker<SummaryBackfillResult>();
+  private readonly htmlBackfill = makeTracker<HtmlBackfillResult>();
   private readonly unavailableRetry =
     makeTracker<SummaryUnavailableRetryResult>();
   private readonly pendingSync = makeTracker<PendingSyncResult>();
@@ -189,6 +197,12 @@ export class ArchiveSyncService implements OnModuleInit {
     // the pal.assembly.go.kr full sync, enabling the earliest possible detection.
     await this.safeRun('pending sync', () => this.runPendingSync('bootstrap'));
     await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
+
+    // HTML backfill runs before summary backfill so that NSM bills gain their
+    // proposalReason before Ollama tries to summarise them.
+    await this.safeRun('html backfill', () =>
+      this.runHtmlBackfill('bootstrap'),
+    );
 
     // Summary backfill and unavailable retry run immediately after the full
     // archive is populated.  They are independent of isDone status and
@@ -249,6 +263,7 @@ export class ArchiveSyncService implements OnModuleInit {
       this.isDoneSync.isRunning ||
       this.integrityCheck.isRunning ||
       this.summaryBackfill.isRunning ||
+      this.htmlBackfill.isRunning ||
       this.unavailableRetry.isRunning ||
       this.pendingSync.isRunning
     );
@@ -263,6 +278,7 @@ export class ArchiveSyncService implements OnModuleInit {
     if (this.isDoneSync.isRunning) return 'isDone sync';
     if (this.integrityCheck.isRunning) return 'integrity check';
     if (this.summaryBackfill.isRunning) return 'summary backfill';
+    if (this.htmlBackfill.isRunning) return 'html backfill';
     if (this.unavailableRetry.isRunning) return 'unavailable retry';
     if (this.pendingSync.isRunning) return 'pending sync';
     return null;
@@ -700,6 +716,36 @@ export class ArchiveSyncService implements OnModuleInit {
 
   getIntegrityCheckStatus(): IntegrityCheckStatus {
     return ArchiveSyncService.toStatus(this.integrityCheck);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 3b - HTML backfill
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Re-fetches source HTML (and for NSM bills: proposalReason + screenshot)
+   * for archive rows that have `sourceHtml = NULL`.
+   *
+   * Runs between the full-sync and the summary-backfill phases so that NSM
+   * bills have their `proposalReason` populated before Ollama tries to
+   * summarise them.
+   */
+  async runHtmlBackfill(trigger: string): Promise<HtmlBackfillResult | null> {
+    return this.runPhase(
+      'HTML backfill',
+      this.htmlBackfill,
+      trigger,
+      () =>
+        this.archiveOrchestratorService.backfillMissingHtml(
+          HTML_BACKFILL_BATCH_SIZE,
+        ),
+      (r) =>
+        `pal=${r.pal.processed}ok/${r.pal.failed}fail nsm=${r.nsm.processed}ok/${r.nsm.failed}fail`,
+    );
+  }
+
+  getHtmlBackfillStatus(): HtmlBackfillStatus {
+    return ArchiveSyncService.toStatus(this.htmlBackfill);
   }
 
   // ─────────────────────────────────────────────────────────────────────────

@@ -277,136 +277,162 @@ export class ArchiveOrchestratorService
       { count: items.length },
     );
 
-    const concurrency = 5;
     const allArchived: CachedNotice[] = [];
 
-    for (let i = 0; i < items.length; i += concurrency) {
-      const chunk = items.slice(i, i + concurrency);
+    // Process NSM items sequentially to avoid rate-limiting on
+    // opinion.lawmaking.go.kr.  Each iteration opens a Puppeteer browser
+    // so concurrent sessions from the same IP would trigger the Waitingroom
+    // anti-bot / rate limiter.  NSM_INTER_CAPTURE_DELAY_MS is applied between
+    // items (matching the same guard used in drainScreenshotQueue).
+    for (let idx = 0; idx < items.length; idx++) {
+      const item = items[idx];
 
-      const chunkResults = await Promise.all(
-        chunk.map(async (item) => {
+      // Inter-item delay for every item after the first.
+      if (idx > 0) {
+        await new Promise<void>((resolve) =>
+          setTimeout(
+            resolve,
+            APP_CONSTANTS.SCREENSHOT.NSM_INTER_CAPTURE_DELAY_MS,
+          ),
+        );
+      }
+
+      const result = await (async (): Promise<CachedNotice | null> => {
+        try {
+          const notice = CrawlingCoreService.nsmBillToCachedNotice(item);
+          const archivedAt = new Date();
+
+          // Single Puppeteer session: HTML capture + screenshot + detail parse.
+          // Previously these required getNsmDetail (plain HTTP, often blocked by
+          // Waitingroom) + captureNsmDetailHtml (Puppeteer #1) + a deferred
+          // captureNsmDetailScreenshot (Puppeteer #2).  captureNsmDetailFull
+          // collapses all three into one browser launch.
+          let proposalReason = '';
+          let sourceTitle: string | null = item.billName;
+          let contentBillNumber: string | null = null;
+          let contentProposer: string | null = null;
+          let contentProposalDate: string | null = null;
+          let contentProposalSession: string | null = null;
+          let sourceHtml: string | null = null;
+          let sourceHtmlSha256: string | null = null;
+          let httpMetadata: ArchiveHttpMetadata | null = null;
+          let capturedScreenshot: Buffer | null = null;
+
           try {
-            const notice = CrawlingCoreService.nsmBillToCachedNotice(item);
-            const archivedAt = new Date();
+            const full = await this.crawlingCoreService.captureNsmDetailFull(
+              item.billNo,
+            );
 
-            // 발의정보 원문 (제안이유 및 주요내용 포함) 상세 페이지에서 직접 수집
-            let proposalReason = '';
-            let sourceTitle: string | null = item.billName;
-            let contentBillNumber: string | null = null;
-            let contentProposer: string | null = null;
-            let contentProposalDate: string | null = null;
-            let contentProposalSession: string | null = null;
+            // HTML / metadata
+            sourceHtml = full.html;
+            sourceHtmlSha256 = this.computeSha256(full.html);
+            httpMetadata = {
+              requestUrl: notice.link,
+              responseUrl: full.responseUrl,
+              fetchedAt: new Date().toISOString(),
+              statusCode: full.statusCode,
+            };
 
-            try {
-              const detail = await this.crawlingCoreService.getNsmDetail(
-                item.billNo,
-              );
-              proposalReason = detail.proposalReason?.trim() ?? '';
-              // proposalInfo는 발의정보 원문으로 sourceTitle에 보관
-              sourceTitle = detail.proposalInfo?.trim() || item.billName;
-              contentBillNumber = detail.billNo?.trim() || null;
-              contentProposer = detail.proposer?.trim() || null;
-              contentProposalDate = detail.proposalDate?.trim() || null;
-              contentProposalSession = detail.session?.trim() || null;
-            } catch (error) {
-              const message =
-                error instanceof Error ? error.message : String(error);
-              this.logger.warn(
-                `Failed to fetch NsmLmSts detail for bill ${item.billNo}: ${message}`,
-              );
-              void this.discordBridge?.logEvent(
-                BridgeLogLevel.VERBOSE,
-                ArchiveOrchestratorService.name,
-                `NsmLmSts detail fetch failed for bill **${item.billNo}**: ${message}`,
-                { billNo: item.billNo },
-              );
+            // Detail fields parsed from the same page HTML
+            if (full.detail) {
+              proposalReason = full.detail.proposalReason?.trim() ?? '';
+              sourceTitle = full.detail.proposalInfo?.trim() || item.billName;
+              contentBillNumber = full.detail.billNo?.trim() || null;
+              contentProposer = full.detail.proposer?.trim() || null;
+              contentProposalDate = full.detail.proposalDate?.trim() || null;
+              contentProposalSession = full.detail.session?.trim() || null;
             }
 
-            let sourceHtml: string | null = null;
-            let sourceHtmlSha256: string | null = null;
-            let httpMetadata: ArchiveHttpMetadata | null = null;
+            // Screenshot captured in the same session
+            capturedScreenshot = full.screenshot;
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            this.logger.warn(
+              `captureNsmDetailFull failed for bill ${item.billNo}: ${message}`,
+            );
+            void this.discordBridge?.logEvent(
+              BridgeLogLevel.VERBOSE,
+              ArchiveOrchestratorService.name,
+              `NsmLmSts full capture failed for bill **${item.billNo}**: ${message}`,
+              { billNo: item.billNo },
+            );
+          }
 
-            try {
-              // opinion.lawmaking.go.kr uses a Waitingroom JS anti-bot
-              // challenge that blocks plain HTTP.  Use Puppeteer (same path
-              // as captureNsmDetailScreenshot) to get the rendered HTML.
-              const sourceCapture =
-                await this.crawlingCoreService.captureNsmDetailHtml(
-                  item.billNo,
+          try {
+            await this.noticeArchiveService.upsertNoticeArchive(notice, {
+              proposalReason,
+              title: sourceTitle,
+              billNumber: contentBillNumber,
+              proposer: contentProposer,
+              proposalDate: contentProposalDate,
+              proposalSession: contentProposalSession,
+              sourceHtml,
+              htmlSha256: sourceHtmlSha256,
+              archivedAt,
+              httpMetadata,
+            });
+
+            // Persist the screenshot immediately if we captured it inline.
+            // If capturedScreenshot is null the backfill queue will retry.
+            if (capturedScreenshot) {
+              try {
+                await this.noticeArchiveService.updateScreenshot(
+                  notice.num,
+                  capturedScreenshot,
+                  'jpeg',
                 );
-              sourceHtml = sourceCapture.html;
-              sourceHtmlSha256 = this.computeSha256(sourceCapture.html);
-              httpMetadata = {
-                requestUrl: notice.link,
-                responseUrl: sourceCapture.responseUrl,
-                fetchedAt: new Date().toISOString(),
-                statusCode: sourceCapture.statusCode,
-              };
-            } catch (error) {
-              const message =
-                error instanceof Error ? error.message : String(error);
-              this.logger.warn(
-                `Failed to capture source HTML for pending bill ${item.billNo}: ${message}`,
-              );
+              } catch (ssErr) {
+                const message =
+                  ssErr instanceof Error ? ssErr.message : String(ssErr);
+                this.logger.warn(
+                  `Screenshot persist failed for bill ${item.billNo}: ${message} - backfill will retry`,
+                );
+                // Fall through: schedule via queue so backfill retries it.
+                capturedScreenshot = null;
+              }
             }
 
-            try {
-              await this.noticeArchiveService.upsertNoticeArchive(notice, {
-                proposalReason,
-                title: sourceTitle,
-                billNumber: contentBillNumber,
-                proposer: contentProposer,
-                proposalDate: contentProposalDate,
-                proposalSession: contentProposalSession,
-                sourceHtml,
-                htmlSha256: sourceHtmlSha256,
-                archivedAt,
-                httpMetadata,
-              });
-              // Return the notice enriched with proposalReason so the caller
-              // can generate an AI summary without an extra DB round-trip.
-              const enriched: CachedNotice = {
-                ...notice,
-                proposalReason: proposalReason || null,
-              };
-              return enriched;
-            } catch (error) {
-              const message =
-                error instanceof Error ? error.message : String(error);
-              this.logger.error(
-                `Failed to archive pending bill ${item.billNo}: ${message}`,
-                error,
-              );
-              return null;
+            if (!capturedScreenshot) {
+              // Screenshot was not captured or persist failed — queue for
+              // backfill so it is retried on the next backfill cron/restart.
+              this.scheduleScreenshots([
+                {
+                  num: notice.num,
+                  contentId: '',
+                  isDone: false,
+                  nsmBillNo: notice.num.toString(),
+                },
+              ]);
             }
+
+            const enriched: CachedNotice = {
+              ...notice,
+              proposalReason: proposalReason || null,
+            };
+            return enriched;
           } catch (error) {
             const message =
               error instanceof Error ? error.message : String(error);
             this.logger.error(
-              `Unexpected error while archiving pending bill ${item.billNo}: ${message}`,
+              `Failed to archive pending bill ${item.billNo}: ${message}`,
               error,
             );
             return null;
           }
-        }),
-      );
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `Unexpected error while archiving pending bill ${item.billNo}: ${message}`,
+            error,
+          );
+          return null;
+        }
+      })();
 
-      const archivedInChunk = chunkResults.filter(
-        (r): r is CachedNotice => r !== null,
-      );
-      allArchived.push(...archivedInChunk);
-
-      // Schedule NsmLmSts detail-page screenshots for successfully archived bills.
-      // Fire-and-forget, matching archiveNotices behaviour for pal.assembly.go.kr.
-      if (archivedInChunk.length > 0) {
-        this.scheduleScreenshots(
-          archivedInChunk.map((n) => ({
-            num: n.num,
-            contentId: '',
-            isDone: false,
-            nsmBillNo: n.num.toString(),
-          })),
-        );
+      if (result !== null) {
+        allArchived.push(result);
       }
     }
 
@@ -649,6 +675,165 @@ export class ArchiveOrchestratorService
       return;
     }
     await this.backfillMissingScreenshots();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // HTML backfill
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Result of a single HTML-backfill pass.
+   */
+  public static readonly HTML_BACKFILL_RESULT_ZERO = {
+    pal: { processed: 0, failed: 0 },
+    nsm: { processed: 0, failed: 0 },
+  };
+
+  /**
+   * Re-fetches source HTML for archived notices that still have
+   * `sourceHtml = NULL`.
+   *
+   * Two capture strategies:
+   *  - **PAL** (`contentId NOT NULL`): plain HTTP fetch via
+   *    `captureNoticePageSource` — fast, no Puppeteer required.
+   *  - **NSM** (`contentId IS NULL`): `captureNsmDetailFull` via Puppeteer
+   *    with Waitingroom bypass — also updates `proposalReason` and fills in
+   *    the screenshot if it too is missing.
+   *
+   * NSM requests are rate-limited with `NSM_INTER_CAPTURE_DELAY_MS` between
+   * items; PAL requests run concurrently (capped at 5 in-flight).
+   *
+   * Called from the bootstrap pipeline (before the summary-backfill phase so
+   * `proposalReason` is available for Ollama summarisation).
+   */
+  async backfillMissingHtml(limit: number): Promise<{
+    pal: { processed: number; failed: number };
+    nsm: { processed: number; failed: number };
+  }> {
+    const { pal, nsm } =
+      await this.noticeArchiveService.getNoticesWithMissingHtml(limit);
+
+    const result = {
+      pal: { processed: 0, failed: 0 },
+      nsm: { processed: 0, failed: 0 },
+    };
+
+    if (pal.length === 0 && nsm.length === 0) {
+      LoggerUtils.debugDev(
+        ArchiveOrchestratorService.name,
+        'HTML backfill: no notices with missing HTML found',
+      );
+      return result;
+    }
+
+    this.logger.log(
+      `HTML backfill: ${pal.length} PAL + ${nsm.length} NSM notice(s) with missing HTML`,
+    );
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.LOG,
+      ArchiveOrchestratorService.name,
+      `HTML backfill: **${pal.length}** PAL + **${nsm.length}** NSM notice(s) with missing source HTML`,
+      { pal: pal.length, nsm: nsm.length },
+    );
+
+    // ── PAL: concurrent plain-HTTP fetches ───────────────────────────────
+
+    if (pal.length > 0) {
+      const PAL_CONCURRENCY = 5;
+      for (let i = 0; i < pal.length; i += PAL_CONCURRENCY) {
+        const chunk = pal.slice(i, i + PAL_CONCURRENCY);
+        await Promise.all(
+          chunk.map(async ({ num, assemblyLink }) => {
+            try {
+              const { html, sha256, httpMetadata } =
+                await this.captureNoticePageSource(assemblyLink);
+              await this.noticeArchiveService.updateSourceHtml(
+                num,
+                html,
+                sha256,
+                httpMetadata,
+              );
+              result.pal.processed++;
+              LoggerUtils.debugDev(
+                ArchiveOrchestratorService.name,
+                `HTML backfill PAL: stored HTML for notice ${num}`,
+              );
+            } catch (err) {
+              result.pal.failed++;
+              this.logger.warn(
+                `HTML backfill PAL failed for notice ${num}: ${(err as Error).message}`,
+              );
+            }
+          }),
+        );
+      }
+    }
+
+    // ── NSM: sequential Puppeteer captures with rate-limit delay ─────────
+
+    for (let idx = 0; idx < nsm.length; idx++) {
+      const { num } = nsm[idx];
+      const billNo = num.toString();
+
+      if (idx > 0) {
+        await new Promise<void>((resolve) =>
+          setTimeout(
+            resolve,
+            APP_CONSTANTS.SCREENSHOT.NSM_INTER_CAPTURE_DELAY_MS,
+          ),
+        );
+      }
+
+      try {
+        const full =
+          await this.crawlingCoreService.captureNsmDetailFull(billNo);
+
+        const sha256 = this.computeSha256(full.html);
+        const httpMetadata: ArchiveHttpMetadata = {
+          requestUrl: `https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/${billNo}/detailRP`,
+          responseUrl: full.responseUrl,
+          fetchedAt: new Date().toISOString(),
+          statusCode: full.statusCode,
+        };
+
+        const proposalReason = full.detail?.proposalReason?.trim() ?? '';
+
+        // Also fill in screenshot if it is still missing (single Puppeteer
+        // session already captured it — no extra cost).
+        const hasScreenshot = full.screenshot !== null;
+
+        await this.noticeArchiveService.updateNsmHtmlAndDetail(num, {
+          html: full.html,
+          sha256,
+          proposalReason,
+          httpMetadata,
+          ...(hasScreenshot
+            ? {
+                screenshotBlob: full.screenshot!,
+                screenshotFormat: 'jpeg',
+              }
+            : {}),
+        });
+
+        result.nsm.processed++;
+        LoggerUtils.debugDev(
+          ArchiveOrchestratorService.name,
+          `HTML backfill NSM: stored HTML${hasScreenshot ? ' + screenshot' : ''} for bill ${billNo}`,
+        );
+      } catch (err) {
+        result.nsm.failed++;
+        this.logger.warn(
+          `HTML backfill NSM failed for bill ${billNo}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    this.logger.log(
+      `HTML backfill complete - PAL: ${result.pal.processed} ok / ${result.pal.failed} failed, ` +
+        `NSM: ${result.nsm.processed} ok / ${result.nsm.failed} failed`,
+    );
+
+    return result;
   }
 
   /**
