@@ -110,6 +110,16 @@ export class CronJobsService {
     await this.execute('crawling and notification', () =>
       this.crawlingService.handleCron(),
     );
+  }
+
+  /**
+   * Crawls NsmLmSts pending ("발의") bills on a slower cadence to reduce
+   * upstream connection resets while keeping early detection coverage.
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handlePendingCrawlingCheck(): Promise<void> {
     await this.execute('pending bills crawl (NsmLmSts)', () =>
       this.crawlingService.handlePendingCron(),
     );
