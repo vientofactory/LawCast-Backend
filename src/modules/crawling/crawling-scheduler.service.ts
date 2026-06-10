@@ -786,7 +786,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
     for await (const page of this.crawlingCoreService.getAllNsmPendingPages(
       {},
-      { delayMs: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_CRON_DELAY_MS },
+      { delayMs: APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS },
     )) {
       for (const item of page.items ?? []) {
         const notice = CrawlingCoreService.nsmBillToCachedNotice(item);

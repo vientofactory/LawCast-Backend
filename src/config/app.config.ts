@@ -161,7 +161,8 @@ export const APP_CONSTANTS = {
     /** Inter-page delay for bootstrap/full-sync crawls (ms). */
     CRAWLER_DELAY_MS: 500,
     /** Inter-page delay for hot-path cron crawls (ms). */
-    CRAWLER_CRON_DELAY_MS: 150,
+    CRAWLER_CRON_DELAY_MS: 100,
+    NSM_CRAWLER_DELAY_MS: 1000, // NsmLmSts requires a longer delay to avoid connection resets
     /** DB rows fetched per revert-pass batch. */
     DONE_BATCH_SIZE: 500,
     /** Archive rows per integrity-scan batch. */
