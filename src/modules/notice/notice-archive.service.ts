@@ -321,6 +321,7 @@ export class NoticeArchiveService {
         committee: true,
         assemblyLink: true,
         contentId: true,
+        proposalReason: true,
         attachmentPdfFile: true,
         attachmentHwpFile: true,
       },
@@ -335,6 +336,7 @@ export class NoticeArchiveService {
       committee: row.committee,
       link: row.assemblyLink,
       contentId: row.contentId,
+      proposalReason: row.proposalReason || null,
       attachments: {
         pdfFile: row.attachmentPdfFile ?? '',
         hwpFile: row.attachmentHwpFile ?? '',
@@ -367,6 +369,7 @@ export class NoticeArchiveService {
         committee: true,
         assemblyLink: true,
         contentId: true,
+        proposalReason: true,
         attachmentPdfFile: true,
         attachmentHwpFile: true,
       },
@@ -382,6 +385,7 @@ export class NoticeArchiveService {
       committee: row.committee,
       link: row.assemblyLink,
       contentId: row.contentId,
+      proposalReason: row.proposalReason || null,
       attachments: {
         pdfFile: row.attachmentPdfFile ?? '',
         hwpFile: row.attachmentHwpFile ?? '',
@@ -653,6 +657,48 @@ export class NoticeArchiveService {
   }
 
   /**
+   * Returns all pal.assembly.go.kr-sourced archived notices (contentId NOT NULL)
+   * regardless of whether a screenshot has already been captured.
+   * Used by the SCREENSHOT_REQUEUE_PAL startup flag to force a full re-capture.
+   */
+  async getAllPalNoticesForScreenshotRequeue(): Promise<
+    Array<{ num: number; contentId: string; isDone: boolean }>
+  > {
+    const rows = await this.archiveRepository.find({
+      select: { noticeNum: true, contentId: true, isDone: true },
+      where: { contentId: Not(IsNull()) },
+      order: { noticeNum: 'ASC' },
+    });
+
+    return rows.map((row) => ({
+      num: row.noticeNum,
+      contentId: row.contentId!,
+      isDone: row.isDone,
+    }));
+  }
+
+  /**
+   * Returns up to `limit` NsmLmSts-sourced archived bills (contentId=null)
+   * that are missing a screenshot, ordered oldest-first.
+   * Used by the bootstrap screenshot-backfill pipeline.
+   */
+  async getNoticesWithMissingNsmScreenshots(
+    limit: number,
+  ): Promise<Array<{ num: number }>> {
+    const rows = await this.archiveRepository.find({
+      select: { noticeNum: true },
+      where: {
+        screenshotBlob: IsNull(),
+        contentId: IsNull(),
+      },
+      order: { noticeNum: 'ASC' },
+      take: limit,
+    });
+
+    return rows.map((row) => ({ num: row.noticeNum }));
+  }
+
+  /**
    * Returns the raw screenshot blob and its MIME format for the given notice,
    * or null if no screenshot has been captured yet.
    */
@@ -706,6 +752,57 @@ export class NoticeArchiveService {
     });
 
     return new Set(rows.map((row) => row.noticeNum));
+  }
+
+  /**
+   * Returns the subset of the given notice numbers that exist in the archive
+   * with a NULL contentId (i.e. records sourced from NsmLmSts pending sync
+   * that have not yet been enriched with a pal.assembly.go.kr contentId).
+   */
+  async getArchivedNullContentIdNums(nums: number[]): Promise<Set<number>> {
+    if (nums.length === 0) return new Set();
+
+    const uniqueNums = Array.from(new Set(nums));
+    const rows = await this.archiveRepository.find({
+      where: { noticeNum: In(uniqueNums), contentId: IsNull() },
+      select: { noticeNum: true },
+    });
+    return new Set(rows.map((row) => row.noticeNum));
+  }
+
+  /**
+   * Upgrades previously-pending archive records (contentId=NULL) with the
+   * pal.assembly.go.kr contentId, updated assembly link, and committee once
+   * those bills appear in the \uc785\ubc95\uc608\uace0 system.
+   *
+   * Only rows that still have contentId=NULL are touched to avoid overwriting
+   * a contentId that may have been set by a concurrent archive cycle.
+   *
+   * @returns The number of rows actually updated.
+   */
+  async upgradePendingNotices(
+    items: Array<{
+      num: number;
+      contentId: string;
+      link: string;
+      committee: string;
+    }>,
+  ): Promise<number> {
+    if (items.length === 0) return 0;
+
+    let upgradedCount = 0;
+    for (const item of items) {
+      const result = await this.archiveRepository.update(
+        { noticeNum: item.num, contentId: IsNull() },
+        {
+          contentId: item.contentId,
+          assemblyLink: item.link,
+          committee: item.committee,
+        },
+      );
+      upgradedCount += result.affected ?? 0;
+    }
+    return upgradedCount;
   }
 
   async getArchiveCount(): Promise<number> {

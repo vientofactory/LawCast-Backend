@@ -176,17 +176,63 @@ export class SummaryGenerationService {
     }
 
     if (!notice.contentId) {
+      // NsmLmSts bills (발의 상태) have no contentId but may have proposalReason
+      // stored directly in the archive. Use it if available.
+      const storedReason = (notice as CachedNotice).proposalReason?.trim();
+
+      if (!storedReason) {
+        if (logOllamaActivity) {
+          this.logOllama(
+            `Skip summary ${progressLabel} (num=${notice.num}) - no contentId and no stored proposalReason`,
+            phase,
+          );
+        }
+        return {
+          aiSummary: null,
+          aiSummaryStatus: 'not_supported',
+        };
+      }
+
       if (logOllamaActivity) {
         this.logOllama(
-          `Skip summary ${progressLabel} (num=${notice.num}) - no contentId`,
+          `Request summary ${progressLabel} (num=${notice.num}, NsmLmSts stored reason)`,
           phase,
         );
       }
 
-      return {
-        aiSummary: null,
-        aiSummaryStatus: 'not_supported',
-      };
+      try {
+        const summary = await this.ollamaClientService.summarizeProposal(
+          notice.subject,
+          storedReason,
+        );
+
+        if (logOllamaActivity) {
+          this.logOllama(
+            `Response summary ${progressLabel} (num=${notice.num}, success=${!!summary})`,
+            phase,
+          );
+        }
+
+        return {
+          aiSummary: summary,
+          aiSummaryStatus: summary ? 'ready' : 'unavailable',
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (logOllamaActivity) {
+          this.warnOllama(
+            `Summary failed ${progressLabel} (num=${notice.num}): ${message}`,
+            phase,
+          );
+        }
+        this.logger.warn(
+          `Failed to generate summary for notice ${notice.num}: ${message}`,
+        );
+        return {
+          aiSummary: null,
+          aiSummaryStatus: 'unavailable',
+        };
+      }
     }
 
     try {

@@ -49,6 +49,12 @@ describe('ArchiveOrchestratorService', () => {
             getExistingNoticeNumSet: jest.fn(),
             updateScreenshot: jest.fn().mockResolvedValue(undefined),
             getNoticesWithMissingScreenshots: jest.fn().mockResolvedValue([]),
+            getNoticesWithMissingNsmScreenshots: jest
+              .fn()
+              .mockResolvedValue([]),
+            getAllPalNoticesForScreenshotRequeue: jest
+              .fn()
+              .mockResolvedValue([]),
           },
         },
         {

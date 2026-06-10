@@ -335,6 +335,13 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
           useValue: {
             upsertNoticeArchive: jest.fn().mockResolvedValue(undefined),
             getExistingNoticeNumSet: jest.fn().mockResolvedValue(new Set()),
+            getNoticesWithMissingScreenshots: jest.fn().mockResolvedValue([]),
+            getNoticesWithMissingNsmScreenshots: jest
+              .fn()
+              .mockResolvedValue([]),
+            getAllPalNoticesForScreenshotRequeue: jest
+              .fn()
+              .mockResolvedValue([]),
           },
         },
         {
@@ -567,6 +574,9 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
           provide: CrawlingCoreService,
           useValue: {
             getAllPages: jest.fn().mockImplementation(twoPageGen),
+            getAllNsmPendingPages: jest
+              .fn()
+              .mockImplementation(async function* () {}),
             searchDone: jest.fn().mockResolvedValue(makeSearchResult([1, 2])),
           },
         },
@@ -587,6 +597,10 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
             updateSummaryStateByNoticeNum: jest
               .fn()
               .mockResolvedValue(undefined),
+            getArchivedNullContentIdNums: jest
+              .fn()
+              .mockResolvedValue(new Set()),
+            upgradePendingNotices: jest.fn().mockResolvedValue(0),
           },
         },
         {
@@ -596,6 +610,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
               .fn()
               .mockResolvedValue([makeTableData(3)]),
             archiveNotices: jest.fn().mockResolvedValue(1),
+            archiveNsmBillItems: jest.fn().mockResolvedValue([]),
           },
         },
         {

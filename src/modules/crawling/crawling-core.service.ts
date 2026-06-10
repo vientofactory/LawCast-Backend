@@ -1,15 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
+  NsmLmSts,
   PalCrawl,
-  type ITableData,
-  type IContentData,
-  type PalCrawlConfig,
-  type ISearchResult,
-  type ISearchQuery,
   type IBulkOptions,
+  type IContentData,
+  type INsmBillDetail,
+  type INsmBillItem,
+  type INsmSearchQuery,
+  type INsmSearchResult,
+  type ISearchQuery,
+  type ISearchResult,
+  type ITableData,
+  type PalCrawlConfig,
 } from 'pal-crawl';
 import sharp from 'sharp';
 import { APP_CONSTANTS } from '../../config/app.config';
+import { type CachedNotice } from '../../types/cache.types';
 import { LoggerUtils } from '../../utils/logger.utils';
 
 const SCREENSHOT_CONFIG = {
@@ -41,6 +47,53 @@ export class CrawlingCoreService {
 
   private createClient(): PalCrawl {
     return new PalCrawl(this.crawlConfig);
+  }
+
+  private createNsmClient(): NsmLmSts {
+    return new NsmLmSts({
+      userAgent: this.crawlConfig.userAgent,
+      timeout: this.crawlConfig.timeout,
+      retryCount: this.crawlConfig.retryCount,
+      customHeaders: this.crawlConfig.customHeaders,
+    });
+  }
+
+  /**
+   * Derives the proposer category (제안자 구분) from the proposer name string.
+   * - 위원장 → '위원장'
+   * - Contains '의원' → '의원'
+   * - Otherwise (government ministry/department name) → '정부'
+   */
+  static extractProposerCategory(proposer: string): string {
+    const s = proposer.trim();
+    if (s.includes('위원장')) return '위원장';
+    if (s.includes('의원')) return '의원';
+    return '정부';
+  }
+
+  /**
+   * Converts a NsmLmSts bill item into the CachedNotice shape used throughout
+   * the archive and notification pipeline.
+   *
+   * Bills returned by NsmLmSts are in "발의" (proposed) state and do not yet
+   * have a pal.assembly.go.kr contentId. The `committee` field from the list
+   * page is empty until the bill is referred to a standing committee, so
+   * `ministry` (소관부처) is used as a fallback to preserve 소관 information.
+   */
+  static nsmBillToCachedNotice(item: INsmBillItem): CachedNotice {
+    return {
+      num: parseInt(item.billNo, 10),
+      subject: item.billName,
+      proposerCategory: CrawlingCoreService.extractProposerCategory(
+        item.proposer,
+      ),
+      committee: item.committee || item.ministry || '',
+      link: item.link,
+      contentId: null,
+      attachments: { pdfFile: null, hwpFile: null },
+      aiSummary: null,
+      aiSummaryStatus: 'not_requested' as const,
+    };
   }
 
   /**
@@ -247,6 +300,161 @@ export class CrawlingCoreService {
     }
 
     return allItems;
+  }
+
+  /**
+   * Fetches the full detail of a single bill from 국회입법현황 (NsmLmSts).
+   * Returns the parsed INsmBillDetail including proposalReason, proposalInfo,
+   * session, proposer, proposalDate and attachments.
+   *
+   * @param billNo The 의안번호 of the bill (e.g. "2200001").
+   */
+  async getNsmDetail(billNo: string): Promise<INsmBillDetail> {
+    try {
+      return await this.createNsmClient().getDetail(billNo);
+    } catch (error) {
+      this.logger.error(
+        `Error fetching NsmLmSts detail for billNo ${billNo}:`,
+        error,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Async generator that yields every page of pending ("발의" status) bills
+   * from 국민참여입법센터 (opinion.lawmaking.go.kr) via NsmLmSts.
+   *
+   * Pending bills are those proposed in the National Assembly but not yet
+   * referred to a standing committee. Streaming them here lets the system
+   * detect new legislation well before the formal 입법예고 process begins.
+   *
+   * @param query Optional NsmLmSts search filters (pageIndex is managed internally).
+   * @param options Bulk-fetch options (delayMs, concurrency, maxPages).
+   */
+  async *getAllNsmPendingPages(
+    query?: Omit<INsmSearchQuery, 'pageIndex'>,
+    options?: IBulkOptions,
+  ): AsyncGenerator<INsmSearchResult> {
+    try {
+      yield* this.createNsmClient().getAllPendingPages(query, options);
+    } catch (error) {
+      this.logger.error('Error streaming NsmLmSts pending bill pages:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Captures a screenshot of a bill's detail page on 국회입법현황 (NsmLmSts).
+   * Used for pending bills that do not yet have a pal.assembly.go.kr contentId.
+   *
+   * Applies the same JPEG recompression pipeline as `captureContentScreenshot`
+   * to keep screenshots within the configured size limit.
+   *
+   * @param billNo The 의안번호 of the bill (e.g. "2200001").
+   */
+  /**
+   * Fetches the fully-rendered HTML of a NSM bill detail page via Puppeteer,
+   * bypassing the Waitingroom JS anti-bot challenge that blocks plain HTTP
+   * requests made by NsmLmSts.httpClient.
+   *
+   * The same Puppeteer infrastructure used by {@link captureNsmDetailScreenshot}
+   * is reused so no extra browser binary is needed.
+   *
+   * @param billNo The 의안번호 of the bill (e.g. "2219152").
+   */
+  async captureNsmDetailHtml(
+    billNo: string,
+  ): Promise<{ html: string; responseUrl: string; statusCode: number }> {
+    const normalized = billNo.trim();
+    if (!normalized) throw new Error('billNo is required');
+
+    const detailUrl = `https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/${normalized}/detailRP`;
+
+    // NsmLmSts.httpClient uses plain HTTP and gets blocked by the Waitingroom
+    // challenge.  We reuse the same Puppeteer setup that getDetailScreenshot
+    // uses so the JS challenge is handled transparently.
+    const client = new NsmLmSts({
+      ...this.crawlConfig,
+      screenshot: SCREENSHOT_CONFIG,
+    });
+
+    try {
+      await client.initBrowser();
+
+      // `browser` is typed `private` in the .d.ts but is a plain JS property
+      // at runtime - safe to access here since we own the lifecycle.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      const browser = (
+        client as unknown as {
+          browser: {
+            newPage: () => Promise<{
+              goto: (
+                url: string,
+                opts: { waitUntil: string; timeout: number },
+              ) => Promise<{ status: () => number } | null>;
+              content: () => Promise<string>;
+              url: () => string;
+              close: () => Promise<void>;
+            }>;
+          };
+        }
+      ).browser;
+
+      const page = await browser.newPage();
+      try {
+        const response = await page.goto(detailUrl, {
+          waitUntil: 'networkidle0',
+          timeout: 30_000,
+        });
+        const html = await page.content();
+        return {
+          html,
+          responseUrl: page.url(),
+          statusCode: response?.status() ?? 200,
+        };
+      } finally {
+        await page.close();
+      }
+    } finally {
+      await client.closeBrowser();
+    }
+  }
+
+  async captureNsmDetailScreenshot(billNo: string): Promise<Buffer | null> {
+    const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
+
+    const client = new NsmLmSts({
+      ...this.crawlConfig,
+      screenshot: SCREENSHOT_CONFIG,
+    });
+
+    try {
+      const raw = await client.getDetailScreenshot(billNo);
+
+      if (raw.length <= maxBytes) return raw;
+
+      this.logger.debug(
+        `NSM screenshot for bill ${billNo} is ${raw.length}B - attempting recompression`,
+      );
+
+      for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
+        const recompressed = await sharp(raw).jpeg({ quality }).toBuffer();
+        if (recompressed.length <= maxBytes) {
+          this.logger.debug(
+            `Recompressed NSM screenshot for bill ${billNo} to ${recompressed.length}B (quality=${quality})`,
+          );
+          return recompressed;
+        }
+      }
+
+      this.logger.warn(
+        `NSM screenshot for bill ${billNo} could not be reduced below ${maxBytes}B - discarding`,
+      );
+      return null;
+    } finally {
+      await client.closeBrowser();
+    }
   }
 
   /**

@@ -99,7 +99,9 @@ export class CronJobsService {
   }
 
   /**
-   * Crawls for new legislative notices and dispatches notifications
+   * Crawls for new legislative notices and dispatches notifications.
+   * Also checks NsmLmSts for newly proposed (\"\ubc1c\uc758\") bills that have not yet
+   * entered the formal \uc785\ubc95\uc608\uace0 process so the system can surface them earlier.
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK, {
     timeZone: CRON_TIMEZONE,
@@ -107,6 +109,9 @@ export class CronJobsService {
   async handleCrawlingCheck(): Promise<void> {
     await this.execute('crawling and notification', () =>
       this.crawlingService.handleCron(),
+    );
+    await this.execute('pending bills crawl (NsmLmSts)', () =>
+      this.crawlingService.handlePendingCron(),
     );
   }
 
