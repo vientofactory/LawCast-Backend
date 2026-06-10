@@ -32,6 +32,14 @@ export class CrawlingService {
   }
 
   /**
+   * Handles the pending-bills cron: detects newly proposed bills from
+   * NsmLmSts (\uad6d\ubbfc\ucc38\uc5ec\uc785\ubc95\uc13c\ud130) before they appear in \uc785\ubc95\uc608\uace0.
+   */
+  async handlePendingCron() {
+    await this.crawlingSchedulerService.handlePendingCron();
+  }
+
+  /**
    * Retrieves the cached recent notices.
    * @param limit The maximum number of notices to retrieve. Defaults to the configured cache limit.
    * @returns A promise that resolves to an array of cached notices.

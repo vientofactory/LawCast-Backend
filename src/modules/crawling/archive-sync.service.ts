@@ -1,5 +1,9 @@
 import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
-import { type ITableData, type ISearchResult } from 'pal-crawl';
+import {
+  type ITableData,
+  type INsmBillItem,
+  type ISearchResult,
+} from 'pal-crawl';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { CrawlingCoreService } from './crawling-core.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
@@ -18,6 +22,7 @@ const {
   CRAWLER_DELAY_MS,
   INTEGRITY_BATCH_SIZE,
   SUMMARY_BACKFILL_BATCH_SIZE,
+  HTML_BACKFILL_BATCH_SIZE,
 } = APP_CONSTANTS.ARCHIVE_SYNC;
 /** Max concurrent Ollama calls within a single backfill / retry batch. */
 const SUMMARY_BACKFILL_CONCURRENCY = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
@@ -72,6 +77,11 @@ export interface SummaryBackfillResult {
   failed: number;
 }
 
+export interface HtmlBackfillResult {
+  pal: { processed: number; failed: number };
+  nsm: { processed: number; failed: number };
+}
+
 /**
  * Result of a single unavailable-summary retry pass.
  * `recovered` = rows that transitioned to `'ready'`;
@@ -85,12 +95,20 @@ export interface SummaryUnavailableRetryResult {
   stillFailed: number;
 }
 
+/** Result of a single NsmLmSts pending-bills sync pass. */
+export interface PendingSyncResult {
+  totalScanned: number;
+  newlyArchivedCount: number;
+}
+
 export type FullSyncStatus = PhaseStatus<FullSyncResult>;
 export type IsDoneSyncStatus = PhaseStatus<IsDoneSyncResult>;
 export type IntegrityCheckStatus = PhaseStatus<IntegrityCheckResult>;
 export type SummaryBackfillStatus = PhaseStatus<SummaryBackfillResult>;
+export type HtmlBackfillStatus = PhaseStatus<HtmlBackfillResult>;
 export type SummaryUnavailableRetryStatus =
   PhaseStatus<SummaryUnavailableRetryResult>;
+export type PendingSyncStatus = PhaseStatus<PendingSyncResult>;
 
 // ─── Internal tracker ─────────────────────────────────────────────────────────
 
@@ -137,8 +155,10 @@ export class ArchiveSyncService implements OnModuleInit {
   private readonly isDoneSync = makeTracker<IsDoneSyncResult>();
   private readonly integrityCheck = makeTracker<IntegrityCheckResult>();
   private readonly summaryBackfill = makeTracker<SummaryBackfillResult>();
+  private readonly htmlBackfill = makeTracker<HtmlBackfillResult>();
   private readonly unavailableRetry =
     makeTracker<SummaryUnavailableRetryResult>();
+  private readonly pendingSync = makeTracker<PendingSyncResult>();
 
   constructor(
     private readonly crawlingCoreService: CrawlingCoreService,
@@ -173,16 +193,33 @@ export class ArchiveSyncService implements OnModuleInit {
       'Bootstrap sync pipeline started',
     );
 
+    // Pending sync runs first so that "발의" state bills are archived before
+    // the pal.assembly.go.kr full sync, enabling the earliest possible detection.
+    await this.safeRun('pending sync', () => this.runPendingSync('bootstrap'));
     await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
-    await this.safeRun('isDone sync', () => this.runIsDoneSync('bootstrap'));
-    await this.safeRun('integrity check', () =>
-      this.runIntegrityCheck('bootstrap'),
+
+    // HTML backfill runs before summary backfill so that NSM bills gain their
+    // proposalReason before Ollama tries to summarise them.
+    await this.safeRun('html backfill', () =>
+      this.runHtmlBackfill('bootstrap'),
     );
+
+    // Summary backfill and unavailable retry run immediately after the full
+    // archive is populated.  They are independent of isDone status and
+    // integrity metadata, so there is no reason to delay them until after the
+    // isDone crawl (which may scan thousands of pages and take minutes).
     await this.safeRun('summary backfill', () =>
       this.runSummaryBackfill('bootstrap'),
     );
     await this.safeRun('unavailable retry', () =>
       this.runUnavailableRetry('bootstrap'),
+    );
+
+    // isDone sync and integrity check update orthogonal columns (isDone,
+    // integrityVerifiedAt) and are not on the critical path for notifications.
+    await this.safeRun('isDone sync', () => this.runIsDoneSync('bootstrap'));
+    await this.safeRun('integrity check', () =>
+      this.runIntegrityCheck('bootstrap'),
     );
 
     LoggerUtils.log(
@@ -226,7 +263,9 @@ export class ArchiveSyncService implements OnModuleInit {
       this.isDoneSync.isRunning ||
       this.integrityCheck.isRunning ||
       this.summaryBackfill.isRunning ||
-      this.unavailableRetry.isRunning
+      this.htmlBackfill.isRunning ||
+      this.unavailableRetry.isRunning ||
+      this.pendingSync.isRunning
     );
   }
 
@@ -239,7 +278,9 @@ export class ArchiveSyncService implements OnModuleInit {
     if (this.isDoneSync.isRunning) return 'isDone sync';
     if (this.integrityCheck.isRunning) return 'integrity check';
     if (this.summaryBackfill.isRunning) return 'summary backfill';
+    if (this.htmlBackfill.isRunning) return 'html backfill';
     if (this.unavailableRetry.isRunning) return 'unavailable retry';
+    if (this.pendingSync.isRunning) return 'pending sync';
     return null;
   }
 
@@ -375,6 +416,39 @@ export class ArchiveSyncService implements OnModuleInit {
         newlyArchivedCount += saved;
       }
 
+      // Upgrade pending bills: bills previously archived from NsmLmSts with
+      // contentId=NULL that now appear in pal.assembly.go.kr with a contentId.
+      const newNums = new Set(newNotices.map((n) => n.num));
+      const alreadyArchivedWithContentId = pageItems.filter(
+        (item) => !newNums.has(item.num) && item.contentId !== null,
+      );
+      if (alreadyArchivedWithContentId.length > 0) {
+        const nullContentIdNums =
+          await this.noticeArchiveService.getArchivedNullContentIdNums(
+            alreadyArchivedWithContentId.map((i) => i.num),
+          );
+        if (nullContentIdNums.size > 0) {
+          const toUpgrade = alreadyArchivedWithContentId.filter((item) =>
+            nullContentIdNums.has(item.num),
+          );
+          const upgraded =
+            await this.noticeArchiveService.upgradePendingNotices(
+              toUpgrade.map((item) => ({
+                num: item.num,
+                contentId: item.contentId!,
+                link: item.link,
+                committee: item.committee,
+              })),
+            );
+          if (upgraded > 0) {
+            LoggerUtils.logDev(
+              ArchiveSyncService.name,
+              `Upgraded ${upgraded} pending bill(s) with contentId from \uc785\ubc95\uc608\uace0`,
+            );
+          }
+        }
+      }
+
       LoggerUtils.debugDev(
         ArchiveSyncService.name,
         `Page ${page.currentPage}/${page.totalPages}: ` +
@@ -383,6 +457,95 @@ export class ArchiveSyncService implements OnModuleInit {
     }
 
     return { totalPagesScanned, totalNoticesScanned, newlyArchivedCount };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 1b - Pending bills sync (NsmLmSts)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Archives bills that are in \"\ubc1c\uc758\" (proposed) state at \uad6d\ubbfc\ucc38\uc5ec\uc785\ubc95\uc13c\ud130
+   * (opinion.lawmaking.go.kr) before they enter the formal \uc785\ubc95\uc608\uace0 process.
+   *
+   * This phase runs before the full pal.assembly.go.kr sync so the system
+   * detects new bills at the earliest possible point in the legislative cycle.
+   */
+  async runPendingSync(trigger: string): Promise<PendingSyncResult | null> {
+    return this.runPhase(
+      'Pending sync',
+      this.pendingSync,
+      trigger,
+      () => this.executePendingSync(),
+      (r) => `scanned=${r.totalScanned} archived=${r.newlyArchivedCount}`,
+    );
+  }
+
+  getPendingSyncStatus(): PendingSyncStatus {
+    return ArchiveSyncService.toStatus(this.pendingSync);
+  }
+
+  private async executePendingSync(): Promise<PendingSyncResult> {
+    LoggerUtils.logDev(
+      ArchiveSyncService.name,
+      'Pending bills sync (NsmLmSts) started',
+    );
+
+    const rawItemMap = new Map<number, INsmBillItem>();
+    const pendingNotices: ReturnType<
+      typeof CrawlingCoreService.nsmBillToCachedNotice
+    >[] = [];
+
+    for await (const page of this.crawlingCoreService.getAllNsmPendingPages(
+      {},
+      { delayMs: CRAWLER_DELAY_MS, concurrency: 1 },
+    )) {
+      for (const item of page.items ?? []) {
+        const notice = CrawlingCoreService.nsmBillToCachedNotice(item);
+        if (!rawItemMap.has(notice.num)) {
+          rawItemMap.set(notice.num, item);
+          pendingNotices.push(notice);
+        }
+      }
+    }
+
+    const totalScanned = pendingNotices.length;
+
+    if (totalScanned === 0) {
+      LoggerUtils.logDev(
+        ArchiveSyncService.name,
+        'No pending bills found in NsmLmSts',
+      );
+      return { totalScanned: 0, newlyArchivedCount: 0 };
+    }
+
+    const newPendingNotices =
+      await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
+        pendingNotices,
+      );
+
+    let newlyArchivedCount = 0;
+    if (newPendingNotices.length > 0) {
+      const newPendingItems = newPendingNotices
+        .map((n) => rawItemMap.get(n.num))
+        .filter((item): item is INsmBillItem => item !== undefined);
+      const archived =
+        await this.archiveOrchestratorService.archiveNsmBillItems(
+          newPendingItems,
+        );
+      newlyArchivedCount = archived.length;
+    }
+
+    LoggerUtils.log(
+      ArchiveSyncService.name,
+      `Pending sync done - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
+    );
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.LOG,
+      ArchiveSyncService.name,
+      `Pending sync complete - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
+    );
+
+    return { totalScanned, newlyArchivedCount };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -553,6 +716,36 @@ export class ArchiveSyncService implements OnModuleInit {
 
   getIntegrityCheckStatus(): IntegrityCheckStatus {
     return ArchiveSyncService.toStatus(this.integrityCheck);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 3b - HTML backfill
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Re-fetches source HTML (and for NSM bills: proposalReason + screenshot)
+   * for archive rows that have `sourceHtml = NULL`.
+   *
+   * Runs between the full-sync and the summary-backfill phases so that NSM
+   * bills have their `proposalReason` populated before Ollama tries to
+   * summarise them.
+   */
+  async runHtmlBackfill(trigger: string): Promise<HtmlBackfillResult | null> {
+    return this.runPhase(
+      'HTML backfill',
+      this.htmlBackfill,
+      trigger,
+      () =>
+        this.archiveOrchestratorService.backfillMissingHtml(
+          HTML_BACKFILL_BATCH_SIZE,
+        ),
+      (r) =>
+        `pal=${r.pal.processed}ok/${r.pal.failed}fail nsm=${r.nsm.processed}ok/${r.nsm.failed}fail`,
+    );
+  }
+
+  getHtmlBackfillStatus(): HtmlBackfillStatus {
+    return ArchiveSyncService.toStatus(this.htmlBackfill);
   }
 
   // ─────────────────────────────────────────────────────────────────────────

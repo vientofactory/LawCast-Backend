@@ -18,4 +18,9 @@ type CachedBaseNotice = Omit<ITableData, 'numComments'>;
 export interface CachedNotice extends CachedBaseNotice {
   aiSummary?: string | null;
   aiSummaryStatus?: AISummaryStatus;
+  /**
+   * Stored proposal reason for NsmLmSts bills (contentId=null).
+   * Populated by archive service and used by AI summary backfill.
+   */
+  proposalReason?: string | null;
 }

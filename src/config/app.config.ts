@@ -147,6 +147,13 @@ export const APP_CONSTANTS = {
     MAX_RETRIES: 3,
     /** Delay (ms) before each retry attempt to avoid hammering the target server. */
     RETRY_DELAY_MS: 5000,
+    /**
+     * Inter-capture delay (ms) applied between consecutive NsmLmSts
+     * (opinion.lawmaking.go.kr) screenshot requests to stay within the
+     * site's rate limit.  Pal.assembly.go.kr does not require this because
+     * Puppeteer navigates a stateless content-viewer URL.
+     */
+    NSM_INTER_CAPTURE_DELAY_MS: 3000,
   },
   ARCHIVE_SYNC: {
     /** Items per crawler HTTP request (max 100). */
@@ -161,6 +168,8 @@ export const APP_CONSTANTS = {
     INTEGRITY_BATCH_SIZE: 200,
     /** Archive rows fetched per summary-backfill / retry batch. */
     SUMMARY_BACKFILL_BATCH_SIZE: 50,
+    /** Max rows fetched per HTML-backfill pass (PAL + NSM combined). */
+    HTML_BACKFILL_BATCH_SIZE: 100,
   },
   CRON: {
     EXPRESSIONS: {
