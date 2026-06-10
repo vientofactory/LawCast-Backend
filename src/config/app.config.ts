@@ -174,6 +174,7 @@ export const APP_CONSTANTS = {
   CRON: {
     EXPRESSIONS: {
       CRAWLING_CHECK: '0 */5 * * * *', // Every 5 minutes
+      PENDING_CRAWLING_CHECK: '0 */10 * * * *', // Every 10 minutes
       WEBHOOK_CLEANUP: '0 1 0 * * *', // Every day at 00:01
       WEBHOOK_OPTIMIZATION: '0 1 2 * * *', // Every day at 02:01
       SYSTEM_MONITORING: '0 0 * * * *', // Every hour
