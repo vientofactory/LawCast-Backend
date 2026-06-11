@@ -724,7 +724,8 @@ export class ArchiveSyncService implements OnModuleInit {
 
   /**
    * Re-fetches source HTML (and for NSM bills: proposalReason + screenshot)
-   * for archive rows that have `sourceHtml = NULL`.
+   * for archive rows that have `sourceHtml = NULL`, plus NSM rows whose
+   * `proposalReason` is still empty.
    *
    * Runs between the full-sync and the summary-backfill phases so that NSM
    * bills have their `proposalReason` populated before Ollama tries to

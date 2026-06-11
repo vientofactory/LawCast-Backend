@@ -14,6 +14,7 @@ import {
   MoreThanOrEqual,
   Not,
   Repository,
+  Brackets,
 } from 'typeorm';
 import {
   type AISummaryStatus,
@@ -736,13 +737,12 @@ export class NoticeArchiveService {
   }
 
   /**
-   * Returns up to `limit` archived notices whose `sourceHtml` is NULL,
+   * Returns up to `limit` archived notices that need HTML/detail backfill,
    * split by source:
-   *  - `pal`: pal.assembly.go.kr bills (contentId NOT NULL) — HTML can be
-   *    re-fetched via a plain HTTP request to `assemblyLink`.
-   *  - `nsm`: NsmLmSts bills (contentId IS NULL) — HTML must be captured
-   *    via Puppeteer to bypass the Waitingroom anti-bot challenge; the
-   *    detail parse also yields `proposalReason`, `proposer`, etc.
+   *  - `pal`: pal.assembly.go.kr bills (contentId NOT NULL) with missing
+   *    `sourceHtml`.
+   *  - `nsm`: NsmLmSts bills (contentId IS NULL) with missing `sourceHtml`
+   *    OR missing/empty `proposalReason`.
    *
    * Rows are ordered oldest-first so early notices are backfilled first.
    */
@@ -757,12 +757,20 @@ export class NoticeArchiveService {
         order: { noticeNum: 'ASC' },
         take: limit,
       }),
-      this.archiveRepository.find({
-        select: { noticeNum: true },
-        where: { sourceHtml: IsNull(), contentId: IsNull() },
-        order: { noticeNum: 'ASC' },
-        take: limit,
-      }),
+      this.archiveRepository
+        .createQueryBuilder('na')
+        .select('na.noticeNum', 'noticeNum')
+        .where('na.contentId IS NULL')
+        .andWhere(
+          new Brackets((qb) => {
+            qb.where('na.sourceHtml IS NULL')
+              .orWhere('na.proposalReason IS NULL')
+              .orWhere("TRIM(na.proposalReason) = ''");
+          }),
+        )
+        .orderBy('na.noticeNum', 'ASC')
+        .limit(limit)
+        .getRawMany<{ noticeNum: number }>(),
     ]);
 
     return {
