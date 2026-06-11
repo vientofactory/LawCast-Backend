@@ -56,6 +56,7 @@ describe('CrawlingSchedulerService', () => {
           provide: CrawlingCoreService,
           useValue: {
             crawlAllPages: jest.fn(),
+            getAllNsmPendingPages: jest.fn(),
           },
         },
         {
@@ -340,6 +341,103 @@ describe('CrawlingSchedulerService', () => {
       await service.handleCron();
 
       expect((service as any).isProcessing).toBe(false);
+    });
+  });
+
+  describe('handlePendingCron', () => {
+    const mockRejectingPendingPages = (error: Error) => ({
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.reject(error),
+      }),
+    });
+
+    const mockEmptyPendingPages = () => ({
+      [Symbol.asyncIterator]: () => {
+        let yielded = false;
+        return {
+          next: () => {
+            if (!yielded) {
+              yielded = true;
+              return Promise.resolve({
+                done: false,
+                value: { items: [], totalPages: 1 },
+              });
+            }
+            return Promise.resolve({ done: true, value: undefined });
+          },
+        };
+      },
+    });
+
+    beforeEach(() => {
+      (service as any).isInitialized = true;
+    });
+
+    it('should skip if cache not initialized', async () => {
+      (service as any).isInitialized = false;
+
+      await service.handlePendingCron();
+
+      expect(crawlingCoreService.getAllNsmPendingPages).not.toHaveBeenCalled();
+    });
+
+    it('should retry on ECONNRESET with exponential backoff and succeed', async () => {
+      const econnreset = Object.assign(new Error('read ECONNRESET'), {
+        code: 'ECONNRESET',
+      });
+      let callCount = 0;
+
+      (
+        crawlingCoreService.getAllNsmPendingPages as jest.Mock
+      ).mockImplementation(() => {
+        callCount += 1;
+        if (callCount <= 2) {
+          return mockRejectingPendingPages(econnreset);
+        }
+        return mockEmptyPendingPages();
+      });
+
+      jest.useFakeTimers();
+      const pendingCronPromise = service.handlePendingCron();
+      await jest.runAllTimersAsync();
+      await pendingCronPromise;
+      jest.useRealTimers();
+
+      expect(callCount).toBe(3);
+    });
+
+    it('should not retry on non-network errors', async () => {
+      (
+        crawlingCoreService.getAllNsmPendingPages as jest.Mock
+      ).mockImplementation(() =>
+        mockRejectingPendingPages(new Error('Database unavailable')),
+      );
+
+      await service.handlePendingCron();
+
+      expect(crawlingCoreService.getAllNsmPendingPages).toHaveBeenCalledTimes(
+        1,
+      );
+    });
+
+    it('should stop after exhausting retry budget on persistent ECONNRESET', async () => {
+      const econnreset = Object.assign(new Error('read ECONNRESET'), {
+        code: 'ECONNRESET',
+      });
+
+      (
+        crawlingCoreService.getAllNsmPendingPages as jest.Mock
+      ).mockImplementation(() => mockRejectingPendingPages(econnreset));
+
+      jest.useFakeTimers();
+      const pendingCronPromise = service.handlePendingCron();
+      await jest.runAllTimersAsync();
+      await pendingCronPromise;
+      jest.useRealTimers();
+
+      expect(crawlingCoreService.getAllNsmPendingPages).toHaveBeenCalledTimes(
+        4,
+      );
     });
   });
 });

@@ -20,6 +20,7 @@ import { HealthCheckService } from '../modules/health/health-check.service';
 import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { NoticeSearchService } from '../modules/crawling/notice-search.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
+import { PackagesService } from '../modules/shared/packages.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;
@@ -239,6 +240,12 @@ describe('HTTP-Batch Processing Isolation', () => {
               lastResult: null,
               lastError: null,
             }),
+          },
+        },
+        {
+          provide: PackagesService,
+          useValue: {
+            getPackages: jest.fn().mockReturnValue([]),
           },
         },
         {

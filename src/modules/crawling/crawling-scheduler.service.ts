@@ -14,6 +14,31 @@ import { APP_CONSTANTS } from '../../config/app.config';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 
+const { PENDING_CRAWL_MAX_RETRIES, PENDING_CRAWL_RETRY_BASE_MS } =
+  APP_CONSTANTS.ARCHIVE_SYNC;
+
+const RETRYABLE_NETWORK_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EAI_AGAIN',
+]);
+
+function isRetryableNetworkError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const errno = error as NodeJS.ErrnoException;
+  if (errno.code && RETRYABLE_NETWORK_ERROR_CODES.has(errno.code)) {
+    return true;
+  }
+  const message = errno.message ?? '';
+  return [...RETRYABLE_NETWORK_ERROR_CODES].some((code) =>
+    message.includes(code),
+  );
+}
+
 @Injectable()
 export class CrawlingSchedulerService implements OnModuleInit {
   private readonly logger = new Logger(CrawlingSchedulerService.name);
@@ -768,16 +793,42 @@ export class CrawlingSchedulerService implements OnModuleInit {
     if (!this.isInitialized) {
       return;
     }
-    try {
-      await this.performPendingBillsCrawl();
-    } catch (error) {
-      this.logger.error('Error during pending bills crawl', error);
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        CrawlingSchedulerService.name,
-        `Pending bills crawl failed: ${(error as Error).message}`,
-      );
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= PENDING_CRAWL_MAX_RETRIES; attempt++) {
+      try {
+        await this.performPendingBillsCrawl();
+        return;
+      } catch (error) {
+        lastError = error;
+        const canRetry =
+          attempt < PENDING_CRAWL_MAX_RETRIES && isRetryableNetworkError(error);
+
+        if (!canRetry) {
+          break;
+        }
+
+        const backoffMs = PENDING_CRAWL_RETRY_BASE_MS * 2 ** attempt;
+        const attemptLabel = `${attempt + 1}/${PENDING_CRAWL_MAX_RETRIES + 1}`;
+        const message = (error as Error).message;
+        this.logger.warn(
+          `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
+        );
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.WARN,
+          CrawlingSchedulerService.name,
+          `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+      }
     }
+
+    this.logger.error('Error during pending bills crawl', lastError);
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.ERROR,
+      CrawlingSchedulerService.name,
+      `Pending bills crawl failed: ${(lastError as Error).message}`,
+    );
   }
 
   private async performPendingBillsCrawl(): Promise<void> {
