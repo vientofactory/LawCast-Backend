@@ -163,6 +163,10 @@ export const APP_CONSTANTS = {
     /** Inter-page delay for hot-path cron crawls (ms). */
     CRAWLER_CRON_DELAY_MS: 100,
     NSM_CRAWLER_DELAY_MS: 1000, // NsmLmSts requires a longer delay to avoid connection resets
+    /** Application-level retry budget for pending-bills cron (NsmLmSts). */
+    PENDING_CRAWL_MAX_RETRIES: 3,
+    /** Base delay (ms) for exponential backoff between pending-bills cron retries. */
+    PENDING_CRAWL_RETRY_BASE_MS: 2000,
     /** DB rows fetched per revert-pass batch. */
     DONE_BATCH_SIZE: 500,
     /** Archive rows per integrity-scan batch. */
