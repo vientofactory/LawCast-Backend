@@ -138,6 +138,19 @@ export class CronJobsService {
   }
 
   /**
+   * Re-runs HTML backfill so legacy rows with missing `sourceHtml` or
+   * missing NsmLmSts `proposalReason` are gradually repaired after bootstrap.
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.HTML_BACKFILL, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleHtmlBackfill(): Promise<void> {
+    await this.execute('html/proposalReason backfill', () =>
+      this.archiveSyncService.runHtmlBackfill('cron').then(() => undefined),
+    );
+  }
+
+  /**
    * Re-validates the SHA-256 integrity of every archive record once a day.
    * Forces `integrityVerifiedAt` to be refreshed on all verifiable rows so
    * operators can confirm recency of the last check.

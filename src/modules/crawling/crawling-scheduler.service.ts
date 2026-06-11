@@ -13,9 +13,29 @@ import {
 import { APP_CONSTANTS } from '../../config/app.config';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
+import { LoggerUtils } from '../../utils/logger.utils';
 
-const { PENDING_CRAWL_MAX_RETRIES, PENDING_CRAWL_RETRY_BASE_MS } =
-  APP_CONSTANTS.ARCHIVE_SYNC;
+const {
+  PENDING_CRAWL_MAX_RETRIES,
+  PENDING_CRAWL_RETRY_BASE_MS,
+  NSM_REASON_RETRY_MAX_ATTEMPTS,
+  NSM_REASON_RETRY_MAX_AGE_MS,
+} = APP_CONSTANTS.ARCHIVE_SYNC;
+
+/**
+ * Tracks an archived NsmLmSts bill that is waiting for its `proposalReason`
+ * to become available on the source detail page.
+ */
+interface ProposalReasonRetryItem {
+  /** The archived notice with empty proposalReason. */
+  notice: CachedNotice;
+  /** NsmLmSts bill number string (same as notice.num.toString()). */
+  billNo: string;
+  /** How many times we have already attempted to fetch proposalReason. */
+  retryCount: number;
+  /** Wall-clock time the item was first enqueued. Used for max-age eviction. */
+  queuedAt: Date;
+}
 
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
   'ECONNRESET',
@@ -44,6 +64,16 @@ export class CrawlingSchedulerService implements OnModuleInit {
   private readonly logger = new Logger(CrawlingSchedulerService.name);
   private isProcessing = false;
   private isInitialized = false;
+
+  /**
+   * In-memory queue of NsmLmSts bills that were archived with an empty
+   * `proposalReason` and are waiting for a successful retry.
+   * Lost on server restart; the HTML-backfill cron acts as the persistent
+   * fallback to ensure no bill permanently lacks a proposalReason.
+   */
+  private readonly proposalReasonRetryQueue: ProposalReasonRetryItem[] = [];
+  /** Prevents two concurrent NSM proposalReason retry drains. */
+  private isReasonRetryRunning = false;
 
   constructor(
     private cacheService: CacheService,
@@ -794,41 +824,48 @@ export class CrawlingSchedulerService implements OnModuleInit {
       return;
     }
 
-    let lastError: unknown;
-    for (let attempt = 0; attempt <= PENDING_CRAWL_MAX_RETRIES; attempt++) {
-      try {
-        await this.performPendingBillsCrawl();
-        return;
-      } catch (error) {
-        lastError = error;
-        const canRetry =
-          attempt < PENDING_CRAWL_MAX_RETRIES && isRetryableNetworkError(error);
+    try {
+      let lastError: unknown;
+      for (let attempt = 0; attempt <= PENDING_CRAWL_MAX_RETRIES; attempt++) {
+        try {
+          await this.performPendingBillsCrawl();
+          return;
+        } catch (error) {
+          lastError = error;
+          const canRetry =
+            attempt < PENDING_CRAWL_MAX_RETRIES &&
+            isRetryableNetworkError(error);
 
-        if (!canRetry) {
-          break;
+          if (!canRetry) {
+            break;
+          }
+
+          const backoffMs = PENDING_CRAWL_RETRY_BASE_MS * 2 ** attempt;
+          const attemptLabel = `${attempt + 1}/${PENDING_CRAWL_MAX_RETRIES + 1}`;
+          const message = (error as Error).message;
+          this.logger.warn(
+            `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
+          );
+          void this.discordBridge?.logEvent(
+            BridgeLogLevel.WARN,
+            CrawlingSchedulerService.name,
+            `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
+          );
+          await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
         }
-
-        const backoffMs = PENDING_CRAWL_RETRY_BASE_MS * 2 ** attempt;
-        const attemptLabel = `${attempt + 1}/${PENDING_CRAWL_MAX_RETRIES + 1}`;
-        const message = (error as Error).message;
-        this.logger.warn(
-          `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
-        );
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.WARN,
-          CrawlingSchedulerService.name,
-          `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
-        );
-        await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
       }
-    }
 
-    this.logger.error('Error during pending bills crawl', lastError);
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.ERROR,
-      CrawlingSchedulerService.name,
-      `Pending bills crawl failed: ${(lastError as Error).message}`,
-    );
+      this.logger.error('Error during pending bills crawl', lastError);
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.ERROR,
+        CrawlingSchedulerService.name,
+        `Pending bills crawl failed: ${(lastError as Error).message}`,
+      );
+    } finally {
+      // Drain the proposalReason retry queue on every cron tick (including
+      // after a failed crawl) so queued items are retried on schedule.
+      this.drainProposalReasonRetryQueueInBackground();
+    }
   }
 
   private async performPendingBillsCrawl(): Promise<void> {
@@ -917,38 +954,76 @@ export class CrawlingSchedulerService implements OnModuleInit {
       );
     }
 
-    // Stage 2: AI summary generation.
-    // Use the archived notices (with proposalReason) when available; fall back
-    // to the raw pending notices so cache/notifications are never blocked.
-    const summaryBase =
-      archivedNotices.length > 0 ? archivedNotices : newPendingNotices;
-    const concurrency = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
+    // Split archived notices by whether proposalReason was successfully obtained.
+    // NSM bills without proposalReason cannot be summarised by Ollama, so we
+    // defer their AI summary and notification until the retry queue resolves them.
+    const noticesWithReason = archivedNotices.filter((n) =>
+      n.proposalReason?.trim(),
+    );
+    const noticesWithoutReason = archivedNotices.filter(
+      (n) => !n.proposalReason?.trim(),
+    );
 
-    const noticesWithSummary: CachedNotice[] = [];
-    for (let i = 0; i < summaryBase.length; i += concurrency) {
-      const chunk = summaryBase.slice(i, i + concurrency);
-      const results = await Promise.all(
-        chunk.map(async (notice) => {
-          try {
-            const result =
-              await this.summaryGenerationService.generateSummaryForNotice(
-                notice,
-              );
-            return { ...notice, ...result };
-          } catch {
-            return {
-              ...notice,
-              aiSummary: null,
-              aiSummaryStatus: 'not_requested' as const,
-            };
-          }
-        }),
+    // Enqueue bills with missing proposalReason for background retry.
+    for (const notice of noticesWithoutReason) {
+      this.enqueueForProposalReasonRetry(notice);
+    }
+
+    if (noticesWithoutReason.length > 0) {
+      this.logger.log(
+        `${noticesWithoutReason.length} pending bill(s) archived without proposalReason — queued for retry`,
       );
-      noticesWithSummary.push(...results);
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        CrawlingSchedulerService.name,
+        `**${noticesWithoutReason.length}** pending bill(s) missing proposalReason — queued for retry`,
+        {
+          nums: noticesWithoutReason.map((n) => n.num),
+          queueSize: this.proposalReasonRetryQueue.length,
+        },
+      );
+    }
+
+    // Stage 2: AI summary generation — only for bills that have proposalReason.
+    // Use archivedNotices (with proposalReason) where available; fall back to
+    // raw pending notices only when archiving failed for every bill so the cache
+    // is not left entirely empty (no notification is sent in the fallback case).
+    const summaryBase =
+      noticesWithReason.length > 0
+        ? noticesWithReason
+        : archivedNotices.length === 0
+          ? newPendingNotices
+          : [];
+
+    const concurrency = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
+    const noticesWithSummary: CachedNotice[] = [];
+
+    if (summaryBase.length > 0) {
+      for (let i = 0; i < summaryBase.length; i += concurrency) {
+        const chunk = summaryBase.slice(i, i + concurrency);
+        const results = await Promise.all(
+          chunk.map(async (notice) => {
+            try {
+              const result =
+                await this.summaryGenerationService.generateSummaryForNotice(
+                  notice,
+                );
+              return { ...notice, ...result };
+            } catch {
+              return {
+                ...notice,
+                aiSummary: null,
+                aiSummaryStatus: 'not_requested' as const,
+              };
+            }
+          }),
+        );
+        noticesWithSummary.push(...results);
+      }
     }
 
     // Stage 3: Persist generated summaries to DB so backfill phases skip them.
-    if (archivedNotices.length > 0) {
+    if (noticesWithReason.length > 0 && noticesWithSummary.length > 0) {
       await Promise.allSettled(
         noticesWithSummary
           .filter(
@@ -964,32 +1039,288 @@ export class CrawlingSchedulerService implements OnModuleInit {
       );
     }
 
-    // Stage 4: Merge into the freshest cache snapshot (race-safe re-fetch),
-    // mirroring the same pattern used in processNewNoticesInBackground.
-    try {
-      const freshCache = await this.cacheService.getRecentNotices(
-        APP_CONSTANTS.CACHE.MAX_SIZE,
-      );
-      const newNums = new Set(noticesWithSummary.map((n) => n.num));
-      const merged = [
-        ...noticesWithSummary,
-        ...freshCache.filter((n) => !newNums.has(n.num)),
-      ];
-      await this.cacheService.updateCache(merged);
-    } catch (error) {
-      this.logger.warn(
-        `Cache update for pending bills failed: ${(error as Error).message}`,
-      );
+    // Stage 4: Merge into the freshest cache snapshot (race-safe re-fetch).
+    // Include BOTH summarised notices and queued-for-retry notices (without
+    // summary) so all new bills become visible in the UI immediately.
+    const allForCache: CachedNotice[] = [
+      ...noticesWithSummary,
+      ...noticesWithoutReason.map((n) => ({
+        ...n,
+        aiSummary: null,
+        aiSummaryStatus: 'not_requested' as const,
+      })),
+    ];
+
+    if (allForCache.length > 0) {
+      try {
+        const freshCache = await this.cacheService.getRecentNotices(
+          APP_CONSTANTS.CACHE.MAX_SIZE,
+        );
+        const newNums = new Set(allForCache.map((n) => n.num));
+        const merged = [
+          ...allForCache,
+          ...freshCache.filter((n) => !newNums.has(n.num)),
+        ];
+        await this.cacheService.updateCache(merged);
+      } catch (error) {
+        this.logger.warn(
+          `Cache update for pending bills failed: ${(error as Error).message}`,
+        );
+      }
     }
 
-    // Stage 5: Send notifications WITH AI summaries.
-    void this.notificationOrchestratorService
-      .sendNotifications(noticesWithSummary)
-      .catch((error) => {
-        this.logger.error(
-          'Notification dispatch for pending bills failed:',
-          error,
+    // Stage 5: Send notifications only for bills that have proposalReason.
+    // Bills in the retry queue will be notified once their reason is resolved.
+    if (noticesWithSummary.length > 0 && noticesWithReason.length > 0) {
+      void this.notificationOrchestratorService
+        .sendNotifications(noticesWithSummary)
+        .catch((error) => {
+          this.logger.error(
+            'Notification dispatch for pending bills failed:',
+            error,
+          );
+        });
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // proposalReason retry queue
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Adds a newly archived NsmLmSts notice to the proposalReason retry queue.
+   * Deduplicates by notice number so the same bill is never enqueued twice.
+   */
+  private enqueueForProposalReasonRetry(notice: CachedNotice): void {
+    const alreadyQueued = this.proposalReasonRetryQueue.some(
+      (item) => item.notice.num === notice.num,
+    );
+    if (alreadyQueued) return;
+
+    this.proposalReasonRetryQueue.push({
+      notice,
+      billNo: notice.num.toString(),
+      retryCount: 0,
+      queuedAt: new Date(),
+    });
+
+    LoggerUtils.debugDev(
+      CrawlingSchedulerService.name,
+      `proposalReason retry: enqueued bill ${notice.num} (queue size: ${this.proposalReasonRetryQueue.length})`,
+    );
+  }
+
+  /**
+   * Non-blocking wrapper: launches `drainProposalReasonRetryQueue` in the
+   * background if the queue has items and a drain is not already running.
+   * Safe to call unconditionally from `handlePendingCron`.
+   */
+  private drainProposalReasonRetryQueueInBackground(): void {
+    if (
+      this.isReasonRetryRunning ||
+      this.proposalReasonRetryQueue.length === 0
+    ) {
+      return;
+    }
+    void this.drainProposalReasonRetryQueue().catch((error) => {
+      this.logger.error(
+        `proposalReason retry queue drain failed: ${(error as Error).message}`,
+      );
+    });
+  }
+
+  /**
+   * Drains the proposalReason retry queue.
+   *
+   * For each queued bill:
+   *  - Calls `ArchiveOrchestratorService.fetchAndUpdateProposalReason()` which
+   *    re-runs a Puppeteer capture and updates the archive DB if successful.
+   *  - On success: generates AI summary → updates cache → sends notification.
+   *  - On failure or still-empty reason: increments retry count and leaves the
+   *    item in the queue for the next 30-minute cron tick.
+   *  - Items that exceed `NSM_REASON_RETRY_MAX_ATTEMPTS` or
+   *    `NSM_REASON_RETRY_MAX_AGE_MS` are evicted; a last-resort notification
+   *    without AI summary is sent so the bill is never silently dropped.
+   *
+   * Processed sequentially (one Puppeteer session at a time) to respect
+   * the NsmLmSts Waitingroom rate limiter.
+   */
+  private async drainProposalReasonRetryQueue(): Promise<void> {
+    if (this.isReasonRetryRunning) return;
+    if (this.proposalReasonRetryQueue.length === 0) return;
+
+    this.isReasonRetryRunning = true;
+    try {
+      const now = Date.now();
+
+      // ── Evict items that have exhausted retries or exceeded max age ────────
+      const evicted: ProposalReasonRetryItem[] = [];
+      let i = this.proposalReasonRetryQueue.length;
+      while (i--) {
+        const item = this.proposalReasonRetryQueue[i];
+        const expired =
+          item.retryCount >= NSM_REASON_RETRY_MAX_ATTEMPTS ||
+          now - item.queuedAt.getTime() > NSM_REASON_RETRY_MAX_AGE_MS;
+        if (expired) {
+          evicted.push(item);
+          this.proposalReasonRetryQueue.splice(i, 1);
+        }
+      }
+
+      if (evicted.length > 0) {
+        this.logger.warn(
+          `proposalReason retry: evicting ${evicted.length} bill(s) after exhausting retries — sending fallback notifications`,
         );
-      });
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.WARN,
+          CrawlingSchedulerService.name,
+          `proposalReason retry: evicting **${evicted.length}** bill(s) — sending notification without summary`,
+          { nums: evicted.map((e) => e.notice.num) },
+        );
+        // Send last-resort notifications without AI summary.
+        void this.notificationOrchestratorService
+          .sendNotifications(
+            evicted.map((e) => ({
+              ...e.notice,
+              aiSummary: null,
+              aiSummaryStatus: 'not_supported' as const,
+            })),
+          )
+          .catch(() => undefined);
+      }
+
+      if (this.proposalReasonRetryQueue.length === 0) return;
+
+      this.logger.log(
+        `proposalReason retry: processing ${this.proposalReasonRetryQueue.length} queued bill(s)`,
+      );
+
+      // ── Process each queued bill sequentially ─────────────────────────────
+      const resolved: CachedNotice[] = [];
+
+      for (let idx = 0; idx < this.proposalReasonRetryQueue.length; idx++) {
+        const item = this.proposalReasonRetryQueue[idx];
+
+        if (idx > 0) {
+          // Same inter-capture delay used by archiveNsmBillItems.
+          await new Promise<void>((resolve) =>
+            setTimeout(
+              resolve,
+              APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS,
+            ),
+          );
+        }
+
+        const proposalReason =
+          await this.archiveOrchestratorService.fetchAndUpdateProposalReason(
+            item.notice.num,
+            item.billNo,
+            item.notice.link,
+          );
+
+        if (!proposalReason) {
+          item.retryCount++;
+          this.logger.warn(
+            `proposalReason retry: still empty for bill ${item.billNo} ` +
+              `(attempt ${item.retryCount}/${NSM_REASON_RETRY_MAX_ATTEMPTS})`,
+          );
+          continue;
+        }
+
+        // ── Success ──────────────────────────────────────────────────────────
+        const enriched: CachedNotice = { ...item.notice, proposalReason };
+
+        // AI summary
+        let noticeWithSummary: CachedNotice;
+        try {
+          const summaryResult =
+            await this.summaryGenerationService.generateSummaryForNotice(
+              enriched,
+            );
+          noticeWithSummary = { ...enriched, ...summaryResult };
+        } catch {
+          noticeWithSummary = {
+            ...enriched,
+            aiSummary: null,
+            aiSummaryStatus: 'not_requested' as const,
+          };
+        }
+
+        // Persist summary to DB
+        if (
+          (noticeWithSummary.aiSummaryStatus ?? 'not_requested') !==
+          'not_requested'
+        ) {
+          await this.noticeArchiveService
+            .updateSummaryStateByNoticeNum(
+              noticeWithSummary.num,
+              noticeWithSummary.aiSummary ?? null,
+              noticeWithSummary.aiSummaryStatus ?? 'not_requested',
+            )
+            .catch((err) => {
+              this.logger.warn(
+                `Failed to persist summary for bill ${item.billNo}: ${(err as Error).message}`,
+              );
+            });
+        }
+
+        resolved.push(noticeWithSummary);
+
+        // Remove from queue (splice adjusts idx to stay in bounds).
+        this.proposalReasonRetryQueue.splice(idx, 1);
+        idx--;
+
+        this.logger.log(
+          `proposalReason retry: resolved bill ${item.billNo} after ${item.retryCount + 1} attempt(s)`,
+        );
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.LOG,
+          CrawlingSchedulerService.name,
+          `proposalReason retry: resolved bill **${item.billNo}**`,
+          { billNo: item.billNo, attempts: item.retryCount + 1 },
+        );
+      }
+
+      if (resolved.length === 0) return;
+
+      // ── Cache update ──────────────────────────────────────────────────────
+      try {
+        const freshCache = await this.cacheService.getRecentNotices(
+          APP_CONSTANTS.CACHE.MAX_SIZE,
+        );
+        const resolvedMap = new Map(resolved.map((n) => [n.num, n]));
+        const existingNums = new Set(freshCache.map((n) => n.num));
+        const merged = [
+          ...freshCache.map((n) => resolvedMap.get(n.num) ?? n),
+          ...resolved.filter((n) => !existingNums.has(n.num)),
+        ];
+        await this.cacheService.updateCache(merged);
+      } catch (error) {
+        this.logger.warn(
+          `Cache update after proposalReason retry failed: ${(error as Error).message}`,
+        );
+      }
+
+      // ── Notification dispatch ─────────────────────────────────────────────
+      void this.notificationOrchestratorService
+        .sendNotifications(resolved)
+        .catch((error) => {
+          this.logger.error(
+            `Notification dispatch after proposalReason retry failed: ${(error as Error).message}`,
+          );
+        });
+
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.LOG,
+        CrawlingSchedulerService.name,
+        `proposalReason retry: **${resolved.length}** resolved, **${this.proposalReasonRetryQueue.length}** still pending`,
+        {
+          resolved: resolved.length,
+          pending: this.proposalReasonRetryQueue.length,
+        },
+      );
+    } finally {
+      this.isReasonRetryRunning = false;
+    }
   }
 }

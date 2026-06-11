@@ -56,7 +56,7 @@ export const APP_CONSTANTS = {
   },
   CACHE: {
     /** Internal storage cap - large enough to hold all active notices. */
-    MAX_SIZE: 10000,
+    MAX_SIZE: 5000,
     /** Default limit for API responses that expose recent notices. */
     DEFAULT_LIMIT: 10,
     NOTICES_RECENT_LIMIT: 10,
@@ -164,9 +164,13 @@ export const APP_CONSTANTS = {
     CRAWLER_CRON_DELAY_MS: 100,
     NSM_CRAWLER_DELAY_MS: 3000, // NsmLmSts requires a longer delay to avoid connection resets
     /** Application-level retry budget for pending-bills cron (NsmLmSts). */
-    PENDING_CRAWL_MAX_RETRIES: 3,
+    PENDING_CRAWL_MAX_RETRIES: 5,
     /** Base delay (ms) for exponential backoff between pending-bills cron retries. */
     PENDING_CRAWL_RETRY_BASE_MS: 3000,
+    /** Max attempts for the proposalReason in-memory retry queue before giving up. */
+    NSM_REASON_RETRY_MAX_ATTEMPTS: 5,
+    /** Max age (ms) for items in the proposalReason retry queue before they are evicted. */
+    NSM_REASON_RETRY_MAX_AGE_MS: 24 * 60 * 60 * 1000,
     /** DB rows fetched per revert-pass batch. */
     DONE_BATCH_SIZE: 500,
     /** Archive rows per integrity-scan batch. */
@@ -179,11 +183,12 @@ export const APP_CONSTANTS = {
   CRON: {
     EXPRESSIONS: {
       CRAWLING_CHECK: '0 */10 * * * *', // Every 10 minutes
-      PENDING_CRAWLING_CHECK: '0 */30 * * * *', // Every 30 minutes
+      PENDING_CRAWLING_CHECK: '0 */20 * * * *', // Every 20 minutes
       WEBHOOK_CLEANUP: '0 1 0 * * *', // Every day at 00:01
       WEBHOOK_OPTIMIZATION: '0 1 2 * * *', // Every day at 02:01
       SYSTEM_MONITORING: '0 0 * * * *', // Every hour
       IS_DONE_SYNC: '0 0 */6 * * *', // Every 6 hours - sync isDone flags for expired notices
+      HTML_BACKFILL: '0 15 */6 * * *', // Every 6 hours (offset 15 min) - retry missing HTML/proposalReason
       INTEGRITY_RESCAN: '0 0 3 * * *', // Every day at 3 AM - full archive integrity re-validation
       SCREENSHOT_BACKFILL: '0 30 */6 * * *', // Every 6 hours (offset 30 min) - retry missing screenshots
     },

@@ -678,6 +678,62 @@ export class ArchiveOrchestratorService
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // proposalReason on-demand retry
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Re-fetches NsmLmSts detail for a single bill and, if `proposalReason` is
+   * successfully obtained, persists the updated HTML + detail to the archive.
+   *
+   * Called by the proposalReason retry queue in CrawlingSchedulerService for
+   * bills that were archived with an empty `proposalReason` on first attempt.
+   *
+   * @returns The trimmed `proposalReason` string on success, or `null` when
+   *   the capture fails or the detail page still has no reason text.
+   */
+  async fetchAndUpdateProposalReason(
+    num: number,
+    billNo: string,
+    noticeLink: string,
+  ): Promise<string | null> {
+    try {
+      const full = await this.crawlingCoreService.captureNsmDetailFull(billNo);
+      const proposalReason = full.detail?.proposalReason?.trim() ?? '';
+
+      if (!proposalReason) {
+        return null;
+      }
+
+      const sha256 = this.computeSha256(full.html);
+      const httpMetadata: ArchiveHttpMetadata = {
+        requestUrl: noticeLink,
+        responseUrl: full.responseUrl,
+        fetchedAt: new Date().toISOString(),
+        statusCode: full.statusCode,
+      };
+
+      await this.noticeArchiveService.updateNsmHtmlAndDetail(num, {
+        html: full.html,
+        sha256,
+        proposalReason,
+        httpMetadata,
+        ...(full.screenshot
+          ? { screenshotBlob: full.screenshot, screenshotFormat: 'jpeg' }
+          : {}),
+      });
+
+      return proposalReason;
+    } catch (error) {
+      this.logger.warn(
+        `fetchAndUpdateProposalReason failed for bill ${billNo}: ${
+          (error as Error).message
+        }`,
+      );
+      return null;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // HTML backfill
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -690,8 +746,8 @@ export class ArchiveOrchestratorService
   };
 
   /**
-   * Re-fetches source HTML for archived notices that still have
-   * `sourceHtml = NULL`.
+   * Re-fetches source HTML/detail for archived notices that still have
+   * `sourceHtml = NULL`, plus NsmLmSts rows with empty `proposalReason`.
    *
    * Two capture strategies:
    *  - **PAL** (`contentId NOT NULL`): plain HTTP fetch via
@@ -721,18 +777,18 @@ export class ArchiveOrchestratorService
     if (pal.length === 0 && nsm.length === 0) {
       LoggerUtils.debugDev(
         ArchiveOrchestratorService.name,
-        'HTML backfill: no notices with missing HTML found',
+        'HTML backfill: no notices with missing HTML/proposalReason found',
       );
       return result;
     }
 
     this.logger.log(
-      `HTML backfill: ${pal.length} PAL + ${nsm.length} NSM notice(s) with missing HTML`,
+      `HTML backfill: ${pal.length} PAL + ${nsm.length} NSM notice(s) requiring HTML/detail repair`,
     );
     void this.discordBridge?.logEvent(
       BridgeLogLevel.LOG,
       ArchiveOrchestratorService.name,
-      `HTML backfill: **${pal.length}** PAL + **${nsm.length}** NSM notice(s) with missing source HTML`,
+      `HTML backfill: **${pal.length}** PAL + **${nsm.length}** NSM notice(s) requiring HTML/proposalReason repair`,
       { pal: pal.length, nsm: nsm.length },
     );
 
