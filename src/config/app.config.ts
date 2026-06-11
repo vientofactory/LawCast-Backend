@@ -162,11 +162,11 @@ export const APP_CONSTANTS = {
     CRAWLER_DELAY_MS: 500,
     /** Inter-page delay for hot-path cron crawls (ms). */
     CRAWLER_CRON_DELAY_MS: 100,
-    NSM_CRAWLER_DELAY_MS: 1000, // NsmLmSts requires a longer delay to avoid connection resets
+    NSM_CRAWLER_DELAY_MS: 3000, // NsmLmSts requires a longer delay to avoid connection resets
     /** Application-level retry budget for pending-bills cron (NsmLmSts). */
     PENDING_CRAWL_MAX_RETRIES: 3,
     /** Base delay (ms) for exponential backoff between pending-bills cron retries. */
-    PENDING_CRAWL_RETRY_BASE_MS: 2000,
+    PENDING_CRAWL_RETRY_BASE_MS: 3000,
     /** DB rows fetched per revert-pass batch. */
     DONE_BATCH_SIZE: 500,
     /** Archive rows per integrity-scan batch. */
@@ -178,8 +178,8 @@ export const APP_CONSTANTS = {
   },
   CRON: {
     EXPRESSIONS: {
-      CRAWLING_CHECK: '0 */5 * * * *', // Every 5 minutes
-      PENDING_CRAWLING_CHECK: '0 */10 * * * *', // Every 10 minutes
+      CRAWLING_CHECK: '0 */10 * * * *', // Every 10 minutes
+      PENDING_CRAWLING_CHECK: '0 */30 * * * *', // Every 30 minutes
       WEBHOOK_CLEANUP: '0 1 0 * * *', // Every day at 00:01
       WEBHOOK_OPTIMIZATION: '0 1 2 * * *', // Every day at 02:01
       SYSTEM_MONITORING: '0 0 * * * *', // Every hour
