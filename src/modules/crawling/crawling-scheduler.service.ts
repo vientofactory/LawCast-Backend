@@ -21,6 +21,7 @@ const {
   PENDING_CRAWL_RETRY_BASE_MS,
   NSM_REASON_RETRY_MAX_ATTEMPTS,
   NSM_REASON_RETRY_MAX_AGE_MS,
+  PROPOSAL_REASON_RETRY_QUEUE,
 } = APP_CONSTANTS.ARCHIVE_SYNC;
 
 /**
@@ -36,6 +37,13 @@ interface ProposalReasonRetryItem {
   retryCount: number;
   /** Wall-clock time the item was first enqueued. Used for max-age eviction. */
   queuedAt: Date;
+}
+
+interface ProposalReasonRetryQueueRecord {
+  notice: CachedNotice;
+  billNo: string;
+  retryCount: number;
+  queuedAtIso: string;
 }
 
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
@@ -66,13 +74,6 @@ export class CrawlingSchedulerService implements OnModuleInit {
   private isProcessing = false;
   private isInitialized = false;
 
-  /**
-   * In-memory queue of NsmLmSts bills that were archived with an empty
-   * `proposalReason` and are waiting for a successful retry.
-   * Lost on server restart; the HTML-backfill cron acts as the persistent
-   * fallback to ensure no bill permanently lacks a proposalReason.
-   */
-  private readonly proposalReasonRetryQueue: ProposalReasonRetryItem[] = [];
   /** Prevents two concurrent NSM proposalReason retry drains. */
   private isReasonRetryRunning = false;
 
@@ -842,18 +843,6 @@ export class CrawlingSchedulerService implements OnModuleInit {
           }
 
           const backoffMs = PENDING_CRAWL_RETRY_BASE_MS * 2 ** attempt;
-
-          // Slient retry with exponential backoff on network errors
-          // const attemptLabel = `${attempt + 1}/${PENDING_CRAWL_MAX_RETRIES + 1}`;
-          // const message = (error as Error).message;
-          // this.logger.warn(
-          //   `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
-          // );
-          // void this.discordBridge?.logEvent(
-          //   BridgeLogLevel.WARN,
-          //   CrawlingSchedulerService.name,
-          //   `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
-          // );
           await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
         }
       }
@@ -969,8 +958,10 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
     // Enqueue bills with missing proposalReason for background retry.
     for (const notice of noticesWithoutReason) {
-      this.enqueueForProposalReasonRetry(notice);
+      await this.enqueueForProposalReasonRetry(notice);
     }
+
+    const retryQueueLength = await this.getProposalReasonRetryQueueLength();
 
     if (noticesWithoutReason.length > 0) {
       this.logger.log(
@@ -982,7 +973,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
         `**${noticesWithoutReason.length}** pending bill(s) missing proposalReason — queued for retry`,
         {
           nums: noticesWithoutReason.map((n) => n.num),
-          queueSize: this.proposalReasonRetryQueue.length,
+          queueSize: retryQueueLength,
         },
       );
     }
@@ -1087,22 +1078,47 @@ export class CrawlingSchedulerService implements OnModuleInit {
    * Adds a newly archived NsmLmSts notice to the proposalReason retry queue.
    * Deduplicates by notice number so the same bill is never enqueued twice.
    */
-  private enqueueForProposalReasonRetry(notice: CachedNotice): void {
-    const alreadyQueued = this.proposalReasonRetryQueue.some(
-      (item) => item.notice.num === notice.num,
-    );
+  private async enqueueForProposalReasonRetry(
+    notice: CachedNotice,
+  ): Promise<void> {
+    const queue = await this.getProposalReasonRetryQueue();
+
+    if (queue.length >= PROPOSAL_REASON_RETRY_QUEUE.MAX_SIZE) {
+      this.logger.warn(
+        `proposalReason retry: queue at capacity (${queue.length}) - sending fallback notification for bill ${notice.num}`,
+      );
+      void this.notificationOrchestratorService
+        .sendNotifications([
+          {
+            ...notice,
+            aiSummary: null,
+            aiSummaryStatus: 'not_supported' as const,
+          },
+        ])
+        .catch(() => undefined);
+      return;
+    }
+
+    const alreadyQueued = queue.some((item) => item.notice.num === notice.num);
     if (alreadyQueued) return;
 
-    this.proposalReasonRetryQueue.push({
+    queue.push({
       notice,
       billNo: notice.num.toString(),
       retryCount: 0,
       queuedAt: new Date(),
     });
 
+    const written = await this.setProposalReasonRetryQueue(queue);
+    if (!written) {
+      this.logger.warn(
+        `proposalReason retry: failed to persist queue after enqueueing bill ${notice.num}`,
+      );
+    }
+
     LoggerUtils.debugDev(
       CrawlingSchedulerService.name,
-      `proposalReason retry: enqueued bill ${notice.num} (queue size: ${this.proposalReasonRetryQueue.length})`,
+      `proposalReason retry: enqueued bill ${notice.num} (queue size: ${queue.length})`,
     );
   }
 
@@ -1112,12 +1128,10 @@ export class CrawlingSchedulerService implements OnModuleInit {
    * Safe to call unconditionally from `handlePendingCron`.
    */
   private drainProposalReasonRetryQueueInBackground(): void {
-    if (
-      this.isReasonRetryRunning ||
-      this.proposalReasonRetryQueue.length === 0
-    ) {
+    if (this.isReasonRetryRunning) {
       return;
     }
+
     void this.drainProposalReasonRetryQueue().catch((error) => {
       this.logger.error(
         `proposalReason retry queue drain failed: ${(error as Error).message}`,
@@ -1143,23 +1157,27 @@ export class CrawlingSchedulerService implements OnModuleInit {
    */
   private async drainProposalReasonRetryQueue(): Promise<void> {
     if (this.isReasonRetryRunning) return;
-    if (this.proposalReasonRetryQueue.length === 0) return;
+
+    const queue = await this.getProposalReasonRetryQueue();
+    if (queue.length === 0) return;
 
     this.isReasonRetryRunning = true;
     try {
       const now = Date.now();
+      let queueDirty = false;
 
       // ── Evict items that have exhausted retries or exceeded max age ────────
       const evicted: ProposalReasonRetryItem[] = [];
-      let i = this.proposalReasonRetryQueue.length;
+      let i = queue.length;
       while (i--) {
-        const item = this.proposalReasonRetryQueue[i];
+        const item = queue[i];
         const expired =
           item.retryCount >= NSM_REASON_RETRY_MAX_ATTEMPTS ||
           now - item.queuedAt.getTime() > NSM_REASON_RETRY_MAX_AGE_MS;
         if (expired) {
           evicted.push(item);
-          this.proposalReasonRetryQueue.splice(i, 1);
+          queue.splice(i, 1);
+          queueDirty = true;
         }
       }
 
@@ -1185,17 +1203,22 @@ export class CrawlingSchedulerService implements OnModuleInit {
           .catch(() => undefined);
       }
 
-      if (this.proposalReasonRetryQueue.length === 0) return;
+      if (queue.length === 0) {
+        if (queueDirty) {
+          await this.setProposalReasonRetryQueue(queue);
+        }
+        return;
+      }
 
       this.logger.log(
-        `proposalReason retry: processing ${this.proposalReasonRetryQueue.length} queued bill(s)`,
+        `proposalReason retry: processing ${queue.length} queued bill(s)`,
       );
 
       // ── Process each queued bill sequentially ─────────────────────────────
       const resolved: CachedNotice[] = [];
 
-      for (let idx = 0; idx < this.proposalReasonRetryQueue.length; idx++) {
-        const item = this.proposalReasonRetryQueue[idx];
+      for (let idx = 0; idx < queue.length; idx++) {
+        const item = queue[idx];
 
         if (idx > 0) {
           // Same inter-capture delay used by archiveNsmBillItems.
@@ -1216,6 +1239,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
         if (!proposalReason) {
           item.retryCount++;
+          queueDirty = true;
           this.logger.warn(
             `proposalReason retry: still empty for bill ${item.billNo} ` +
               `(attempt ${item.retryCount}/${NSM_REASON_RETRY_MAX_ATTEMPTS})`,
@@ -1263,7 +1287,8 @@ export class CrawlingSchedulerService implements OnModuleInit {
         resolved.push(noticeWithSummary);
 
         // Remove from queue (splice adjusts idx to stay in bounds).
-        this.proposalReasonRetryQueue.splice(idx, 1);
+        queue.splice(idx, 1);
+        queueDirty = true;
         idx--;
 
         this.logger.log(
@@ -1275,6 +1300,10 @@ export class CrawlingSchedulerService implements OnModuleInit {
           `proposalReason retry: resolved bill **${item.billNo}**`,
           { billNo: item.billNo, attempts: item.retryCount + 1 },
         );
+      }
+
+      if (queueDirty) {
+        await this.setProposalReasonRetryQueue(queue);
       }
 
       if (resolved.length === 0) return;
@@ -1309,14 +1338,82 @@ export class CrawlingSchedulerService implements OnModuleInit {
       void this.discordBridge?.logEvent(
         BridgeLogLevel.LOG,
         CrawlingSchedulerService.name,
-        `proposalReason retry: **${resolved.length}** resolved, **${this.proposalReasonRetryQueue.length}** still pending`,
+        `proposalReason retry: **${resolved.length}** resolved, **${queue.length}** still pending`,
         {
           resolved: resolved.length,
-          pending: this.proposalReasonRetryQueue.length,
+          pending: queue.length,
         },
       );
     } finally {
       this.isReasonRetryRunning = false;
     }
+  }
+
+  private toProposalReasonRetryQueueRecord(
+    item: ProposalReasonRetryItem,
+  ): ProposalReasonRetryQueueRecord {
+    return {
+      notice: item.notice,
+      billNo: item.billNo,
+      retryCount: item.retryCount,
+      queuedAtIso: item.queuedAt.toISOString(),
+    };
+  }
+
+  private fromProposalReasonRetryQueueRecord(
+    item: ProposalReasonRetryQueueRecord,
+  ): ProposalReasonRetryItem | null {
+    const queuedAt = new Date(item.queuedAtIso);
+    if (Number.isNaN(queuedAt.getTime())) {
+      return null;
+    }
+
+    return {
+      notice: item.notice,
+      billNo: item.billNo,
+      retryCount: item.retryCount,
+      queuedAt,
+    };
+  }
+
+  private async getProposalReasonRetryQueue(): Promise<
+    ProposalReasonRetryItem[]
+  > {
+    const stored = await this.cacheService.getObject<
+      ProposalReasonRetryQueueRecord[]
+    >(PROPOSAL_REASON_RETRY_QUEUE.KEY);
+
+    if (!Array.isArray(stored) || stored.length === 0) {
+      return [];
+    }
+
+    const queue: ProposalReasonRetryItem[] = [];
+    for (const row of stored) {
+      const restored = this.fromProposalReasonRetryQueueRecord(row);
+      if (restored) {
+        queue.push(restored);
+      }
+    }
+
+    return queue;
+  }
+
+  private async getProposalReasonRetryQueueLength(): Promise<number> {
+    const queue = await this.getProposalReasonRetryQueue();
+    return queue.length;
+  }
+
+  private async setProposalReasonRetryQueue(
+    queue: ProposalReasonRetryItem[],
+  ): Promise<boolean> {
+    if (queue.length === 0) {
+      return this.cacheService.deleteKey(PROPOSAL_REASON_RETRY_QUEUE.KEY);
+    }
+
+    return this.cacheService.setObject(
+      PROPOSAL_REASON_RETRY_QUEUE.KEY,
+      queue.map((item) => this.toProposalReasonRetryQueueRecord(item)),
+      PROPOSAL_REASON_RETRY_QUEUE.TTL_SECONDS,
+    );
   }
 }

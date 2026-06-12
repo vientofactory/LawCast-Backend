@@ -322,6 +322,53 @@ export class CacheService implements OnModuleDestroy {
   }
 
   /**
+   * Retrieves an arbitrary object value from the cache.
+   * @param key The cache key to retrieve.
+   * @returns The cached object or null when missing/unreadable.
+   */
+  async getObject<T>(key: string): Promise<T | null> {
+    try {
+      const value = await this.cacheManager.get<T>(key);
+      return value ?? null;
+    } catch (error) {
+      this.logger.warn(`Error reading object cache key (${key}):`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Stores an arbitrary object value in the cache.
+   * @param key The cache key to set.
+   * @param value The value to store.
+   * @param ttl The time-to-live (TTL) in seconds. Defaults to 0 (no expiration).
+   * @returns True when the write succeeded, false otherwise.
+   */
+  async setObject<T>(key: string, value: T, ttl = 0): Promise<boolean> {
+    try {
+      await this.cacheManager.set(key, value, ttl);
+      return true;
+    } catch (error) {
+      this.logger.warn(`Error writing object cache key (${key}):`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Deletes a cache key.
+   * @param key The cache key to remove.
+   * @returns True when deletion succeeded, false otherwise.
+   */
+  async deleteKey(key: string): Promise<boolean> {
+    try {
+      await this.cacheManager.del(key);
+      return true;
+    } catch (error) {
+      this.logger.warn(`Error deleting cache key (${key}):`, error);
+      return false;
+    }
+  }
+
+  /**
    * Sanitizes a cached notice by removing unnecessary properties.
    * @param notice The cached notice to sanitize.
    * @returns The sanitized cached notice.

@@ -93,6 +93,8 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
   const tableData = [makeTableData(1), makeTableData(2)];
 
   beforeEach(async () => {
+    const objectStore = new Map<string, unknown>();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CrawlingSchedulerService,
@@ -102,6 +104,22 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
             updateCache: jest.fn().mockResolvedValue(undefined),
             findNewNotices: jest.fn().mockResolvedValue([]),
             getRecentNotices: jest.fn().mockResolvedValue([]),
+            getObject: jest
+              .fn()
+              .mockImplementation(async (key: string) =>
+                objectStore.has(key) ? objectStore.get(key) : null,
+              ),
+            setObject: jest
+              .fn()
+              .mockImplementation(async (key: string, value: unknown) => {
+                objectStore.set(key, value);
+                return true;
+              }),
+            deleteKey: jest
+              .fn()
+              .mockImplementation(async (key: string) =>
+                objectStore.delete(key),
+              ),
           },
         },
         {
@@ -330,6 +348,14 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ArchiveOrchestratorService,
+        {
+          provide: CacheService,
+          useValue: {
+            getObject: jest.fn().mockResolvedValue(null),
+            setObject: jest.fn().mockResolvedValue(true),
+            deleteKey: jest.fn().mockResolvedValue(true),
+          },
+        },
         {
           provide: NoticeArchiveService,
           useValue: {
@@ -626,6 +652,8 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
           provide: CacheService,
           useValue: {
             updateCache: jest.fn().mockResolvedValue(undefined),
+            getObject: jest.fn().mockResolvedValue(null),
+            setObject: jest.fn().mockResolvedValue(true),
           },
         },
       ],
@@ -883,6 +911,8 @@ describe('[Fault Isolation] CrawlingCoreService.crawlAllPages partial failure', 
             updateCache: jest.fn().mockResolvedValue(undefined),
             findNewNotices: jest.fn(),
             getRecentNotices: jest.fn(),
+            getObject: jest.fn().mockResolvedValue(null),
+            setObject: jest.fn().mockResolvedValue(true),
           },
         },
         {
