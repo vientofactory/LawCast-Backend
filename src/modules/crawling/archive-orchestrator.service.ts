@@ -53,8 +53,8 @@ export class ArchiveOrchestratorService
    * Startup screenshot pipeline.
    *
    * When `SCREENSHOT_REQUEUE_PAL=true` is set, every pal.assembly.go.kr notice
-   * (contentId NOT NULL) is queued for screenshot re-capture — including rows
-   * that already have a screenshot — before the normal missing-screenshot
+   * (contentId NOT NULL) is queued for screenshot re-capture - including rows
+   * that already have a screenshot - before the normal missing-screenshot
    * backfill runs.  The `scheduleScreenshots` deduplication means the normal
    * backfill will then only add any NsmLmSts notices that were not already
    * enqueued by the forced requeue.
@@ -396,7 +396,7 @@ export class ArchiveOrchestratorService
             }
 
             if (!capturedScreenshot) {
-              // Screenshot was not captured or persist failed — queue for
+              // Screenshot was not captured or persist failed - queue for
               // backfill so it is retried on the next backfill cron/restart.
               this.scheduleScreenshots([
                 {
@@ -759,9 +759,9 @@ export class ArchiveOrchestratorService
    *
    * Two capture strategies:
    *  - **PAL** (`contentId NOT NULL`): plain HTTP fetch via
-   *    `captureNoticePageSource` — fast, no Puppeteer required.
+   *    `captureNoticePageSource` - fast, no Puppeteer required.
    *  - **NSM** (`contentId IS NULL`): `captureNsmDetailFull` via Puppeteer
-   *    with Waitingroom bypass — also updates `proposalReason` and fills in
+   *    with Waitingroom bypass - also updates `proposalReason` and fills in
    *    the screenshot if it too is missing.
    *
    * NSM requests are rate-limited with `NSM_INTER_CAPTURE_DELAY_MS` between
@@ -863,7 +863,7 @@ export class ArchiveOrchestratorService
         const proposalReason = full.detail?.proposalReason?.trim() ?? '';
 
         // Also fill in screenshot if it is still missing (single Puppeteer
-        // session already captured it — no extra cost).
+        // session already captured it - no extra cost).
         const hasScreenshot = full.screenshot !== null;
 
         await this.noticeArchiveService.updateNsmHtmlAndDetail(num, {
