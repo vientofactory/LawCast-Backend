@@ -9,6 +9,7 @@ import { createHash } from 'crypto';
 import { type INsmBillItem } from 'pal-crawl';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type CachedNotice } from '../../types/cache.types';
+import { CacheService } from '../cache/cache.service';
 import {
   NoticeArchiveService,
   type ArchiveHttpMetadata,
@@ -18,25 +19,26 @@ import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
 
+interface ScreenshotQueueItem {
+  num: number;
+  contentId: string;
+  isDone: boolean;
+  retryCount: number;
+  /** Set for NsmLmSts bills; when present, use captureNsmDetailScreenshot instead of captureContentScreenshot. */
+  nsmBillNo?: string;
+}
+
 @Injectable()
 export class ArchiveOrchestratorService
   implements OnModuleInit, OnApplicationShutdown
 {
   private readonly logger = new Logger(ArchiveOrchestratorService.name);
 
-  /** Minimal payload stored in the screenshot queue. */
-  private readonly screenshotQueue: Array<{
-    num: number;
-    contentId: string;
-    isDone: boolean;
-    retryCount: number;
-    /** Set for NsmLmSts bills; when present, use captureNsmDetailScreenshot instead of captureContentScreenshot. */
-    nsmBillNo?: string;
-  }> = [];
   /** Prevents two concurrent Puppeteer screenshot runs. */
   private isCaptureRunning = false;
 
   constructor(
+    private readonly cacheService: CacheService,
     private noticeArchiveService: NoticeArchiveService,
     private crawlingCoreService: CrawlingCoreService,
     @Optional() private discordBridge: DiscordBridgeService,
@@ -455,27 +457,11 @@ export class ArchiveOrchestratorService
   ): void {
     if (items.length === 0) return;
 
-    // Deduplicate: skip notices already waiting in the queue to avoid
-    // redundant Puppeteer captures when backfill and a cron cycle overlap.
-    const queuedNums = new Set(this.screenshotQueue.map((q) => q.num));
-    const deduped = items.filter((item) => !queuedNums.has(item.num));
-
-    if (deduped.length === 0) return;
-
-    this.screenshotQueue.push(
-      ...deduped.map((item) => ({ ...item, retryCount: 0 })),
-    );
-    LoggerUtils.debug(
-      ArchiveOrchestratorService.name,
-      `Queued ${deduped.length} notice(s) for screenshot capture ` +
-        `(${items.length - deduped.length} duplicate(s) skipped, ` +
-        `queue depth: ${this.screenshotQueue.length}, running: ${this.isCaptureRunning})`,
-    );
-
-    if (!this.isCaptureRunning) {
-      // Start the drain loop asynchronously
-      void this.drainScreenshotQueue();
-    }
+    void this.enqueueScreenshots(items).catch((error) => {
+      this.logger.warn(
+        `Failed to enqueue screenshots: ${(error as Error).message}`,
+      );
+    });
   }
 
   /**
@@ -490,8 +476,20 @@ export class ArchiveOrchestratorService
     this.isCaptureRunning = true;
 
     try {
-      while (this.screenshotQueue.length > 0) {
-        const notice = this.screenshotQueue.shift()!;
+      for (;;) {
+        const queue = await this.getScreenshotQueue();
+        if (queue.length === 0) break;
+
+        const notice = queue[0];
+        const rest = queue.slice(1);
+
+        const dequeued = await this.setScreenshotQueue(rest);
+        if (!dequeued) {
+          this.logger.warn(
+            'Screenshot queue dequeue failed - stopping drain loop for safety',
+          );
+          break;
+        }
 
         try {
           // Back-off delay before each retry attempt.
@@ -533,7 +531,7 @@ export class ArchiveOrchestratorService
           // re-queue with an incremented retry counter and a back-off delay.
           const message =
             error instanceof Error ? error.message : String(error);
-          this.requeueOrSkip(notice, message);
+          await this.requeueOrSkip(notice, message);
         }
 
         // Apply a per-item inter-capture delay for NsmLmSts notices to avoid
@@ -561,14 +559,31 @@ export class ArchiveOrchestratorService
    * next backfill cron or server restart.
    */
   private requeueOrSkip(
-    notice: (typeof this.screenshotQueue)[number],
+    notice: ScreenshotQueueItem,
     reason: string,
-  ): void {
+  ): Promise<void> {
+    return this.requeueOrSkipInternal(notice, reason);
+  }
+
+  private async requeueOrSkipInternal(
+    notice: ScreenshotQueueItem,
+    reason: string,
+  ): Promise<void> {
     const max = APP_CONSTANTS.SCREENSHOT.MAX_RETRIES;
     const nextAttempt = notice.retryCount + 1;
 
     if (notice.retryCount < max) {
-      this.screenshotQueue.push({ ...notice, retryCount: nextAttempt });
+      const queue = await this.getScreenshotQueue();
+      queue.push({ ...notice, retryCount: nextAttempt });
+      const queued = await this.setScreenshotQueue(queue);
+
+      if (!queued) {
+        this.logger.warn(
+          `Screenshot retry enqueue failed for notice ${notice.num}: ${reason}`,
+        );
+        return;
+      }
+
       this.logger.warn(
         `Screenshot failed for notice ${notice.num} ` +
           `(attempt ${nextAttempt}/${max + 1}): ${reason} - re-queued`,
@@ -588,7 +603,7 @@ export class ArchiveOrchestratorService
    * retried on the next archiving cycle).
    */
   async onApplicationShutdown(signal?: string): Promise<void> {
-    const pending = this.screenshotQueue.length;
+    const pending = await this.getScreenshotQueueLength();
     const inProgress = this.isCaptureRunning ? 1 : 0;
 
     if (pending > 0 || inProgress > 0) {
@@ -599,7 +614,7 @@ export class ArchiveOrchestratorService
     }
 
     // Clear the queue so the drain loop exits on its next iteration.
-    this.screenshotQueue.length = 0;
+    await this.setScreenshotQueue([]);
   }
 
   /**
@@ -667,7 +682,8 @@ export class ArchiveOrchestratorService
    * Called by the cron job in CronJobsService.
    */
   async handleScreenshotBackfill(): Promise<void> {
-    if (this.isCaptureRunning || this.screenshotQueue.length > 0) {
+    const queueLength = await this.getScreenshotQueueLength();
+    if (this.isCaptureRunning || queueLength > 0) {
       LoggerUtils.debugDev(
         ArchiveOrchestratorService.name,
         'Screenshot backfill cron skipped: capture already running or queue not empty',
@@ -738,14 +754,6 @@ export class ArchiveOrchestratorService
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * Result of a single HTML-backfill pass.
-   */
-  public static readonly HTML_BACKFILL_RESULT_ZERO = {
-    pal: { processed: 0, failed: 0 },
-    nsm: { processed: 0, failed: 0 },
-  };
-
-  /**
    * Re-fetches source HTML/detail for archived notices that still have
    * `sourceHtml = NULL`, plus NsmLmSts rows with empty `proposalReason`.
    *
@@ -770,8 +778,8 @@ export class ArchiveOrchestratorService
       await this.noticeArchiveService.getNoticesWithMissingHtml(limit);
 
     const result = {
-      pal: { processed: 0, failed: 0 },
-      nsm: { processed: 0, failed: 0 },
+      pal: { ...APP_CONSTANTS.ARCHIVE_SYNC.HTML_BACKFILL_RESULT_ZERO.pal },
+      nsm: { ...APP_CONSTANTS.ARCHIVE_SYNC.HTML_BACKFILL_RESULT_ZERO.nsm },
     };
 
     if (pal.length === 0 && nsm.length === 0) {
@@ -934,6 +942,88 @@ export class ArchiveOrchestratorService
    */
   private computeSha256(input: string): string {
     return createHash('sha256').update(input, 'utf8').digest('hex');
+  }
+
+  private async enqueueScreenshots(
+    items: Array<{
+      num: number;
+      contentId: string;
+      isDone: boolean;
+      nsmBillNo?: string;
+    }>,
+  ): Promise<void> {
+    const queue = await this.getScreenshotQueue();
+
+    // Deduplicate: skip notices already waiting in the queue to avoid
+    // redundant Puppeteer captures when backfill and a cron cycle overlap.
+    const queuedNums = new Set(queue.map((q) => q.num));
+    const deduped = items.filter((item) => !queuedNums.has(item.num));
+
+    if (deduped.length === 0) return;
+
+    const availableSlots = Math.max(
+      0,
+      APP_CONSTANTS.SCREENSHOT.QUEUE.MAX_SIZE - queue.length,
+    );
+
+    if (availableSlots === 0) {
+      this.logger.warn(
+        `Screenshot queue at capacity (${queue.length}) - dropping ${deduped.length} enqueue request(s)`,
+      );
+      return;
+    }
+
+    const accepted = deduped.slice(0, availableSlots);
+    const dropped = deduped.length - accepted.length;
+
+    queue.push(...accepted.map((item) => ({ ...item, retryCount: 0 })));
+    const written = await this.setScreenshotQueue(queue);
+
+    if (!written) {
+      this.logger.warn(
+        `Failed to persist screenshot queue after enqueueing ${deduped.length} notice(s)`,
+      );
+      return;
+    }
+
+    LoggerUtils.debug(
+      ArchiveOrchestratorService.name,
+      `Queued ${accepted.length} notice(s) for screenshot capture ` +
+        `(${items.length - deduped.length} duplicate(s) skipped, ${dropped} dropped by capacity, ` +
+        `queue depth: ${queue.length}, running: ${this.isCaptureRunning})`,
+    );
+
+    if (!this.isCaptureRunning) {
+      // Start the drain loop asynchronously
+      void this.drainScreenshotQueue();
+    }
+  }
+
+  private async getScreenshotQueue(): Promise<ScreenshotQueueItem[]> {
+    const queue = await this.cacheService.getObject<ScreenshotQueueItem[]>(
+      APP_CONSTANTS.SCREENSHOT.QUEUE.KEY,
+    );
+
+    return Array.isArray(queue) ? queue : [];
+  }
+
+  private async getScreenshotQueueLength(): Promise<number> {
+    const queue = await this.getScreenshotQueue();
+    return queue.length;
+  }
+
+  private async setScreenshotQueue(
+    queue: ScreenshotQueueItem[],
+  ): Promise<boolean> {
+    if (queue.length === 0) {
+      return this.cacheService.deleteKey(APP_CONSTANTS.SCREENSHOT.QUEUE.KEY);
+    }
+
+    return this.cacheService.setObject(
+      APP_CONSTANTS.SCREENSHOT.QUEUE.KEY,
+      queue,
+      APP_CONSTANTS.SCREENSHOT.QUEUE.TTL_SECONDS,
+    );
   }
 
   /**

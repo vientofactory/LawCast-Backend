@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ArchiveOrchestratorService } from './archive-orchestrator.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { CrawlingCoreService } from './crawling-core.service';
+import { CacheService } from '../cache/cache.service';
 import { type CachedNotice } from '../../types/cache.types';
 
 // fetch를 모킹
@@ -39,9 +40,32 @@ describe('ArchiveOrchestratorService', () => {
   };
 
   beforeEach(async () => {
+    const objectStore = new Map<string, unknown>();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ArchiveOrchestratorService,
+        {
+          provide: CacheService,
+          useValue: {
+            getObject: jest
+              .fn()
+              .mockImplementation(async (key: string) =>
+                objectStore.has(key) ? objectStore.get(key) : null,
+              ),
+            setObject: jest
+              .fn()
+              .mockImplementation(async (key: string, value: unknown) => {
+                objectStore.set(key, value);
+                return true;
+              }),
+            deleteKey: jest
+              .fn()
+              .mockImplementation(async (key: string) =>
+                objectStore.delete(key),
+              ),
+          },
+        },
         {
           provide: NoticeArchiveService,
           useValue: {

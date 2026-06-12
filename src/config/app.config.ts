@@ -154,6 +154,11 @@ export const APP_CONSTANTS = {
      * Puppeteer navigates a stateless content-viewer URL.
      */
     NSM_INTER_CAPTURE_DELAY_MS: 3000,
+    QUEUE: {
+      KEY: 'crawling:screenshotQueue',
+      MAX_SIZE: 20_000,
+      TTL_SECONDS: 7 * 24 * 60 * 60,
+    },
   },
   ARCHIVE_SYNC: {
     /** Items per crawler HTTP request (max 100). */
@@ -171,6 +176,15 @@ export const APP_CONSTANTS = {
     NSM_REASON_RETRY_MAX_ATTEMPTS: 5,
     /** Max age (ms) for items in the proposalReason retry queue before they are evicted. */
     NSM_REASON_RETRY_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+    PROPOSAL_REASON_RETRY_QUEUE: {
+      KEY: 'crawling:proposalReasonRetryQueue',
+      MAX_SIZE: 5000,
+      TTL_SECONDS: Math.ceil((24 * 60 * 60 * 1000) / 1000) * 2,
+    },
+    HTML_BACKFILL_RESULT_ZERO: {
+      pal: { processed: 0, failed: 0 },
+      nsm: { processed: 0, failed: 0 },
+    },
     /** DB rows fetched per revert-pass batch. */
     DONE_BATCH_SIZE: 500,
     /** Archive rows per integrity-scan batch. */

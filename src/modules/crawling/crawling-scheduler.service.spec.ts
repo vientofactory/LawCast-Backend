@@ -42,6 +42,8 @@ describe('CrawlingSchedulerService', () => {
   ];
 
   beforeEach(async () => {
+    const objectStore = new Map<string, unknown>();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CrawlingSchedulerService,
@@ -51,6 +53,22 @@ describe('CrawlingSchedulerService', () => {
             updateCache: jest.fn(),
             findNewNotices: jest.fn(),
             getRecentNotices: jest.fn(),
+            getObject: jest
+              .fn()
+              .mockImplementation(async (key: string) =>
+                objectStore.has(key) ? objectStore.get(key) : null,
+              ),
+            setObject: jest
+              .fn()
+              .mockImplementation(async (key: string, value: unknown) => {
+                objectStore.set(key, value);
+                return true;
+              }),
+            deleteKey: jest
+              .fn()
+              .mockImplementation(async (key: string) =>
+                objectStore.delete(key),
+              ),
           },
         },
         {
