@@ -808,7 +808,37 @@ export class NoticeArchiveService {
       baseUpdate.screenshotFormat = payload.screenshotFormat ?? 'jpeg';
     }
 
-    await this.archiveRepository.update({ noticeNum }, baseUpdate);
+    if (payload.proposalReason) {
+      // When proposalReason is now populated, rows that were previously marked
+      // 'not_supported' (because proposalReason was empty at archive time) must
+      // be reset to 'not_requested' so the summary backfill can pick them up.
+      // Only rows still in the terminal-skip state are touched; rows that already
+      // have a real status (ready / unavailable / not_requested) are left alone.
+      await this.archiveRepository
+        .createQueryBuilder()
+        .update(NoticeArchive)
+        .set({ ...baseUpdate, aiSummaryStatus: 'not_requested' })
+        .where('noticeNum = :noticeNum AND aiSummaryStatus = :skip', {
+          noticeNum,
+          skip: 'not_supported',
+        })
+        .execute();
+
+      // For rows whose aiSummaryStatus is already something other than
+      // 'not_supported', update only the HTML/detail fields without touching
+      // the status.
+      await this.archiveRepository
+        .createQueryBuilder()
+        .update(NoticeArchive)
+        .set(baseUpdate)
+        .where('noticeNum = :noticeNum AND aiSummaryStatus != :skip', {
+          noticeNum,
+          skip: 'not_supported',
+        })
+        .execute();
+    } else {
+      await this.archiveRepository.update({ noticeNum }, baseUpdate);
+    }
   }
 
   async getExistingNoticeNumSet(noticeNums: number[]): Promise<Set<number>> {
