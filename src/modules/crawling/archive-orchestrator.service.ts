@@ -986,7 +986,7 @@ export class ArchiveOrchestratorService
       return;
     }
 
-    LoggerUtils.debug(
+    LoggerUtils.debugDev(
       ArchiveOrchestratorService.name,
       `Queued ${accepted.length} notice(s) for screenshot capture ` +
         `(${items.length - deduped.length} duplicate(s) skipped, ${dropped} dropped by capacity, ` +
