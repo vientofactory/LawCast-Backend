@@ -264,12 +264,6 @@ export class CrawlingSchedulerService implements OnModuleInit {
     const crawledData = await this.crawlingCoreService.crawlAllPages();
 
     if (!crawledData || crawledData.length === 0) {
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        CrawlingSchedulerService.name,
-        'No data received from crawler during initialization',
-      );
-      this.logger.warn('No data received from crawler during initialization');
       return;
     }
 
@@ -362,12 +356,6 @@ export class CrawlingSchedulerService implements OnModuleInit {
     });
 
     if (!crawledData || crawledData.length === 0) {
-      this.logger.warn('No data received from crawler');
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        CrawlingSchedulerService.name,
-        'No data received from crawler',
-      );
       return [];
     }
 
@@ -965,12 +953,12 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
     if (noticesWithoutReason.length > 0) {
       this.logger.log(
-        `${noticesWithoutReason.length} pending bill(s) archived without proposalReason — queued for retry`,
+        `${noticesWithoutReason.length} pending bill(s) archived without proposalReason - queued for retry`,
       );
       void this.discordBridge?.logEvent(
         BridgeLogLevel.WARN,
         CrawlingSchedulerService.name,
-        `**${noticesWithoutReason.length}** pending bill(s) missing proposalReason — queued for retry`,
+        `**${noticesWithoutReason.length}** pending bill(s) missing proposalReason - queued for retry`,
         {
           nums: noticesWithoutReason.map((n) => n.num),
           queueSize: retryQueueLength,
@@ -978,7 +966,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       );
     }
 
-    // Stage 2: AI summary generation — only for bills that have proposalReason.
+    // Stage 2: AI summary generation - only for bills that have proposalReason.
     // Use archivedNotices (with proposalReason) where available; fall back to
     // raw pending notices only when archiving failed for every bill so the cache
     // is not left entirely empty (no notification is sent in the fallback case).
@@ -1183,12 +1171,12 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
       if (evicted.length > 0) {
         this.logger.warn(
-          `proposalReason retry: evicting ${evicted.length} bill(s) after exhausting retries — sending fallback notifications`,
+          `proposalReason retry: evicting ${evicted.length} bill(s) after exhausting retries - sending fallback notifications`,
         );
         void this.discordBridge?.logEvent(
           BridgeLogLevel.WARN,
           CrawlingSchedulerService.name,
-          `proposalReason retry: evicting **${evicted.length}** bill(s) — sending notification without summary`,
+          `proposalReason retry: evicting **${evicted.length}** bill(s) - sending notification without summary`,
           { nums: evicted.map((e) => e.notice.num) },
         );
         // Send last-resort notifications without AI summary.

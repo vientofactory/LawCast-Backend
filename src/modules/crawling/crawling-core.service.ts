@@ -327,7 +327,7 @@ export class CrawlingCoreService {
     try {
       await client.initBrowser();
 
-      // `browser` is a private JS property — safe to access at runtime.
+      // `browser` is a private JS property - safe to access at runtime.
 
       const browser = (
         client as unknown as {
@@ -375,7 +375,7 @@ export class CrawlingCoreService {
         // so we end up capturing the wrong HTML.
         //
         // Fix:
-        //   1. Use `domcontentloaded` — resolves immediately on either the real
+        //   1. Use `domcontentloaded` - resolves immediately on either the real
         //      page or the Waitingroom without waiting for networkidle.
         //   2. Inspect the page title.  If it's Waitingroom, call
         //      waitForNavigation(networkidle0) to wait for the JS redirect.
@@ -412,7 +412,7 @@ export class CrawlingCoreService {
               });
               if (nav) response = nav;
             } catch {
-              // waitForNavigation timed out — pause then reload.
+              // waitForNavigation timed out - pause then reload.
               await new Promise<void>((r) =>
                 setTimeout(r, WAITINGROOM_RETRY_DELAY_MS * (attempt + 1)),
               );
@@ -428,7 +428,7 @@ export class CrawlingCoreService {
           this.logger.warn(
             `NSM bill ${billNo}: Waitingroom not resolved after ${
               MAX_WAITINGROOM_RETRIES + 1
-            } attempts — HTML may be a Waitingroom page`,
+            } attempts - HTML may be a Waitingroom page`,
           );
         }
 
@@ -436,7 +436,7 @@ export class CrawlingCoreService {
         const responseUrl = page.url();
         const statusCode = response?.status() ?? 200;
 
-        // Parse detail from the already-loaded HTML — no extra HTTP request.
+        // Parse detail from the already-loaded HTML - no extra HTTP request.
         let detail: INsmBillDetail | null = null;
         try {
           detail = new NsmLmStsParser().parseDetail(html);
