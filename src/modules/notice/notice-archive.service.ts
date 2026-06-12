@@ -1,17 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createHash } from 'crypto';
 import {
-  Between,
-  FindOptionsWhere,
-  FindOperator,
-  ILike,
   In,
   IsNull,
   LessThan,
-  LessThanOrEqual,
   MoreThan,
-  MoreThanOrEqual,
   Not,
   Repository,
   Brackets,
@@ -22,26 +15,19 @@ import {
 } from '../../types/cache.types';
 import { NoticeArchive } from '../notice/notice-archive.entity';
 import { buildArchiveExportArtifacts } from './archive-export.builder';
+import {
+  NOTICE_ITEM_SELECT,
+  buildArchiveWhereConditions,
+  computeSha256,
+  mapArchiveEntityToCachedNotice,
+  mapArchiveEntityToNoticeItem,
+  mapArchiveEntityToRawRecord,
+  normalizeSortOrder,
+  parseHttpMetadata,
+  parseOptionalDate,
+} from './notice-archive.helpers';
+import { mapConcurrently } from '../../utils/concurrency.utils';
 import JSZip from 'jszip';
-
-/**
- * Columns required by mapArchiveEntityToNoticeItem
- */
-const NOTICE_ITEM_SELECT = {
-  noticeNum: true,
-  subject: true,
-  proposerCategory: true,
-  committee: true,
-  assemblyLink: true,
-  contentId: true,
-  isDone: true,
-  aiSummary: true,
-  aiSummaryStatus: true,
-  attachmentPdfFile: true,
-  attachmentHwpFile: true,
-  archiveStartedAt: true,
-  lastUpdatedAt: true,
-} as const;
 
 export interface ArchiveListQuery {
   page: number;
@@ -219,7 +205,7 @@ export class NoticeArchiveService {
       httpMetadataJson: normalizedHttpMetadata
         ? JSON.stringify(normalizedHttpMetadata)
         : null,
-      httpFetchedAt: this.parseOptionalDate(normalizedHttpMetadata?.fetchedAt),
+      httpFetchedAt: parseOptionalDate(normalizedHttpMetadata?.fetchedAt),
       httpStatusCode: normalizedHttpMetadata?.statusCode ?? null,
       httpContentType: normalizedHttpMetadata?.contentType ?? null,
       httpEtag: normalizedHttpMetadata?.etag ?? null,
@@ -330,21 +316,9 @@ export class NoticeArchiveService {
       take,
     });
 
-    return rows.map((row) => ({
-      num: row.noticeNum,
-      subject: row.subject,
-      proposerCategory: row.proposerCategory,
-      committee: row.committee,
-      link: row.assemblyLink,
-      contentId: row.contentId,
-      proposalReason: row.proposalReason || null,
-      attachments: {
-        pdfFile: row.attachmentPdfFile ?? '',
-        hwpFile: row.attachmentHwpFile ?? '',
-      },
-      aiSummary: null,
-      aiSummaryStatus: 'not_requested' as const,
-    }));
+    return rows.map((row) =>
+      mapArchiveEntityToCachedNotice(row, 'not_requested'),
+    );
   }
 
   /**
@@ -379,21 +353,9 @@ export class NoticeArchiveService {
       take,
     });
 
-    return rows.map((row) => ({
-      num: row.noticeNum,
-      subject: row.subject,
-      proposerCategory: row.proposerCategory,
-      committee: row.committee,
-      link: row.assemblyLink,
-      contentId: row.contentId,
-      proposalReason: row.proposalReason || null,
-      attachments: {
-        pdfFile: row.attachmentPdfFile ?? '',
-        hwpFile: row.attachmentHwpFile ?? '',
-      },
-      aiSummary: null,
-      aiSummaryStatus: 'unavailable' as const,
-    }));
+    return rows.map((row) =>
+      mapArchiveEntityToCachedNotice(row, 'unavailable'),
+    );
   }
 
   async getArchiveNotices(query: ArchiveListQuery): Promise<{
@@ -408,14 +370,14 @@ export class NoticeArchiveService {
     const limit = Math.min(50, Math.max(1, query.limit || 10));
     const skip = (page - 1) * limit;
     const search = (query.search || '').trim();
-    const where = this.buildArchiveWhereConditions({
+    const where = buildArchiveWhereConditions({
       search,
       startDate: query.startDate,
       endDate: query.endDate,
       isDone: query.isDone,
       fullText: query.fullText,
     });
-    const sortOrder = this.normalizeSortOrder(query.sortOrder);
+    const sortOrder = normalizeSortOrder(query.sortOrder);
 
     const [rows, total] = await this.archiveRepository.findAndCount({
       where,
@@ -429,7 +391,7 @@ export class NoticeArchiveService {
     });
 
     return {
-      items: rows.map((row) => this.mapArchiveEntityToNoticeItem(row)),
+      items: rows.map((row) => mapArchiveEntityToNoticeItem(row)),
       page,
       limit,
       total,
@@ -440,7 +402,7 @@ export class NoticeArchiveService {
 
   async listArchiveNotices(search?: string): Promise<ArchiveNoticeItem[]> {
     const normalizedSearch = (search || '').trim();
-    const where = this.buildArchiveWhereConditions({
+    const where = buildArchiveWhereConditions({
       search: normalizedSearch,
     });
 
@@ -453,7 +415,7 @@ export class NoticeArchiveService {
       },
     });
 
-    return rows.map((row) => this.mapArchiveEntityToNoticeItem(row));
+    return rows.map((row) => mapArchiveEntityToNoticeItem(row));
   }
 
   async getArchiveNoticesByOffset(query: ArchiveOffsetQuery): Promise<{
@@ -464,14 +426,14 @@ export class NoticeArchiveService {
     const skip = Math.max(0, query.skip || 0);
     const take = Math.max(0, query.take || 0);
     const search = (query.search || '').trim();
-    const where = this.buildArchiveWhereConditions({
+    const where = buildArchiveWhereConditions({
       search,
       startDate: query.startDate,
       endDate: query.endDate,
       isDone: query.isDone,
       fullText: query.fullText,
     });
-    const sortOrder = this.normalizeSortOrder(query.sortOrder);
+    const sortOrder = normalizeSortOrder(query.sortOrder);
 
     // Use knownTotal when provided to avoid a redundant COUNT query.
     const total =
@@ -497,7 +459,7 @@ export class NoticeArchiveService {
     });
 
     return {
-      items: rows.map((row) => this.mapArchiveEntityToNoticeItem(row)),
+      items: rows.map((row) => mapArchiveEntityToNoticeItem(row)),
       total,
       search,
     };
@@ -515,10 +477,10 @@ export class NoticeArchiveService {
     }
 
     const integrity = await this.verifyAndRefreshIntegrity(row);
-    const httpMetadata = this.parseHttpMetadata(row.httpMetadataJson);
+    const httpMetadata = parseHttpMetadata(row.httpMetadataJson);
 
     return {
-      notice: this.mapArchiveEntityToNoticeItem(row),
+      notice: mapArchiveEntityToNoticeItem(row),
       originalContent: {
         contentId: row.contentId ?? '',
         title: row.sourceTitle?.trim() || row.subject,
@@ -577,7 +539,7 @@ export class NoticeArchiveService {
     }
 
     const integrity = await this.verifyAndRefreshIntegrity(row);
-    const httpMetadata = this.parseHttpMetadata(row.httpMetadataJson);
+    const httpMetadata = parseHttpMetadata(row.httpMetadataJson);
     const generatedAt = new Date();
 
     return buildArchiveExportArtifacts({
@@ -586,7 +548,7 @@ export class NoticeArchiveService {
       row,
       integrity,
       httpMetadata,
-      dbRecord: this.mapArchiveEntityToRawRecord(row),
+      dbRecord: mapArchiveEntityToRawRecord(row),
     });
   }
 
@@ -801,7 +763,7 @@ export class NoticeArchiveService {
         sourceHtml: html,
         sourceHtmlSha256: sha256,
         httpMetadataJson: normalized ? JSON.stringify(normalized) : null,
-        httpFetchedAt: this.parseOptionalDate(normalized?.fetchedAt),
+        httpFetchedAt: parseOptionalDate(normalized?.fetchedAt),
         httpStatusCode: normalized?.statusCode ?? null,
         httpContentType: normalized?.contentType ?? null,
         httpEtag: normalized?.etag ?? null,
@@ -834,7 +796,7 @@ export class NoticeArchiveService {
       sourceHtmlSha256: payload.sha256,
       proposalReason: payload.proposalReason,
       httpMetadataJson: normalized ? JSON.stringify(normalized) : null,
-      httpFetchedAt: this.parseOptionalDate(normalized?.fetchedAt),
+      httpFetchedAt: parseOptionalDate(normalized?.fetchedAt),
       httpStatusCode: normalized?.statusCode ?? null,
       httpContentType: normalized?.contentType ?? null,
       httpEtag: normalized?.etag ?? null,
@@ -904,8 +866,7 @@ export class NoticeArchiveService {
   ): Promise<number> {
     if (items.length === 0) return 0;
 
-    let upgradedCount = 0;
-    for (const item of items) {
+    const updatedCounts = await mapConcurrently(items, 10, async (item) => {
       const result = await this.archiveRepository.update(
         { noticeNum: item.num, contentId: IsNull() },
         {
@@ -914,9 +875,10 @@ export class NoticeArchiveService {
           committee: item.committee,
         },
       );
-      upgradedCount += result.affected ?? 0;
-    }
-    return upgradedCount;
+      return result.affected ?? 0;
+    });
+
+    return updatedCounts.reduce((sum, count) => sum + count, 0);
   }
 
   async getArchiveCount(): Promise<number> {
@@ -951,21 +913,9 @@ export class NoticeArchiveService {
       take: limit,
     });
 
-    return rows.map((row) => ({
-      num: row.noticeNum,
-      subject: row.subject,
-      proposerCategory: row.proposerCategory,
-      committee: row.committee,
-      link: row.assemblyLink,
-      contentId: row.contentId,
-      attachments: {
-        pdfFile: row.attachmentPdfFile ?? '',
-        hwpFile: row.attachmentHwpFile ?? '',
-      },
-      aiSummary: row.aiSummary ?? null,
-      aiSummaryStatus: (row.aiSummaryStatus ??
-        'not_requested') as AISummaryStatus,
-    }));
+    return rows.map((row) =>
+      mapArchiveEntityToCachedNotice(row, 'not_requested'),
+    );
   }
 
   /**
@@ -990,7 +940,7 @@ export class NoticeArchiveService {
     failed: number;
     skipped: number;
   }> {
-    let skip = 0;
+    let lastSeenId = 0;
     let scanned = 0;
     let passed = 0;
     let failed = 0;
@@ -998,6 +948,7 @@ export class NoticeArchiveService {
 
     for (;;) {
       const rows = await this.archiveRepository.find({
+        where: lastSeenId > 0 ? { id: MoreThan(lastSeenId) } : undefined,
         select: {
           id: true,
           sourceHtml: true,
@@ -1006,7 +957,6 @@ export class NoticeArchiveService {
           integrityVerifiedAt: true,
         },
         order: { id: 'ASC' },
-        skip,
         take: batchSize,
       });
 
@@ -1025,7 +975,7 @@ export class NoticeArchiveService {
           skipped++;
           continue;
         }
-        const computed = this.computeSha256(row.sourceHtml);
+        const computed = computeSha256(row.sourceHtml);
         const ok = computed === row.sourceHtmlSha256;
         if (ok) passed++;
         else failed++;
@@ -1055,8 +1005,8 @@ export class NoticeArchiveService {
         );
       }
 
+      lastSeenId = rows[rows.length - 1].id;
       if (rows.length < batchSize) break;
-      skip += batchSize;
     }
 
     return { scanned, passed, failed, skipped };
@@ -1087,7 +1037,7 @@ export class NoticeArchiveService {
   async countByNoticeNumComparison(
     query: ArchiveNumCompareCountQuery,
   ): Promise<number> {
-    const where = this.buildArchiveWhereConditions({
+    const where = buildArchiveWhereConditions({
       search: query.search,
       startDate: query.startDate,
       endDate: query.endDate,
@@ -1144,149 +1094,6 @@ export class NoticeArchiveService {
     );
   }
 
-  private mapArchiveEntityToNoticeItem(row: NoticeArchive): ArchiveNoticeItem {
-    return {
-      num: row.noticeNum,
-      subject: row.subject,
-      proposerCategory: row.proposerCategory,
-      committee: row.committee,
-      link: row.assemblyLink,
-      contentId: row.contentId,
-      isDone: row.isDone ?? false,
-      aiSummary: row.aiSummary,
-      aiSummaryStatus: (row.aiSummaryStatus ||
-        'not_requested') as AISummaryStatus,
-      attachments: {
-        pdfFile: row.attachmentPdfFile,
-        hwpFile: row.attachmentHwpFile,
-      },
-      archiveStartedAt: row.archiveStartedAt,
-      lastUpdatedAt: row.lastUpdatedAt,
-    };
-  }
-
-  private mapArchiveEntityToRawRecord(row: NoticeArchive) {
-    return {
-      id: row.id,
-      noticeNum: row.noticeNum,
-      subject: row.subject,
-      proposerCategory: row.proposerCategory,
-      committee: row.committee,
-      assemblyLink: row.assemblyLink,
-      contentId: row.contentId,
-      proposalReason: row.proposalReason,
-      sourceTitle: row.sourceTitle,
-      contentBillNumber: row.contentBillNumber,
-      contentProposer: row.contentProposer,
-      contentProposalDate: row.contentProposalDate,
-      contentCommittee: row.contentCommittee,
-      contentReferralDate: row.contentReferralDate,
-      contentNoticePeriod: row.contentNoticePeriod,
-      contentProposalSession: row.contentProposalSession,
-      aiSummary: row.aiSummary,
-      aiSummaryStatus: row.aiSummaryStatus,
-      attachmentPdfFile: row.attachmentPdfFile,
-      attachmentHwpFile: row.attachmentHwpFile,
-      archivedAt: row.archivedAt,
-      sourceHtml: row.sourceHtml,
-      sourceHtmlSha256: row.sourceHtmlSha256,
-      integrityVerifiedAt: row.integrityVerifiedAt,
-      integrityCheckPassed: row.integrityCheckPassed,
-      httpMetadataJson: row.httpMetadataJson,
-      httpFetchedAt: row.httpFetchedAt,
-      httpStatusCode: row.httpStatusCode,
-      httpContentType: row.httpContentType,
-      httpEtag: row.httpEtag,
-      httpLastModified: row.httpLastModified,
-      archiveStartedAt: row.archiveStartedAt,
-      lastUpdatedAt: row.lastUpdatedAt,
-    };
-  }
-
-  private normalizeSortOrder(sortOrder?: 'asc' | 'desc'): 'asc' | 'desc' {
-    return sortOrder === 'asc' ? 'asc' : 'desc';
-  }
-
-  private buildArchiveWhereConditions(params: {
-    search?: string;
-    startDate?: Date;
-    endDate?: Date;
-    noticeNumCondition?: FindOperator<number>;
-    isDone?: boolean;
-    fullText?: boolean;
-  }):
-    | FindOptionsWhere<NoticeArchive>
-    | FindOptionsWhere<NoticeArchive>[]
-    | undefined {
-    const normalizedSearch = (params.search || '').trim();
-    const baseWhere: FindOptionsWhere<NoticeArchive> = {};
-
-    if (params.noticeNumCondition) {
-      baseWhere.noticeNum = params.noticeNumCondition;
-    }
-
-    if (params.isDone !== undefined) {
-      baseWhere.isDone = params.isDone;
-    }
-
-    if (params.startDate && params.endDate) {
-      baseWhere.archiveStartedAt =
-        params.startDate <= params.endDate
-          ? Between(params.startDate, params.endDate)
-          : Between(params.endDate, params.startDate);
-    } else if (params.startDate) {
-      baseWhere.archiveStartedAt = MoreThanOrEqual(params.startDate);
-    } else if (params.endDate) {
-      baseWhere.archiveStartedAt = LessThanOrEqual(params.endDate);
-    }
-
-    if (!normalizedSearch) {
-      return Object.keys(baseWhere).length > 0 ? baseWhere : undefined;
-    }
-
-    const conditions: FindOptionsWhere<NoticeArchive>[] = [
-      { ...baseWhere, subject: ILike(`%${normalizedSearch}%`) },
-      { ...baseWhere, committee: ILike(`%${normalizedSearch}%`) },
-    ];
-
-    // proposalReason is a large TEXT column; ILIKE without FTS is expensive.
-    // Only include when fullText is explicitly requested.
-    if (params.fullText) {
-      conditions.push({
-        ...baseWhere,
-        proposalReason: ILike(`%${normalizedSearch}%`),
-      });
-    }
-
-    return conditions;
-  }
-
-  private parseHttpMetadata(raw: string | null): ArchiveHttpMetadata {
-    if (!raw) {
-      return {};
-    }
-
-    try {
-      const parsed = JSON.parse(raw) as ArchiveHttpMetadata;
-      return typeof parsed === 'object' && parsed !== null ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-
-  private parseOptionalDate(value?: string): Date | null {
-    if (!value) {
-      return null;
-    }
-
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  }
-
-  private computeSha256(input: string): string {
-    return createHash('sha256').update(input, 'utf8').digest('hex');
-  }
-
   private async verifyAndRefreshIntegrity(row: NoticeArchive): Promise<{
     checkedAt: Date | null;
     passed: boolean | null;
@@ -1300,7 +1107,7 @@ export class NoticeArchiveService {
       };
     }
 
-    const calculatedSha256 = this.computeSha256(row.sourceHtml);
+    const calculatedSha256 = computeSha256(row.sourceHtml);
     const passed = calculatedSha256 === row.sourceHtmlSha256;
     const checkedAt = new Date();
 
