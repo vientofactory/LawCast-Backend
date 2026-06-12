@@ -14,6 +14,7 @@ import { APP_CONSTANTS } from '../../config/app.config';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
+import { mapConcurrently } from '../../utils/concurrency.utils';
 
 const {
   PENDING_CRAWL_MAX_RETRIES,
@@ -841,16 +842,18 @@ export class CrawlingSchedulerService implements OnModuleInit {
           }
 
           const backoffMs = PENDING_CRAWL_RETRY_BASE_MS * 2 ** attempt;
-          const attemptLabel = `${attempt + 1}/${PENDING_CRAWL_MAX_RETRIES + 1}`;
-          const message = (error as Error).message;
-          this.logger.warn(
-            `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
-          );
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.WARN,
-            CrawlingSchedulerService.name,
-            `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
-          );
+
+          // Slient retry with exponential backoff on network errors
+          // const attemptLabel = `${attempt + 1}/${PENDING_CRAWL_MAX_RETRIES + 1}`;
+          // const message = (error as Error).message;
+          // this.logger.warn(
+          //   `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
+          // );
+          // void this.discordBridge?.logEvent(
+          //   BridgeLogLevel.WARN,
+          //   CrawlingSchedulerService.name,
+          //   `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
+          // );
           await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
         }
       }
@@ -996,13 +999,9 @@ export class CrawlingSchedulerService implements OnModuleInit {
           : [];
 
     const concurrency = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
-    const noticesWithSummary: CachedNotice[] = [];
-
-    if (summaryBase.length > 0) {
-      for (let i = 0; i < summaryBase.length; i += concurrency) {
-        const chunk = summaryBase.slice(i, i + concurrency);
-        const results = await Promise.all(
-          chunk.map(async (notice) => {
+    const noticesWithSummary =
+      summaryBase.length > 0
+        ? await mapConcurrently(summaryBase, concurrency, async (notice) => {
             try {
               const result =
                 await this.summaryGenerationService.generateSummaryForNotice(
@@ -1016,11 +1015,8 @@ export class CrawlingSchedulerService implements OnModuleInit {
                 aiSummaryStatus: 'not_requested' as const,
               };
             }
-          }),
-        );
-        noticesWithSummary.push(...results);
-      }
-    }
+          })
+        : [];
 
     // Stage 3: Persist generated summaries to DB so backfill phases skip them.
     if (noticesWithReason.length > 0 && noticesWithSummary.length > 0) {

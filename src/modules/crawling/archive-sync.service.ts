@@ -13,6 +13,7 @@ import { CacheService } from '../cache/cache.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
+import { mapConcurrently } from '../../utils/concurrency.utils';
 import { type CachedNotice } from '../../types/cache.types';
 
 // ─── Tuning constants (sourced from APP_CONSTANTS.ARCHIVE_SYNC) ───────────────
@@ -837,7 +838,7 @@ export class ArchiveSyncService implements OnModuleInit {
       if (batch.length === 0) break;
 
       const batchCacheUpdates: CachedNotice[] = [];
-      const batchStatuses = await this.mapConcurrently(
+      const batchStatuses = await mapConcurrently(
         batch,
         SUMMARY_BACKFILL_CONCURRENCY,
         async (notice) => {
@@ -937,7 +938,7 @@ export class ArchiveSyncService implements OnModuleInit {
       if (batch.length === 0) break;
 
       const batchCacheUpdates: CachedNotice[] = [];
-      const batchStatuses = await this.mapConcurrently(
+      const batchStatuses = await mapConcurrently(
         batch,
         SUMMARY_BACKFILL_CONCURRENCY,
         async (notice) => {
@@ -1006,35 +1007,5 @@ export class ArchiveSyncService implements OnModuleInit {
     );
 
     return { scanned, recovered, skipped, stillFailed };
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Utilities
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Maps `items` through `mapper` with at most `concurrency` parallel calls.
-   * Preserves input order in the returned array.
-   */
-  private async mapConcurrently<T, R>(
-    items: T[],
-    concurrency: number,
-    mapper: (item: T) => Promise<R>,
-  ): Promise<R[]> {
-    if (items.length === 0) return [];
-    const limit = Math.max(1, concurrency);
-    const results = new Array<R>(items.length);
-    let nextIndex = 0;
-    const worker = async () => {
-      for (;;) {
-        const idx = nextIndex++;
-        if (idx >= items.length) return;
-        results[idx] = await mapper(items[idx]);
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(limit, items.length) }, worker),
-    );
-    return results;
   }
 }

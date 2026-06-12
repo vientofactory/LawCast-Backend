@@ -6,6 +6,7 @@ import { SummaryGenerationService } from './summary-generation.service';
 import { ArchiveOrchestratorService } from './archive-orchestrator.service';
 import { NotificationOrchestratorService } from '../notification/notification-orchestrator.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
+import { APP_CONSTANTS } from '../../config/app.config';
 import { type ITableData } from 'pal-crawl';
 
 describe('CrawlingSchedulerService', () => {
@@ -424,6 +425,8 @@ describe('CrawlingSchedulerService', () => {
       const econnreset = Object.assign(new Error('read ECONNRESET'), {
         code: 'ECONNRESET',
       });
+      const expectedAttempts =
+        APP_CONSTANTS.ARCHIVE_SYNC.PENDING_CRAWL_MAX_RETRIES + 1;
 
       (
         crawlingCoreService.getAllNsmPendingPages as jest.Mock
@@ -436,7 +439,7 @@ describe('CrawlingSchedulerService', () => {
       jest.useRealTimers();
 
       expect(crawlingCoreService.getAllNsmPendingPages).toHaveBeenCalledTimes(
-        4,
+        expectedAttempts,
       );
     });
   });
