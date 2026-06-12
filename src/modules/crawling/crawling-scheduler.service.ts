@@ -841,16 +841,18 @@ export class CrawlingSchedulerService implements OnModuleInit {
           }
 
           const backoffMs = PENDING_CRAWL_RETRY_BASE_MS * 2 ** attempt;
-          const attemptLabel = `${attempt + 1}/${PENDING_CRAWL_MAX_RETRIES + 1}`;
-          const message = (error as Error).message;
-          this.logger.warn(
-            `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
-          );
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.WARN,
-            CrawlingSchedulerService.name,
-            `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
-          );
+
+          // Slient retry with exponential backoff on network errors
+          // const attemptLabel = `${attempt + 1}/${PENDING_CRAWL_MAX_RETRIES + 1}`;
+          // const message = (error as Error).message;
+          // this.logger.warn(
+          //   `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
+          // );
+          // void this.discordBridge?.logEvent(
+          //   BridgeLogLevel.WARN,
+          //   CrawlingSchedulerService.name,
+          //   `Pending bills crawl failed (attempt ${attemptLabel}): ${message} - retrying in ${backoffMs}ms`,
+          // );
           await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
         }
       }
