@@ -102,19 +102,8 @@ export class CrawlingCoreService {
    * @returns A promise that resolves to an array of notice summaries.
    */
   async crawlData(): Promise<ITableData[]> {
-    try {
-      const crawledData = await this.createClient().get();
-
-      if (!crawledData || crawledData.length === 0) {
-        this.logger.warn('No data received from crawler');
-        return [];
-      }
-
-      return crawledData;
-    } catch (error) {
-      this.logger.error('Error during crawling:', error);
-      throw error;
-    }
+    const crawledData = await this.createClient().get();
+    return crawledData?.length ? crawledData : [];
   }
 
   /**
@@ -123,15 +112,7 @@ export class CrawlingCoreService {
    * @returns A promise that resolves to the detailed content data of the notice.
    */
   async getContent(contentId: string): Promise<IContentData> {
-    try {
-      return await this.createClient().getContent(contentId);
-    } catch (error) {
-      this.logger.error(
-        `Error fetching content for contentId ${contentId}:`,
-        error,
-      );
-      throw error;
-    }
+    return this.createClient().getContent(contentId);
   }
 
   /**
@@ -139,13 +120,8 @@ export class CrawlingCoreService {
    * @returns A promise that resolves to an array of done notice summaries.
    */
   async getDone(): Promise<ITableData[]> {
-    try {
-      const data = await this.createClient().getDone();
-      return data ?? [];
-    } catch (error) {
-      this.logger.error('Error fetching done notices:', error);
-      throw error;
-    }
+    const data = await this.createClient().getDone();
+    return data ?? [];
   }
 
   /**
@@ -154,15 +130,7 @@ export class CrawlingCoreService {
    * @returns A promise that resolves to the detailed content data of the done notice.
    */
   async getDoneContent(contentId: string): Promise<IContentData> {
-    try {
-      return await this.createClient().getDoneContent(contentId);
-    } catch (error) {
-      this.logger.error(
-        `Error fetching done content for contentId ${contentId}:`,
-        error,
-      );
-      throw error;
-    }
+    return this.createClient().getDoneContent(contentId);
   }
 
   /**
@@ -171,12 +139,7 @@ export class CrawlingCoreService {
    * @returns A promise that resolves to the search results for active notices.
    */
   async search(query?: ISearchQuery): Promise<ISearchResult> {
-    try {
-      return await this.createClient().search(query);
-    } catch (error) {
-      this.logger.error('Error searching active notices:', error);
-      throw error;
-    }
+    return this.createClient().search(query);
   }
 
   /**
@@ -185,12 +148,7 @@ export class CrawlingCoreService {
    * @returns A promise that resolves to the search results for done notices.
    */
   async searchDone(query?: ISearchQuery): Promise<ISearchResult> {
-    try {
-      return await this.createClient().searchDone(query);
-    } catch (error) {
-      this.logger.error('Error searching done notices:', error);
-      throw error;
-    }
+    return this.createClient().searchDone(query);
   }
 
   /**
@@ -205,12 +163,7 @@ export class CrawlingCoreService {
     query?: Omit<ISearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
   ): AsyncGenerator<ISearchResult> {
-    try {
-      yield* this.createClient().getAllPages(query, options);
-    } catch (error) {
-      this.logger.error('Error streaming active notice pages:', error);
-      throw error;
-    }
+    yield* this.createClient().getAllPages(query, options);
   }
 
   /**
@@ -225,12 +178,7 @@ export class CrawlingCoreService {
     query?: Omit<ISearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
   ): AsyncGenerator<ISearchResult> {
-    try {
-      yield* this.createClient().getAllDonePages(query, options);
-    } catch (error) {
-      this.logger.error('Error streaming done notice pages:', error);
-      throw error;
-    }
+    yield* this.createClient().getAllDonePages(query, options);
   }
 
   /**
@@ -311,15 +259,7 @@ export class CrawlingCoreService {
    * @param billNo The 의안번호 of the bill (e.g. "2200001").
    */
   async getNsmDetail(billNo: string): Promise<INsmBillDetail> {
-    try {
-      return await this.createNsmClient().getDetail(billNo);
-    } catch (error) {
-      this.logger.error(
-        `Error fetching NsmLmSts detail for billNo ${billNo}:`,
-        error,
-      );
-      throw error;
-    }
+    return this.createNsmClient().getDetail(billNo);
   }
 
   /**
@@ -337,12 +277,7 @@ export class CrawlingCoreService {
     query?: Omit<INsmSearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
   ): AsyncGenerator<INsmSearchResult> {
-    try {
-      yield* this.createNsmClient().getAllPendingPages(query, options);
-    } catch (error) {
-      this.logger.error('Error streaming NsmLmSts pending bill pages:', error);
-      throw error;
-    }
+    yield* this.createNsmClient().getAllPendingPages(query, options);
   }
 
   /**
