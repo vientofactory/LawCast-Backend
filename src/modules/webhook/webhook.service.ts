@@ -49,16 +49,26 @@ export class WebhookService {
       parsed.search = '';
       parsed.hash = '';
 
+      const normalizedHost = this.normalizeDiscordWebhookHost(parsed.hostname);
+
       let normalizedPath = parsed.pathname;
       if (normalizedPath.endsWith('/') && normalizedPath.length > 1) {
         normalizedPath = normalizedPath.slice(0, -1);
       }
 
-      return `${parsed.protocol}//${parsed.host}${normalizedPath}`;
+      return `${parsed.protocol}//${normalizedHost}${normalizedPath}`;
     } catch {
       // Fallback to original URL if parsing fails
       return url;
     }
+  }
+
+  private normalizeDiscordWebhookHost(hostname: string): string {
+    const normalized = hostname.toLowerCase();
+    if (normalized === 'discordapp.com') {
+      return 'discord.com';
+    }
+    return normalized;
   }
 
   // Utility methods for managing webhooks
