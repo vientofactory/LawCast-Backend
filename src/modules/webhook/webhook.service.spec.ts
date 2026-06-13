@@ -70,6 +70,25 @@ describe('WebhookService', () => {
       });
     });
 
+    it('should canonicalize discordapp.com to discord.com', async () => {
+      const discordAppUrl =
+        'https://discordapp.com/api/webhooks/123456789/token123';
+      const canonicalUrl =
+        'https://discord.com/api/webhooks/123456789/token123';
+
+      mockRepository.create.mockReturnValue({});
+      mockRepository.save.mockResolvedValue({});
+
+      await service.create(discordAppUrl);
+
+      expect(mockRepository.findOne).toHaveBeenCalledWith({
+        where: { url: canonicalUrl },
+      });
+      expect(mockRepository.create).toHaveBeenCalledWith({
+        url: canonicalUrl,
+      });
+    });
+
     it('should remove query parameters', async () => {
       const urlWithQuery =
         'https://discord.com/api/webhooks/123456789/token123?wait=true';
@@ -184,6 +203,19 @@ describe('WebhookService', () => {
       mockRepository.findOne.mockResolvedValue(null);
 
       await service.findByUrl('https://discord.com/api/webhooks/123/token/');
+
+      expect(mockRepository.findOne).toHaveBeenCalledWith({
+        where: {
+          url: 'https://discord.com/api/webhooks/123/token',
+          isActive: true,
+        },
+      });
+    });
+
+    it('should treat discordapp.com as the same webhook URL', async () => {
+      mockRepository.findOne.mockResolvedValue(null);
+
+      await service.findByUrl('https://discordapp.com/api/webhooks/123/token');
 
       expect(mockRepository.findOne).toHaveBeenCalledWith({
         where: {
