@@ -14,9 +14,12 @@ export class CreateWebhookDto {
     { require_protocol: true, protocols: ['https'] },
     { message: 'Please enter a valid HTTPS URL' },
   )
-  @Matches(/^https:\/\/discord\.com\/api\/webhooks\/\d+\/[a-zA-Z0-9_-]+$/, {
-    message: 'Invalid Discord webhook URL format',
-  })
+  @Matches(
+    /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[a-zA-Z0-9_-]+$/,
+    {
+      message: 'Invalid Discord webhook URL format',
+    },
+  )
   @MaxLength(APP_CONSTANTS.DISCORD.WEBHOOK.URL_MAX_LENGTH, {
     message: `URL cannot exceed ${APP_CONSTANTS.DISCORD.WEBHOOK.URL_MAX_LENGTH} characters`,
   })

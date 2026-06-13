@@ -14,20 +14,16 @@ import {
   type CachedNotice,
 } from '../../types/cache.types';
 import { NoticeArchive } from '../notice/notice-archive.entity';
-import { buildArchiveExportArtifacts } from './archive-export.builder';
 import {
   NOTICE_ITEM_SELECT,
   buildArchiveWhereConditions,
-  computeSha256,
   mapArchiveEntityToCachedNotice,
   mapArchiveEntityToNoticeItem,
-  mapArchiveEntityToRawRecord,
   normalizeSortOrder,
-  parseHttpMetadata,
   parseOptionalDate,
 } from './notice-archive.helpers';
 import { mapConcurrently } from '../../utils/concurrency.utils';
-import JSZip from 'jszip';
+import { NoticeArchiveArtifactSupport } from './utils/notice-archive-artifact-support';
 
 export interface ArchiveListQuery {
   page: number;
@@ -150,10 +146,16 @@ export interface ArchiveHttpMetadata {
 
 @Injectable()
 export class NoticeArchiveService {
+  private readonly artifactSupport: NoticeArchiveArtifactSupport;
+
   constructor(
     @InjectRepository(NoticeArchive)
     private readonly archiveRepository: Repository<NoticeArchive>,
-  ) {}
+  ) {
+    this.artifactSupport = new NoticeArchiveArtifactSupport(
+      this.archiveRepository,
+    );
+  }
 
   async upsertNoticeArchive(
     notice: CachedNotice,
@@ -468,126 +470,19 @@ export class NoticeArchiveService {
   async getArchivedNoticeDetail(
     noticeNum: number,
   ): Promise<ArchiveDetailResult | null> {
-    const row = await this.archiveRepository.findOne({
-      where: { noticeNum },
-    });
-
-    if (!row) {
-      return null;
-    }
-
-    const integrity = await this.verifyAndRefreshIntegrity(row);
-    const httpMetadata = parseHttpMetadata(row.httpMetadataJson);
-
-    return {
-      notice: mapArchiveEntityToNoticeItem(row),
-      originalContent: {
-        contentId: row.contentId ?? '',
-        title: row.sourceTitle?.trim() || row.subject,
-        proposalReason: row.proposalReason || '',
-        billNumber: row.contentBillNumber ?? null,
-        proposer: row.contentProposer ?? null,
-        proposalDate: row.contentProposalDate ?? null,
-        committee: row.contentCommittee ?? null,
-        referralDate: row.contentReferralDate ?? null,
-        noticePeriod: row.contentNoticePeriod ?? null,
-        proposalSession: row.contentProposalSession ?? null,
-      },
-      archiveMetadata: {
-        archivedAt: row.archivedAt,
-        sourceHtmlSha256: row.sourceHtmlSha256,
-        sourceHtmlSize: row.sourceHtml
-          ? Buffer.byteLength(row.sourceHtml, 'utf8')
-          : 0,
-        integrity: {
-          checkedAt: integrity.checkedAt,
-          passed: integrity.passed,
-          calculatedSha256: integrity.calculatedSha256,
-        },
-        http: {
-          fetchedAt: row.httpFetchedAt,
-          statusCode: row.httpStatusCode,
-          contentType: row.httpContentType,
-          etag: row.httpEtag,
-          lastModified: row.httpLastModified,
-          requestUrl:
-            typeof httpMetadata.requestUrl === 'string'
-              ? httpMetadata.requestUrl
-              : undefined,
-          responseUrl:
-            typeof httpMetadata.responseUrl === 'string'
-              ? httpMetadata.responseUrl
-              : undefined,
-        },
-      },
-      screenshotMeta: {
-        hasScreenshot: row.screenshotBlob != null,
-        format: row.screenshotFormat ?? null,
-      },
-    };
+    return this.artifactSupport.getArchivedNoticeDetail(noticeNum);
   }
 
   async buildArchiveExportFile(
     noticeNum: number,
   ): Promise<ArchiveExportResult | null> {
-    const row = await this.archiveRepository.findOne({
-      where: { noticeNum },
-    });
-
-    if (!row) {
-      return null;
-    }
-
-    const integrity = await this.verifyAndRefreshIntegrity(row);
-    const httpMetadata = parseHttpMetadata(row.httpMetadataJson);
-    const generatedAt = new Date();
-
-    return buildArchiveExportArtifacts({
-      noticeNum,
-      generatedAt,
-      row,
-      integrity,
-      httpMetadata,
-      dbRecord: mapArchiveEntityToRawRecord(row),
-    });
+    return this.artifactSupport.buildArchiveExportFile(noticeNum);
   }
 
   async buildArchiveExportZip(
     noticeNum: number,
   ): Promise<{ zipFileName: string; zipBuffer: Buffer } | null> {
-    const [artifacts, screenshot] = await Promise.all([
-      this.buildArchiveExportFile(noticeNum),
-      this.getScreenshotByNoticeNum(noticeNum),
-    ]);
-
-    if (!artifacts) {
-      return null;
-    }
-
-    const zip = new JSZip();
-
-    // JSON Artifacts
-    zip.file(artifacts.jsonFileName, artifacts.jsonContent);
-
-    // Integrity Snapshot
-    zip.file(artifacts.integrityFileName, artifacts.integrityContent);
-
-    // Verification Scripts
-    for (const script of artifacts.verificationScripts) {
-      zip.file(script.fileName, script.content);
-    }
-
-    // Screenshot (if available)
-    if (screenshot) {
-      zip.file(`screenshot.${screenshot.format}`, screenshot.blob);
-    }
-
-    const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
-
-    return {
-      zipFileName: artifacts.zipFileName,
-      zipBuffer,
-    };
+    return this.artifactSupport.buildArchiveExportZip(noticeNum);
   }
 
   async existsByNoticeNum(noticeNum: number): Promise<boolean> {
@@ -970,76 +865,7 @@ export class NoticeArchiveService {
     failed: number;
     skipped: number;
   }> {
-    let lastSeenId = 0;
-    let scanned = 0;
-    let passed = 0;
-    let failed = 0;
-    let skipped = 0;
-
-    for (;;) {
-      const rows = await this.archiveRepository.find({
-        where: lastSeenId > 0 ? { id: MoreThan(lastSeenId) } : undefined,
-        select: {
-          id: true,
-          sourceHtml: true,
-          sourceHtmlSha256: true,
-          integrityCheckPassed: true,
-          integrityVerifiedAt: true,
-        },
-        order: { id: 'ASC' },
-        take: batchSize,
-      });
-
-      if (rows.length === 0) break;
-
-      const checkedAt = new Date();
-      const updates: Array<{
-        id: number;
-        integrityCheckPassed: boolean;
-        integrityVerifiedAt: Date;
-      }> = [];
-
-      for (const row of rows) {
-        scanned++;
-        if (!row.sourceHtml || !row.sourceHtmlSha256) {
-          skipped++;
-          continue;
-        }
-        const computed = computeSha256(row.sourceHtml);
-        const ok = computed === row.sourceHtmlSha256;
-        if (ok) passed++;
-        else failed++;
-
-        const resultChanged = row.integrityCheckPassed !== ok;
-        const neverChecked = !row.integrityVerifiedAt;
-        if (forceUpdate || resultChanged || neverChecked) {
-          updates.push({
-            id: row.id,
-            integrityCheckPassed: ok,
-            integrityVerifiedAt: checkedAt,
-          });
-        }
-      }
-
-      if (updates.length > 0) {
-        await Promise.all(
-          updates.map((u) =>
-            this.archiveRepository.update(
-              { id: u.id },
-              {
-                integrityCheckPassed: u.integrityCheckPassed,
-                integrityVerifiedAt: u.integrityVerifiedAt,
-              },
-            ),
-          ),
-        );
-      }
-
-      lastSeenId = rows[rows.length - 1].id;
-      if (rows.length < batchSize) break;
-    }
-
-    return { scanned, passed, failed, skipped };
+    return this.artifactSupport.runIntegrityScan(batchSize, forceUpdate);
   }
 
   async getArchiveStartedAtByNoticeNums(
@@ -1122,42 +948,5 @@ export class NoticeArchiveService {
         aiSummaryStatus: status,
       },
     );
-  }
-
-  private async verifyAndRefreshIntegrity(row: NoticeArchive): Promise<{
-    checkedAt: Date | null;
-    passed: boolean | null;
-    calculatedSha256: string | null;
-  }> {
-    if (!row.sourceHtml || !row.sourceHtmlSha256) {
-      return {
-        checkedAt: row.integrityVerifiedAt ?? null,
-        passed: row.integrityCheckPassed ?? null,
-        calculatedSha256: null,
-      };
-    }
-
-    const calculatedSha256 = computeSha256(row.sourceHtml);
-    const passed = calculatedSha256 === row.sourceHtmlSha256;
-    const checkedAt = new Date();
-
-    if (row.integrityCheckPassed !== passed || !row.integrityVerifiedAt) {
-      await this.archiveRepository.update(
-        { id: row.id },
-        {
-          integrityCheckPassed: passed,
-          integrityVerifiedAt: checkedAt,
-        },
-      );
-
-      row.integrityCheckPassed = passed;
-      row.integrityVerifiedAt = checkedAt;
-    }
-
-    return {
-      checkedAt: row.integrityVerifiedAt,
-      passed,
-      calculatedSha256,
-    };
   }
 }
