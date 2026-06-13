@@ -15,6 +15,14 @@ import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { mapConcurrently } from '../../utils/concurrency.utils';
 import { type CachedNotice } from '../../types/cache.types';
+import {
+  ArchiveSyncPhaseRunner,
+  type ArchiveSyncPhaseState,
+  type ArchiveSyncPhaseStatus,
+  makePhaseTracker,
+  type PhaseEntry,
+  type PhaseTracker,
+} from './utils/archive-sync-phase-runner';
 
 // ─── Tuning constants (sourced from APP_CONSTANTS.ARCHIVE_SYNC) ───────────────
 
@@ -40,18 +48,13 @@ const DONE_PAGE_RETRY_BASE_MS = 500;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
-export type SyncPhaseStatus = 'idle' | 'running' | 'failed';
+export type SyncPhaseStatus = ArchiveSyncPhaseStatus;
 
 /**
  * Generic status snapshot returned by each `getXxxStatus()` accessor.
  * All three sync phases share the same shape - only the result type differs.
  */
-export interface PhaseStatus<TResult> {
-  status: SyncPhaseStatus;
-  lastRunAt: string | null;
-  lastResult: TResult | null;
-  lastError: string | null;
-}
+export type PhaseStatus<TResult> = ArchiveSyncPhaseState<TResult>;
 
 export interface FullSyncResult {
   totalPagesScanned: number;
@@ -113,21 +116,6 @@ export type PendingSyncStatus = PhaseStatus<PendingSyncResult>;
 
 // ─── Internal tracker ─────────────────────────────────────────────────────────
 
-/** Extends PhaseStatus with an in-progress guard. Never exposed externally. */
-interface PhaseTracker<TResult> extends PhaseStatus<TResult> {
-  isRunning: boolean;
-}
-
-function makeTracker<T>(): PhaseTracker<T> {
-  return {
-    isRunning: false,
-    status: 'idle',
-    lastRunAt: null,
-    lastResult: null,
-    lastError: null,
-  };
-}
-
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 /**
@@ -152,14 +140,16 @@ function makeTracker<T>(): PhaseTracker<T> {
 export class ArchiveSyncService implements OnModuleInit {
   // ── Phase trackers ───────────────────────────────────────────────────────
 
-  private readonly fullSync = makeTracker<FullSyncResult>();
-  private readonly isDoneSync = makeTracker<IsDoneSyncResult>();
-  private readonly integrityCheck = makeTracker<IntegrityCheckResult>();
-  private readonly summaryBackfill = makeTracker<SummaryBackfillResult>();
-  private readonly htmlBackfill = makeTracker<HtmlBackfillResult>();
+  private readonly phaseRunner = new ArchiveSyncPhaseRunner();
+
+  private readonly fullSync = makePhaseTracker<FullSyncResult>();
+  private readonly isDoneSync = makePhaseTracker<IsDoneSyncResult>();
+  private readonly integrityCheck = makePhaseTracker<IntegrityCheckResult>();
+  private readonly summaryBackfill = makePhaseTracker<SummaryBackfillResult>();
+  private readonly htmlBackfill = makePhaseTracker<HtmlBackfillResult>();
   private readonly unavailableRetry =
-    makeTracker<SummaryUnavailableRetryResult>();
-  private readonly pendingSync = makeTracker<PendingSyncResult>();
+    makePhaseTracker<SummaryUnavailableRetryResult>();
+  private readonly pendingSync = makePhaseTracker<PendingSyncResult>();
 
   constructor(
     private readonly crawlingCoreService: CrawlingCoreService,
@@ -259,30 +249,7 @@ export class ArchiveSyncService implements OnModuleInit {
    * heavy phase (e.g. isDone sync vs integrity rescan) is in progress.
    */
   isAnyPhaseRunning(): boolean {
-    return (
-      this.fullSync.isRunning ||
-      this.isDoneSync.isRunning ||
-      this.integrityCheck.isRunning ||
-      this.summaryBackfill.isRunning ||
-      this.htmlBackfill.isRunning ||
-      this.unavailableRetry.isRunning ||
-      this.pendingSync.isRunning
-    );
-  }
-
-  /**
-   * Returns the name of the currently running phase, or null if idle.
-   * Used for logging when a cron-triggered phase is skipped.
-   */
-  private runningPhaseName(): string | null {
-    if (this.fullSync.isRunning) return 'full sync';
-    if (this.isDoneSync.isRunning) return 'isDone sync';
-    if (this.integrityCheck.isRunning) return 'integrity check';
-    if (this.summaryBackfill.isRunning) return 'summary backfill';
-    if (this.htmlBackfill.isRunning) return 'html backfill';
-    if (this.unavailableRetry.isRunning) return 'unavailable retry';
-    if (this.pendingSync.isRunning) return 'pending sync';
-    return null;
+    return this.phaseRunner.isAnyPhaseRunning(this.getPhaseEntries());
   }
 
   /**
@@ -302,68 +269,36 @@ export class ArchiveSyncService implements OnModuleInit {
     formatResult?: (result: T) => string,
     crossPhaseGuard = false,
   ): Promise<T | null> {
-    if (tracker.isRunning) {
-      LoggerUtils.warn(
-        ArchiveSyncService.name,
-        `${phaseName} already in progress - skipping [${trigger}]`,
-      );
-      return null;
-    }
-
-    if (crossPhaseGuard) {
-      const running = this.runningPhaseName();
-      if (running) {
-        LoggerUtils.warn(
-          ArchiveSyncService.name,
-          `${phaseName} skipped - another phase is in progress (${running}) [${trigger}]`,
-        );
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.WARN,
-          ArchiveSyncService.name,
-          `**${phaseName}** skipped - \`${running}\` is already running [${trigger}]`,
-        );
-        return null;
-      }
-    }
-
-    tracker.isRunning = true;
-    tracker.status = 'running';
-    tracker.lastError = null;
-
-    try {
-      const result = await task();
-      tracker.status = 'idle';
-      tracker.lastRunAt = new Date().toISOString();
-      tracker.lastResult = result;
-      tracker.lastError = null;
-      if (formatResult) {
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.DEBUG,
-          ArchiveSyncService.name,
-          `[${trigger}] ${phaseName} - ${formatResult(result)}`,
-        );
-      }
-      return result;
-    } catch (error) {
-      tracker.status = 'failed';
-      tracker.lastRunAt = new Date().toISOString();
-      tracker.lastError =
-        error instanceof Error ? error.message : String(error);
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        ArchiveSyncService.name,
-        `[${trigger}] **${phaseName}** failed - ${(error as Error).message}`,
-      );
-      throw error;
-    } finally {
-      tracker.isRunning = false;
-    }
+    return this.phaseRunner.runPhase({
+      phaseName,
+      tracker,
+      trigger,
+      task,
+      formatResult,
+      crossPhaseGuard,
+      phaseEntries: this.getPhaseEntries(),
+      serviceName: ArchiveSyncService.name,
+      discordLogger: (level, serviceName, message) => {
+        void this.discordBridge?.logEvent(level, serviceName, message);
+      },
+    });
   }
 
   /** Returns a status snapshot without the internal `isRunning` flag. */
-  private static toStatus<T>(tracker: PhaseTracker<T>): PhaseStatus<T> {
-    const { isRunning: _, ...status } = tracker;
-    return status;
+  private toStatus<T>(tracker: PhaseTracker<T>): PhaseStatus<T> {
+    return this.phaseRunner.toStatus(tracker);
+  }
+
+  private getPhaseEntries(): PhaseEntry[] {
+    return [
+      { name: 'full sync', tracker: this.fullSync },
+      { name: 'isDone sync', tracker: this.isDoneSync },
+      { name: 'integrity check', tracker: this.integrityCheck },
+      { name: 'summary backfill', tracker: this.summaryBackfill },
+      { name: 'html backfill', tracker: this.htmlBackfill },
+      { name: 'unavailable retry', tracker: this.unavailableRetry },
+      { name: 'pending sync', tracker: this.pendingSync },
+    ];
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -382,7 +317,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   getFullSyncStatus(): FullSyncStatus {
-    return ArchiveSyncService.toStatus(this.fullSync);
+    return this.toStatus(this.fullSync);
   }
 
   private async executeFullSync(): Promise<FullSyncResult> {
@@ -482,7 +417,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   getPendingSyncStatus(): PendingSyncStatus {
-    return ArchiveSyncService.toStatus(this.pendingSync);
+    return this.toStatus(this.pendingSync);
   }
 
   private async executePendingSync(): Promise<PendingSyncResult> {
@@ -565,7 +500,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   getIsDoneSyncStatus(): IsDoneSyncStatus {
-    return ArchiveSyncService.toStatus(this.isDoneSync);
+    return this.toStatus(this.isDoneSync);
   }
 
   /**
@@ -716,7 +651,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   getIntegrityCheckStatus(): IntegrityCheckStatus {
-    return ArchiveSyncService.toStatus(this.integrityCheck);
+    return this.toStatus(this.integrityCheck);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -747,7 +682,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   getHtmlBackfillStatus(): HtmlBackfillStatus {
-    return ArchiveSyncService.toStatus(this.htmlBackfill);
+    return this.toStatus(this.htmlBackfill);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -768,7 +703,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   getSummaryBackfillStatus(): SummaryBackfillStatus {
-    return ArchiveSyncService.toStatus(this.summaryBackfill);
+    return this.toStatus(this.summaryBackfill);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -800,7 +735,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   getUnavailableRetryStatus(): SummaryUnavailableRetryStatus {
-    return ArchiveSyncService.toStatus(this.unavailableRetry);
+    return this.toStatus(this.unavailableRetry);
   }
 
   /**

@@ -13,38 +13,12 @@ import {
 import { APP_CONSTANTS } from '../../config/app.config';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
-import { LoggerUtils } from '../../utils/logger.utils';
 import { mapConcurrently } from '../../utils/concurrency.utils';
+import { CrawlingSchedulerProposalRetry } from './utils/crawling-scheduler-proposal-retry';
+import { CrawlingSchedulerSummarySupport } from './utils/crawling-scheduler-summary-support';
 
-const {
-  PENDING_CRAWL_MAX_RETRIES,
-  PENDING_CRAWL_RETRY_BASE_MS,
-  NSM_REASON_RETRY_MAX_ATTEMPTS,
-  NSM_REASON_RETRY_MAX_AGE_MS,
-  PROPOSAL_REASON_RETRY_QUEUE,
-} = APP_CONSTANTS.ARCHIVE_SYNC;
-
-/**
- * Tracks an archived NsmLmSts bill that is waiting for its `proposalReason`
- * to become available on the source detail page.
- */
-interface ProposalReasonRetryItem {
-  /** The archived notice with empty proposalReason. */
-  notice: CachedNotice;
-  /** NsmLmSts bill number string (same as notice.num.toString()). */
-  billNo: string;
-  /** How many times we have already attempted to fetch proposalReason. */
-  retryCount: number;
-  /** Wall-clock time the item was first enqueued. Used for max-age eviction. */
-  queuedAt: Date;
-}
-
-interface ProposalReasonRetryQueueRecord {
-  notice: CachedNotice;
-  billNo: string;
-  retryCount: number;
-  queuedAtIso: string;
-}
+const { PENDING_CRAWL_MAX_RETRIES, PENDING_CRAWL_RETRY_BASE_MS } =
+  APP_CONSTANTS.ARCHIVE_SYNC;
 
 const RETRYABLE_NETWORK_ERROR_CODES = new Set([
   'ECONNRESET',
@@ -73,9 +47,8 @@ export class CrawlingSchedulerService implements OnModuleInit {
   private readonly logger = new Logger(CrawlingSchedulerService.name);
   private isProcessing = false;
   private isInitialized = false;
-
-  /** Prevents two concurrent NSM proposalReason retry drains. */
-  private isReasonRetryRunning = false;
+  private readonly proposalReasonRetry: CrawlingSchedulerProposalRetry;
+  private readonly summarySupport: CrawlingSchedulerSummarySupport;
 
   constructor(
     private cacheService: CacheService,
@@ -85,7 +58,24 @@ export class CrawlingSchedulerService implements OnModuleInit {
     private notificationOrchestratorService: NotificationOrchestratorService,
     private noticeArchiveService: NoticeArchiveService,
     @Optional() private discordBridge: DiscordBridgeService,
-  ) {}
+  ) {
+    this.proposalReasonRetry = new CrawlingSchedulerProposalRetry({
+      cacheService: this.cacheService,
+      archiveOrchestratorService: this.archiveOrchestratorService,
+      summaryGenerationService: this.summaryGenerationService,
+      notificationOrchestratorService: this.notificationOrchestratorService,
+      noticeArchiveService: this.noticeArchiveService,
+      logger: this.logger,
+      discordBridge: this.discordBridge,
+    });
+    this.summarySupport = new CrawlingSchedulerSummarySupport({
+      cacheService: this.cacheService,
+      noticeArchiveService: this.noticeArchiveService,
+      summaryGenerationService: this.summaryGenerationService,
+      logger: this.logger,
+      discordBridge: this.discordBridge,
+    });
+  }
 
   /**
    * Initializes the cache in the background on module startup.
@@ -347,7 +337,8 @@ export class CrawlingSchedulerService implements OnModuleInit {
     const existingNotices = await this.cacheService.getRecentNotices(
       APP_CONSTANTS.CACHE.MAX_SIZE,
     );
-    const existingNoticeMap = this.buildNoticeMap(existingNotices);
+    const existingNoticeMap =
+      this.summarySupport.buildNoticeMap(existingNotices);
     const maxCachedNum = existingNotices[0]?.num;
 
     const crawledData = await this.crawlingCoreService.crawlAllPages({
@@ -405,7 +396,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
           aiSummary: existingNotice.aiSummary ?? null,
           aiSummaryStatus:
             existingNotice.aiSummaryStatus ??
-            this.resolveSummaryStatus(existingNotice.aiSummary),
+            this.summarySupport.resolveSummaryStatus(existingNotice.aiSummary),
         };
       }
       return {
@@ -539,7 +530,9 @@ export class CrawlingSchedulerService implements OnModuleInit {
     const freshCacheNotices = await this.cacheService.getRecentNotices(
       APP_CONSTANTS.CACHE.MAX_SIZE,
     );
-    const newNoticeMap = this.buildNoticeMap(newNoticesWithSummary);
+    const newNoticeMap = this.summarySupport.buildNoticeMap(
+      newNoticesWithSummary,
+    );
     const mergedNotices = freshCacheNotices.map((notice) => {
       const withSummary = newNoticeMap.get(notice.num);
       if (withSummary) {
@@ -555,10 +548,11 @@ export class CrawlingSchedulerService implements OnModuleInit {
     // Stage: Retry unavailable summaries - fallback to merged notices on failure
     let finalNotices: CachedNotice[];
     try {
-      finalNotices = await this.retryUnavailableSummariesFromPreviousCycle(
-        mergedNotices,
-        existingNoticeMap,
-      );
+      finalNotices =
+        await this.summarySupport.retryUnavailableSummariesFromPreviousCycle(
+          mergedNotices,
+          existingNoticeMap,
+        );
     } catch (error) {
       this.logger.warn(
         `Unavailable summary retry failed, using merged notices: ${(error as Error).message}`,
@@ -598,80 +592,19 @@ export class CrawlingSchedulerService implements OnModuleInit {
     notices: CachedNotice[],
     existingNoticeMap: Map<number, CachedNotice>,
   ): Promise<void> {
-    const retried = await this.retryUnavailableSummariesFromPreviousCycle(
+    await this.summarySupport.retryUnavailableSummariesInBackground(
       notices,
       existingNoticeMap,
     );
-    await this.cacheService.updateCache(retried);
-  }
-
-  private buildNoticeMap(notices: CachedNotice[]): Map<number, CachedNotice> {
-    return new Map(notices.map((notice) => [notice.num, notice]));
-  }
-
-  private resolveSummaryStatus(
-    summary?: string | null,
-  ): 'ready' | 'unavailable' {
-    return summary?.trim() ? 'ready' : 'unavailable';
   }
 
   private async persistRetriedArchiveSummaryStates(
     noticesWithSummary: CachedNotice[],
     archiveSummaryStates: Map<number, ArchiveSummaryState>,
   ): Promise<void> {
-    const changedRetriedNotices = noticesWithSummary.filter((notice) => {
-      const previousState = archiveSummaryStates.get(notice.num);
-
-      if (!previousState) {
-        return false;
-      }
-
-      // Persist when the previous state was either:
-      //  - 'not_requested': archive row saved without a summary (e.g. full-sync bootstrap)
-      //  - 'unavailable': previous generation failed and was just retried
-      const wasPending =
-        previousState.aiSummaryStatus === 'not_requested' ||
-        previousState.aiSummaryStatus === 'unavailable';
-
-      if (!wasPending) {
-        return false;
-      }
-
-      const previousSummary = previousState.aiSummary?.trim() || null;
-      const nextSummary = notice.aiSummary?.trim() || null;
-      const nextStatus = notice.aiSummaryStatus ?? 'not_requested';
-
-      return (
-        previousSummary !== nextSummary ||
-        previousState.aiSummaryStatus !== nextStatus
-      );
-    });
-
-    if (changedRetriedNotices.length === 0) {
-      return;
-    }
-
-    const persistResults = await Promise.allSettled(
-      changedRetriedNotices.map(async (notice) => {
-        await this.noticeArchiveService.updateSummaryStateByNoticeNum(
-          notice.num,
-          notice.aiSummary ?? null,
-          notice.aiSummaryStatus ?? 'not_requested',
-        );
-      }),
-    );
-
-    const persistFailed = persistResults.filter(
-      (r) => r.status === 'rejected',
-    ).length;
-    if (persistFailed > 0) {
-      this.logger.warn(
-        `Failed to persist ${persistFailed}/${changedRetriedNotices.length} retried summary states`,
-      );
-    }
-
-    this.logger.log(
-      `Persisted retried summary state for ${changedRetriedNotices.length - persistFailed} archived notices`,
+    await this.summarySupport.persistRetriedArchiveSummaryStates(
+      noticesWithSummary,
+      archiveSummaryStates,
     );
   }
 
@@ -679,125 +612,10 @@ export class CrawlingSchedulerService implements OnModuleInit {
     notices: CachedNotice[],
     existingNoticeMap: Map<number, CachedNotice>,
   ): Promise<CachedNotice[]> {
-    const retryCandidates = notices.filter((notice) => {
-      const existingNotice = existingNoticeMap.get(notice.num);
-
-      return (
-        !!existingNotice &&
-        existingNotice.aiSummaryStatus === 'unavailable' &&
-        notice.aiSummaryStatus === 'unavailable' &&
-        !!notice.contentId
-      );
-    });
-
-    if (retryCandidates.length === 0) {
-      return notices;
-    }
-
-    this.logger.log(
-      `Retrying unavailable summaries for ${retryCandidates.length} notices`,
+    return this.summarySupport.retryUnavailableSummariesFromPreviousCycle(
+      notices,
+      existingNoticeMap,
     );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.WARN,
-      CrawlingSchedulerService.name,
-      `Retrying unavailable summaries for ${retryCandidates.length} notices`,
-    );
-
-    const retryResults = await Promise.all(
-      retryCandidates.map(async (notice, index) => {
-        const summaryResult =
-          await this.summaryGenerationService.generateSummaryForNotice(notice, {
-            logOllamaActivity: true,
-            phase: 'cron-retry',
-            index,
-            total: retryCandidates.length,
-          });
-
-        return {
-          num: notice.num,
-          aiSummary: summaryResult.aiSummary,
-          aiSummaryStatus: summaryResult.aiSummaryStatus,
-        };
-      }),
-    );
-
-    const retryResultMap = new Map(
-      retryResults.map((result) => [result.num, result]),
-    );
-
-    const recoveredCount = retryResults.filter(
-      (r) => r.aiSummaryStatus === 'ready',
-    ).length;
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.DEBUG,
-      CrawlingSchedulerService.name,
-      `Summary retry: **${recoveredCount}/${retryCandidates.length}** recovered`,
-      {
-        candidates: retryCandidates.length,
-        recovered: recoveredCount,
-        stillUnavailable: retryCandidates.length - recoveredCount,
-      },
-    );
-
-    const mergedNotices = notices.map((notice) => {
-      const retryResult = retryResultMap.get(notice.num);
-
-      if (!retryResult) {
-        return notice;
-      }
-
-      return {
-        ...notice,
-        aiSummary: retryResult.aiSummary,
-        aiSummaryStatus: retryResult.aiSummaryStatus,
-      };
-    });
-
-    const changedRetriedNotices = mergedNotices.filter((notice) => {
-      const previousNotice = existingNoticeMap.get(notice.num);
-
-      if (!previousNotice || previousNotice.aiSummaryStatus !== 'unavailable') {
-        return false;
-      }
-
-      const previousSummary = previousNotice.aiSummary?.trim() || null;
-      const nextSummary = notice.aiSummary?.trim() || null;
-      const nextStatus = notice.aiSummaryStatus ?? 'not_requested';
-
-      return (
-        previousSummary !== nextSummary ||
-        previousNotice.aiSummaryStatus !== nextStatus
-      );
-    });
-
-    if (changedRetriedNotices.length === 0) {
-      return mergedNotices;
-    }
-
-    const cronPersistResults = await Promise.allSettled(
-      changedRetriedNotices.map(async (notice) => {
-        await this.noticeArchiveService.updateSummaryStateByNoticeNum(
-          notice.num,
-          notice.aiSummary ?? null,
-          notice.aiSummaryStatus ?? 'not_requested',
-        );
-      }),
-    );
-
-    const cronPersistFailed = cronPersistResults.filter(
-      (r) => r.status === 'rejected',
-    ).length;
-    if (cronPersistFailed > 0) {
-      this.logger.warn(
-        `Failed to persist ${cronPersistFailed}/${changedRetriedNotices.length} cron retried summary states`,
-      );
-    }
-
-    this.logger.log(
-      `Persisted cron retried summary state for ${changedRetriedNotices.length - cronPersistFailed} notices`,
-    );
-
-    return mergedNotices;
   }
 
   /**
@@ -844,7 +662,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     } finally {
       // Drain the proposalReason retry queue on every cron tick (including
       // after a failed crawl) so queued items are retried on schedule.
-      this.drainProposalReasonRetryQueueInBackground();
+      this.proposalReasonRetry.drainInBackground();
     }
   }
 
@@ -946,10 +764,10 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
     // Enqueue bills with missing proposalReason for background retry.
     for (const notice of noticesWithoutReason) {
-      await this.enqueueForProposalReasonRetry(notice);
+      await this.proposalReasonRetry.enqueue(notice);
     }
 
-    const retryQueueLength = await this.getProposalReasonRetryQueueLength();
+    const retryQueueLength = await this.proposalReasonRetry.getQueueLength();
 
     if (noticesWithoutReason.length > 0) {
       this.logger.log(
@@ -1056,352 +874,5 @@ export class CrawlingSchedulerService implements OnModuleInit {
           );
         });
     }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // proposalReason retry queue
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Adds a newly archived NsmLmSts notice to the proposalReason retry queue.
-   * Deduplicates by notice number so the same bill is never enqueued twice.
-   */
-  private async enqueueForProposalReasonRetry(
-    notice: CachedNotice,
-  ): Promise<void> {
-    const queue = await this.getProposalReasonRetryQueue();
-
-    if (queue.length >= PROPOSAL_REASON_RETRY_QUEUE.MAX_SIZE) {
-      this.logger.warn(
-        `proposalReason retry: queue at capacity (${queue.length}) - sending fallback notification for bill ${notice.num}`,
-      );
-      void this.notificationOrchestratorService
-        .sendNotifications([
-          {
-            ...notice,
-            aiSummary: null,
-            aiSummaryStatus: 'not_supported' as const,
-          },
-        ])
-        .catch(() => undefined);
-      return;
-    }
-
-    const alreadyQueued = queue.some((item) => item.notice.num === notice.num);
-    if (alreadyQueued) return;
-
-    queue.push({
-      notice,
-      billNo: notice.num.toString(),
-      retryCount: 0,
-      queuedAt: new Date(),
-    });
-
-    const written = await this.setProposalReasonRetryQueue(queue);
-    if (!written) {
-      this.logger.warn(
-        `proposalReason retry: failed to persist queue after enqueueing bill ${notice.num}`,
-      );
-    }
-
-    LoggerUtils.debugDev(
-      CrawlingSchedulerService.name,
-      `proposalReason retry: enqueued bill ${notice.num} (queue size: ${queue.length})`,
-    );
-  }
-
-  /**
-   * Non-blocking wrapper: launches `drainProposalReasonRetryQueue` in the
-   * background if the queue has items and a drain is not already running.
-   * Safe to call unconditionally from `handlePendingCron`.
-   */
-  private drainProposalReasonRetryQueueInBackground(): void {
-    if (this.isReasonRetryRunning) {
-      return;
-    }
-
-    void this.drainProposalReasonRetryQueue().catch((error) => {
-      this.logger.error(
-        `proposalReason retry queue drain failed: ${(error as Error).message}`,
-      );
-    });
-  }
-
-  /**
-   * Drains the proposalReason retry queue.
-   *
-   * For each queued bill:
-   *  - Calls `ArchiveOrchestratorService.fetchAndUpdateProposalReason()` which
-   *    re-runs a Puppeteer capture and updates the archive DB if successful.
-   *  - On success: generates AI summary → updates cache → sends notification.
-   *  - On failure or still-empty reason: increments retry count and leaves the
-   *    item in the queue for the next 30-minute cron tick.
-   *  - Items that exceed `NSM_REASON_RETRY_MAX_ATTEMPTS` or
-   *    `NSM_REASON_RETRY_MAX_AGE_MS` are evicted; a last-resort notification
-   *    without AI summary is sent so the bill is never silently dropped.
-   *
-   * Processed sequentially (one Puppeteer session at a time) to respect
-   * the NsmLmSts Waitingroom rate limiter.
-   */
-  private async drainProposalReasonRetryQueue(): Promise<void> {
-    if (this.isReasonRetryRunning) return;
-
-    const queue = await this.getProposalReasonRetryQueue();
-    if (queue.length === 0) return;
-
-    this.isReasonRetryRunning = true;
-    try {
-      const now = Date.now();
-      let queueDirty = false;
-
-      // ── Evict items that have exhausted retries or exceeded max age ────────
-      const evicted: ProposalReasonRetryItem[] = [];
-      let i = queue.length;
-      while (i--) {
-        const item = queue[i];
-        const expired =
-          item.retryCount >= NSM_REASON_RETRY_MAX_ATTEMPTS ||
-          now - item.queuedAt.getTime() > NSM_REASON_RETRY_MAX_AGE_MS;
-        if (expired) {
-          evicted.push(item);
-          queue.splice(i, 1);
-          queueDirty = true;
-        }
-      }
-
-      if (evicted.length > 0) {
-        this.logger.warn(
-          `proposalReason retry: evicting ${evicted.length} bill(s) after exhausting retries - sending fallback notifications`,
-        );
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.WARN,
-          CrawlingSchedulerService.name,
-          `proposalReason retry: evicting **${evicted.length}** bill(s) - sending notification without summary`,
-          { nums: evicted.map((e) => e.notice.num) },
-        );
-        // Send last-resort notifications without AI summary.
-        void this.notificationOrchestratorService
-          .sendNotifications(
-            evicted.map((e) => ({
-              ...e.notice,
-              aiSummary: null,
-              aiSummaryStatus: 'not_supported' as const,
-            })),
-          )
-          .catch(() => undefined);
-      }
-
-      if (queue.length === 0) {
-        if (queueDirty) {
-          await this.setProposalReasonRetryQueue(queue);
-        }
-        return;
-      }
-
-      this.logger.log(
-        `proposalReason retry: processing ${queue.length} queued bill(s)`,
-      );
-
-      // ── Process each queued bill sequentially ─────────────────────────────
-      const resolved: CachedNotice[] = [];
-
-      for (let idx = 0; idx < queue.length; idx++) {
-        const item = queue[idx];
-
-        if (idx > 0) {
-          // Same inter-capture delay used by archiveNsmBillItems.
-          await new Promise<void>((resolve) =>
-            setTimeout(
-              resolve,
-              APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS,
-            ),
-          );
-        }
-
-        const proposalReason =
-          await this.archiveOrchestratorService.fetchAndUpdateProposalReason(
-            item.notice.num,
-            item.billNo,
-            item.notice.link,
-          );
-
-        if (!proposalReason) {
-          item.retryCount++;
-          queueDirty = true;
-          this.logger.warn(
-            `proposalReason retry: still empty for bill ${item.billNo} ` +
-              `(attempt ${item.retryCount}/${NSM_REASON_RETRY_MAX_ATTEMPTS})`,
-          );
-          continue;
-        }
-
-        // ── Success ──────────────────────────────────────────────────────────
-        const enriched: CachedNotice = { ...item.notice, proposalReason };
-
-        // AI summary
-        let noticeWithSummary: CachedNotice;
-        try {
-          const summaryResult =
-            await this.summaryGenerationService.generateSummaryForNotice(
-              enriched,
-            );
-          noticeWithSummary = { ...enriched, ...summaryResult };
-        } catch {
-          noticeWithSummary = {
-            ...enriched,
-            aiSummary: null,
-            aiSummaryStatus: 'not_requested' as const,
-          };
-        }
-
-        // Persist summary to DB
-        if (
-          (noticeWithSummary.aiSummaryStatus ?? 'not_requested') !==
-          'not_requested'
-        ) {
-          await this.noticeArchiveService
-            .updateSummaryStateByNoticeNum(
-              noticeWithSummary.num,
-              noticeWithSummary.aiSummary ?? null,
-              noticeWithSummary.aiSummaryStatus ?? 'not_requested',
-            )
-            .catch((err) => {
-              this.logger.warn(
-                `Failed to persist summary for bill ${item.billNo}: ${(err as Error).message}`,
-              );
-            });
-        }
-
-        resolved.push(noticeWithSummary);
-
-        // Remove from queue (splice adjusts idx to stay in bounds).
-        queue.splice(idx, 1);
-        queueDirty = true;
-        idx--;
-
-        this.logger.log(
-          `proposalReason retry: resolved bill ${item.billNo} after ${item.retryCount + 1} attempt(s)`,
-        );
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.LOG,
-          CrawlingSchedulerService.name,
-          `proposalReason retry: resolved bill **${item.billNo}**`,
-          { billNo: item.billNo, attempts: item.retryCount + 1 },
-        );
-      }
-
-      if (queueDirty) {
-        await this.setProposalReasonRetryQueue(queue);
-      }
-
-      if (resolved.length === 0) return;
-
-      // ── Cache update ──────────────────────────────────────────────────────
-      try {
-        const freshCache = await this.cacheService.getRecentNotices(
-          APP_CONSTANTS.CACHE.MAX_SIZE,
-        );
-        const resolvedMap = new Map(resolved.map((n) => [n.num, n]));
-        const existingNums = new Set(freshCache.map((n) => n.num));
-        const merged = [
-          ...freshCache.map((n) => resolvedMap.get(n.num) ?? n),
-          ...resolved.filter((n) => !existingNums.has(n.num)),
-        ];
-        await this.cacheService.updateCache(merged);
-      } catch (error) {
-        this.logger.warn(
-          `Cache update after proposalReason retry failed: ${(error as Error).message}`,
-        );
-      }
-
-      // ── Notification dispatch ─────────────────────────────────────────────
-      void this.notificationOrchestratorService
-        .sendNotifications(resolved)
-        .catch((error) => {
-          this.logger.error(
-            `Notification dispatch after proposalReason retry failed: ${(error as Error).message}`,
-          );
-        });
-
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
-        CrawlingSchedulerService.name,
-        `proposalReason retry: **${resolved.length}** resolved, **${queue.length}** still pending`,
-        {
-          resolved: resolved.length,
-          pending: queue.length,
-        },
-      );
-    } finally {
-      this.isReasonRetryRunning = false;
-    }
-  }
-
-  private toProposalReasonRetryQueueRecord(
-    item: ProposalReasonRetryItem,
-  ): ProposalReasonRetryQueueRecord {
-    return {
-      notice: item.notice,
-      billNo: item.billNo,
-      retryCount: item.retryCount,
-      queuedAtIso: item.queuedAt.toISOString(),
-    };
-  }
-
-  private fromProposalReasonRetryQueueRecord(
-    item: ProposalReasonRetryQueueRecord,
-  ): ProposalReasonRetryItem | null {
-    const queuedAt = new Date(item.queuedAtIso);
-    if (Number.isNaN(queuedAt.getTime())) {
-      return null;
-    }
-
-    return {
-      notice: item.notice,
-      billNo: item.billNo,
-      retryCount: item.retryCount,
-      queuedAt,
-    };
-  }
-
-  private async getProposalReasonRetryQueue(): Promise<
-    ProposalReasonRetryItem[]
-  > {
-    const stored = await this.cacheService.getObject<
-      ProposalReasonRetryQueueRecord[]
-    >(PROPOSAL_REASON_RETRY_QUEUE.KEY);
-
-    if (!Array.isArray(stored) || stored.length === 0) {
-      return [];
-    }
-
-    const queue: ProposalReasonRetryItem[] = [];
-    for (const row of stored) {
-      const restored = this.fromProposalReasonRetryQueueRecord(row);
-      if (restored) {
-        queue.push(restored);
-      }
-    }
-
-    return queue;
-  }
-
-  private async getProposalReasonRetryQueueLength(): Promise<number> {
-    const queue = await this.getProposalReasonRetryQueue();
-    return queue.length;
-  }
-
-  private async setProposalReasonRetryQueue(
-    queue: ProposalReasonRetryItem[],
-  ): Promise<boolean> {
-    if (queue.length === 0) {
-      return this.cacheService.deleteKey(PROPOSAL_REASON_RETRY_QUEUE.KEY);
-    }
-
-    return this.cacheService.setObject(
-      PROPOSAL_REASON_RETRY_QUEUE.KEY,
-      queue.map((item) => this.toProposalReasonRetryQueueRecord(item)),
-      PROPOSAL_REASON_RETRY_QUEUE.TTL_SECONDS,
-    );
   }
 }
