@@ -19,6 +19,10 @@ export class NotificationService {
     GLOBAL: 'rate_limit:global',
     WEBHOOK: (webhookId: number) => `rate_limit:webhook:${webhookId}`,
   };
+  private readonly RATE_LIMIT_TTL_SECONDS = {
+    GLOBAL: 60,
+    WEBHOOK: 60 * 60,
+  };
 
   // Tracks permanently failed webhooks to prevent duplicate attempts
   private readonly permanentlyFailedWebhooks = new Set<number>();
@@ -410,11 +414,15 @@ export class NotificationService {
     this.webhookLastSendAt.set(webhookId, now);
 
     await Promise.all([
-      this.cacheService.setNumber(this.RATE_LIMIT_KEYS.GLOBAL, now, 0),
+      this.cacheService.setNumber(
+        this.RATE_LIMIT_KEYS.GLOBAL,
+        now,
+        this.RATE_LIMIT_TTL_SECONDS.GLOBAL,
+      ),
       this.cacheService.setNumber(
         this.RATE_LIMIT_KEYS.WEBHOOK(webhookId),
         now,
-        0,
+        this.RATE_LIMIT_TTL_SECONDS.WEBHOOK,
       ),
     ]);
   }
@@ -470,6 +478,10 @@ export class NotificationService {
    */
   clearPermanentFailureFlag(webhookId: number): void {
     this.permanentlyFailedWebhooks.delete(webhookId);
+    this.webhookLastSendAt.delete(webhookId);
+
+    void this.cacheService.deleteKey(this.RATE_LIMIT_KEYS.WEBHOOK(webhookId));
+
     LoggerUtils.debugDev(
       NotificationService.name,
       `Cleared permanent failure flag for webhook ${webhookId}`,
