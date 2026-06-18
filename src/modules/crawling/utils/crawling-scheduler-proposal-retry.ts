@@ -47,6 +47,7 @@ interface ProposalRetryOptions {
 
 export class CrawlingSchedulerProposalRetry {
   private isRunning = false;
+  private rerunRequested = false;
 
   constructor(private readonly options: ProposalRetryOptions) {}
 
@@ -94,14 +95,26 @@ export class CrawlingSchedulerProposalRetry {
 
   drainInBackground(): void {
     if (this.isRunning) {
+      this.rerunRequested = true;
       return;
     }
 
-    void this.drain().catch((error) => {
-      this.options.logger.error(
-        `proposalReason retry queue drain failed: ${(error as Error).message}`,
-      );
-    });
+    this.isRunning = true;
+    void this.drain()
+      .catch((error) => {
+        this.options.logger.error(
+          `proposalReason retry queue drain failed: ${(error as Error).message}`,
+        );
+      })
+      .finally(() => {
+        this.isRunning = false;
+        if (!this.rerunRequested) {
+          return;
+        }
+
+        this.rerunRequested = false;
+        this.drainInBackground();
+      });
   }
 
   async getQueueLength(): Promise<number> {
@@ -110,188 +123,178 @@ export class CrawlingSchedulerProposalRetry {
   }
 
   private async drain(): Promise<void> {
-    if (this.isRunning) return;
-
     const queue = await this.getQueue();
     if (queue.length === 0) return;
 
-    this.isRunning = true;
-    try {
-      const now = Date.now();
-      let queueDirty = false;
+    const now = Date.now();
+    let queueDirty = false;
 
-      const evicted: ProposalReasonRetryItem[] = [];
-      let index = queue.length;
-      while (index--) {
-        const item = queue[index];
-        const expired =
-          item.retryCount >= NSM_REASON_RETRY_MAX_ATTEMPTS ||
-          now - item.queuedAt.getTime() > NSM_REASON_RETRY_MAX_AGE_MS;
-        if (expired) {
-          evicted.push(item);
-          queue.splice(index, 1);
-          queueDirty = true;
-        }
-      }
-
-      if (evicted.length > 0) {
-        this.options.logger.warn(
-          `proposalReason retry: evicting ${evicted.length} bill(s) after exhausting retries - sending fallback notifications`,
-        );
-        void this.options.discordBridge?.logEvent(
-          BridgeLogLevel.WARN,
-          'CrawlingSchedulerService',
-          `proposalReason retry: evicting **${evicted.length}** bill(s) - sending notification without summary`,
-          { nums: evicted.map((item) => item.notice.num) },
-        );
-        void this.options.notificationOrchestratorService
-          .sendNotifications(
-            evicted.map((item) => ({
-              ...item.notice,
-              aiSummary: null,
-              aiSummaryStatus: 'not_supported' as const,
-            })),
-          )
-          .catch(() => undefined);
-      }
-
-      if (queue.length === 0) {
-        if (queueDirty) {
-          await this.setQueue(queue);
-        }
-        return;
-      }
-
-      this.options.logger.log(
-        `proposalReason retry: processing ${queue.length} queued bill(s)`,
-      );
-
-      const resolved: CachedNotice[] = [];
-
-      for (let idx = 0; idx < queue.length; idx++) {
-        const item = queue[idx];
-
-        if (idx > 0) {
-          await new Promise<void>((resolve) =>
-            setTimeout(
-              resolve,
-              APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS,
-            ),
-          );
-        }
-
-        const proposalReason =
-          await this.options.archiveOrchestratorService.fetchAndUpdateProposalReason(
-            item.notice.num,
-            item.billNo,
-            item.notice.link,
-          );
-
-        if (!proposalReason) {
-          item.retryCount++;
-          queueDirty = true;
-          this.options.logger.warn(
-            `proposalReason retry: still empty for bill ${item.billNo} ` +
-              `(attempt ${item.retryCount}/${NSM_REASON_RETRY_MAX_ATTEMPTS})`,
-          );
-          continue;
-        }
-
-        const enriched: CachedNotice = { ...item.notice, proposalReason };
-
-        let noticeWithSummary: CachedNotice;
-        try {
-          const summaryResult =
-            await this.options.summaryGenerationService.generateSummaryForNotice(
-              enriched,
-            );
-          noticeWithSummary = { ...enriched, ...summaryResult };
-        } catch {
-          noticeWithSummary = {
-            ...enriched,
-            aiSummary: null,
-            aiSummaryStatus: 'not_requested' as const,
-          };
-        }
-
-        if (
-          (noticeWithSummary.aiSummaryStatus ?? 'not_requested') !==
-          'not_requested'
-        ) {
-          await this.options.noticeArchiveService
-            .updateSummaryStateByNoticeNum(
-              noticeWithSummary.num,
-              noticeWithSummary.aiSummary ?? null,
-              noticeWithSummary.aiSummaryStatus ?? 'not_requested',
-            )
-            .catch((error) => {
-              this.options.logger.warn(
-                `Failed to persist summary for bill ${item.billNo}: ${(error as Error).message}`,
-              );
-            });
-        }
-
-        resolved.push(noticeWithSummary);
-        queue.splice(idx, 1);
+    const evicted: ProposalReasonRetryItem[] = [];
+    let index = queue.length;
+    while (index--) {
+      const item = queue[index];
+      const expired =
+        item.retryCount >= NSM_REASON_RETRY_MAX_ATTEMPTS ||
+        now - item.queuedAt.getTime() > NSM_REASON_RETRY_MAX_AGE_MS;
+      if (expired) {
+        evicted.push(item);
+        queue.splice(index, 1);
         queueDirty = true;
-        idx--;
-
-        this.options.logger.log(
-          `proposalReason retry: resolved bill ${item.billNo} after ${item.retryCount + 1} attempt(s)`,
-        );
-        void this.options.discordBridge?.logEvent(
-          BridgeLogLevel.LOG,
-          'CrawlingSchedulerService',
-          `proposalReason retry: resolved bill **${item.billNo}**`,
-          { billNo: item.billNo, attempts: item.retryCount + 1 },
-        );
       }
+    }
 
+    if (evicted.length > 0) {
+      this.options.logger.warn(
+        `proposalReason retry: evicting ${evicted.length} bill(s) after exhausting retries - sending fallback notifications`,
+      );
+      void this.options.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        'CrawlingSchedulerService',
+        `proposalReason retry: evicting **${evicted.length}** bill(s) - sending notification without summary`,
+        { nums: evicted.map((item) => item.notice.num) },
+      );
+      void this.options.notificationOrchestratorService
+        .sendNotifications(
+          evicted.map((item) => ({
+            ...item.notice,
+            aiSummary: null,
+            aiSummaryStatus: 'not_supported' as const,
+          })),
+        )
+        .catch(() => undefined);
+    }
+
+    if (queue.length === 0) {
       if (queueDirty) {
         await this.setQueue(queue);
       }
+      return;
+    }
 
-      if (resolved.length === 0) return;
+    this.options.logger.log(
+      `proposalReason retry: processing ${queue.length} queued bill(s)`,
+    );
 
-      try {
-        const freshCache = await this.options.cacheService.getRecentNotices(
-          APP_CONSTANTS.CACHE.MAX_SIZE,
-        );
-        const resolvedMap = new Map(
-          resolved.map((notice) => [notice.num, notice]),
-        );
-        const existingNums = new Set(freshCache.map((notice) => notice.num));
-        const merged = [
-          ...freshCache.map((notice) => resolvedMap.get(notice.num) ?? notice),
-          ...resolved.filter((notice) => !existingNums.has(notice.num)),
-        ];
-        await this.options.cacheService.updateCache(merged);
-      } catch (error) {
-        this.options.logger.warn(
-          `Cache update after proposalReason retry failed: ${(error as Error).message}`,
+    const resolved: CachedNotice[] = [];
+
+    for (let idx = 0; idx < queue.length; idx++) {
+      const item = queue[idx];
+
+      if (idx > 0) {
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS),
         );
       }
 
-      void this.options.notificationOrchestratorService
-        .sendNotifications(resolved)
-        .catch((error) => {
-          this.options.logger.error(
-            `Notification dispatch after proposalReason retry failed: ${(error as Error).message}`,
-          );
-        });
+      const proposalReason =
+        await this.options.archiveOrchestratorService.fetchAndUpdateProposalReason(
+          item.notice.num,
+          item.billNo,
+          item.notice.link,
+        );
 
+      if (!proposalReason) {
+        item.retryCount++;
+        queueDirty = true;
+        this.options.logger.warn(
+          `proposalReason retry: still empty for bill ${item.billNo} ` +
+            `(attempt ${item.retryCount}/${NSM_REASON_RETRY_MAX_ATTEMPTS})`,
+        );
+        continue;
+      }
+
+      const enriched: CachedNotice = { ...item.notice, proposalReason };
+
+      let noticeWithSummary: CachedNotice;
+      try {
+        const summaryResult =
+          await this.options.summaryGenerationService.generateSummaryForNotice(
+            enriched,
+          );
+        noticeWithSummary = { ...enriched, ...summaryResult };
+      } catch {
+        noticeWithSummary = {
+          ...enriched,
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested' as const,
+        };
+      }
+
+      if (
+        (noticeWithSummary.aiSummaryStatus ?? 'not_requested') !==
+        'not_requested'
+      ) {
+        await this.options.noticeArchiveService
+          .updateSummaryStateByNoticeNum(
+            noticeWithSummary.num,
+            noticeWithSummary.aiSummary ?? null,
+            noticeWithSummary.aiSummaryStatus ?? 'not_requested',
+          )
+          .catch((error) => {
+            this.options.logger.warn(
+              `Failed to persist summary for bill ${item.billNo}: ${(error as Error).message}`,
+            );
+          });
+      }
+
+      resolved.push(noticeWithSummary);
+      queue.splice(idx, 1);
+      queueDirty = true;
+      idx--;
+
+      this.options.logger.log(
+        `proposalReason retry: resolved bill ${item.billNo} after ${item.retryCount + 1} attempt(s)`,
+      );
       void this.options.discordBridge?.logEvent(
         BridgeLogLevel.LOG,
         'CrawlingSchedulerService',
-        `proposalReason retry: **${resolved.length}** resolved, **${queue.length}** still pending`,
-        {
-          resolved: resolved.length,
-          pending: queue.length,
-        },
+        `proposalReason retry: resolved bill **${item.billNo}**`,
+        { billNo: item.billNo, attempts: item.retryCount + 1 },
       );
-    } finally {
-      this.isRunning = false;
     }
+
+    if (queueDirty) {
+      await this.setQueue(queue);
+    }
+
+    if (resolved.length === 0) return;
+
+    try {
+      const freshCache = await this.options.cacheService.getRecentNotices(
+        APP_CONSTANTS.CACHE.MAX_SIZE,
+      );
+      const resolvedMap = new Map(
+        resolved.map((notice) => [notice.num, notice]),
+      );
+      const existingNums = new Set(freshCache.map((notice) => notice.num));
+      const merged = [
+        ...freshCache.map((notice) => resolvedMap.get(notice.num) ?? notice),
+        ...resolved.filter((notice) => !existingNums.has(notice.num)),
+      ];
+      await this.options.cacheService.updateCache(merged);
+    } catch (error) {
+      this.options.logger.warn(
+        `Cache update after proposalReason retry failed: ${(error as Error).message}`,
+      );
+    }
+
+    void this.options.notificationOrchestratorService
+      .sendNotifications(resolved)
+      .catch((error) => {
+        this.options.logger.error(
+          `Notification dispatch after proposalReason retry failed: ${(error as Error).message}`,
+        );
+      });
+
+    void this.options.discordBridge?.logEvent(
+      BridgeLogLevel.LOG,
+      'CrawlingSchedulerService',
+      `proposalReason retry: **${resolved.length}** resolved, **${queue.length}** still pending`,
+      {
+        resolved: resolved.length,
+        pending: queue.length,
+      },
+    );
   }
 
   private toQueueRecord(

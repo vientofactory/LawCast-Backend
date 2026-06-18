@@ -213,6 +213,38 @@ describe('NotificationService', () => {
         false,
       );
     });
+
+    it('should include guidance field when proposalReason is missing for NSM notice', async () => {
+      mockDiscordWebhook.send.mockResolvedValue(undefined);
+
+      await service.sendDiscordNotificationBatch(
+        {
+          num: 1,
+          subject: '제안이유 누락 법률안',
+          proposerCategory: '정부',
+          committee: '법제사법위원회',
+          link: 'https://example.com/notice/1',
+          contentId: null,
+          proposalReason: null,
+          aiSummary: null,
+          aiSummaryStatus: 'not_supported',
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        [
+          {
+            id: 1,
+            url: 'https://discord.com/api/webhooks/1/token1',
+            isActive: true,
+          } as Webhook,
+        ],
+      );
+
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '안내',
+        '법률안 제안이유를 아직 수집하지 못했습니다. 자세히 보기 링크를 통해 국회 페이지에서 직접 확인해 주세요.',
+        false,
+      );
+    });
   });
 
   describe('sendDiscordNotificationBatch', () => {

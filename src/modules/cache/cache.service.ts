@@ -11,6 +11,7 @@ export class CacheService implements OnModuleDestroy {
   private readonly logger = new Logger(CacheService.name);
   private readonly MAX_CACHE_SIZE = APP_CONSTANTS.CACHE.MAX_SIZE;
   private readonly CACHE_KEYS = APP_CONSTANTS.CACHE.KEYS;
+  private readonly HEALTH_CHECK_TTL_SECONDS = 30;
 
   constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache) {}
 
@@ -249,7 +250,11 @@ export class CacheService implements OnModuleDestroy {
 
     try {
       const testKey = `health_check_${Date.now()}`;
-      await this.cacheManager.set(testKey, 'performance_test');
+      await this.cacheManager.set(
+        testKey,
+        'performance_test',
+        this.HEALTH_CHECK_TTL_SECONDS,
+      );
       const retrievedValue = await this.cacheManager.get(testKey);
       await this.cacheManager.del(testKey);
 
