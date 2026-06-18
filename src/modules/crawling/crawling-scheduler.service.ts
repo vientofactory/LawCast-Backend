@@ -41,7 +41,6 @@ function isRetryableNetworkError(error: unknown): boolean {
     message.includes(code),
   );
 }
-
 @Injectable()
 export class CrawlingSchedulerService implements OnModuleInit {
   private readonly logger = new Logger(CrawlingSchedulerService.name);
@@ -753,14 +752,50 @@ export class CrawlingSchedulerService implements OnModuleInit {
     }
 
     // Split archived notices by whether proposalReason was successfully obtained.
-    // NSM bills without proposalReason cannot be summarised by Ollama, so we
-    // defer their AI summary and notification until the retry queue resolves them.
+    // NSM bills without proposalReason cannot be summarised by Ollama.
+    // They are still notified immediately, with guidance rendered by the
+    // notification embed utility, and retried in the background.
     const noticesWithReason = archivedNotices.filter((n) =>
       n.proposalReason?.trim(),
     );
     const noticesWithoutReason = archivedNotices.filter(
       (n) => !n.proposalReason?.trim(),
     );
+
+    const noticesWithoutReasonForNotification: CachedNotice[] =
+      noticesWithoutReason.map((notice) => ({
+        ...notice,
+        aiSummary: null,
+        aiSummaryStatus: 'not_supported' as const,
+      }));
+
+    // Notify immediately even when proposalReason is missing so users still
+    // receive the bill alert without waiting for retry resolution.
+    if (noticesWithoutReasonForNotification.length > 0) {
+      void this.notificationOrchestratorService
+        .sendNotifications(noticesWithoutReasonForNotification)
+        .catch((error) => {
+          this.logger.error(
+            'Notification dispatch for pending bills without proposalReason failed:',
+            error,
+          );
+          void this.discordBridge?.logEvent(
+            BridgeLogLevel.ERROR,
+            CrawlingSchedulerService.name,
+            'Notification dispatch failed for pending bills without proposalReason',
+            {
+              count: noticesWithoutReasonForNotification.length,
+              billNos: noticesWithoutReasonForNotification.map(
+                (notice) => notice.num,
+              ),
+              proposalReasonState: 'missing',
+              notificationMode: 'immediate',
+              retryQueueSize: noticesWithoutReason.length,
+              guidanceIncluded: true,
+            },
+          );
+        });
+    }
 
     // Enqueue bills with missing proposalReason for background retry.
     for (const notice of noticesWithoutReason) {
@@ -837,11 +872,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     // summary) so all new bills become visible in the UI immediately.
     const allForCache: CachedNotice[] = [
       ...noticesWithSummary,
-      ...noticesWithoutReason.map((n) => ({
-        ...n,
-        aiSummary: null,
-        aiSummaryStatus: 'not_requested' as const,
-      })),
+      ...noticesWithoutReasonForNotification,
     ];
 
     if (allForCache.length > 0) {

@@ -13,6 +13,8 @@ import { type CachedNotice } from '../../types/cache.types';
 @Injectable()
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
+  private readonly PROPOSAL_REASON_MISSING_GUIDANCE =
+    '법률안 제안이유를 아직 수집하지 못했습니다. 자세히 보기 링크를 통해 국회 페이지에서 직접 확인해 주세요.';
 
   // Rate limit keys
   private readonly RATE_LIMIT_KEYS = {
@@ -139,7 +141,7 @@ export class NotificationService {
   private async createNotificationEmbed(
     notice: CachedNotice,
   ): Promise<MessageBuilder> {
-    const summary = this.buildProposalSummary(notice);
+    const summaryOrGuidance = this.buildSummaryOrGuidanceField(notice);
     const embed = new MessageBuilder()
       .setTitle('새로운 국회 입법예고')
       .setDescription(
@@ -152,10 +154,10 @@ export class NotificationService {
       .setTimestamp()
       .setFooter('LawCast 알림 서비스', '');
 
-    if (summary) {
+    if (summaryOrGuidance) {
       embed.addField(
-        '핵심 내용 AI 요약',
-        this.truncateForEmbed(summary),
+        summaryOrGuidance.name,
+        this.truncateForEmbed(summaryOrGuidance.value),
         false,
       );
     }
@@ -166,14 +168,31 @@ export class NotificationService {
     return embed;
   }
 
-  private buildProposalSummary(notice: CachedNotice): string | null {
+  private buildSummaryOrGuidanceField(
+    notice: CachedNotice,
+  ): { name: string; value: string } | null {
     const precomputedSummary = notice.aiSummary;
 
     if (precomputedSummary) {
-      return precomputedSummary.trim();
+      return {
+        name: '핵심 내용 AI 요약',
+        value: precomputedSummary.trim(),
+      };
+    }
+
+    if (this.isProposalReasonMissing(notice)) {
+      return {
+        name: '안내',
+        value: this.PROPOSAL_REASON_MISSING_GUIDANCE,
+      };
     }
 
     return null;
+  }
+
+  private isProposalReasonMissing(notice: CachedNotice): boolean {
+    const reason = notice.proposalReason?.trim();
+    return notice.contentId === null && !reason;
   }
 
   private truncateForEmbed(value: string, maxLength = 1024): string {
