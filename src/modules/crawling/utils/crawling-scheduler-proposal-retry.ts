@@ -211,31 +211,39 @@ export class CrawlingSchedulerProposalRetry {
           await this.options.summaryGenerationService.generateSummaryForNotice(
             enriched,
           );
-        noticeWithSummary = { ...enriched, ...summaryResult };
-      } catch {
+        const normalizedStatus =
+          summaryResult.aiSummaryStatus === 'not_requested' &&
+          this.options.summaryGenerationService.isAiSummaryEnabled()
+            ? ('unavailable' as const)
+            : summaryResult.aiSummaryStatus;
+
+        noticeWithSummary = {
+          ...enriched,
+          aiSummary: summaryResult.aiSummary,
+          aiSummaryStatus: normalizedStatus,
+        };
+      } catch (error) {
+        this.options.logger.warn(
+          `proposalReason retry: summary generation failed for bill ${item.billNo}: ${(error as Error).message}`,
+        );
         noticeWithSummary = {
           ...enriched,
           aiSummary: null,
-          aiSummaryStatus: 'not_requested' as const,
+          aiSummaryStatus: 'unavailable' as const,
         };
       }
 
-      if (
-        (noticeWithSummary.aiSummaryStatus ?? 'not_requested') !==
-        'not_requested'
-      ) {
-        await this.options.noticeArchiveService
-          .updateSummaryStateByNoticeNum(
-            noticeWithSummary.num,
-            noticeWithSummary.aiSummary ?? null,
-            noticeWithSummary.aiSummaryStatus ?? 'not_requested',
-          )
-          .catch((error) => {
-            this.options.logger.warn(
-              `Failed to persist summary for bill ${item.billNo}: ${(error as Error).message}`,
-            );
-          });
-      }
+      await this.options.noticeArchiveService
+        .updateSummaryStateByNoticeNum(
+          noticeWithSummary.num,
+          noticeWithSummary.aiSummary ?? null,
+          noticeWithSummary.aiSummaryStatus ?? 'not_requested',
+        )
+        .catch((error) => {
+          this.options.logger.warn(
+            `Failed to persist summary for bill ${item.billNo}: ${(error as Error).message}`,
+          );
+        });
 
       resolved.push(noticeWithSummary);
       queue.splice(idx, 1);
