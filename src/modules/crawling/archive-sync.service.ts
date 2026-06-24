@@ -799,6 +799,22 @@ export class ArchiveSyncService implements OnModuleInit {
               ArchiveSyncService.name,
               `Summary backfill failed for notice ${notice.num}: ${(error as Error).message}`,
             );
+
+            await this.noticeArchiveService
+              .updateSummaryStateByNoticeNum(notice.num, null, 'unavailable')
+              .catch((persistError) => {
+                LoggerUtils.warn(
+                  ArchiveSyncService.name,
+                  `Failed to persist unavailable summary state for notice ${notice.num}: ${(persistError as Error).message}`,
+                );
+              });
+
+            batchCacheUpdates.push({
+              ...notice,
+              aiSummary: null,
+              aiSummaryStatus: 'unavailable',
+            });
+
             return 'unavailable' as const;
           }
         },

@@ -777,6 +777,9 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(result!.failed).toBe(1);
     expect(result!.generated).toBe(2);
     expect(result!.scanned).toBe(3);
+    expect(
+      noticeArchiveService.updateSummaryStateByNoticeNum,
+    ).toHaveBeenCalledWith(10, null, 'unavailable');
   });
 
   it('DB updateSummaryStateByNoticeNum throws for one item → other items in batch still updated, phase completes', async () => {
