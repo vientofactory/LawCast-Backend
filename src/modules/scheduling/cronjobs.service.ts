@@ -140,13 +140,22 @@ export class CronJobsService {
   /**
    * Re-runs HTML backfill so legacy rows with missing `sourceHtml` or
    * missing NsmLmSts `proposalReason` are gradually repaired after bootstrap.
+   *
+   * Immediately follows with summary backfill and unavailable retry so rows
+   * that became summarizable in this pass (e.g. proposalReason just filled)
+   * are processed without waiting for a server restart/bootstrap pipeline.
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.HTML_BACKFILL, {
     timeZone: CRON_TIMEZONE,
   })
   async handleHtmlBackfill(): Promise<void> {
-    await this.execute('html/proposalReason backfill', () =>
-      this.archiveSyncService.runHtmlBackfill('cron').then(() => undefined),
+    await this.execute(
+      'html/proposalReason backfill + summary pipeline',
+      async () => {
+        await this.archiveSyncService.runHtmlBackfill('cron');
+        await this.archiveSyncService.runSummaryBackfill('cron');
+        await this.archiveSyncService.runUnavailableRetry('cron');
+      },
     );
   }
 
