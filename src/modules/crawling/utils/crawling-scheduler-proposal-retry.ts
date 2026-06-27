@@ -8,6 +8,10 @@ import { NoticeArchiveService } from '../../notice/notice-archive.service';
 import { DiscordBridgeService } from '../../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../../utils/logger.utils';
+import {
+  AI_SUMMARY_STATUS,
+  normalizeAttemptedSummaryStatus,
+} from './ai-summary-status.utils';
 
 const {
   NSM_REASON_RETRY_MAX_ATTEMPTS,
@@ -211,11 +215,10 @@ export class CrawlingSchedulerProposalRetry {
           await this.options.summaryGenerationService.generateSummaryForNotice(
             enriched,
           );
-        const normalizedStatus =
-          summaryResult.aiSummaryStatus === 'not_requested' &&
-          this.options.summaryGenerationService.isAiSummaryEnabled()
-            ? ('unavailable' as const)
-            : summaryResult.aiSummaryStatus;
+        const normalizedStatus = normalizeAttemptedSummaryStatus(
+          summaryResult.aiSummaryStatus,
+          this.options.summaryGenerationService.isAiSummaryEnabled(),
+        );
 
         noticeWithSummary = {
           ...enriched,
@@ -229,7 +232,7 @@ export class CrawlingSchedulerProposalRetry {
         noticeWithSummary = {
           ...enriched,
           aiSummary: null,
-          aiSummaryStatus: 'unavailable' as const,
+          aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
         };
       }
 

@@ -4,6 +4,7 @@ import { APP_CONSTANTS } from '../../config/app.config';
 import { type AISummaryStatus } from '../../types/cache.types';
 import { CrawlingCoreService } from './crawling-core.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
+import { AI_SUMMARY_STATUS } from './utils/ai-summary-status.utils';
 
 export interface SearchNoticesQuery {
   keyword: string;
@@ -134,7 +135,7 @@ export class NoticeSearchService {
             isDone: false,
             isArchived: false,
             aiSummary: null,
-            aiSummaryStatus: 'not_requested' as AISummaryStatus,
+            aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED as AISummaryStatus,
             attachments: {
               pdfFile: crawlerItem.attachments.pdfFile ?? '',
               hwpFile: crawlerItem.attachments.hwpFile ?? '',
@@ -164,7 +165,7 @@ export class NoticeSearchService {
             isDone: true,
             isArchived: false,
             aiSummary: null,
-            aiSummaryStatus: 'not_requested' as AISummaryStatus,
+            aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED as AISummaryStatus,
             attachments: {
               pdfFile: crawlerItem.attachments.pdfFile ?? '',
               hwpFile: crawlerItem.attachments.hwpFile ?? '',

@@ -13,6 +13,7 @@ import {
   type AISummaryStatus,
   type CachedNotice,
 } from '../../types/cache.types';
+import { AI_SUMMARY_STATUS } from '../crawling/utils/ai-summary-status.utils';
 import { NoticeArchive } from '../notice/notice-archive.entity';
 import {
   NOTICE_ITEM_SELECT,
@@ -198,7 +199,8 @@ export class NoticeArchiveService {
       contentNoticePeriod: originalContent.noticePeriod?.trim() || null,
       contentProposalSession: originalContent.proposalSession?.trim() || null,
       aiSummary: notice.aiSummary ?? null,
-      aiSummaryStatus: notice.aiSummaryStatus ?? 'not_requested',
+      aiSummaryStatus:
+        notice.aiSummaryStatus ?? AI_SUMMARY_STATUS.NOT_REQUESTED,
       attachmentPdfFile: notice.attachments?.pdfFile ?? '',
       attachmentHwpFile: notice.attachments?.hwpFile ?? '',
       archivedAt: originalContent.archivedAt ?? new Date(),
@@ -302,7 +304,7 @@ export class NoticeArchiveService {
    */
   async getPendingSummaryPage(take: number): Promise<CachedNotice[]> {
     const rows = await this.archiveRepository.find({
-      where: { aiSummaryStatus: 'not_requested' },
+      where: { aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED },
       select: {
         noticeNum: true,
         subject: true,
@@ -319,7 +321,7 @@ export class NoticeArchiveService {
     });
 
     return rows.map((row) =>
-      mapArchiveEntityToCachedNotice(row, 'not_requested'),
+      mapArchiveEntityToCachedNotice(row, AI_SUMMARY_STATUS.NOT_REQUESTED),
     );
   }
 
@@ -338,7 +340,7 @@ export class NoticeArchiveService {
     take: number,
   ): Promise<CachedNotice[]> {
     const rows = await this.archiveRepository.find({
-      where: { aiSummaryStatus: 'unavailable' },
+      where: { aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE },
       select: {
         noticeNum: true,
         subject: true,
@@ -356,7 +358,7 @@ export class NoticeArchiveService {
     });
 
     return rows.map((row) =>
-      mapArchiveEntityToCachedNotice(row, 'unavailable'),
+      mapArchiveEntityToCachedNotice(row, AI_SUMMARY_STATUS.UNAVAILABLE),
     );
   }
 
@@ -706,13 +708,16 @@ export class NoticeArchiveService {
     if (payload.proposalReason) {
       // When proposalReason is now populated, rows that were previously marked
       // 'not_supported' (because proposalReason was empty at archive time) must
-      // be reset to 'not_requested' so the summary backfill can pick them up.
+      // be reset to `not_requested` so the summary backfill can pick them up.
       // Only rows still in the terminal-skip state are touched; rows that already
       // have a real status (ready / unavailable / not_requested) are left alone.
       await this.archiveRepository
         .createQueryBuilder()
         .update(NoticeArchive)
-        .set({ ...baseUpdate, aiSummaryStatus: 'not_requested' })
+        .set({
+          ...baseUpdate,
+          aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
+        })
         .where('noticeNum = :noticeNum AND aiSummaryStatus = :skip', {
           noticeNum,
           skip: 'not_supported',

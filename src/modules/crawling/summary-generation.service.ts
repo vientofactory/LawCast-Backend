@@ -8,6 +8,11 @@ import {
 import { OllamaClientService } from '../ollama/ollama-client.service';
 import { type ArchiveSummaryState } from '../notice/notice-archive.service';
 import { CrawlingCoreService } from './crawling-core.service';
+import {
+  AI_SUMMARY_STATUS,
+  isSummaryNotRequested,
+  isSummaryUnavailable,
+} from './utils/ai-summary-status.utils';
 
 @Injectable()
 export class SummaryGenerationService {
@@ -72,16 +77,14 @@ export class SummaryGenerationService {
         const archivedSummaryState = archiveSummaryStates.get(notice.num);
 
         // Skip generation only for terminal states (ready / not_supported).
-        // 'not_requested' means the archive row was saved without ever attempting
-        // a summary (e.g. by the full-sync bootstrap), so fall through and generate.
-        // 'unavailable' follows the existing retry-flag logic below.
+        // `not_requested` means the row has not entered the summary pipeline yet.
         if (
           archivedSummaryState &&
-          archivedSummaryState.aiSummaryStatus !== 'not_requested'
+          !isSummaryNotRequested(archivedSummaryState.aiSummaryStatus)
         ) {
           if (
             retryUnavailableArchiveSummary &&
-            archivedSummaryState.aiSummaryStatus === 'unavailable'
+            isSummaryUnavailable(archivedSummaryState.aiSummaryStatus)
           ) {
             if (logOllamaActivity) {
               this.logOllama(
@@ -171,7 +174,7 @@ export class SummaryGenerationService {
 
       return {
         aiSummary: null,
-        aiSummaryStatus: 'not_requested',
+        aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
       };
     }
 
@@ -189,7 +192,7 @@ export class SummaryGenerationService {
         }
         return {
           aiSummary: null,
-          aiSummaryStatus: 'not_supported',
+          aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
         };
       }
 
@@ -215,7 +218,9 @@ export class SummaryGenerationService {
 
         return {
           aiSummary: summary,
-          aiSummaryStatus: summary ? 'ready' : 'unavailable',
+          aiSummaryStatus: summary
+            ? AI_SUMMARY_STATUS.READY
+            : AI_SUMMARY_STATUS.UNAVAILABLE,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -230,7 +235,7 @@ export class SummaryGenerationService {
         );
         return {
           aiSummary: null,
-          aiSummaryStatus: 'unavailable',
+          aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
         };
       }
     }
@@ -250,7 +255,7 @@ export class SummaryGenerationService {
 
         return {
           aiSummary: null,
-          aiSummaryStatus: 'not_supported',
+          aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
         };
       }
 
@@ -275,7 +280,9 @@ export class SummaryGenerationService {
 
       return {
         aiSummary: summary,
-        aiSummaryStatus: summary ? 'ready' : 'unavailable',
+        aiSummaryStatus: summary
+          ? AI_SUMMARY_STATUS.READY
+          : AI_SUMMARY_STATUS.UNAVAILABLE,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -292,7 +299,7 @@ export class SummaryGenerationService {
       );
       return {
         aiSummary: null,
-        aiSummaryStatus: 'unavailable',
+        aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
       };
     }
   }
