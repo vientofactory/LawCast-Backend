@@ -15,6 +15,7 @@ import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { mapConcurrently } from '../../utils/concurrency.utils';
 import { type CachedNotice } from '../../types/cache.types';
+import { AI_SUMMARY_STATUS } from './utils/ai-summary-status.utils';
 import {
   ArchiveSyncPhaseRunner,
   type ArchiveSyncPhaseState,
@@ -801,7 +802,11 @@ export class ArchiveSyncService implements OnModuleInit {
             );
 
             await this.noticeArchiveService
-              .updateSummaryStateByNoticeNum(notice.num, null, 'unavailable')
+              .updateSummaryStateByNoticeNum(
+                notice.num,
+                null,
+                AI_SUMMARY_STATUS.UNAVAILABLE,
+              )
               .catch((persistError) => {
                 LoggerUtils.warn(
                   ArchiveSyncService.name,
@@ -812,10 +817,10 @@ export class ArchiveSyncService implements OnModuleInit {
             batchCacheUpdates.push({
               ...notice,
               aiSummary: null,
-              aiSummaryStatus: 'unavailable',
+              aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
             });
 
-            return 'unavailable' as const;
+            return AI_SUMMARY_STATUS.UNAVAILABLE;
           }
         },
       );

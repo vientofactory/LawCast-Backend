@@ -11,6 +11,7 @@ import {
   type AISummaryStatus,
   type CachedNotice,
 } from '../../types/cache.types';
+import { AI_SUMMARY_STATUS } from '../crawling/utils/ai-summary-status.utils';
 import { NoticeArchive } from './notice-archive.entity';
 import {
   type ArchiveHttpMetadata,
@@ -46,7 +47,7 @@ export function mapArchiveEntityToNoticeItem(
     isDone: row.isDone ?? false,
     aiSummary: row.aiSummary,
     aiSummaryStatus: (row.aiSummaryStatus ||
-      'not_requested') as AISummaryStatus,
+      AI_SUMMARY_STATUS.NOT_REQUESTED) as AISummaryStatus,
     attachments: {
       pdfFile: row.attachmentPdfFile,
       hwpFile: row.attachmentHwpFile,
