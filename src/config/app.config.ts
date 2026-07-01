@@ -196,15 +196,19 @@ export const APP_CONSTANTS = {
   },
   CRON: {
     EXPRESSIONS: {
-      CRAWLING_CHECK: '0 */10 * * * *', // Every 10 minutes
-      PENDING_CRAWLING_CHECK: '0 */20 * * * *', // Every 20 minutes
-      WEBHOOK_CLEANUP: '0 1 0 * * *', // Every day at 00:01
-      WEBHOOK_OPTIMIZATION: '0 1 2 * * *', // Every day at 02:01
-      SYSTEM_MONITORING: '0 0 * * * *', // Every hour
-      IS_DONE_SYNC: '0 0 */6 * * *', // Every 6 hours - sync isDone flags for expired notices
-      HTML_BACKFILL: '0 15 */6 * * *', // Every 6 hours (offset 15 min) - retry missing HTML/proposalReason
-      INTEGRITY_RESCAN: '0 0 3 * * *', // Every day at 3 AM - full archive integrity re-validation
-      SCREENSHOT_BACKFILL: '0 30 */6 * * *', // Every 6 hours (offset 30 min) - retry missing screenshots
+      CRAWLING_CHECK: '*/10 * * * *', // Every 10 minutes
+      PENDING_CRAWLING_CHECK: '*/20 * * * *', // Every 20 minutes
+      WEBHOOK_CLEANUP: '1 0 * * *', // Every day at 00:01
+      WEBHOOK_OPTIMIZATION: '1 2 * * *', // Every day at 02:01
+      SYSTEM_MONITORING: '0 * * * *', // Every hour
+      IS_DONE_SYNC: '0 */6 * * *', // Every 6 hours - sync isDone flags for expired notices
+      HTML_BACKFILL: '0 */6 * * *', // Every 6 hours - offset is applied in scheduler logic
+      INTEGRITY_RESCAN: '0 3 * * *', // Every day at 3 AM - full archive integrity re-validation
+      SCREENSHOT_BACKFILL: '0 */6 * * *', // Every 6 hours - offset is applied in scheduler logic
+    },
+    OFFSETS_MS: {
+      HTML_BACKFILL: 15 * 60 * 1000,
+      SCREENSHOT_BACKFILL: 30 * 60 * 1000,
     },
   },
 } as const;

@@ -15,6 +15,12 @@ const CRON_TIMEZONE = appConfig().cron.timezone;
 export class CronJobsService {
   private readonly logger = new Logger(CronJobsService.name);
 
+  private readonly htmlBackfillOffsetMs =
+    APP_CONSTANTS.CRON.OFFSETS_MS.HTML_BACKFILL;
+
+  private readonly screenshotBackfillOffsetMs =
+    APP_CONSTANTS.CRON.OFFSETS_MS.SCREENSHOT_BACKFILL;
+
   constructor(
     private readonly webhookCleanupService: WebhookCleanupService,
     private readonly crawlingService: CrawlingService,
@@ -60,6 +66,27 @@ export class CronJobsService {
         `Scheduled task failed: **${taskName}** - ${(error as Error).message}`,
       );
     }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async executeWithOffset(
+    taskName: string,
+    offsetMs: number,
+    task: () => Promise<void>,
+  ): Promise<void> {
+    await this.execute(taskName, async () => {
+      if (offsetMs > 0) {
+        LoggerUtils.debugDev(
+          CronJobsService.name,
+          `Applying ${offsetMs}ms offset before ${taskName}.`,
+        );
+        await this.sleep(offsetMs);
+      }
+      await task();
+    });
   }
 
   /**
@@ -144,13 +171,15 @@ export class CronJobsService {
    * Immediately follows with summary backfill and unavailable retry so rows
    * that became summarizable in this pass (e.g. proposalReason just filled)
    * are processed without waiting for a server restart/bootstrap pipeline.
+   * Schedule offset is applied in service logic.
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.HTML_BACKFILL, {
     timeZone: CRON_TIMEZONE,
   })
   async handleHtmlBackfill(): Promise<void> {
-    await this.execute(
+    await this.executeWithOffset(
       'html/proposalReason backfill + summary pipeline',
+      this.htmlBackfillOffsetMs,
       async () => {
         await this.archiveSyncService.runHtmlBackfill('cron');
         await this.archiveSyncService.runSummaryBackfill('cron');
@@ -178,15 +207,18 @@ export class CronJobsService {
   /**
    * Periodically re-triggers the screenshot backfill so notices that were
    * permanently skipped in a previous session are retried without a full
-   * server restart. Skipped when a capture is already in progress or the
-   * queue still has pending items.
+   * server restart. The schedule cadence is every 6 hours, and the 30-minute
+   * offset is applied in service logic. Skipped when a capture is already in
+   * progress or the queue still has pending items.
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SCREENSHOT_BACKFILL, {
     timeZone: CRON_TIMEZONE,
   })
   async handleScreenshotBackfill(): Promise<void> {
-    await this.execute('screenshot backfill', () =>
-      this.archiveOrchestratorService.handleScreenshotBackfill(),
+    await this.executeWithOffset(
+      'screenshot backfill',
+      this.screenshotBackfillOffsetMs,
+      () => this.archiveOrchestratorService.handleScreenshotBackfill(),
     );
   }
 }
