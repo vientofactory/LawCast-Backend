@@ -45,7 +45,7 @@ const SUMMARY_BACKFILL_CONCURRENCY = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
  */
 const DONE_PAGE_MAX_RETRIES = 2;
 /** Base backoff between done-page retry attempts (ms); multiplied by attempt number. */
-const DONE_PAGE_RETRY_BASE_MS = 500;
+const DONE_PAGE_RETRY_BASE_MS = 1000;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -368,19 +368,48 @@ export class ArchiveSyncService implements OnModuleInit {
           const toUpgrade = alreadyArchivedWithContentId.filter((item) =>
             nullContentIdNums.has(item.num),
           );
-          const upgraded =
-            await this.noticeArchiveService.upgradePendingNotices(
-              toUpgrade.map((item) => ({
-                num: item.num,
-                contentId: item.contentId!,
-                link: item.link,
-                committee: item.committee,
-              })),
+          const summaryStates =
+            await this.noticeArchiveService.getSummaryStateByNoticeNums(
+              toUpgrade.map((item) => item.num),
             );
+
+          // Re-archive with PAL source/detail so NSM-first rows are naturally
+          // refreshed (proposal metadata/source HTML/etc.) once PAL publishes.
+          const upgraded = await this.archiveOrchestratorService.archiveNotices(
+            toUpgrade.map((item) => {
+              const summary = summaryStates.get(item.num);
+              return {
+                num: item.num,
+                subject: item.subject,
+                proposerCategory: item.proposerCategory,
+                committee: item.committee,
+                link: item.link,
+                contentId: item.contentId,
+                attachments: item.attachments ?? {
+                  pdfFile: null,
+                  hwpFile: null,
+                },
+                aiSummary: summary?.aiSummary ?? null,
+                aiSummaryStatus: summary?.aiSummaryStatus ?? 'not_requested',
+              };
+            }),
+          );
           if (upgraded > 0) {
             LoggerUtils.logDev(
               ArchiveSyncService.name,
-              `Upgraded ${upgraded} pending bill(s) with contentId from \uc785\ubc95\uc608\uace0`,
+              `Upgraded ${upgraded} pending bill(s) from NSM to PAL with full archive refresh`,
+            );
+            void this.discordBridge?.logEvent(
+              BridgeLogLevel.DEBUG,
+              ArchiveSyncService.name,
+              `NSM->PAL archive refresh applied: upgraded **${upgraded}** bill(s) on full sync`,
+              {
+                upgraded,
+                detected: toUpgrade.length,
+                sampleNoticeNums: toUpgrade
+                  .slice(0, 10)
+                  .map((item) => item.num),
+              },
             );
           }
         }
