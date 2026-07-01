@@ -86,6 +86,34 @@ export class CronJobsService {
     });
   }
 
+  private shouldSkipCrawlingCron(taskName: string): boolean {
+    if (!this.archiveSyncService.isAnyPhaseRunning()) return false;
+
+    const message = `${taskName} skipped - archive sync phase is currently running`;
+    this.logger.warn(message);
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.WARN,
+      CronJobsService.name,
+      message,
+    );
+    return true;
+  }
+
+  private shouldSkipArchiveSyncCron(taskName: string): boolean {
+    if (!this.crawlingService.isSchedulerBusy({ includeBackground: true })) {
+      return false;
+    }
+
+    const message = `${taskName} skipped - crawling scheduler is busy`;
+    this.logger.warn(message);
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.WARN,
+      CronJobsService.name,
+      message,
+    );
+    return true;
+  }
+
   /**
    * Runs webhook cleanup daily at midnight
    */
@@ -131,6 +159,9 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handleCrawlingCheck(): Promise<void> {
+    if (this.shouldSkipCrawlingCron('crawling and notification')) {
+      return;
+    }
     await this.execute('crawling and notification', () =>
       this.crawlingService.handleCron(),
     );
@@ -144,6 +175,9 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handlePendingCrawlingCheck(): Promise<void> {
+    if (this.shouldSkipCrawlingCron('pending bills crawl (NsmLmSts)')) {
+      return;
+    }
     await this.execute('pending bills crawl (NsmLmSts)', () =>
       this.crawlingService.handlePendingCron(),
     );
@@ -156,6 +190,9 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handleIsDoneSync(): Promise<void> {
+    if (this.shouldSkipArchiveSyncCron('isDone sync')) {
+      return;
+    }
     await this.execute('isDone sync', () =>
       this.archiveSyncService.runIsDoneSync('cron').then(() => undefined),
     );
@@ -174,6 +211,13 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handleHtmlBackfill(): Promise<void> {
+    if (
+      this.shouldSkipArchiveSyncCron(
+        'html/proposalReason backfill + summary pipeline',
+      )
+    ) {
+      return;
+    }
     await this.execute(
       'html/proposalReason backfill + summary pipeline',
       async () => {
@@ -193,6 +237,9 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handleIntegrityRescan(): Promise<void> {
+    if (this.shouldSkipArchiveSyncCron('integrity re-scan')) {
+      return;
+    }
     await this.execute('integrity re-scan', () =>
       this.archiveSyncService
         .runScheduledIntegrityRescan('cron')
