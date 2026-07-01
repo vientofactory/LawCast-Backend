@@ -202,9 +202,9 @@ export const APP_CONSTANTS = {
       WEBHOOK_OPTIMIZATION: '1 2 * * *', // Every day at 02:01
       SYSTEM_MONITORING: '0 * * * *', // Every hour
       IS_DONE_SYNC: '0 */6 * * *', // Every 6 hours - sync isDone flags for expired notices
-      HTML_BACKFILL: '0 */3 * * *', // Every 3 hours
+      HTML_BACKFILL: '0 */1 * * *', // Every 1 hour
       INTEGRITY_RESCAN: '0 3 * * *', // Every day at 3 AM - full archive integrity re-validation
-      SCREENSHOT_BACKFILL: '0 */3 * * *', // Every 3 hours
+      SCREENSHOT_BACKFILL: '0 */1 * * *', // Every 1 hour
     },
     OFFSETS_MS: {
       SCREENSHOT_BACKFILL: 10 * 60 * 1000, // 10 minutes
