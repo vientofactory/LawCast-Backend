@@ -46,6 +46,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
   private readonly logger = new Logger(CrawlingSchedulerService.name);
   private isProcessing = false;
   private isInitialized = false;
+  private readonly activeBackgroundTasks = new Set<string>();
   private readonly proposalReasonRetry: CrawlingSchedulerProposalRetry;
   private readonly summarySupport: CrawlingSchedulerSummarySupport;
 
@@ -145,6 +146,57 @@ export class CrawlingSchedulerService implements OnModuleInit {
     } finally {
       this.isProcessing = false;
     }
+  }
+
+  /**
+   * Returns true when scheduler is actively handling cron work.
+   * By default includes background tasks launched after the fast path.
+   */
+  isBusy(options: { includeBackground?: boolean } = {}): boolean {
+    const includeBackground = options.includeBackground ?? true;
+    if (this.isProcessing) return true;
+    if (includeBackground && this.activeBackgroundTasks.size > 0) return true;
+    return false;
+  }
+
+  /** Snapshot for diagnostics (API/Discord/debug logs). */
+  getExecutionState(): {
+    isInitialized: boolean;
+    isProcessing: boolean;
+    activeBackgroundTaskCount: number;
+    activeBackgroundTasks: string[];
+  } {
+    return {
+      isInitialized: this.isInitialized,
+      isProcessing: this.isProcessing,
+      activeBackgroundTaskCount: this.activeBackgroundTasks.size,
+      activeBackgroundTasks: Array.from(this.activeBackgroundTasks).sort(),
+    };
+  }
+
+  /**
+   * Runs a named background task exactly once at a time.
+   * If the same task is already running, the new request is skipped.
+   */
+  private runBackgroundTask(taskName: string, task: () => Promise<void>): void {
+    if (this.activeBackgroundTasks.has(taskName)) {
+      Logger.debug(
+        `Background task already running - skipping duplicate launch: ${taskName}`,
+        CrawlingSchedulerService.name,
+      );
+      return;
+    }
+
+    this.activeBackgroundTasks.add(taskName);
+    void task()
+      .catch((error) => {
+        this.logger.error(
+          `Background task failed [${taskName}]: ${(error as Error).message}`,
+        );
+      })
+      .finally(() => {
+        this.activeBackgroundTasks.delete(taskName);
+      });
   }
 
   /**
@@ -406,6 +458,21 @@ export class CrawlingSchedulerService implements OnModuleInit {
     });
     await this.cacheService.updateCache(noticesWithExistingSummary);
 
+    // If a bill was archived earlier from NSM (contentId=NULL) and now appears
+    // in PAL with contentId, refresh that row in the background so periodic
+    // cron cycles also perform NSM->PAL upgrades (not only bootstrap full sync).
+    const newNums = new Set(newNotices.map((n) => n.num));
+    const alreadyArchivedWithContentId = crawledData.filter(
+      (item) => !newNums.has(item.num) && item.contentId !== null,
+    );
+    if (alreadyArchivedWithContentId.length > 0) {
+      this.runBackgroundTask('refresh-nsm-to-pal', async () => {
+        await this.refreshNsmToPalUpgradesInBackground(
+          alreadyArchivedWithContentId,
+        );
+      });
+    }
+
     if (newNotices.length > 0) {
       this.logger.log(`Found ${newNotices.length} new legislative notices`);
       void this.discordBridge?.logEvent(
@@ -420,19 +487,23 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
       // ── Background path: AI summary → archiving → cache re-update → notifications ──
       // Runs independently after the isProcessing lock is released, so it never blocks the cron cycle.
-      void this.processNewNoticesInBackground(
-        newNotices,
-        existingNoticeMap,
-      ).catch((error) => {
-        this.logger.error(
-          'Background processing for new notices failed:',
-          error,
-        );
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.ERROR,
-          CrawlingSchedulerService.name,
-          `Background new notice processing failed: ${(error as Error).message}`,
-        );
+      this.runBackgroundTask('process-new-notices', async () => {
+        try {
+          await this.processNewNoticesInBackground(
+            newNotices,
+            existingNoticeMap,
+          );
+        } catch (error) {
+          this.logger.error(
+            'Background processing for new notices failed:',
+            error,
+          );
+          void this.discordBridge?.logEvent(
+            BridgeLogLevel.ERROR,
+            CrawlingSchedulerService.name,
+            `Background new notice processing failed: ${(error as Error).message}`,
+          );
+        }
       });
     } else {
       void this.discordBridge?.logEvent(
@@ -443,13 +514,17 @@ export class CrawlingSchedulerService implements OnModuleInit {
       );
 
       // ── Background path: retry summaries that failed to generate in a previous cycle ──
-      void this.retryUnavailableSummariesInBackground(
-        noticesWithExistingSummary,
-        existingNoticeMap,
-      ).catch((error) => {
-        this.logger.warn(
-          `Background summary retry failed: ${(error as Error).message}`,
-        );
+      this.runBackgroundTask('retry-unavailable-summaries', async () => {
+        try {
+          await this.retryUnavailableSummariesInBackground(
+            noticesWithExistingSummary,
+            existingNoticeMap,
+          );
+        } catch (error) {
+          this.logger.warn(
+            `Background summary retry failed: ${(error as Error).message}`,
+          );
+        }
       });
     }
 
@@ -618,6 +693,82 @@ export class CrawlingSchedulerService implements OnModuleInit {
   }
 
   /**
+   * Periodic (cron) NSM->PAL transition refresh.
+   *
+   * Finds archive rows that were previously created from NSM with
+   * `contentId = NULL`, then re-archives them using PAL detail/source HTML
+   * once PAL exposes a real contentId for the same notice number.
+   */
+  private async refreshNsmToPalUpgradesInBackground(
+    itemsWithContentId: ITableData[],
+  ): Promise<void> {
+    const nullContentIdNums =
+      await this.noticeArchiveService.getArchivedNullContentIdNums(
+        itemsWithContentId.map((item) => item.num),
+      );
+
+    if (nullContentIdNums.size === 0) {
+      return;
+    }
+
+    const toUpgrade = itemsWithContentId.filter((item) =>
+      nullContentIdNums.has(item.num),
+    );
+    if (toUpgrade.length === 0) {
+      return;
+    }
+
+    let summaryStates: Map<number, ArchiveSummaryState>;
+    try {
+      summaryStates =
+        await this.noticeArchiveService.getSummaryStateByNoticeNums(
+          toUpgrade.map((item) => item.num),
+        );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to load summary states for periodic NSM->PAL refresh, using defaults: ${(error as Error).message}`,
+      );
+      summaryStates = new Map();
+    }
+
+    const upgraded = await this.archiveOrchestratorService.archiveNotices(
+      toUpgrade.map((item) => {
+        const summary = summaryStates.get(item.num);
+        return {
+          num: item.num,
+          subject: item.subject,
+          proposerCategory: item.proposerCategory,
+          committee: item.committee,
+          link: item.link,
+          contentId: item.contentId,
+          attachments: item.attachments ?? {
+            pdfFile: null,
+            hwpFile: null,
+          },
+          aiSummary: summary?.aiSummary ?? null,
+          aiSummaryStatus: summary?.aiSummaryStatus ?? 'not_requested',
+        };
+      }),
+    );
+
+    if (upgraded > 0) {
+      this.logger.log(
+        `Periodic NSM->PAL archive refresh updated ${upgraded} bill(s)`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.DEBUG,
+        CrawlingSchedulerService.name,
+        `Periodic NSM->PAL archive refresh: upgraded **${upgraded}** bill(s)`,
+        {
+          upgraded,
+          detected: toUpgrade.length,
+          sampleNoticeNums: toUpgrade.slice(0, 10).map((item) => item.num),
+        },
+      );
+    }
+  }
+
+  /**
    * Detects newly proposed (\"\ubc1c\uc758\") bills from \uad6d\ubbfc\ucc38\uc5ec\uc785\ubc95\uc13c\ud130 (NsmLmSts) that have not
    * yet entered the formal \uc785\ubc95\uc608\uace0 process, archives them, and dispatches
    * notifications - allowing the system to surface new legislation earlier
@@ -709,19 +860,23 @@ export class CrawlingSchedulerService implements OnModuleInit {
       .filter((item): item is INsmBillItem => item !== undefined);
 
     // Archive and notify in the background so the cron lock is not held.
-    void this.processPendingBillsInBackground(
-      newPendingItems,
-      newPendingNotices,
-    ).catch((error) => {
-      this.logger.error(
-        'Background processing for pending bills failed:',
-        error,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        CrawlingSchedulerService.name,
-        `Pending bills background processing failed: ${(error as Error).message}`,
-      );
+    this.runBackgroundTask('process-pending-bills', async () => {
+      try {
+        await this.processPendingBillsInBackground(
+          newPendingItems,
+          newPendingNotices,
+        );
+      } catch (error) {
+        this.logger.error(
+          'Background processing for pending bills failed:',
+          error,
+        );
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.ERROR,
+          CrawlingSchedulerService.name,
+          `Pending bills background processing failed: ${(error as Error).message}`,
+        );
+      }
     });
   }
 

@@ -40,6 +40,14 @@ export class CrawlingService {
   }
 
   /**
+   * True when crawling scheduler is in fast-path processing or running
+   * background follow-up tasks.
+   */
+  isSchedulerBusy(options?: { includeBackground?: boolean }): boolean {
+    return this.crawlingSchedulerService.isBusy(options);
+  }
+
+  /**
    * Retrieves the cached recent notices.
    * @param limit The maximum number of notices to retrieve. Defaults to the configured cache limit.
    * @returns A promise that resolves to an array of cached notices.
