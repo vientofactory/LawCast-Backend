@@ -15,9 +15,6 @@ const CRON_TIMEZONE = appConfig().cron.timezone;
 export class CronJobsService {
   private readonly logger = new Logger(CronJobsService.name);
 
-  private readonly htmlBackfillOffsetMs =
-    APP_CONSTANTS.CRON.OFFSETS_MS.HTML_BACKFILL;
-
   private readonly screenshotBackfillOffsetMs =
     APP_CONSTANTS.CRON.OFFSETS_MS.SCREENSHOT_BACKFILL;
 
@@ -177,9 +174,8 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handleHtmlBackfill(): Promise<void> {
-    await this.executeWithOffset(
+    await this.execute(
       'html/proposalReason backfill + summary pipeline',
-      this.htmlBackfillOffsetMs,
       async () => {
         await this.archiveSyncService.runHtmlBackfill('cron');
         await this.archiveSyncService.runSummaryBackfill('cron');

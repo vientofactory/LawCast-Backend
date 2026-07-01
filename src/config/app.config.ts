@@ -202,13 +202,12 @@ export const APP_CONSTANTS = {
       WEBHOOK_OPTIMIZATION: '1 2 * * *', // Every day at 02:01
       SYSTEM_MONITORING: '0 * * * *', // Every hour
       IS_DONE_SYNC: '0 */6 * * *', // Every 6 hours - sync isDone flags for expired notices
-      HTML_BACKFILL: '0 */6 * * *', // Every 6 hours - offset is applied in scheduler logic
+      HTML_BACKFILL: '0 */3 * * *', // Every 3 hours
       INTEGRITY_RESCAN: '0 3 * * *', // Every day at 3 AM - full archive integrity re-validation
-      SCREENSHOT_BACKFILL: '0 */6 * * *', // Every 6 hours - offset is applied in scheduler logic
+      SCREENSHOT_BACKFILL: '0 */3 * * *', // Every 3 hours
     },
     OFFSETS_MS: {
-      HTML_BACKFILL: 15 * 60 * 1000,
-      SCREENSHOT_BACKFILL: 30 * 60 * 1000,
+      SCREENSHOT_BACKFILL: 10 * 60 * 1000, // 10 minutes
     },
   },
 } as const;
