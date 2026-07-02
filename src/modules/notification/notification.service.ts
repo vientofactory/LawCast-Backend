@@ -37,13 +37,15 @@ export class NotificationService {
     subject: '법률안명',
     proposerCategory: '제안자 구분',
     committee: '소관위원회',
-    link: '원문 링크',
-    contentId: '국회 콘텐츠 ID',
     proposalReason: '제안이유',
+    billNumber: '입법예고 의안번호',
+    proposer: '입법예고 제안자',
+    proposalDate: '입법예고 제안일',
+    contentCommittee: '입법예고 소관위원회',
+    referralDate: '입법예고 회부일',
+    noticePeriod: '입법예고 기간',
+    proposalSession: '입법예고 제안회기',
     isDone: '처리 상태',
-    'attachments.pdfFile': 'PDF 파일',
-    'attachments.hwpFile': 'HWP 파일',
-    sourceHtmlSha256: '원문 해시',
   };
 
   // Rate limit keys

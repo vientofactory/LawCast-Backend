@@ -19,19 +19,21 @@ export interface DiffComputationResult {
   diffSummaryJson: string;
 }
 
-// Initial Phase-2 tracked fields. Can be expanded in later phases.
+// Track only user-meaningful notice metadata and proposal text.
 export const DEFAULT_TRACKED_FIELDS = [
   'num',
   'subject',
   'proposerCategory',
   'committee',
-  'link',
-  'contentId',
   'proposalReason',
+  'billNumber',
+  'proposer',
+  'proposalDate',
+  'contentCommittee',
+  'referralDate',
+  'noticePeriod',
+  'proposalSession',
   'isDone',
-  'attachments.pdfFile',
-  'attachments.hwpFile',
-  'sourceHtmlSha256',
 ] as const;
 
 function normalizeString(input: string): string {

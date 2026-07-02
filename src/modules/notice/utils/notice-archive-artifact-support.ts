@@ -271,7 +271,6 @@ export class NoticeArchiveArtifactSupport {
           integrityVerifiedAt: checkedAt,
         },
       );
-
       row.integrityCheckPassed = passed;
       row.integrityVerifiedAt = checkedAt;
     }

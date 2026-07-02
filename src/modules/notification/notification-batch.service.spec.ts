@@ -126,7 +126,7 @@ describe('NotificationBatchService (diffchain change batching)', () => {
         subject: '법률안 201',
         eventType: 'updated',
         source: 'archive:updateSourceHtml',
-        changedFields: ['sourceHtmlSha256'],
+        changedFields: ['proposer'],
         eventHash: 'hash-201',
       },
       {

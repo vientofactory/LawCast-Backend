@@ -257,13 +257,15 @@ export class NoticeArchiveService {
       subject: coreFields.subject,
       proposerCategory: coreFields.proposerCategory,
       committee: coreFields.committee,
-      assemblyLink: coreFields.assemblyLink,
-      contentId: coreFields.contentId,
       proposalReason: coreFields.proposalReason,
+      contentBillNumber: coreFields.contentBillNumber,
+      contentProposer: coreFields.contentProposer,
+      contentProposalDate: coreFields.contentProposalDate,
+      contentCommittee: coreFields.contentCommittee,
+      contentReferralDate: coreFields.contentReferralDate,
+      contentNoticePeriod: coreFields.contentNoticePeriod,
+      contentProposalSession: coreFields.contentProposalSession,
       isDone: coreFields.isDone,
-      attachmentPdfFile: coreFields.attachmentPdfFile,
-      attachmentHwpFile: coreFields.attachmentHwpFile,
-      sourceHtmlSha256: coreFields.sourceHtmlSha256,
     });
   }
 
@@ -849,13 +851,15 @@ export class NoticeArchiveService {
     | 'subject'
     | 'proposerCategory'
     | 'committee'
-    | 'assemblyLink'
-    | 'contentId'
     | 'proposalReason'
+    | 'contentBillNumber'
+    | 'contentProposer'
+    | 'contentProposalDate'
+    | 'contentCommittee'
+    | 'contentReferralDate'
+    | 'contentNoticePeriod'
+    | 'contentProposalSession'
     | 'isDone'
-    | 'attachmentPdfFile'
-    | 'attachmentHwpFile'
-    | 'sourceHtmlSha256'
   > | null> {
     return this.archiveRepository.findOne({
       where: { noticeNum },
@@ -864,13 +868,15 @@ export class NoticeArchiveService {
         subject: true,
         proposerCategory: true,
         committee: true,
-        assemblyLink: true,
-        contentId: true,
         proposalReason: true,
+        contentBillNumber: true,
+        contentProposer: true,
+        contentProposalDate: true,
+        contentCommittee: true,
+        contentReferralDate: true,
+        contentNoticePeriod: true,
+        contentProposalSession: true,
         isDone: true,
-        attachmentPdfFile: true,
-        attachmentHwpFile: true,
-        sourceHtmlSha256: true,
       },
     });
   }
@@ -882,13 +888,15 @@ export class NoticeArchiveService {
       | 'subject'
       | 'proposerCategory'
       | 'committee'
-      | 'assemblyLink'
-      | 'contentId'
       | 'proposalReason'
+      | 'contentBillNumber'
+      | 'contentProposer'
+      | 'contentProposalDate'
+      | 'contentCommittee'
+      | 'contentReferralDate'
+      | 'contentNoticePeriod'
+      | 'contentProposalSession'
       | 'isDone'
-      | 'attachmentPdfFile'
-      | 'attachmentHwpFile'
-      | 'sourceHtmlSha256'
     > | null,
   ): Record<string, unknown> | null {
     if (!row) return null;
@@ -898,15 +906,15 @@ export class NoticeArchiveService {
       subject: row.subject,
       proposerCategory: row.proposerCategory,
       committee: row.committee,
-      link: row.assemblyLink,
-      contentId: row.contentId,
       proposalReason: row.proposalReason,
+      billNumber: row.contentBillNumber,
+      proposer: row.contentProposer,
+      proposalDate: row.contentProposalDate,
+      contentCommittee: row.contentCommittee,
+      referralDate: row.contentReferralDate,
+      noticePeriod: row.contentNoticePeriod,
+      proposalSession: row.contentProposalSession,
       isDone: row.isDone,
-      attachments: {
-        pdfFile: row.attachmentPdfFile,
-        hwpFile: row.attachmentHwpFile,
-      },
-      sourceHtmlSha256: row.sourceHtmlSha256,
     };
   }
 
@@ -919,13 +927,15 @@ export class NoticeArchiveService {
       | 'subject'
       | 'proposerCategory'
       | 'committee'
-      | 'assemblyLink'
-      | 'contentId'
       | 'proposalReason'
+      | 'contentBillNumber'
+      | 'contentProposer'
+      | 'contentProposalDate'
+      | 'contentCommittee'
+      | 'contentReferralDate'
+      | 'contentNoticePeriod'
+      | 'contentProposalSession'
       | 'isDone'
-      | 'attachmentPdfFile'
-      | 'attachmentHwpFile'
-      | 'sourceHtmlSha256'
     > | null,
     afterRow: Pick<
       NoticeArchive,
@@ -933,13 +943,15 @@ export class NoticeArchiveService {
       | 'subject'
       | 'proposerCategory'
       | 'committee'
-      | 'assemblyLink'
-      | 'contentId'
       | 'proposalReason'
+      | 'contentBillNumber'
+      | 'contentProposer'
+      | 'contentProposalDate'
+      | 'contentCommittee'
+      | 'contentReferralDate'
+      | 'contentNoticePeriod'
+      | 'contentProposalSession'
       | 'isDone'
-      | 'attachmentPdfFile'
-      | 'attachmentHwpFile'
-      | 'sourceHtmlSha256'
     > | null,
   ): Promise<void> {
     if (!this.changeTrackingService || !afterRow) {
@@ -962,29 +974,26 @@ export class NoticeArchiveService {
         return;
       }
 
-      const event = await this.changeTrackingService.appendChangeEvent({
-        noticeNum,
-        eventType: built.eventType,
-        eventHash: built.eventHash,
-        detectedAt: built.detectedAt,
-        source,
-        changedFieldCount: built.diff.changedFieldCount,
-        diffSummaryJson: built.diff.diffSummaryJson,
-        hashAlgo: built.hashAlgo,
-        canonVersion: built.canonVersion,
-      });
-
-      await this.changeTrackingService.appendChangeDetails(
-        event.id,
-        built.diff.details.map((detail) => ({
-          fieldPath: detail.fieldPath,
-          changeType: detail.changeType,
-          beforeValue: detail.beforeValue,
-          afterValue: detail.afterValue,
-          beforeHash: detail.beforeHash,
-          afterHash: detail.afterHash,
-        })),
-      );
+      const event =
+        await this.changeTrackingService.appendChangeEventWithDetails({
+          noticeNum,
+          eventType: built.eventType,
+          eventHash: built.eventHash,
+          detectedAt: built.detectedAt,
+          source,
+          changedFieldCount: built.diff.changedFieldCount,
+          diffSummaryJson: built.diff.diffSummaryJson,
+          hashAlgo: built.hashAlgo,
+          canonVersion: built.canonVersion,
+          details: built.diff.details.map((detail) => ({
+            fieldPath: detail.fieldPath,
+            changeType: detail.changeType,
+            beforeValue: detail.beforeValue,
+            afterValue: detail.afterValue,
+            beforeHash: detail.beforeHash,
+            afterHash: detail.afterHash,
+          })),
+        });
 
       const subject =
         typeof afterSnapshot.subject === 'string'
@@ -1006,6 +1015,7 @@ export class NoticeArchiveService {
       this.logger.warn(
         `Failed to append change event for notice ${noticeNum} (${source}): ${(error as Error).message}`,
       );
+      throw error;
     }
   }
 

@@ -421,7 +421,7 @@ describe('NotificationService', () => {
           subject: '변경 추적 테스트 법률안',
           eventType: 'updated',
           source: 'archive:upsert',
-          changedFields: ['subject', 'attachments.pdfFile', 'unknown.field'],
+          changedFields: ['subject', 'billNumber', 'unknown.field'],
           eventHash: 'hash-test-1',
         },
         mockWebhooks,
@@ -429,7 +429,7 @@ describe('NotificationService', () => {
 
       expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
         '변경 필드',
-        '법률안명, PDF 파일, 기타(unknown.field)',
+        '법률안명, 입법예고 의안번호, 기타(unknown.field)',
         true,
       );
     });

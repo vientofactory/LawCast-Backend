@@ -1,7 +1,7 @@
-import { createHash } from 'crypto';
 import { describe, expect, it, jest } from '@jest/globals';
 import { NoticeArchiveService } from './notice-archive.service';
 import { NoticeArchive } from '../notice/notice-archive.entity';
+import { computeSha256 } from './notice-archive.helpers';
 
 describe('NoticeArchiveService', () => {
   const createRepositoryMock = () => ({
@@ -18,9 +18,7 @@ describe('NoticeArchiveService', () => {
 
   const buildRow = (overrides: Partial<NoticeArchive> = {}): NoticeArchive => {
     const sourceHtml = '<html><body>LawCast Integrity Test</body></html>';
-    const sourceHtmlSha256 = createHash('sha256')
-      .update(sourceHtml, 'utf8')
-      .digest('hex');
+    const sourceHtmlSha256 = computeSha256(sourceHtml);
 
     return {
       id: 1,
@@ -93,8 +91,10 @@ describe('NoticeArchiveService', () => {
     expect(bashScript?.content).toContain(
       `INTEGRITY_FILE="${result?.integrityFileName}"`,
     );
-    expect(bashScript?.content).toContain('jq -rj ".dbRecord.sourceHtml"');
-    expect(bashScript?.content).toContain('cut -d " " -f1');
+    expect(bashScript?.content).toContain('node -e');
+    expect(bashScript?.content).toContain(
+      'integritySnapshot?.calculatedSha256',
+    );
 
     expect(powerShellScript?.content).toContain(
       `$JsonFile = "${result?.jsonFileName}"`,
@@ -103,7 +103,9 @@ describe('NoticeArchiveService', () => {
       `$IntegrityFile = "${result?.integrityFileName}"`,
     );
     expect(powerShellScript?.content).toContain('ConvertFrom-Json');
-    expect(powerShellScript?.content).toContain('SHA256');
+    expect(powerShellScript?.content).toContain(
+      'integritySnapshot.calculatedSha256',
+    );
   });
 
   it('builds a structurally consistent export payload and metadata files', async () => {

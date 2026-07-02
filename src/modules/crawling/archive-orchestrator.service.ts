@@ -5,7 +5,6 @@ import {
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
-import { createHash } from 'crypto';
 import { type INsmBillItem } from 'pal-crawl';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type CachedNotice } from '../../types/cache.types';
@@ -14,6 +13,7 @@ import {
   NoticeArchiveService,
   type ArchiveHttpMetadata,
 } from '../notice/notice-archive.service';
+import { computeSha256 as computeSha256Hex } from '../notice/notice-archive.helpers';
 import { CrawlingCoreService } from './crawling-core.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
@@ -730,12 +730,10 @@ export class ArchiveOrchestratorService
   }
 
   /**
-   * Computes the SHA-256 hash of the given input string.
-   * @param input The input string to hash.
-   * @returns The SHA-256 hash of the input string.
+   * Computes SHA-256 hash for archived HTML payloads.
    */
   private computeSha256(input: string): string {
-    return createHash('sha256').update(input, 'utf8').digest('hex');
+    return computeSha256Hex(input);
   }
 
   /**

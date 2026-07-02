@@ -1,6 +1,6 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { type EntityManager, In, Repository } from 'typeorm';
 import {
   NoticeChangeEvent,
   type ChangeEventType,
@@ -29,6 +29,11 @@ interface AppendChangeEventInput {
   crawlerRunId?: string | null;
   hashAlgo?: string;
   canonVersion?: number;
+}
+
+interface AppendChangeEventWithDetailsInput extends AppendChangeEventInput {
+  details?: ChangeDetailInput[];
+  maxRetries?: number;
 }
 
 interface ChangeDetailInput {
@@ -125,6 +130,7 @@ export interface RecentChangesResult {
 @Injectable()
 export class ChangeTrackingService {
   private readonly logger = new Logger(ChangeTrackingService.name);
+  private readonly APPEND_EVENT_MAX_RETRIES = 3;
   private readonly queuedChangeNotifications: ChangeNotificationPayload[] = [];
   private flushTimer: NodeJS.Timeout | null = null;
   private isFlushingQueuedNotifications = false;
@@ -198,6 +204,174 @@ export class ChangeTrackingService {
     );
 
     await this.changeDetailRepository.save(rows);
+  }
+
+  /**
+   * Atomically appends a chain event header and its detail rows in one DB transaction.
+   * Retries on per-notice event-height unique conflicts caused by concurrent writers.
+   */
+  async appendChangeEventWithDetails(
+    input: AppendChangeEventWithDetailsInput,
+  ): Promise<NoticeChangeEvent> {
+    const details = input.details ?? [];
+    const maxRetries = Math.max(
+      input.maxRetries ?? this.APPEND_EVENT_MAX_RETRIES,
+      1,
+    );
+
+    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+      try {
+        const saved = await this.changeEventRepository.manager.transaction(
+          async (manager) =>
+            this.appendEventAndDetailsInTransaction(manager, input, details),
+        );
+
+        this.logger.debug(
+          `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
+        );
+        return saved;
+      } catch (error) {
+        if (this.isEventHeightConflictError(error) && attempt < maxRetries) {
+          this.logger.warn(
+            `Change event append conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`,
+          );
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new Error(
+      `Failed to append change event after ${maxRetries} attempts for notice=${input.noticeNum}`,
+    );
+  }
+
+  private async appendEventAndDetailsInTransaction(
+    manager: EntityManager,
+    input: AppendChangeEventInput,
+    details: ChangeDetailInput[],
+  ): Promise<NoticeChangeEvent> {
+    const eventRepo = manager.getRepository(NoticeChangeEvent);
+    const detailRepo = manager.getRepository(NoticeChangeDetail);
+
+    const lastEvent = await eventRepo.findOne({
+      where: { noticeNum: input.noticeNum },
+      order: { eventHeight: 'DESC' },
+    });
+
+    const event = eventRepo.create({
+      noticeNum: input.noticeNum,
+      detectedAt: input.detectedAt ?? new Date(),
+      eventType: input.eventType,
+      source: input.source ?? null,
+      eventHeight: (lastEvent?.eventHeight ?? 0) + 1,
+      prevEventHash: lastEvent?.eventHash ?? null,
+      eventHash: input.eventHash,
+      changedFieldCount: input.changedFieldCount ?? 0,
+      diffSummaryJson: input.diffSummaryJson ?? null,
+      crawlerRunId: input.crawlerRunId ?? null,
+      hashAlgo: input.hashAlgo ?? 'sha256',
+      canonVersion: input.canonVersion ?? 1,
+    });
+
+    const saved = await eventRepo.save(event);
+
+    if (details.length > 0) {
+      const rows = details.map((detail) =>
+        detailRepo.create({
+          eventId: saved.id,
+          fieldPath: detail.fieldPath,
+          changeType: detail.changeType,
+          beforeValue: detail.beforeValue ?? null,
+          afterValue: detail.afterValue ?? null,
+          beforeHash: detail.beforeHash ?? null,
+          afterHash: detail.afterHash ?? null,
+        }),
+      );
+
+      await detailRepo.save(rows);
+    }
+
+    return saved;
+  }
+
+  private isEventHeightConflictError(error: unknown): boolean {
+    const extractErrorMeta = (
+      value: unknown,
+    ): {
+      code: string;
+      constraint: string;
+      message: string;
+      detail: string;
+      errno: number | null;
+    } => {
+      const obj = (value as Record<string, unknown> | undefined) ?? {};
+      const code = String(obj.code ?? '').toLowerCase();
+      const constraint = String(obj.constraint ?? '').toLowerCase();
+      const message = String(obj.message ?? '').toLowerCase();
+      const detail = String(obj.detail ?? '').toLowerCase();
+      const errnoRaw = obj.errno;
+      const errno =
+        typeof errnoRaw === 'number'
+          ? errnoRaw
+          : typeof errnoRaw === 'string'
+            ? Number.parseInt(errnoRaw, 10)
+            : null;
+
+      return {
+        code,
+        constraint,
+        message,
+        detail,
+        errno: Number.isNaN(errno ?? Number.NaN) ? null : errno,
+      };
+    };
+
+    const isTargetConstraint = (text: string): boolean =>
+      text.includes(
+        'idx_notice_change_events_notice_num_event_height_unique',
+      ) ||
+      text.includes(
+        'notice_change_events.notice_num, notice_change_events.event_height',
+      ) ||
+      text.includes('notice_num_event_height');
+
+    const isKnownUniqueCode = (meta: {
+      code: string;
+      errno: number | null;
+    }): boolean =>
+      meta.code === '23505' ||
+      meta.code === 'sqlite_constraint' ||
+      meta.code === 'sqlite_constraint_unique' ||
+      meta.code === 'er_dup_entry' ||
+      meta.errno === 1062;
+
+    const candidates = [error];
+    const driverError = (error as { driverError?: unknown } | undefined)
+      ?.driverError;
+    if (driverError) {
+      candidates.push(driverError);
+    }
+
+    for (const candidate of candidates) {
+      const meta = extractErrorMeta(candidate);
+      const joinedText = `${meta.constraint} ${meta.detail} ${meta.message}`;
+
+      if (!isTargetConstraint(joinedText)) {
+        continue;
+      }
+
+      const hasUniqueViolationText =
+        meta.message.includes('unique constraint') ||
+        meta.detail.includes('unique constraint') ||
+        meta.detail.includes('duplicate key');
+
+      if (isKnownUniqueCode(meta) || hasUniqueViolationText) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
