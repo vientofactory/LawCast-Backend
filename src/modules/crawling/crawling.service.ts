@@ -47,6 +47,16 @@ export class CrawlingService {
     return this.crawlingSchedulerService.isBusy(options);
   }
 
+  /** Snapshot of scheduler lock/background-task execution state. */
+  getSchedulerExecutionState(): {
+    isInitialized: boolean;
+    isProcessing: boolean;
+    activeBackgroundTaskCount: number;
+    activeBackgroundTasks: string[];
+  } {
+    return this.crawlingSchedulerService.getExecutionState();
+  }
+
   /**
    * Retrieves the cached recent notices.
    * @param limit The maximum number of notices to retrieve. Defaults to the configured cache limit.
