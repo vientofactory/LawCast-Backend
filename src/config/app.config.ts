@@ -196,18 +196,18 @@ export const APP_CONSTANTS = {
   },
   CRON: {
     EXPRESSIONS: {
-      CRAWLING_CHECK: '*/10 * * * *', // Every 10 minutes
-      PENDING_CRAWLING_CHECK: '*/20 * * * *', // Every 20 minutes
+      CRAWLING_CHECK: '2-59/10 * * * *', // Every 10 minutes, shifted to avoid minute-0 contention
+      PENDING_CRAWLING_CHECK: '6-59/20 * * * *', // Every 20 minutes, staggered from main crawl
       WEBHOOK_CLEANUP: '1 0 * * *', // Every day at 00:01
       WEBHOOK_OPTIMIZATION: '1 2 * * *', // Every day at 02:01
       SYSTEM_MONITORING: '0 * * * *', // Every hour
-      IS_DONE_SYNC: '0 */6 * * *', // Every 6 hours - sync isDone flags for expired notices
-      HTML_BACKFILL: '0 */1 * * *', // Every 1 hour
-      INTEGRITY_RESCAN: '0 3 * * *', // Every day at 3 AM - full archive integrity re-validation
-      SCREENSHOT_BACKFILL: '0 */1 * * *', // Every 1 hour
+      IS_DONE_SYNC: '13 */6 * * *', // Every 6 hours, staggered away from heavy minute-0 jobs
+      HTML_BACKFILL: '17 * * * *', // Every hour, staggered from crawling and isDone sync
+      INTEGRITY_RESCAN: '43 3 * * *', // Daily at 03:43, isolated from top-of-hour workload
+      SCREENSHOT_BACKFILL: '37 * * * *', // Every hour, staggered from HTML backfill
     },
     OFFSETS_MS: {
-      SCREENSHOT_BACKFILL: 10 * 60 * 1000, // 10 minutes
+      SCREENSHOT_BACKFILL: 0, // No extra offset; schedule is already staggered
     },
   },
 } as const;

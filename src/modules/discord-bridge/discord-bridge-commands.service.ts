@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
+import { APP_CONSTANTS } from '../../config/app.config';
 import {
   BridgeLogLevel,
   BRIDGE_LOG_LEVEL_LABELS,
@@ -39,6 +40,9 @@ export class DiscordBridgeCommandsService {
         break;
       case 'loglevel':
         await this.cmdLogLevel(interaction, ctx);
+        break;
+      case 'locks':
+        await this.cmdLocks(interaction);
         break;
     }
   }
@@ -420,5 +424,96 @@ export class DiscordBridgeCommandsService {
         `✅ Log level changed: **${BRIDGE_LOG_LEVEL_LABELS[oldLevel]}** -> **${BRIDGE_LOG_LEVEL_LABELS[levelMap[requested]]}**`,
       )
       .catch(() => {});
+  }
+
+  private async cmdLocks(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const { CrawlingService } = await import('../crawling/crawling.service');
+    const { ArchiveSyncService } =
+      await import('../crawling/archive-sync.service');
+
+    const crawlingService = this.moduleRef.get(CrawlingService, {
+      strict: false,
+    });
+    const archiveSyncService = this.moduleRef.get(ArchiveSyncService, {
+      strict: false,
+    });
+
+    const scheduler = crawlingService.getSchedulerExecutionState();
+    const archive = archiveSyncService.getExecutionState();
+
+    const runningPhases =
+      archive.runningPhases.length > 0
+        ? archive.runningPhases.join(', ')
+        : 'none';
+    const backgroundTasks =
+      scheduler.activeBackgroundTasks.length > 0
+        ? scheduler.activeBackgroundTasks.join(', ')
+        : 'none';
+
+    const recentPhaseStates = archive.phases
+      .map(
+        (phase) =>
+          `${phase.name}: ${phase.status}` +
+          (phase.lastError ? ` (err=${phase.lastError})` : ''),
+      )
+      .join('\n');
+
+    const cronLayout = {
+      crawlingCheck: APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK,
+      pendingCrawling: APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK,
+      isDoneSync: APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC,
+      htmlBackfill: APP_CONSTANTS.CRON.EXPRESSIONS.HTML_BACKFILL,
+      screenshotBackfill: APP_CONSTANTS.CRON.EXPRESSIONS.SCREENSHOT_BACKFILL,
+      integrityRescan: APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN,
+      screenshotOffsetMs: APP_CONSTANTS.CRON.OFFSETS_MS.SCREENSHOT_BACKFILL,
+    };
+
+    const embed = new EmbedBuilder()
+      .setColor(0xf59e0b)
+      .setTitle('🔒 Lock / Phase Debug')
+      .addFields(
+        {
+          name: 'Scheduler',
+          value:
+            `initialized=${scheduler.isInitialized} ` +
+            `processing=${scheduler.isProcessing} ` +
+            `busy(no-bg)=${crawlingService.isSchedulerBusy({ includeBackground: false })} ` +
+            `busy(with-bg)=${crawlingService.isSchedulerBusy({ includeBackground: true })}`,
+          inline: false,
+        },
+        {
+          name: 'Background Tasks',
+          value: `count=${scheduler.activeBackgroundTaskCount}\n${backgroundTasks}`,
+          inline: false,
+        },
+        {
+          name: 'Archive Sync Phases',
+          value: `anyRunning=${archive.isAnyPhaseRunning}\nrunning=${runningPhases}`,
+          inline: false,
+        },
+        {
+          name: 'Phase States',
+          value:
+            recentPhaseStates.length > 0
+              ? recentPhaseStates.slice(0, 1024)
+              : 'none',
+          inline: false,
+        },
+      )
+      .setTimestamp()
+      .setFooter({ text: 'LawCast Debug Bridge' });
+
+    const cronRaw = JSON.stringify(cronLayout, null, 2);
+    const cronSnippet =
+      cronRaw.length > 1000 ? cronRaw.slice(0, 997) + '…' : cronRaw;
+    embed.addFields({
+      name: 'Cron Layout',
+      value: `\`\`\`json\n${cronSnippet}\n\`\`\``,
+      inline: false,
+    });
+
+    await interaction.reply({ embeds: [embed] }).catch(() => {});
   }
 }

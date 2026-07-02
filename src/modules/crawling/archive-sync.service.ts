@@ -115,6 +115,17 @@ export type SummaryUnavailableRetryStatus =
   PhaseStatus<SummaryUnavailableRetryResult>;
 export type PendingSyncStatus = PhaseStatus<PendingSyncResult>;
 
+export interface ArchiveSyncExecutionState {
+  isAnyPhaseRunning: boolean;
+  runningPhases: string[];
+  phases: Array<{
+    name: string;
+    status: SyncPhaseStatus;
+    lastRunAt: string | null;
+    lastError: string | null;
+  }>;
+}
+
 // ─── Internal tracker ─────────────────────────────────────────────────────────
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -251,6 +262,27 @@ export class ArchiveSyncService implements OnModuleInit {
    */
   isAnyPhaseRunning(): boolean {
     return this.phaseRunner.isAnyPhaseRunning(this.getPhaseEntries());
+  }
+
+  /**
+   * Returns a full execution snapshot for lock/phase debugging.
+   */
+  getExecutionState(): ArchiveSyncExecutionState {
+    const entries = this.getPhaseEntries();
+    const runningPhases = entries
+      .filter(({ tracker }) => tracker.isRunning)
+      .map(({ name }) => name);
+
+    return {
+      isAnyPhaseRunning: runningPhases.length > 0,
+      runningPhases,
+      phases: entries.map(({ name, tracker }) => ({
+        name,
+        status: tracker.status,
+        lastRunAt: tracker.lastRunAt,
+        lastError: tracker.lastError,
+      })),
+    };
   }
 
   /**

@@ -126,15 +126,83 @@ DISCORD_BRIDGE_ADMIN_USER_IDS=
 
 ## 스케줄(기본값)
 
-- `*/10 * * * *`: crawling check (PAL 중심 신규 감지/처리)
-- `*/20 * * * *`: pending crawling check (NSM 발의 단계)
-- `0 */6 * * *`: isDone sync
-- `0 */1 * * *`: HTML backfill + summary pipeline
-- `0 3 * * *`: integrity rescan
-- `0 */1 * * *`: screenshot backfill (서비스 내 offset 적용)
-- `1 0 * * *`: webhook cleanup
-- `1 2 * * *`: webhook optimization
-- `0 * * * *`: system monitoring
+- `2-59/10 * * * *`: crawling check (PAL 중심 신규 감지/처리, 매시간 02/12/22/32/42/52분 실행)
+- `6-59/20 * * * *`: pending crawling check (NSM 발의 단계, 매시간 06/26/46분 실행)
+- `1 0 * * *`: webhook cleanup (매일 00:01 실행)
+- `1 2 * * *`: webhook optimization (매일 02:01 실행)
+- `0 * * * *`: system monitoring (매시 정각 실행)
+- `13 */6 * * *`: isDone sync (6시간마다 13분에 실행: 00:13/06:13/12:13/18:13)
+- `17 * * * *`: HTML backfill + summary pipeline (매시 17분 실행)
+- `43 3 * * *`: integrity rescan (매일 03:43 실행)
+- `37 * * * *`: screenshot backfill (`SCREENSHOT_BACKFILL` 오프셋 0ms, 매시 37분 실행)
+
+## 크론/페이즈 락
+
+### 시작 시점(Trigger)과 진입 가드
+
+- crawling/pending 크론은 `ArchiveSyncService.isAnyPhaseRunning()`이 `true`이면 스킵됩니다.
+- archive-sync 계열 크론(isDone/html+summary/integrity)은 `CrawlingService.isSchedulerBusy({ includeBackground: true })`가 `true`이면 스킵됩니다.
+- screenshot backfill은 별도 큐 가드(`isCaptureRunning || queueLength > 0`)로 중복 실행을 막습니다.
+
+### 락 해제(Release) 지점
+
+- archive phase 락: `ArchiveSyncPhaseRunner.runPhase()`의 `finally`에서 `tracker.isRunning=false`로 항상 해제됩니다.
+- crawling fast-path 락: `CrawlingSchedulerService.handleCron()`의 `finally`에서 `isProcessing=false`로 해제됩니다.
+- background task 락: `runBackgroundTask()`의 `finally`에서 task name이 `activeBackgroundTasks`에서 제거됩니다.
+
+### 최종 판단
+
+- lock/release 누락으로 인한 상시 데드락 패턴은 확인되지 않았습니다.
+- 스킵 로그가 많은 현상은 현재 상호배제 가드 + 주기 근접성으로 인해 발생하는 정상 동작일 가능성이 큽니다.
+- 단, archive-sync 크론 가드는 "crawling busy" 기준이고, phase-level cross guard는 일부 phase(isDone/integrity)에만 강제되어 있어 부트스트랩 장기 실행 중 특정 phase가 진입할 가능성은 운영 환경에서 관찰이 필요합니다.
+
+### 실행 제어 도식
+
+```mermaid
+flowchart TD
+		A[CRON Tick] --> B{Task Type}
+
+		B -->|crawling / pending| C{archiveSync.isAnyPhaseRunning}
+		C -->|true| C1[Skip + WARN log]
+		C -->|false| C2[Run CrawlingService.handleCron/handlePendingCron]
+
+		B -->|isDone / html+summary / integrity| D{crawlingService.isSchedulerBusy\nincludeBackground=true}
+		D -->|true| D1[Skip + WARN log]
+		D -->|false| D2[Run archive-sync cron task]
+
+		B -->|screenshot backfill| E[executeWithOffset]
+		E --> F{isCaptureRunning OR queueLength > 0}
+		F -->|true| F1[Skip backfill]
+		F -->|false| F2[Queue + drain screenshot capture]
+```
+
+```mermaid
+stateDiagram-v2
+		[*] --> Idle
+
+		state "Archive Phase Tracker" as AP {
+			[*] --> IdleP
+			IdleP --> RunningP: runPhase enter\ntracker.isRunning=true
+			RunningP --> IdleP: success\nstatus=idle
+			RunningP --> FailedP: error\nstatus=failed
+			FailedP --> IdleP: finally\ntracker.isRunning=false
+			IdleP --> IdleP: concurrent call\nskip when running/cross-guard
+		}
+
+		state "Crawling Scheduler" as CS {
+			[*] --> Ready
+			Ready --> Processing: handleCron enter\nisProcessing=true
+			Processing --> Ready: finally\nisProcessing=false
+			Ready --> Ready: handleCron while processing\nskip
+		}
+
+		state "Background Tasks" as BG {
+			[*] --> None
+			None --> Active: runBackgroundTask add(name)
+			Active --> None: finally delete(name)
+			Active --> Active: duplicate name\nskip launch
+		}
+```
 
 ## API 엔드포인트
 
@@ -202,6 +270,7 @@ Base path: `/api`
 - `/batch-history`
 - `/webhooks`
 - `/loglevel` (조회/변경)
+- `/locks` (scheduler/phase lock 상태 + 크론 레이아웃 디버깅)
 
 `DISCORD_BRIDGE_GUILD_ID`가 설정되면 guild 명령으로 즉시 등록되고, 미설정 시 global 명령으로 등록됩니다(전파 지연 가능).
 

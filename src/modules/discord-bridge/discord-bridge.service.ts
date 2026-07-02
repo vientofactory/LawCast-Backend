@@ -33,6 +33,10 @@ const SLASH_COMMAND_DEFINITIONS = [
   { name: 'batch-history', description: 'Recent batch job history' },
   { name: 'webhooks', description: 'Webhook statistics' },
   {
+    name: 'locks',
+    description: 'Lock/phase execution state and cron layout for debugging',
+  },
+  {
     name: 'loglevel',
     description: 'Get or set the log level for the log channel',
     options: [
