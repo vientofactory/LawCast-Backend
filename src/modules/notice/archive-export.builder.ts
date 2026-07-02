@@ -18,6 +18,7 @@ export interface ArchiveExportBuilderInput {
   integrity: ArchiveIntegrityState;
   httpMetadata: Record<string, unknown>;
   dbRecord: Record<string, unknown>;
+  changeTrackingData?: Record<string, unknown> | null;
 }
 
 export interface ArchiveExportArtifacts {
@@ -26,14 +27,23 @@ export interface ArchiveExportArtifacts {
   jsonContent: string;
   integrityFileName: string;
   integrityContent: string;
+  changeTrackingFileName?: string;
+  changeTrackingContent?: string;
   verificationScripts: ArchiveVerificationScript[];
 }
 
 export const buildArchiveExportArtifacts = (
   params: ArchiveExportBuilderInput,
 ): ArchiveExportArtifacts => {
-  const { noticeNum, generatedAt, row, integrity, httpMetadata, dbRecord } =
-    params;
+  const {
+    noticeNum,
+    generatedAt,
+    row,
+    integrity,
+    httpMetadata,
+    dbRecord,
+    changeTrackingData,
+  } = params;
 
   const exportPayload = {
     exportMeta: {
@@ -50,12 +60,14 @@ export const buildArchiveExportArtifacts = (
       calculatedSha256: integrity.calculatedSha256,
     },
     httpMetadata,
+    changeTrackingSnapshot: changeTrackingData ?? null,
   };
 
   const fileStamp = generatedAt.toISOString().replace(/[:.]/g, '-');
   const baseFileName = `lawcast-archive-${noticeNum}-${fileStamp}`;
   const jsonFileName = `${baseFileName}.json`;
   const integrityFileName = `${baseFileName}.integrity.txt`;
+  const changeTrackingFileName = `${baseFileName}.changes.json`;
 
   return {
     zipFileName: `${baseFileName}.zip`,
@@ -69,6 +81,8 @@ export const buildArchiveExportArtifacts = (
       integrity,
       httpMetadata,
     }),
+    changeTrackingFileName,
+    changeTrackingContent: JSON.stringify(changeTrackingData ?? null, null, 2),
     verificationScripts: buildVerificationScripts({
       jsonFileName,
       integrityFileName,

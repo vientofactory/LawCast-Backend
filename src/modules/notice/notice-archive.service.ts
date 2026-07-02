@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   In,
@@ -25,6 +25,7 @@ import {
 } from './notice-archive.helpers';
 import { mapConcurrently } from '../../utils/concurrency.utils';
 import { NoticeArchiveArtifactSupport } from './utils/notice-archive-artifact-support';
+import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 
 export interface ArchiveListQuery {
   page: number;
@@ -128,6 +129,8 @@ export interface ArchiveExportResult {
   jsonContent: string;
   integrityFileName: string;
   integrityContent: string;
+  changeTrackingFileName?: string;
+  changeTrackingContent?: string;
   verificationScripts?: Array<{
     fileName: string;
     content: string;
@@ -147,11 +150,14 @@ export interface ArchiveHttpMetadata {
 
 @Injectable()
 export class NoticeArchiveService {
+  private readonly logger = new Logger(NoticeArchiveService.name);
   private readonly artifactSupport: NoticeArchiveArtifactSupport;
 
   constructor(
     @InjectRepository(NoticeArchive)
     private readonly archiveRepository: Repository<NoticeArchive>,
+    @Optional()
+    private readonly changeTrackingService?: ChangeTrackingService,
   ) {
     this.artifactSupport = new NoticeArchiveArtifactSupport(
       this.archiveRepository,
@@ -179,6 +185,7 @@ export class NoticeArchiveService {
       screenshotFormat?: string | null;
     },
   ): Promise<void> {
+    const beforeRow = await this.getTrackedRowByNoticeNum(notice.num);
     const normalizedHttpMetadata = originalContent.httpMetadata || null;
 
     // Core content fields - always written on both INSERT and UPDATE.
@@ -217,10 +224,7 @@ export class NoticeArchiveService {
       isDone: originalContent.isDone ?? false,
     };
 
-    const existing = await this.archiveRepository.findOne({
-      where: { noticeNum: notice.num },
-      select: { id: true },
-    });
+    const existing = beforeRow !== null;
 
     if (existing) {
       // On UPDATE, only include screenshot fields when they were explicitly
@@ -247,6 +251,20 @@ export class NoticeArchiveService {
         }),
       );
     }
+
+    await this.appendTrackedDiffEvent(notice.num, 'archive:upsert', beforeRow, {
+      noticeNum: coreFields.noticeNum,
+      subject: coreFields.subject,
+      proposerCategory: coreFields.proposerCategory,
+      committee: coreFields.committee,
+      assemblyLink: coreFields.assemblyLink,
+      contentId: coreFields.contentId,
+      proposalReason: coreFields.proposalReason,
+      isDone: coreFields.isDone,
+      attachmentPdfFile: coreFields.attachmentPdfFile,
+      attachmentHwpFile: coreFields.attachmentHwpFile,
+      sourceHtmlSha256: coreFields.sourceHtmlSha256,
+    });
   }
 
   /**
@@ -478,13 +496,77 @@ export class NoticeArchiveService {
   async buildArchiveExportFile(
     noticeNum: number,
   ): Promise<ArchiveExportResult | null> {
-    return this.artifactSupport.buildArchiveExportFile(noticeNum);
+    const changeTrackingData =
+      await this.buildChangeTrackingExportData(noticeNum);
+    return this.artifactSupport.buildArchiveExportFile(noticeNum, {
+      changeTrackingData,
+    });
   }
 
   async buildArchiveExportZip(
     noticeNum: number,
   ): Promise<{ zipFileName: string; zipBuffer: Buffer } | null> {
-    return this.artifactSupport.buildArchiveExportZip(noticeNum);
+    const changeTrackingData =
+      await this.buildChangeTrackingExportData(noticeNum);
+    return this.artifactSupport.buildArchiveExportZip(noticeNum, {
+      changeTrackingData,
+    });
+  }
+
+  async flushQueuedChangeNotifications(): Promise<void> {
+    if (!this.changeTrackingService) {
+      return;
+    }
+
+    await this.changeTrackingService.flushQueuedChangeNotificationsNow();
+  }
+
+  beginChangeNotificationCollection(): void {
+    this.changeTrackingService?.beginChangeNotificationCollection();
+  }
+
+  async endChangeNotificationCollection(): Promise<void> {
+    if (!this.changeTrackingService) {
+      return;
+    }
+
+    await this.changeTrackingService.endChangeNotificationCollection();
+  }
+
+  private async buildChangeTrackingExportData(
+    noticeNum: number,
+  ): Promise<Record<string, unknown> | null> {
+    if (!this.changeTrackingService) {
+      return null;
+    }
+
+    try {
+      // Export path uses a generous cap to include full trace for most notices.
+      const timeline = await this.changeTrackingService.getNoticeChangeTimeline(
+        {
+          noticeNum,
+          limit: 1000,
+        },
+      );
+
+      return {
+        exportedAt: new Date().toISOString(),
+        noticeNum,
+        eventCount: timeline.length,
+        events: timeline,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `Failed to collect change-tracking export data for notice ${noticeNum}: ${(error as Error).message}`,
+      );
+      return {
+        exportedAt: new Date().toISOString(),
+        noticeNum,
+        eventCount: 0,
+        events: [],
+        warning: 'change_tracking_unavailable',
+      };
+    }
   }
 
   async existsByNoticeNum(noticeNum: number): Promise<boolean> {
@@ -653,6 +735,7 @@ export class NoticeArchiveService {
     sha256: string,
     httpMetadata: ArchiveHttpMetadata | null,
   ): Promise<void> {
+    const beforeRow = await this.getTrackedRowByNoticeNum(noticeNum);
     const normalized = httpMetadata || null;
     await this.archiveRepository.update(
       { noticeNum },
@@ -666,6 +749,14 @@ export class NoticeArchiveService {
         httpEtag: normalized?.etag ?? null,
         httpLastModified: normalized?.lastModified ?? null,
       },
+    );
+
+    const afterRow = await this.getTrackedRowByNoticeNum(noticeNum);
+    await this.appendTrackedDiffEvent(
+      noticeNum,
+      'archive:updateSourceHtml',
+      beforeRow,
+      afterRow,
     );
   }
 
@@ -686,6 +777,7 @@ export class NoticeArchiveService {
       screenshotFormat?: string;
     },
   ): Promise<void> {
+    const beforeRow = await this.getTrackedRowByNoticeNum(noticeNum);
     const normalized = payload.httpMetadata || null;
 
     const baseUpdate: Partial<NoticeArchive> = {
@@ -738,6 +830,182 @@ export class NoticeArchiveService {
         .execute();
     } else {
       await this.archiveRepository.update({ noticeNum }, baseUpdate);
+    }
+
+    const afterRow = await this.getTrackedRowByNoticeNum(noticeNum);
+    await this.appendTrackedDiffEvent(
+      noticeNum,
+      'archive:updateNsmHtmlAndDetail',
+      beforeRow,
+      afterRow,
+    );
+  }
+
+  private async getTrackedRowByNoticeNum(
+    noticeNum: number,
+  ): Promise<Pick<
+    NoticeArchive,
+    | 'noticeNum'
+    | 'subject'
+    | 'proposerCategory'
+    | 'committee'
+    | 'assemblyLink'
+    | 'contentId'
+    | 'proposalReason'
+    | 'isDone'
+    | 'attachmentPdfFile'
+    | 'attachmentHwpFile'
+    | 'sourceHtmlSha256'
+  > | null> {
+    return this.archiveRepository.findOne({
+      where: { noticeNum },
+      select: {
+        noticeNum: true,
+        subject: true,
+        proposerCategory: true,
+        committee: true,
+        assemblyLink: true,
+        contentId: true,
+        proposalReason: true,
+        isDone: true,
+        attachmentPdfFile: true,
+        attachmentHwpFile: true,
+        sourceHtmlSha256: true,
+      },
+    });
+  }
+
+  private buildTrackedSnapshot(
+    row: Pick<
+      NoticeArchive,
+      | 'noticeNum'
+      | 'subject'
+      | 'proposerCategory'
+      | 'committee'
+      | 'assemblyLink'
+      | 'contentId'
+      | 'proposalReason'
+      | 'isDone'
+      | 'attachmentPdfFile'
+      | 'attachmentHwpFile'
+      | 'sourceHtmlSha256'
+    > | null,
+  ): Record<string, unknown> | null {
+    if (!row) return null;
+
+    return {
+      num: row.noticeNum,
+      subject: row.subject,
+      proposerCategory: row.proposerCategory,
+      committee: row.committee,
+      link: row.assemblyLink,
+      contentId: row.contentId,
+      proposalReason: row.proposalReason,
+      isDone: row.isDone,
+      attachments: {
+        pdfFile: row.attachmentPdfFile,
+        hwpFile: row.attachmentHwpFile,
+      },
+      sourceHtmlSha256: row.sourceHtmlSha256,
+    };
+  }
+
+  private async appendTrackedDiffEvent(
+    noticeNum: number,
+    source: string,
+    beforeRow: Pick<
+      NoticeArchive,
+      | 'noticeNum'
+      | 'subject'
+      | 'proposerCategory'
+      | 'committee'
+      | 'assemblyLink'
+      | 'contentId'
+      | 'proposalReason'
+      | 'isDone'
+      | 'attachmentPdfFile'
+      | 'attachmentHwpFile'
+      | 'sourceHtmlSha256'
+    > | null,
+    afterRow: Pick<
+      NoticeArchive,
+      | 'noticeNum'
+      | 'subject'
+      | 'proposerCategory'
+      | 'committee'
+      | 'assemblyLink'
+      | 'contentId'
+      | 'proposalReason'
+      | 'isDone'
+      | 'attachmentPdfFile'
+      | 'attachmentHwpFile'
+      | 'sourceHtmlSha256'
+    > | null,
+  ): Promise<void> {
+    if (!this.changeTrackingService || !afterRow) {
+      return;
+    }
+
+    try {
+      const beforeSnapshot = this.buildTrackedSnapshot(beforeRow);
+      const afterSnapshot = this.buildTrackedSnapshot(afterRow);
+      if (!afterSnapshot) return;
+
+      const built = this.changeTrackingService.buildDiffEvent({
+        noticeNum,
+        beforeSnapshot,
+        afterSnapshot,
+        source,
+      });
+
+      if (!built.shouldAppend) {
+        return;
+      }
+
+      const event = await this.changeTrackingService.appendChangeEvent({
+        noticeNum,
+        eventType: built.eventType,
+        eventHash: built.eventHash,
+        detectedAt: built.detectedAt,
+        source,
+        changedFieldCount: built.diff.changedFieldCount,
+        diffSummaryJson: built.diff.diffSummaryJson,
+        hashAlgo: built.hashAlgo,
+        canonVersion: built.canonVersion,
+      });
+
+      await this.changeTrackingService.appendChangeDetails(
+        event.id,
+        built.diff.details.map((detail) => ({
+          fieldPath: detail.fieldPath,
+          changeType: detail.changeType,
+          beforeValue: detail.beforeValue,
+          afterValue: detail.afterValue,
+          beforeHash: detail.beforeHash,
+          afterHash: detail.afterHash,
+        })),
+      );
+
+      const subject =
+        typeof afterSnapshot.subject === 'string'
+          ? afterSnapshot.subject
+          : `notice-${noticeNum}`;
+
+      void this.changeTrackingService
+        .dispatchChangeNotification({
+          event,
+          subject,
+          changedFields: built.diff.details.map((detail) => detail.fieldPath),
+        })
+        .catch((dispatchError) => {
+          this.logger.warn(
+            `Failed to dispatch change notification for event ${event.id}: ${(dispatchError as Error).message}`,
+          );
+        });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to append change event for notice ${noticeNum} (${source}): ${(error as Error).message}`,
+      );
     }
   }
 

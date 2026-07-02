@@ -327,4 +327,49 @@ describe('NoticeArchiveService', () => {
       expect(result).toEqual([]);
     });
   });
+
+  describe('change notification collection bridge', () => {
+    it('forwards begin/end/flush calls to ChangeTrackingService when available', async () => {
+      const repositoryMock = createRepositoryMock();
+      const changeTrackingService = {
+        beginChangeNotificationCollection: jest.fn<(...args: any[]) => void>(),
+        endChangeNotificationCollection: jest
+          .fn<(...args: any[]) => Promise<void>>()
+          .mockResolvedValue(undefined),
+        flushQueuedChangeNotificationsNow: jest
+          .fn<(...args: any[]) => Promise<void>>()
+          .mockResolvedValue(undefined),
+      };
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        changeTrackingService as any,
+      );
+
+      service.beginChangeNotificationCollection();
+      await service.endChangeNotificationCollection();
+      await service.flushQueuedChangeNotifications();
+
+      expect(
+        changeTrackingService.beginChangeNotificationCollection,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        changeTrackingService.endChangeNotificationCollection,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        changeTrackingService.flushQueuedChangeNotificationsNow,
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it('safely no-ops when ChangeTrackingService is missing', async () => {
+      const repositoryMock = createRepositoryMock();
+      const service = new NoticeArchiveService(repositoryMock as any);
+
+      service.beginChangeNotificationCollection();
+      await service.endChangeNotificationCollection();
+      await service.flushQueuedChangeNotifications();
+
+      expect(true).toBe(true);
+    });
+  });
 });

@@ -402,4 +402,36 @@ describe('NotificationService', () => {
       }
     });
   });
+
+  describe('sendDiscordChangeNotificationBatch', () => {
+    const mockWebhooks: Webhook[] = [
+      {
+        id: 10,
+        url: 'https://discord.com/api/webhooks/10/token10',
+        isActive: true,
+      } as Webhook,
+    ];
+
+    it('should render changed fields with Korean labels in embed', async () => {
+      mockDiscordWebhook.send.mockResolvedValue(undefined);
+
+      await service.sendDiscordChangeNotificationBatch(
+        {
+          noticeNum: 2210001,
+          subject: '변경 추적 테스트 법률안',
+          eventType: 'updated',
+          source: 'archive:upsert',
+          changedFields: ['subject', 'attachments.pdfFile', 'unknown.field'],
+          eventHash: 'hash-test-1',
+        },
+        mockWebhooks,
+      );
+
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '변경 필드',
+        '법률안명, PDF 파일, 기타(unknown.field)',
+        true,
+      );
+    });
+  });
 });

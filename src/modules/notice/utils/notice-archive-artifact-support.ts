@@ -80,6 +80,9 @@ export class NoticeArchiveArtifactSupport {
 
   async buildArchiveExportFile(
     noticeNum: number,
+    options?: {
+      changeTrackingData?: Record<string, unknown> | null;
+    },
   ): Promise<ArchiveExportResult | null> {
     const row = await this.archiveRepository.findOne({
       where: { noticeNum },
@@ -100,14 +103,18 @@ export class NoticeArchiveArtifactSupport {
       integrity,
       httpMetadata,
       dbRecord: mapArchiveEntityToRawRecord(row),
+      changeTrackingData: options?.changeTrackingData ?? null,
     });
   }
 
   async buildArchiveExportZip(
     noticeNum: number,
+    options?: {
+      changeTrackingData?: Record<string, unknown> | null;
+    },
   ): Promise<{ zipFileName: string; zipBuffer: Buffer } | null> {
     const [artifacts, screenshot] = await Promise.all([
-      this.buildArchiveExportFile(noticeNum),
+      this.buildArchiveExportFile(noticeNum, options),
       this.getScreenshotByNoticeNum(noticeNum),
     ]);
 
@@ -121,6 +128,13 @@ export class NoticeArchiveArtifactSupport {
 
     for (const script of artifacts.verificationScripts) {
       zip.file(script.fileName, script.content);
+    }
+
+    if (artifacts.changeTrackingFileName && artifacts.changeTrackingContent) {
+      zip.file(
+        artifacts.changeTrackingFileName,
+        artifacts.changeTrackingContent,
+      );
     }
 
     if (screenshot) {

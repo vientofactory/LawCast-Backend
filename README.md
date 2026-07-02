@@ -340,6 +340,8 @@ Base path: `/api`
 | `GET`  | `/notices/archive`         | 아카이브 목록 조회(필터/정렬/페이지네이션) |
 | `GET`  | `/notices/search`          | 통합 검색                                  |
 | `GET`  | `/notices/:num/detail`     | 의안번호 상세(아카이브 기반)               |
+| `GET`  | `/notices/:num/changes`    | 의안번호별 변경 이벤트 타임라인            |
+| `GET`  | `/notices/changes`         | 전체 의안 변경 이벤트 목록(페이지네이션)   |
 | `GET`  | `/notices/:num/screenshot` | 아카이브 스크린샷 이미지                   |
 | `GET`  | `/notices/:num/export`     | 아카이브 ZIP 내보내기                      |
 | `GET`  | `/stats`                   | 런타임 통계(아카이브/요약/캐시 포함)       |
@@ -374,6 +376,7 @@ Base path: `/api`
 `GET /api/notices/:num/export`는 다음 아티팩트를 ZIP으로 제공합니다.
 
 - `<base>.json`: DB raw record + integrity snapshot + HTTP metadata
+- `<base>.changes.json`: 변경 이벤트 타임라인 + 필드 diff + 알림 전송 로그 스냅샷
 - `<base>.integrity.txt`: 무결성 메타데이터 텍스트
 - `verify-integrity.sh`: Bash 검증 스크립트
 - `verify-integrity.ps1`: PowerShell 검증 스크립트

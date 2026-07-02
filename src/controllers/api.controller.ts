@@ -32,6 +32,8 @@ import { APP_CONSTANTS } from '../config/app.config';
 import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
+import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
+import { type ChangeEventType } from '../modules/change-tracking/notice-change-event.entity';
 
 @Controller('api')
 export class ApiController {
@@ -49,6 +51,7 @@ export class ApiController {
     private readonly runtimeStatsService: RuntimeStatsService,
     private readonly archiveSyncService: ArchiveSyncService,
     private readonly packagesService: PackagesService,
+    private readonly changeTrackingService: ChangeTrackingService,
   ) {}
 
   @Post('webhooks')
@@ -200,6 +203,51 @@ export class ApiController {
       aiSummaryEnabled: (await this.healthCheckService.getOllamaMetrics())
         .enabled,
     });
+  }
+
+  @Get('notices/:num/changes')
+  async getNoticeChanges(
+    @Param('num', ParseIntPipe) num: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    const timeline = await this.changeTrackingService.getNoticeChangeTimeline({
+      noticeNum: num,
+      limit,
+    });
+
+    return ApiResponseUtils.success({
+      noticeNum: num,
+      items: timeline,
+      count: timeline.length,
+    });
+  }
+
+  @Get('notices/changes')
+  async getRecentNoticeChanges(
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('eventType') eventTypeRaw?: string,
+  ) {
+    const allowedEventTypes: ChangeEventType[] = [
+      'created',
+      'updated',
+      'redacted',
+      'invalidated',
+    ];
+
+    const eventType = allowedEventTypes.includes(
+      eventTypeRaw as ChangeEventType,
+    )
+      ? (eventTypeRaw as ChangeEventType)
+      : undefined;
+
+    const result = await this.changeTrackingService.getRecentChanges({
+      page,
+      limit,
+      eventType,
+    });
+
+    return ApiResponseUtils.success(result);
   }
 
   @Get('notices/:num/screenshot')

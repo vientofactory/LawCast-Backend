@@ -10,11 +10,41 @@ import { CacheService } from '../cache/cache.service';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { type CachedNotice } from '../../types/cache.types';
 
+export interface ChangeNotificationPayload {
+  noticeNum: number;
+  subject: string;
+  eventType: 'created' | 'updated' | 'redacted' | 'invalidated';
+  source?: string | null;
+  changedFields: string[];
+  eventHash: string;
+}
+
+type NotificationSendResult = {
+  webhookId: number;
+  success: boolean;
+  error?: unknown;
+  shouldDelete?: boolean;
+};
+
 @Injectable()
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
   private readonly PROPOSAL_REASON_MISSING_GUIDANCE =
     '법률안 제안이유를 아직 수집하지 못했습니다. 자세히 보기 링크를 통해 국회 페이지에서 직접 확인해 주세요.';
+  // Mapping of change-tracking field paths to user-friendly labels for Discord embeds
+  private readonly CHANGE_FIELD_LABELS: Readonly<Record<string, string>> = {
+    num: '의안번호',
+    subject: '법률안명',
+    proposerCategory: '제안자 구분',
+    committee: '소관위원회',
+    link: '원문 링크',
+    contentId: '국회 콘텐츠 ID',
+    proposalReason: '제안이유',
+    isDone: '처리 상태',
+    'attachments.pdfFile': 'PDF 파일',
+    'attachments.hwpFile': 'HWP 파일',
+    sourceHtmlSha256: '원문 해시',
+  };
 
   // Rate limit keys
   private readonly RATE_LIMIT_KEYS = {
@@ -48,31 +78,51 @@ export class NotificationService {
     notice: CachedNotice,
     webhooks: Webhook[],
     abortSignal?: AbortSignal,
-  ): Promise<
-    Array<{
-      webhookId: number;
-      success: boolean;
-      error?: unknown;
-      shouldDelete?: boolean;
-    }>
-  > {
+  ): Promise<NotificationSendResult[]> {
+    const embed = await this.createNotificationEmbed(notice);
+    return this.sendDiscordEmbedBatch(embed, webhooks, {
+      username: 'LawCast 알리미',
+      context: 'notice notification',
+      abortSignal,
+    });
+  }
+
+  /**
+   * Sends change-tracking notifications to multiple webhooks.
+   * Reuses the same rate-limit controls and permanent-failure handling
+   * as the regular notice notification flow.
+   */
+  async sendDiscordChangeNotificationBatch(
+    payload: ChangeNotificationPayload,
+    webhooks: Webhook[],
+    abortSignal?: AbortSignal,
+  ): Promise<NotificationSendResult[]> {
+    const embed = this.createChangeNotificationEmbed(payload);
+    return this.sendDiscordEmbedBatch(embed, webhooks, {
+      username: 'LawCast 변경 추적',
+      context: 'change notification',
+      abortSignal,
+    });
+  }
+
+  private async sendDiscordEmbedBatch(
+    embed: MessageBuilder,
+    webhooks: Webhook[],
+    options: {
+      username: string;
+      context: string;
+      abortSignal?: AbortSignal;
+    },
+  ): Promise<NotificationSendResult[]> {
     await this.hydrateRateLimitState();
 
-    const embed = await this.createNotificationEmbed(notice);
-    const results: Array<{
-      webhookId: number;
-      success: boolean;
-      error?: unknown;
-      shouldDelete?: boolean;
-    }> = [];
+    const results: NotificationSendResult[] = [];
 
-    // Process webhooks sequentially while respecting Discord rate limits
     for (const webhook of webhooks) {
-      if (abortSignal?.aborted) {
+      if (options.abortSignal?.aborted) {
         throw new Error('Notification batch aborted');
       }
 
-      // Skip webhooks that have already permanently failed
       if (this.permanentlyFailedWebhooks.has(webhook.id)) {
         results.push({
           webhookId: webhook.id,
@@ -83,19 +133,14 @@ export class NotificationService {
         continue;
       }
 
-      // Wait for rate limit if necessary before sending the notification
-      await this.waitForRateLimit(webhook.id, abortSignal);
+      await this.waitForRateLimit(webhook.id, options.abortSignal);
 
       try {
         const discordWebhook = new DiscordWebhook(webhook.url);
-        discordWebhook.setUsername('LawCast 알리미');
-
+        discordWebhook.setUsername(options.username);
         await discordWebhook.send(embed);
 
-        // Record the last send time on success
         await this.updateRateLimitTimestamp(webhook.id);
-
-        // Remove from the permanently failed list on success
         this.permanentlyFailedWebhooks.delete(webhook.id);
 
         results.push({ webhookId: webhook.id, success: true });
@@ -107,24 +152,22 @@ export class NotificationService {
         const shouldDelete = this.shouldDeleteWebhook(error);
 
         if (shouldDelete) {
-          // Mark this webhook as permanently failed to avoid future attempts
           this.permanentlyFailedWebhooks.add(webhook.id);
-
           LoggerUtils.debugDev(
             NotificationService.name,
-            `Webhook ${webhook.id} permanently failed on first attempt (${webhookError.response?.status || 'unknown'}) - marked for immediate deactivation`,
+            `Webhook ${webhook.id} permanently failed during ${options.context} (${webhookError.response?.status || 'unknown'})`,
           );
         } else {
           LoggerUtils.debugDev(
             NotificationService.name,
-            `Webhook ${webhook.id} temporarily failed: ${webhookError.message || 'unknown error'}`,
+            `Webhook ${webhook.id} temporarily failed during ${options.context}: ${webhookError.message || 'unknown error'}`,
           );
         }
 
         results.push({
           webhookId: webhook.id,
           success: false,
-          error: error,
+          error,
           shouldDelete,
         });
       }
@@ -166,6 +209,41 @@ export class NotificationService {
     embed.addField('자세히 보기', `[입법예고 전문](${detailUrl})`, false);
 
     return embed;
+  }
+
+  private createChangeNotificationEmbed(
+    payload: ChangeNotificationPayload,
+  ): MessageBuilder {
+    const detailUrl = this.buildFrontendNoticeDetailUrlByNoticeNum(
+      payload.noticeNum,
+      {
+        timeline: 'true',
+      },
+    );
+    const mappedChangedFields = payload.changedFields.map((fieldPath) =>
+      this.getChangeFieldDisplayLabel(fieldPath),
+    );
+    const changedFieldsPreview =
+      payload.changedFields.length > 0
+        ? mappedChangedFields.slice(0, 8).join(', ')
+        : 'N/A';
+
+    const embed = new MessageBuilder()
+      .setTitle('입법예고 변경 감지')
+      .setDescription('기존 아카이브 대비 변경 사항이 감지되었습니다.')
+      .addField('법률안명', payload.subject, false)
+      .addField('의안번호', String(payload.noticeNum), true)
+      .addField('변경 필드', this.truncateForEmbed(changedFieldsPreview), true)
+      .addField('자세히 보기', `[변경 추적 상세](${detailUrl})`, false)
+      .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
+      .setTimestamp()
+      .setFooter('LawCast 알림 서비스', '');
+
+    return embed;
+  }
+
+  private getChangeFieldDisplayLabel(fieldPath: string): string {
+    return this.CHANGE_FIELD_LABELS[fieldPath] ?? `기타(${fieldPath})`;
   }
 
   private buildSummaryOrGuidanceField(
@@ -214,6 +292,30 @@ export class NotificationService {
 
     const normalizedBaseUrl = primaryFrontendUrl.replace(/\/+$/, '');
     return `${normalizedBaseUrl}/notices/${notice.num}`;
+  }
+
+  private buildFrontendNoticeDetailUrlByNoticeNum(
+    noticeNum: number,
+    params?: Record<string, string>,
+  ): string {
+    const frontendUrls =
+      this.configService.get<string[]>('frontend.urls') || [];
+    const primaryFrontendUrl = frontendUrls.find((url) => !!url?.trim());
+
+    if (!primaryFrontendUrl) {
+      return `https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOpn/list.do`;
+    }
+
+    const normalizedBaseUrl = primaryFrontendUrl.replace(/\/+$/, '');
+    const queryString = params
+      ? `?${Object.entries(params)
+          .map(
+            ([key, value]) =>
+              `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+          )
+          .join('&')}`
+      : '';
+    return `${normalizedBaseUrl}/notices/${noticeNum}${queryString}`;
   }
 
   /**

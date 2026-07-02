@@ -10,6 +10,7 @@ import { ApiController } from '../controllers/api.controller';
 import { BatchProcessingService } from '../modules/shared/batch-processing.service';
 import { CrawlingService } from '../modules/crawling/crawling.service';
 import { WebhookService } from '../modules/webhook/webhook.service';
+import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
 import { NotificationService } from '../modules/notification/notification.service';
 import { HashguardService } from '../modules/shared/hashguard.service';
 import { WebhookCleanupService } from '../modules/webhook/webhook-cleanup.service';
@@ -239,6 +240,19 @@ describe('HTTP-Batch Processing Isolation', () => {
               lastRunAt: null,
               lastResult: null,
               lastError: null,
+            }),
+          },
+        },
+        {
+          provide: ChangeTrackingService,
+          useValue: {
+            getNoticeChangeTimeline: jest.fn().mockResolvedValue([]),
+            getRecentChanges: jest.fn().mockResolvedValue({
+              items: [],
+              page: 1,
+              limit: 10,
+              total: 0,
+              totalPages: 0,
             }),
           },
         },
