@@ -351,6 +351,30 @@ export class ApiController {
       case 'isDone':
         detail.notice.isDone = value === 'true';
         return;
+      case 'lifecycleStatus': {
+        const normalized = toStringOrNull(value);
+        if (
+          normalized === 'active' ||
+          normalized === 'source_deleted' ||
+          normalized === 'renumbered'
+        ) {
+          detail.notice.lifecycleStatus = normalized;
+        }
+        return;
+      }
+      case 'sourceDeletedAt': {
+        const normalized = toStringOrNull(value);
+        if (!normalized) {
+          detail.notice.sourceDeletedAt = null;
+          return;
+        }
+
+        const parsed = new Date(normalized);
+        detail.notice.sourceDeletedAt = Number.isNaN(parsed.getTime())
+          ? null
+          : parsed;
+        return;
+      }
       default:
         return;
     }

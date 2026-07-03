@@ -6,6 +6,7 @@ import {
   LessThan,
   MoreThan,
   Not,
+  type FindOptionsWhere,
   Repository,
   Brackets,
 } from 'typeorm';
@@ -14,7 +15,10 @@ import {
   type CachedNotice,
 } from '../../types/cache.types';
 import { AI_SUMMARY_STATUS } from '../crawling/utils/ai-summary-status.utils';
-import { NoticeArchive } from '../notice/notice-archive.entity';
+import {
+  NoticeArchive,
+  type NoticeLifecycleStatus,
+} from '../notice/notice-archive.entity';
 import {
   NOTICE_ITEM_SELECT,
   buildArchiveWhereConditions,
@@ -26,6 +30,12 @@ import {
 import { mapConcurrently } from '../../utils/concurrency.utils';
 import { NoticeArchiveArtifactSupport } from './utils/notice-archive-artifact-support';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
+import { type ChangeEventType } from '../change-tracking/notice-change-event.entity';
+import {
+  canonicalStringify,
+  computeDiff,
+  sha256Hex,
+} from '../change-tracking/change-tracking-diff.utils';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 
@@ -77,6 +87,8 @@ export interface ArchiveNoticeItem {
     pdfFile: string;
     hwpFile: string;
   };
+  lifecycleStatus: NoticeLifecycleStatus;
+  sourceDeletedAt: Date | null;
   archiveStartedAt: Date;
   lastUpdatedAt: Date;
 }
@@ -150,6 +162,25 @@ export interface ArchiveHttpMetadata {
   [key: string]: unknown;
 }
 
+type TrackedArchiveRow = Pick<
+  NoticeArchive,
+  | 'noticeNum'
+  | 'subject'
+  | 'proposerCategory'
+  | 'committee'
+  | 'proposalReason'
+  | 'contentBillNumber'
+  | 'contentProposer'
+  | 'contentProposalDate'
+  | 'contentCommittee'
+  | 'contentReferralDate'
+  | 'contentNoticePeriod'
+  | 'contentProposalSession'
+  | 'isDone'
+  | 'lifecycleStatus'
+  | 'sourceDeletedAt'
+>;
+
 @Injectable()
 export class NoticeArchiveService {
   private readonly logger = new Logger(NoticeArchiveService.name);
@@ -183,6 +214,11 @@ export class NoticeArchiveService {
     return type === 'sqlite' || type === 'better-sqlite3' || type === 'sqljs';
   }
 
+  private normalizeStableId(value: string | null | undefined): string | null {
+    const normalized = value?.trim();
+    return normalized && normalized.length > 0 ? normalized : null;
+  }
+
   async upsertNoticeArchive(
     notice: CachedNotice,
     originalContent: {
@@ -204,8 +240,25 @@ export class NoticeArchiveService {
       screenshotFormat?: string | null;
     },
   ): Promise<void> {
-    const beforeRow = await this.getTrackedRowByNoticeNum(notice.num);
+    const normalizedBillNumber = this.normalizeStableId(
+      originalContent.billNumber,
+    );
+    const normalizedContentId = this.normalizeStableId(notice.contentId);
+
+    let beforeRow = await this.getTrackedRowByNoticeNum(notice.num);
+
+    if (!beforeRow && (normalizedContentId || normalizedBillNumber)) {
+      beforeRow = await this.getTrackedRowByStableIdentity(
+        notice.num,
+        normalizedContentId,
+        normalizedBillNumber,
+      );
+    }
+
     const normalizedHttpMetadata = originalContent.httpMetadata || null;
+    const previousNoticeNum = beforeRow?.noticeNum ?? null;
+    const isRenumbering =
+      previousNoticeNum !== null && previousNoticeNum !== notice.num;
 
     // Core content fields - always written on both INSERT and UPDATE.
     const coreFields = {
@@ -241,9 +294,30 @@ export class NoticeArchiveService {
       httpEtag: normalizedHttpMetadata?.etag ?? null,
       httpLastModified: normalizedHttpMetadata?.lastModified ?? null,
       isDone: originalContent.isDone ?? false,
+      lifecycleStatus: 'active' as NoticeLifecycleStatus,
+      sourceDeletedAt: null,
     };
 
     const existing = beforeRow !== null;
+    const updateNoticeNum = previousNoticeNum ?? notice.num;
+
+    if (isRenumbering && beforeRow) {
+      const beforeSnapshot = this.buildTrackedSnapshot(beforeRow);
+      if (beforeSnapshot) {
+        const invalidatedSnapshot = {
+          ...beforeSnapshot,
+          lifecycleStatus: 'renumbered',
+        };
+        await this.appendExplicitEventWithDiff({
+          noticeNum: previousNoticeNum,
+          source: 'archive:renumbered',
+          eventType: 'invalidated',
+          beforeSnapshot,
+          afterSnapshot: invalidatedSnapshot,
+          subject: beforeRow.subject,
+        });
+      }
+    }
 
     if (existing) {
       // On UPDATE, only include screenshot fields when they were explicitly
@@ -258,7 +332,7 @@ export class NoticeArchiveService {
           : {};
 
       await this.archiveRepository.update(
-        { noticeNum: notice.num },
+        { noticeNum: updateNoticeNum },
         { ...coreFields, ...screenshotUpdate },
       );
     } else {
@@ -285,6 +359,8 @@ export class NoticeArchiveService {
       contentNoticePeriod: coreFields.contentNoticePeriod,
       contentProposalSession: coreFields.contentProposalSession,
       isDone: coreFields.isDone,
+      lifecycleStatus: coreFields.lifecycleStatus,
+      sourceDeletedAt: coreFields.sourceDeletedAt,
     });
   }
 
@@ -297,7 +373,11 @@ export class NoticeArchiveService {
     if (nums.length === 0) return 0;
     const result = await this.archiveRepository.update(
       { noticeNum: In(nums), isDone: false },
-      { isDone: true },
+      {
+        isDone: true,
+        lifecycleStatus: 'active',
+        sourceDeletedAt: null,
+      },
     );
     return result.affected ?? 0;
   }
@@ -311,9 +391,84 @@ export class NoticeArchiveService {
     if (nums.length === 0) return 0;
     const result = await this.archiveRepository.update(
       { noticeNum: In(nums), isDone: true },
-      { isDone: false },
+      {
+        isDone: false,
+        lifecycleStatus: 'active',
+        sourceDeletedAt: null,
+      },
     );
     return result.affected ?? 0;
+  }
+
+  async markSourceDeletedByMissingPalNums(
+    seenPalActiveNums: Set<number>,
+  ): Promise<number> {
+    const candidates = await this.archiveRepository.find({
+      where: {
+        contentId: Not(IsNull()),
+        isDone: false,
+        lifecycleStatus: Not('source_deleted'),
+      },
+      select: {
+        noticeNum: true,
+        subject: true,
+        proposerCategory: true,
+        committee: true,
+        proposalReason: true,
+        contentBillNumber: true,
+        contentProposer: true,
+        contentProposalDate: true,
+        contentCommittee: true,
+        contentReferralDate: true,
+        contentNoticePeriod: true,
+        contentProposalSession: true,
+        isDone: true,
+        lifecycleStatus: true,
+        sourceDeletedAt: true,
+      },
+    });
+
+    const missing = candidates.filter(
+      (row) => !seenPalActiveNums.has(row.noticeNum),
+    );
+
+    if (missing.length === 0) {
+      return 0;
+    }
+
+    const markedAt = new Date();
+
+    for (const row of missing) {
+      await this.archiveRepository.update(
+        { noticeNum: row.noticeNum },
+        {
+          lifecycleStatus: 'source_deleted',
+          sourceDeletedAt: markedAt,
+        },
+      );
+
+      const beforeSnapshot = this.buildTrackedSnapshot(row);
+      const afterSnapshot = beforeSnapshot
+        ? {
+            ...beforeSnapshot,
+            lifecycleStatus: 'source_deleted',
+            sourceDeletedAt: markedAt.toISOString(),
+          }
+        : null;
+
+      if (beforeSnapshot && afterSnapshot) {
+        await this.appendExplicitEventWithDiff({
+          noticeNum: row.noticeNum,
+          source: 'archive:source-missing',
+          eventType: 'invalidated',
+          beforeSnapshot,
+          afterSnapshot,
+          subject: row.subject,
+        });
+      }
+    }
+
+    return missing.length;
   }
 
   /**
@@ -865,22 +1020,7 @@ export class NoticeArchiveService {
 
   private async getTrackedRowByNoticeNum(
     noticeNum: number,
-  ): Promise<Pick<
-    NoticeArchive,
-    | 'noticeNum'
-    | 'subject'
-    | 'proposerCategory'
-    | 'committee'
-    | 'proposalReason'
-    | 'contentBillNumber'
-    | 'contentProposer'
-    | 'contentProposalDate'
-    | 'contentCommittee'
-    | 'contentReferralDate'
-    | 'contentNoticePeriod'
-    | 'contentProposalSession'
-    | 'isDone'
-  > | null> {
+  ): Promise<TrackedArchiveRow | null> {
     return this.archiveRepository.findOne({
       where: { noticeNum },
       select: {
@@ -897,27 +1037,62 @@ export class NoticeArchiveService {
         contentNoticePeriod: true,
         contentProposalSession: true,
         isDone: true,
+        lifecycleStatus: true,
+        sourceDeletedAt: true,
       },
     });
   }
 
+  private async getTrackedRowByStableIdentity(
+    incomingNoticeNum: number,
+    contentId: string | null,
+    billNumber: string | null,
+  ): Promise<TrackedArchiveRow | null> {
+    const where: FindOptionsWhere<NoticeArchive>[] = [];
+
+    if (contentId) {
+      where.push({ contentId });
+    }
+
+    if (billNumber) {
+      where.push({ contentBillNumber: billNumber });
+    }
+
+    if (where.length === 0) {
+      return null;
+    }
+
+    const matched = await this.archiveRepository.findOne({
+      where,
+      select: {
+        noticeNum: true,
+        subject: true,
+        proposerCategory: true,
+        committee: true,
+        proposalReason: true,
+        contentBillNumber: true,
+        contentProposer: true,
+        contentProposalDate: true,
+        contentCommittee: true,
+        contentReferralDate: true,
+        contentNoticePeriod: true,
+        contentProposalSession: true,
+        isDone: true,
+        lifecycleStatus: true,
+        sourceDeletedAt: true,
+      },
+      order: { noticeNum: 'DESC' },
+    });
+
+    if (!matched || matched.noticeNum === incomingNoticeNum) {
+      return null;
+    }
+
+    return matched;
+  }
+
   private buildTrackedSnapshot(
-    row: Pick<
-      NoticeArchive,
-      | 'noticeNum'
-      | 'subject'
-      | 'proposerCategory'
-      | 'committee'
-      | 'proposalReason'
-      | 'contentBillNumber'
-      | 'contentProposer'
-      | 'contentProposalDate'
-      | 'contentCommittee'
-      | 'contentReferralDate'
-      | 'contentNoticePeriod'
-      | 'contentProposalSession'
-      | 'isDone'
-    > | null,
+    row: TrackedArchiveRow | null,
   ): Record<string, unknown> | null {
     if (!row) return null;
 
@@ -935,44 +1110,18 @@ export class NoticeArchiveService {
       noticePeriod: row.contentNoticePeriod,
       proposalSession: row.contentProposalSession,
       isDone: row.isDone,
+      lifecycleStatus: row.lifecycleStatus,
+      sourceDeletedAt: row.sourceDeletedAt
+        ? row.sourceDeletedAt.toISOString()
+        : null,
     };
   }
 
   private async appendTrackedDiffEvent(
     noticeNum: number,
     source: string,
-    beforeRow: Pick<
-      NoticeArchive,
-      | 'noticeNum'
-      | 'subject'
-      | 'proposerCategory'
-      | 'committee'
-      | 'proposalReason'
-      | 'contentBillNumber'
-      | 'contentProposer'
-      | 'contentProposalDate'
-      | 'contentCommittee'
-      | 'contentReferralDate'
-      | 'contentNoticePeriod'
-      | 'contentProposalSession'
-      | 'isDone'
-    > | null,
-    afterRow: Pick<
-      NoticeArchive,
-      | 'noticeNum'
-      | 'subject'
-      | 'proposerCategory'
-      | 'committee'
-      | 'proposalReason'
-      | 'contentBillNumber'
-      | 'contentProposer'
-      | 'contentProposalDate'
-      | 'contentCommittee'
-      | 'contentReferralDate'
-      | 'contentNoticePeriod'
-      | 'contentProposalSession'
-      | 'isDone'
-    > | null,
+    beforeRow: TrackedArchiveRow | null,
+    afterRow: TrackedArchiveRow | null,
   ): Promise<void> {
     if (!this.changeTrackingService || !afterRow) {
       return;
@@ -1049,6 +1198,76 @@ export class NoticeArchiveService {
       );
       throw error;
     }
+  }
+
+  private async appendExplicitEventWithDiff(input: {
+    noticeNum: number;
+    source: string;
+    eventType: Extract<ChangeEventType, 'invalidated' | 'redacted'>;
+    beforeSnapshot: Record<string, unknown> | null;
+    afterSnapshot: Record<string, unknown>;
+    subject: string;
+  }): Promise<void> {
+    if (!this.changeTrackingService) {
+      return;
+    }
+
+    const hashAlgo = 'sha256';
+    const canonVersion = 1;
+    const detectedAt = new Date();
+    const diff = computeDiff(input.beforeSnapshot, input.afterSnapshot);
+
+    if (!diff.changed) {
+      return;
+    }
+
+    const eventHash = sha256Hex(
+      canonicalStringify({
+        noticeNum: input.noticeNum,
+        detectedAt: detectedAt.toISOString(),
+        eventType: input.eventType,
+        source: input.source,
+        hashAlgo,
+        canonVersion,
+        before: diff.normalizedBefore,
+        after: diff.normalizedAfter,
+        details: diff.details,
+      }),
+    );
+
+    const event = await this.changeTrackingService.appendChangeEventWithDetails(
+      {
+        noticeNum: input.noticeNum,
+        eventType: input.eventType,
+        eventHash,
+        detectedAt,
+        source: input.source,
+        changedFieldCount: diff.changedFieldCount,
+        diffSummaryJson: diff.diffSummaryJson,
+        hashAlgo,
+        canonVersion,
+        details: diff.details.map((detail) => ({
+          fieldPath: detail.fieldPath,
+          changeType: detail.changeType,
+          beforeValue: detail.beforeValue,
+          afterValue: detail.afterValue,
+          beforeHash: detail.beforeHash,
+          afterHash: detail.afterHash,
+        })),
+      },
+    );
+
+    void this.changeTrackingService
+      .dispatchChangeNotification({
+        event,
+        subject: input.subject,
+        changedFields: diff.details.map((detail) => detail.fieldPath),
+      })
+      .catch((dispatchError) => {
+        this.logger.warn(
+          `Failed to dispatch explicit ${input.eventType} notification for notice ${input.noticeNum}: ${(dispatchError as Error).message}`,
+        );
+      });
   }
 
   async getExistingNoticeNumSet(noticeNums: number[]): Promise<Set<number>> {

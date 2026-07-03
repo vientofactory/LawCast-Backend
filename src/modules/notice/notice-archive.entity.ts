@@ -7,11 +7,15 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
+export type NoticeLifecycleStatus = 'active' | 'source_deleted' | 'renumbered';
+
 @Entity('notice_archives')
 @Index('idx_notice_archives_notice_num', ['noticeNum'], { unique: true })
 @Index('idx_notice_archives_subject', ['subject'])
 @Index('idx_notice_archives_archive_started_at', ['archiveStartedAt'])
 @Index('idx_notice_archives_is_done', ['isDone'])
+@Index('idx_notice_archives_lifecycle_status', ['lifecycleStatus'])
+@Index('idx_notice_archives_source_deleted_at', ['sourceDeletedAt'])
 export class NoticeArchive {
   @PrimaryGeneratedColumn()
   id: number;
@@ -158,6 +162,17 @@ export class NoticeArchive {
 
   @Column({ type: 'boolean', name: 'is_done', default: false })
   isDone: boolean;
+
+  @Column({
+    type: 'varchar',
+    length: 30,
+    name: 'lifecycle_status',
+    default: 'active',
+  })
+  lifecycleStatus: NoticeLifecycleStatus;
+
+  @Column({ type: 'datetime', name: 'source_deleted_at', nullable: true })
+  sourceDeletedAt: Date | null;
 
   @Column({ type: 'blob', name: 'screenshot_blob', nullable: true })
   screenshotBlob: Buffer | null;

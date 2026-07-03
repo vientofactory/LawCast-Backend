@@ -636,6 +636,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
             getArchivedNullContentIdNums: jest
               .fn()
               .mockResolvedValue(new Set()),
+            markSourceDeletedByMissingPalNums: jest.fn().mockResolvedValue(0),
             upgradePendingNotices: jest.fn().mockResolvedValue(0),
           },
         },

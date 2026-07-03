@@ -55,6 +55,8 @@ describe('NoticeArchiveService', () => {
       httpEtag: null,
       httpLastModified: null,
       isDone: false,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
       archiveStartedAt: new Date('2026-04-17T00:00:02.000Z'),
       lastUpdatedAt: new Date('2026-04-17T00:00:03.000Z'),
       screenshotBlob: null,

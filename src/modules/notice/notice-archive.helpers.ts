@@ -30,6 +30,8 @@ export const NOTICE_ITEM_SELECT = {
   aiSummaryStatus: true,
   attachmentPdfFile: true,
   attachmentHwpFile: true,
+  lifecycleStatus: true,
+  sourceDeletedAt: true,
   archiveStartedAt: true,
   lastUpdatedAt: true,
 } as const;
@@ -52,6 +54,8 @@ export function mapArchiveEntityToNoticeItem(
       pdfFile: row.attachmentPdfFile,
       hwpFile: row.attachmentHwpFile,
     },
+    lifecycleStatus: row.lifecycleStatus ?? 'active',
+    sourceDeletedAt: row.sourceDeletedAt ?? null,
     archiveStartedAt: row.archiveStartedAt,
     lastUpdatedAt: row.lastUpdatedAt,
   };
@@ -90,6 +94,8 @@ export function mapArchiveEntityToRawRecord(row: NoticeArchive) {
     httpContentType: row.httpContentType,
     httpEtag: row.httpEtag,
     httpLastModified: row.httpLastModified,
+    lifecycleStatus: row.lifecycleStatus,
+    sourceDeletedAt: row.sourceDeletedAt,
     archiveStartedAt: row.archiveStartedAt,
     lastUpdatedAt: row.lastUpdatedAt,
   };

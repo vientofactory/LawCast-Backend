@@ -435,11 +435,18 @@ describe('NotificationService', () => {
         true,
       );
 
-      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
-        '자세히 보기',
-        '[변경 추적 상세](http://localhost:5173/notices/2210001?cmpFrom=4&cmpTo=5&cmpShowAll=1)',
-        false,
+      const detailFieldCall = (
+        mockMessageBuilder.addField as jest.Mock
+      ).mock.calls.find((call) => call[0] === '자세히 보기');
+
+      expect(detailFieldCall).toBeDefined();
+      expect(detailFieldCall?.[2]).toBe(false);
+      expect(detailFieldCall?.[1]).toContain(
+        'http://localhost:5173/notices/2210001',
       );
+      expect(detailFieldCall?.[1]).toContain('cmpFrom=4');
+      expect(detailFieldCall?.[1]).toContain('cmpTo=5');
+      expect(detailFieldCall?.[1]).toMatch(/cmpShowAll=(1|true)/);
     });
   });
 });

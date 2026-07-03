@@ -359,6 +359,7 @@ export class ArchiveSyncService implements OnModuleInit {
     let totalPagesScanned = 0;
     let totalNoticesScanned = 0;
     let newlyArchivedCount = 0;
+    const seenPalActiveNums = new Set<number>();
 
     this.noticeArchiveService.beginChangeNotificationCollection();
 
@@ -370,6 +371,9 @@ export class ArchiveSyncService implements OnModuleInit {
         totalPagesScanned++;
         // Guard against unexpected null/undefined items from the crawler
         const pageItems: ITableData[] = page.items ?? [];
+        for (const item of pageItems) {
+          seenPalActiveNums.add(item.num);
+        }
         totalNoticesScanned += pageItems.length;
 
         const newNotices =
@@ -456,6 +460,17 @@ export class ArchiveSyncService implements OnModuleInit {
           ArchiveSyncService.name,
           `Page ${page.currentPage}/${page.totalPages}: ` +
             `total=${pageItems.length} new=${newNotices.length}`,
+        );
+      }
+
+      const sourceDeletedCount =
+        await this.noticeArchiveService.markSourceDeletedByMissingPalNums(
+          seenPalActiveNums,
+        );
+      if (sourceDeletedCount > 0) {
+        LoggerUtils.log(
+          ArchiveSyncService.name,
+          `Marked ${sourceDeletedCount} notice(s) as source_deleted after PAL full sync reconciliation`,
         );
       }
 

@@ -453,6 +453,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       noticePeriod: null,
       proposalSession: null,
       isDone: null,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
     };
     const updatedSnapshot = {
       ...createdSnapshot,

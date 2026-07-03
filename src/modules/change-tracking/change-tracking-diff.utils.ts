@@ -34,6 +34,8 @@ export const DEFAULT_TRACKED_FIELDS = [
   'noticePeriod',
   'proposalSession',
   'isDone',
+  'lifecycleStatus',
+  'sourceDeletedAt',
 ] as const;
 
 function normalizeString(input: string): string {
