@@ -424,6 +424,7 @@ describe('NotificationService', () => {
           source: 'archive:upsert',
           changedFields: ['subject', 'billNumber', 'unknown.field'],
           eventHash: 'hash-test-1',
+          eventHeight: 5,
         },
         mockWebhooks,
       );
@@ -432,6 +433,12 @@ describe('NotificationService', () => {
         '변경 필드',
         '법률안명, 입법예고 의안번호, 기타(unknown.field)',
         true,
+      );
+
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '자세히 보기',
+        '[변경 추적 상세](http://localhost:5173/notices/2210001?cmpFrom=4&cmpTo=5&cmpShowAll=1)',
+        false,
       );
     });
   });

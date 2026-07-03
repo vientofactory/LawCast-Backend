@@ -17,6 +17,7 @@ export interface ChangeNotificationPayload {
   source?: string | null;
   changedFields: string[];
   eventHash: string;
+  eventHeight?: number;
 }
 
 export interface AdminAnnouncementPayload {
@@ -237,12 +238,17 @@ export class NotificationService {
   private createChangeNotificationEmbed(
     payload: ChangeNotificationPayload,
   ): MessageBuilder {
-    const detailUrl = this.buildFrontendNoticeDetailUrlByNoticeNum(
-      payload.noticeNum,
-      {
-        timeline: 'true',
-      },
-    );
+    const detailUrl =
+      payload.eventHeight && payload.eventHeight > 1
+        ? this.buildFrontendNoticeDetailUrlByNoticeNum(payload.noticeNum, {
+            timeline: 'true',
+            cmpFrom: String(payload.eventHeight - 1),
+            cmpTo: String(payload.eventHeight),
+            cmpShowAll: 'true',
+          })
+        : this.buildFrontendNoticeDetailUrlByNoticeNum(payload.noticeNum, {
+            timeline: 'true',
+          });
     const mappedChangedFields = payload.changedFields.map((fieldPath) =>
       this.getChangeFieldDisplayLabel(fieldPath),
     );

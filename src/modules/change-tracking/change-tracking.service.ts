@@ -564,6 +564,7 @@ export class ChangeTrackingService {
       source: input.event.source,
       changedFields: input.changedFields,
       eventHash: input.event.eventHash,
+      eventHeight: input.event.eventHeight,
     };
 
     this.queuedChangeNotifications.push(payload);
