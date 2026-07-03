@@ -20,16 +20,14 @@ describe('ChangeTrackingService (diffchain batching)', () => {
 
     const changeEventRepository = {} as any;
     const changeDetailRepository = {} as any;
-    const deliveryLogRepository = {} as any;
 
     const service = new ChangeTrackingService(
       changeEventRepository,
       changeDetailRepository,
-      deliveryLogRepository,
       notificationBatchService as any,
     );
 
-    return { service, notificationBatchService, deliveryLogRepository };
+    return { service, notificationBatchService };
   };
 
   beforeEach(() => {
@@ -218,7 +216,6 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const service = new ChangeTrackingService(
       changeEventRepository,
       {} as any,
-      {} as any,
       undefined as any,
     );
 
@@ -314,7 +311,6 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const service = new ChangeTrackingService(
       changeEventRepository,
       {} as any,
-      {} as any,
       undefined as any,
     );
 
@@ -407,7 +403,6 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const service = new ChangeTrackingService(
       changeEventRepository,
       {} as any,
-      {} as any,
       undefined as any,
     );
 
@@ -440,8 +435,6 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const bootstrapService = new ChangeTrackingService(
       {} as any,
       {} as any,
-      {} as any,
-      undefined as any,
       undefined as any,
     );
     const createdDetectedAt = new Date('2026-07-03T00:00:00.000Z');
@@ -537,26 +530,9 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       ]),
     } as any;
 
-    const deliveryLogRepository = {
-      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
-        {
-          id: 301,
-          eventId: 12,
-          webhookId: 9,
-          deliveredAt: new Date('2026-07-03T01:01:00.000Z'),
-          status: 'delivered',
-          payloadHash:
-            '1f37d0428b37fca84e2be5938d3f7cb3f5f76d0c4186330becaf2f35d8155c45',
-          responseCode: null,
-          errorMessage: null,
-        },
-      ]),
-    } as any;
-
     const service = new ChangeTrackingService(
       changeEventRepository,
       changeDetailRepository,
-      deliveryLogRepository,
       undefined as any,
       undefined as any,
     );

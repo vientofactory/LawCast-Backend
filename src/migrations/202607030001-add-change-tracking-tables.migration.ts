@@ -5,7 +5,6 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *
  * - notice_change_events: append-only chain headers per notice
  * - notice_change_details: field-level diff records
- * - notification_delivery_logs: immutable delivery evidence records
  */
 export class AddChangeTrackingTables1751500801000 implements MigrationInterface {
   name = 'AddChangeTrackingTables1751500801000';
@@ -75,37 +74,6 @@ export class AddChangeTrackingTables1751500801000 implements MigrationInterface 
       ON "notice_change_details" ("field_path")
     `);
 
-    await queryRunner.query(`
-      CREATE TABLE IF NOT EXISTS "notification_delivery_logs" (
-        "id" integer PRIMARY KEY AUTOINCREMENT NOT NULL,
-        "event_id" integer NOT NULL,
-        "webhook_id" integer,
-        "delivered_at" datetime NOT NULL,
-        "status" varchar(30) NOT NULL,
-        "payload_hash" varchar(64) NOT NULL,
-        "response_code" integer,
-        "error_message" text,
-        "created_at" datetime NOT NULL DEFAULT (datetime('now')),
-        FOREIGN KEY ("event_id") REFERENCES "notice_change_events" ("id") ON DELETE CASCADE,
-        FOREIGN KEY ("webhook_id") REFERENCES "webhooks" ("id") ON DELETE SET NULL
-      )
-    `);
-
-    await queryRunner.query(`
-      CREATE INDEX IF NOT EXISTS "idx_notification_delivery_logs_event_id_delivered_at"
-      ON "notification_delivery_logs" ("event_id", "delivered_at")
-    `);
-
-    await queryRunner.query(`
-      CREATE INDEX IF NOT EXISTS "idx_notification_delivery_logs_webhook_id"
-      ON "notification_delivery_logs" ("webhook_id")
-    `);
-
-    await queryRunner.query(`
-      CREATE INDEX IF NOT EXISTS "idx_notification_delivery_logs_payload_hash"
-      ON "notification_delivery_logs" ("payload_hash")
-    `);
-
     // Enforce append-only semantics at DB layer.
     await queryRunner.query(`
       CREATE TRIGGER IF NOT EXISTS "trg_notice_change_events_no_update"
@@ -138,31 +106,9 @@ export class AddChangeTrackingTables1751500801000 implements MigrationInterface 
         SELECT RAISE(ABORT, 'notice_change_details is append-only');
       END
     `);
-
-    await queryRunner.query(`
-      CREATE TRIGGER IF NOT EXISTS "trg_notification_delivery_logs_no_update"
-      BEFORE UPDATE ON "notification_delivery_logs"
-      BEGIN
-        SELECT RAISE(ABORT, 'notification_delivery_logs is append-only');
-      END
-    `);
-
-    await queryRunner.query(`
-      CREATE TRIGGER IF NOT EXISTS "trg_notification_delivery_logs_no_delete"
-      BEFORE DELETE ON "notification_delivery_logs"
-      BEGIN
-        SELECT RAISE(ABORT, 'notification_delivery_logs is append-only');
-      END
-    `);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      `DROP TRIGGER IF EXISTS "trg_notification_delivery_logs_no_delete"`,
-    );
-    await queryRunner.query(
-      `DROP TRIGGER IF EXISTS "trg_notification_delivery_logs_no_update"`,
-    );
     await queryRunner.query(
       `DROP TRIGGER IF EXISTS "trg_notice_change_details_no_delete"`,
     );
@@ -174,19 +120,6 @@ export class AddChangeTrackingTables1751500801000 implements MigrationInterface 
     );
     await queryRunner.query(
       `DROP TRIGGER IF EXISTS "trg_notice_change_events_no_update"`,
-    );
-
-    await queryRunner.query(
-      `DROP INDEX IF EXISTS "idx_notification_delivery_logs_payload_hash"`,
-    );
-    await queryRunner.query(
-      `DROP INDEX IF EXISTS "idx_notification_delivery_logs_webhook_id"`,
-    );
-    await queryRunner.query(
-      `DROP INDEX IF EXISTS "idx_notification_delivery_logs_event_id_delivered_at"`,
-    );
-    await queryRunner.query(
-      `DROP TABLE IF EXISTS "notification_delivery_logs"`,
     );
 
     await queryRunner.query(

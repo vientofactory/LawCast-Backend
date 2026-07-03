@@ -11,14 +11,20 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { type CachedNotice } from '../../types/cache.types';
 
 export interface ChangeNotificationPayload {
-  eventId?: number;
   noticeNum: number;
   subject: string;
   eventType: 'created' | 'updated' | 'redacted' | 'invalidated';
   source?: string | null;
   changedFields: string[];
   eventHash: string;
-  payloadHash?: string;
+}
+
+export interface AdminAnnouncementPayload {
+  title: string;
+  body: string;
+  requestedByDisplay?: string;
+  requestedByUserId?: string;
+  requestedByAvatarUrl?: string;
 }
 
 type NotificationSendResult = {
@@ -105,6 +111,19 @@ export class NotificationService {
     return this.sendDiscordEmbedBatch(embed, webhooks, {
       username: 'LawCast 변경 추적',
       context: 'change notification',
+      abortSignal,
+    });
+  }
+
+  async sendDiscordAdminAnnouncementBatch(
+    payload: AdminAnnouncementPayload,
+    webhooks: Webhook[],
+    abortSignal?: AbortSignal,
+  ): Promise<NotificationSendResult[]> {
+    const embed = this.createAdminAnnouncementEmbed(payload);
+    return this.sendDiscordEmbedBatch(embed, webhooks, {
+      username: 'LawCast 관리자 공지',
+      context: 'admin announcement',
       abortSignal,
     });
   }
@@ -244,6 +263,23 @@ export class NotificationService {
       .setFooter('LawCast 알림 서비스', '');
 
     return embed;
+  }
+
+  private createAdminAnnouncementEmbed(
+    payload: AdminAnnouncementPayload,
+  ): MessageBuilder {
+    const title = payload.title.trim();
+    const body = payload.body.trim();
+    const requestedByDisplay = payload.requestedByDisplay?.trim() || '관리자';
+    const requestedByAvatarUrl = payload.requestedByAvatarUrl?.trim();
+    const prefixedTitle = `[공지] ${title}`;
+
+    return new MessageBuilder()
+      .setTitle(this.truncateForEmbed(prefixedTitle, 256))
+      .setDescription(this.truncateForEmbed(body, 4000))
+      .setColor(APP_CONSTANTS.COLORS.DISCORD.SUCCESS)
+      .setTimestamp()
+      .setFooter(requestedByDisplay, requestedByAvatarUrl);
   }
 
   private getChangeFieldDisplayLabel(fieldPath: string): string {

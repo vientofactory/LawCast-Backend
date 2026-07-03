@@ -28,6 +28,7 @@ describe('NotificationService', () => {
     mockMessageBuilder = {
       setTitle: jest.fn().mockReturnThis(),
       setDescription: jest.fn().mockReturnThis(),
+      setAuthor: jest.fn().mockReturnThis(),
       addField: jest.fn().mockReturnThis(),
       setColor: jest.fn().mockReturnThis(),
       setTimestamp: jest.fn().mockReturnThis(),

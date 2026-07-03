@@ -554,19 +554,22 @@ export class NoticeArchiveService {
     await this.changeTrackingService.endChangeNotificationCollection();
   }
 
-  private async buildChangeTrackingExportData(
-    noticeNum: number,
-  ): Promise<Record<string, unknown> | null> {
+  private async buildChangeTrackingExportData(noticeNum: number): Promise<any> {
     if (!this.changeTrackingService) {
       return null;
     }
 
     try {
+      const events = await this.changeTrackingService.getNoticeChangeTimeline({
+        noticeNum,
+        limit: 1000,
+      });
+
       return {
-        ...(await this.changeTrackingService.getChangeTrackingExportData(
-          noticeNum,
-          1000,
-        )),
+        exportedAt: new Date().toISOString(),
+        noticeNum,
+        eventCount: events.length,
+        events,
       };
     } catch (error) {
       this.logger.warn(

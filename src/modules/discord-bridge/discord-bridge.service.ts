@@ -15,6 +15,7 @@ import {
   Routes,
   ApplicationCommandOptionType,
   Interaction,
+  MessageFlags,
 } from 'discord.js';
 import {
   BridgeLogLevel,
@@ -30,6 +31,18 @@ const SLASH_COMMAND_DEFINITIONS = [
   { name: 'stats', description: 'Aggregate runtime statistics' },
   { name: 'cache', description: 'Redis cache status' },
   { name: 'crawl', description: 'Trigger a manual crawl cycle' },
+  {
+    name: 'notice-batch',
+    description: 'Compose and broadcast an admin announcement to all webhooks',
+    options: [
+      {
+        name: 'dry_run',
+        description: 'Run validation flow without actually sending',
+        type: ApplicationCommandOptionType.Boolean,
+        required: false,
+      },
+    ],
+  },
   { name: 'batch-history', description: 'Recent batch job history' },
   { name: 'webhooks', description: 'Webhook statistics' },
   {
@@ -286,11 +299,36 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
   // ─── Interaction handling ─────────────────────────────────────────────────
 
   private async handleInteraction(interaction: Interaction): Promise<void> {
-    if (!interaction.isChatInputCommand()) return;
+    const isSupportedInteraction =
+      interaction.isChatInputCommand() ||
+      interaction.isButton() ||
+      interaction.isModalSubmit();
+    if (!isSupportedInteraction) return;
+
     if (this.bridgeChannelId && interaction.channelId !== this.bridgeChannelId)
       return;
     // Silently ignore non-admin users
     if (!this.adminUserIds.has(interaction.user.id)) return;
+
+    if (!interaction.isChatInputCommand()) {
+      try {
+        await this.commandsService.executeComponentInteraction(interaction);
+      } catch (error) {
+        const msg = `❌ Interaction error: ${(error as Error).message}`;
+        if (interaction.isRepliable()) {
+          if (interaction.replied || interaction.deferred) {
+            await interaction
+              .followUp({ content: msg, flags: MessageFlags.Ephemeral })
+              .catch(() => {});
+          } else {
+            await interaction
+              .reply({ content: msg, flags: MessageFlags.Ephemeral })
+              .catch(() => {});
+          }
+        }
+      }
+      return;
+    }
 
     const ctx = {
       currentLogLevel: this.currentLogLevel,
@@ -308,7 +346,7 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
         await interaction.editReply(msg).catch(() => {});
       } else {
         await interaction
-          .reply({ content: msg, ephemeral: true })
+          .reply({ content: msg, flags: MessageFlags.Ephemeral })
           .catch(() => {});
       }
     }

@@ -20,7 +20,6 @@ import { type ChangeNotificationPayload } from '../notification/notification.ser
 import { NotificationBatchService } from '../notification/notification-batch.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
-import { NotificationDeliveryLog } from './notification-delivery-log.entity';
 
 interface AppendChangeEventInput {
   noticeNum: number;
@@ -131,25 +130,6 @@ export interface RecentChangesResult {
   totalPages: number;
 }
 
-export interface NotificationDeliveryLogItem {
-  id: number;
-  eventId: number;
-  webhookId: number | null;
-  deliveredAt: Date;
-  status: string;
-  payloadHash: string;
-  responseCode: number | null;
-  errorMessage: string | null;
-}
-
-export interface ChangeTrackingExportData {
-  exportedAt: string;
-  noticeNum: number;
-  eventCount: number;
-  events: ChangeTimelineItem[];
-  deliveryLogs: NotificationDeliveryLogItem[];
-}
-
 interface ChainVerificationIssue {
   noticeNum: number;
   eventId?: number;
@@ -189,8 +169,6 @@ export class ChangeTrackingService {
     private readonly changeEventRepository: Repository<NoticeChangeEvent>,
     @InjectRepository(NoticeChangeDetail)
     private readonly changeDetailRepository: Repository<NoticeChangeDetail>,
-    @InjectRepository(NotificationDeliveryLog)
-    private readonly deliveryLogRepository: Repository<NotificationDeliveryLog>,
     @Optional()
     private readonly notificationBatchService?: NotificationBatchService,
     @Optional() private readonly discordBridge?: DiscordBridgeService,
@@ -580,14 +558,12 @@ export class ChangeTrackingService {
     }
 
     const payload: ChangeNotificationPayload = {
-      eventId: input.event.id,
       noticeNum: input.event.noticeNum,
       subject: input.subject,
       eventType: input.event.eventType,
       source: input.event.source,
       changedFields: input.changedFields,
       eventHash: input.event.eventHash,
-      payloadHash: this.buildChangeNotificationPayloadHash(input),
     };
 
     this.queuedChangeNotifications.push(payload);
@@ -798,26 +774,6 @@ export class ChangeTrackingService {
     };
   }
 
-  async getChangeTrackingExportData(
-    noticeNum: number,
-    limit = 1000,
-  ): Promise<ChangeTrackingExportData> {
-    const events = await this.getNoticeChangeTimeline({
-      noticeNum,
-      limit,
-    });
-    const eventIds = events.map((event) => event.id);
-    const deliveryLogs = await this.getDeliveryLogsByEventIds(eventIds);
-
-    return {
-      exportedAt: new Date().toISOString(),
-      noticeNum,
-      eventCount: events.length,
-      events,
-      deliveryLogs,
-    };
-  }
-
   async runScheduledChainAudit(
     scope: 'daily' | 'weekly',
   ): Promise<ChangeChainAuditReport> {
@@ -898,25 +854,12 @@ export class ChangeTrackingService {
           order: { id: 'ASC' },
         })
       : [];
-    const deliveryLogs = eventIds.length
-      ? await this.deliveryLogRepository.find({
-          where: { eventId: In(eventIds) },
-          order: { deliveredAt: 'ASC', id: 'ASC' },
-        })
-      : [];
 
     const detailsByEventId = new Map<number, NoticeChangeDetail[]>();
     for (const detail of details) {
       const bucket = detailsByEventId.get(detail.eventId) ?? [];
       bucket.push(detail);
       detailsByEventId.set(detail.eventId, bucket);
-    }
-
-    const logsByEventId = new Map<number, NotificationDeliveryLog[]>();
-    for (const log of deliveryLogs) {
-      const bucket = logsByEventId.get(log.eventId) ?? [];
-      bucket.push(log);
-      logsByEventId.set(log.eventId, bucket);
     }
 
     const issues: ChainVerificationIssue[] = [];
@@ -1032,24 +975,6 @@ export class ChangeTrackingService {
         }
       }
 
-      const eventLogs = logsByEventId.get(event.id) ?? [];
-      if (eventLogs.length > 0) {
-        const distinctPayloadHashes = new Set(
-          eventLogs.map((log) => log.payloadHash),
-        );
-
-        if (distinctPayloadHashes.size > 1) {
-          issues.push({
-            noticeNum,
-            eventId: event.id,
-            eventHeight: event.eventHeight,
-            code: 'payload_hash_inconsistent',
-            message:
-              'Delivery logs for a single event contain multiple payload hashes',
-          });
-        }
-      }
-
       currentState = nextState;
       previousHash = event.eventHash;
     });
@@ -1060,45 +985,6 @@ export class ChangeTrackingService {
       latestEventHash: previousHash,
       issues,
     };
-  }
-
-  private async getDeliveryLogsByEventIds(
-    eventIds: number[],
-  ): Promise<NotificationDeliveryLogItem[]> {
-    if (eventIds.length === 0) {
-      return [];
-    }
-
-    const logs = await this.deliveryLogRepository.find({
-      where: { eventId: In(eventIds) },
-      order: { deliveredAt: 'DESC', id: 'DESC' },
-    });
-
-    return logs.map((log) => ({
-      id: log.id,
-      eventId: log.eventId,
-      webhookId: log.webhookId,
-      deliveredAt: log.deliveredAt,
-      status: log.status,
-      payloadHash: log.payloadHash,
-      responseCode: log.responseCode,
-      errorMessage: log.errorMessage,
-    }));
-  }
-
-  private buildChangeNotificationPayloadHash(
-    input: DispatchChangeNotificationInput,
-  ): string {
-    return sha256Hex(
-      canonicalStringify({
-        noticeNum: input.event.noticeNum,
-        subject: input.subject,
-        eventType: input.event.eventType,
-        source: input.event.source ?? null,
-        changedFields: input.changedFields,
-        eventHash: input.event.eventHash,
-      }),
-    );
   }
 
   private createEmptyTrackedState(): Record<string, string | null> {

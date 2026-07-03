@@ -16,12 +16,10 @@
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
 import { CrawlingSchedulerService } from './crawling-scheduler.service';
 import { ArchiveSyncService } from './archive-sync.service';
 import { ArchiveOrchestratorService } from './archive-orchestrator.service';
 import { NotificationBatchService } from '../notification/notification-batch.service';
-import { NotificationDeliveryLog } from '../change-tracking/notification-delivery-log.entity';
 import { CacheService } from '../cache/cache.service';
 import { CrawlingCoreService } from './crawling-core.service';
 import { SummaryGenerationService } from './summary-generation.service';
@@ -542,13 +540,6 @@ describe('[Fault Isolation] NotificationBatchService', () => {
             ),
             generateId: jest.fn().mockReturnValue('batch-test-id'),
             updateRecentJobMetadata: jest.fn(),
-          },
-        },
-        {
-          provide: getRepositoryToken(NotificationDeliveryLog),
-          useValue: {
-            create: jest.fn((payload: unknown) => payload),
-            save: jest.fn().mockResolvedValue(undefined),
           },
         },
       ],

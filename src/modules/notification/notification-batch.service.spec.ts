@@ -14,10 +14,6 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     findAll: jest.Mock;
     remove: jest.Mock;
   };
-  let deliveryLogRepository: {
-    create: jest.Mock;
-    save: jest.Mock;
-  };
   let notificationService: {
     sendDiscordChangeNotificationBatch: jest.Mock;
     clearPermanentFailureFlag: jest.Mock;
@@ -57,11 +53,6 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       clearPermanentFailureFlag: jest.fn<(...args: any[]) => void>(),
     };
 
-    deliveryLogRepository = {
-      create: jest.fn((payload: unknown) => payload),
-      save: jest.fn<(...args: any[]) => Promise<void>>().mockResolvedValue(),
-    };
-
     batchProcessingService = {
       executeBatch: jest.fn(
         async (jobs: Array<(signal: AbortSignal) => Promise<any>>) => {
@@ -81,7 +72,6 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       webhookService as any,
       notificationService as any,
       batchProcessingService as any,
-      deliveryLogRepository as any,
       undefined as any,
     );
   });
@@ -93,24 +83,20 @@ describe('NotificationBatchService (diffchain change batching)', () => {
   it('executes one batch containing multiple change payload jobs', async () => {
     const payloads: ChangeNotificationPayload[] = [
       {
-        eventId: 501,
         noticeNum: 101,
         subject: '법률안 101',
         eventType: 'updated',
         source: 'archive:upsert',
         changedFields: ['subject'],
         eventHash: 'hash-101',
-        payloadHash: 'payload-hash-101',
       },
       {
-        eventId: 502,
         noticeNum: 102,
         subject: '법률안 102',
         eventType: 'updated',
         source: 'archive:upsert',
         changedFields: ['committee'],
         eventHash: 'hash-102',
-        payloadHash: 'payload-hash-102',
       },
     ];
 
@@ -131,30 +117,25 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       noticeNum: 102,
       subject: '법률안 102',
     });
-    expect(deliveryLogRepository.save).toHaveBeenCalledTimes(2);
   });
 
   it('processChangeNotificationBatch accepts payload arrays without splitting to separate batch runs', async () => {
     const payloads: ChangeNotificationPayload[] = [
       {
-        eventId: 601,
         noticeNum: 201,
         subject: '법률안 201',
         eventType: 'updated',
         source: 'archive:updateSourceHtml',
         changedFields: ['proposer'],
         eventHash: 'hash-201',
-        payloadHash: 'payload-hash-201',
       },
       {
-        eventId: 602,
         noticeNum: 202,
         subject: '법률안 202',
         eventType: 'updated',
         source: 'archive:updateNsmHtmlAndDetail',
         changedFields: ['proposalReason'],
         eventHash: 'hash-202',
-        payloadHash: 'payload-hash-202',
       },
     ];
 
