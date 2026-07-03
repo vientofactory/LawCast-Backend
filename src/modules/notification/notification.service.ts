@@ -11,12 +11,14 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { type CachedNotice } from '../../types/cache.types';
 
 export interface ChangeNotificationPayload {
+  eventId?: number;
   noticeNum: number;
   subject: string;
   eventType: 'created' | 'updated' | 'redacted' | 'invalidated';
   source?: string | null;
   changedFields: string[];
   eventHash: string;
+  payloadHash?: string;
 }
 
 type NotificationSendResult = {

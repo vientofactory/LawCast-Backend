@@ -12,11 +12,15 @@ import {
 import {
   canonicalStringify,
   computeDiff,
+  DEFAULT_TRACKED_FIELDS,
   sha256Hex,
   type DiffComputationResult,
 } from './change-tracking-diff.utils';
 import { type ChangeNotificationPayload } from '../notification/notification.service';
 import { NotificationBatchService } from '../notification/notification-batch.service';
+import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
+import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
+import { NotificationDeliveryLog } from './notification-delivery-log.entity';
 
 interface AppendChangeEventInput {
   noticeNum: number;
@@ -127,6 +131,50 @@ export interface RecentChangesResult {
   totalPages: number;
 }
 
+export interface NotificationDeliveryLogItem {
+  id: number;
+  eventId: number;
+  webhookId: number | null;
+  deliveredAt: Date;
+  status: string;
+  payloadHash: string;
+  responseCode: number | null;
+  errorMessage: string | null;
+}
+
+export interface ChangeTrackingExportData {
+  exportedAt: string;
+  noticeNum: number;
+  eventCount: number;
+  events: ChangeTimelineItem[];
+  deliveryLogs: NotificationDeliveryLogItem[];
+}
+
+interface ChainVerificationIssue {
+  noticeNum: number;
+  eventId?: number;
+  eventHeight?: number;
+  code: string;
+  message: string;
+}
+
+interface ChainVerificationReport {
+  noticeNum: number;
+  eventCount: number;
+  latestEventHash: string | null;
+  issues: ChainVerificationIssue[];
+}
+
+export interface ChangeChainAuditReport {
+  checkedAt: string;
+  scope: 'daily' | 'weekly';
+  noticeCount: number;
+  eventCount: number;
+  failureCount: number;
+  checkpointRootHash: string;
+  failures: ChainVerificationIssue[];
+}
+
 @Injectable()
 export class ChangeTrackingService {
   private readonly logger = new Logger(ChangeTrackingService.name);
@@ -141,8 +189,11 @@ export class ChangeTrackingService {
     private readonly changeEventRepository: Repository<NoticeChangeEvent>,
     @InjectRepository(NoticeChangeDetail)
     private readonly changeDetailRepository: Repository<NoticeChangeDetail>,
+    @InjectRepository(NotificationDeliveryLog)
+    private readonly deliveryLogRepository: Repository<NotificationDeliveryLog>,
     @Optional()
     private readonly notificationBatchService?: NotificationBatchService,
+    @Optional() private readonly discordBridge?: DiscordBridgeService,
   ) {}
 
   async getLastEventForNotice(
@@ -181,6 +232,16 @@ export class ChangeTrackingService {
     const saved = await this.changeEventRepository.save(event);
     this.logger.debug(
       `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
+    );
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.DEBUG,
+      ChangeTrackingService.name,
+      `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight}`,
+      {
+        noticeNum: saved.noticeNum,
+        eventHeight: saved.eventHeight,
+        eventHash: saved.eventHash,
+      },
     );
     return saved;
   }
@@ -229,14 +290,55 @@ export class ChangeTrackingService {
         this.logger.debug(
           `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
         );
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.DEBUG,
+          ChangeTrackingService.name,
+          `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight}`,
+          {
+            noticeNum: saved.noticeNum,
+            eventHeight: saved.eventHeight,
+            eventHash: saved.eventHash,
+          },
+        );
         return saved;
       } catch (error) {
         if (this.isEventHeightConflictError(error) && attempt < maxRetries) {
           this.logger.warn(
             `Change event append conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`,
           );
+          void this.discordBridge?.logEvent(
+            BridgeLogLevel.WARN,
+            ChangeTrackingService.name,
+            `Change event append conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`,
+            {
+              noticeNum: input.noticeNum,
+              attempt,
+              maxRetries,
+            },
+          );
           continue;
         }
+
+        if (this.isSqliteTransactionStartConflictError(error)) {
+          if (attempt < maxRetries) {
+            this.logger.warn(
+              `SQLite transaction start conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`,
+            );
+            void this.discordBridge?.logEvent(
+              BridgeLogLevel.WARN,
+              ChangeTrackingService.name,
+              `SQLite transaction start conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`,
+              {
+                noticeNum: input.noticeNum,
+                attempt,
+                maxRetries,
+              },
+            );
+            await this.delayBeforeRetry(attempt);
+            continue;
+          }
+        }
+
         throw error;
       }
     }
@@ -374,6 +476,36 @@ export class ChangeTrackingService {
     return false;
   }
 
+  private isSqliteTransactionStartConflictError(error: unknown): boolean {
+    const message = String(
+      (error as { message?: string } | undefined)?.message ?? '',
+    ).toLowerCase();
+    const code = String(
+      (error as { code?: string } | undefined)?.code ?? '',
+    ).toLowerCase();
+    const driverError = (
+      error as { driverError?: { message?: string; code?: string } } | undefined
+    )?.driverError;
+    const driverMessage = String(driverError?.message ?? '').toLowerCase();
+    const driverCode = String(driverError?.code ?? '').toLowerCase();
+
+    const targetMessage = 'cannot start a transaction within a transaction';
+
+    return (
+      message.includes(targetMessage) ||
+      driverMessage.includes(targetMessage) ||
+      (code === 'sqlite_error' && message.includes('begin transaction')) ||
+      (driverCode === 'sqlite_error' &&
+        (driverMessage.includes('begin transaction') ||
+          driverMessage.includes(targetMessage)))
+    );
+  }
+
+  private async delayBeforeRetry(attempt: number): Promise<void> {
+    const delayMs = Math.min(10 * attempt, 50);
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+  }
+
   /**
    * Phase 2 helper:
    * Computes normalized field-level diffs and builds deterministic event hash.
@@ -431,13 +563,31 @@ export class ChangeTrackingService {
       return;
     }
 
+    if (input.event.eventType === 'created') {
+      this.logger.debug(
+        `Skipping change notification for created notice ${input.event.noticeNum} because the regular notice notification already covers it`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.DEBUG,
+        ChangeTrackingService.name,
+        `Skipped change notification for created notice **${input.event.noticeNum}**`,
+        {
+          noticeNum: input.event.noticeNum,
+          eventHash: input.event.eventHash,
+        },
+      );
+      return;
+    }
+
     const payload: ChangeNotificationPayload = {
+      eventId: input.event.id,
       noticeNum: input.event.noticeNum,
       subject: input.subject,
       eventType: input.event.eventType,
       source: input.event.source,
       changedFields: input.changedFields,
       eventHash: input.event.eventHash,
+      payloadHash: this.buildChangeNotificationPayloadHash(input),
     };
 
     this.queuedChangeNotifications.push(payload);
@@ -522,9 +672,26 @@ export class ChangeTrackingService {
       this.logger.debug(
         `Change notification batch dispatched for ${payloads.length} event(s), job=${batchJobId}`,
       );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.DEBUG,
+        ChangeTrackingService.name,
+        `Change notification batch dispatched for ${payloads.length} event(s)`,
+        {
+          payloadCount: payloads.length,
+          batchJobId,
+        },
+      );
     } catch (error) {
       this.logger.warn(
         `Failed to dispatch queued change notifications (${payloads.length} event(s)): ${(error as Error).message}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        ChangeTrackingService.name,
+        `Failed to dispatch queued change notifications (${payloads.length} event(s)): ${(error as Error).message}`,
+        {
+          payloadCount: payloads.length,
+        },
       );
     } finally {
       this.isFlushingQueuedNotifications = false;
@@ -629,6 +796,343 @@ export class ChangeTrackingService {
       total,
       totalPages: total > 0 ? Math.ceil(total / limit) : 1,
     };
+  }
+
+  async getChangeTrackingExportData(
+    noticeNum: number,
+    limit = 1000,
+  ): Promise<ChangeTrackingExportData> {
+    const events = await this.getNoticeChangeTimeline({
+      noticeNum,
+      limit,
+    });
+    const eventIds = events.map((event) => event.id);
+    const deliveryLogs = await this.getDeliveryLogsByEventIds(eventIds);
+
+    return {
+      exportedAt: new Date().toISOString(),
+      noticeNum,
+      eventCount: events.length,
+      events,
+      deliveryLogs,
+    };
+  }
+
+  async runScheduledChainAudit(
+    scope: 'daily' | 'weekly',
+  ): Promise<ChangeChainAuditReport> {
+    const reports = await this.verifyAllChains();
+    const failures = reports.flatMap((report) => report.issues);
+    const checkpointRootHash = this.computeCheckpointRootHash(reports);
+    const result: ChangeChainAuditReport = {
+      checkedAt: new Date().toISOString(),
+      scope,
+      noticeCount: reports.length,
+      eventCount: reports.reduce((sum, report) => sum + report.eventCount, 0),
+      failureCount: failures.length,
+      checkpointRootHash,
+      failures,
+    };
+
+    const summaryMessage =
+      `Change-chain ${scope} audit completed: ` +
+      `${result.noticeCount} notice(s), ${result.eventCount} event(s), ` +
+      `${result.failureCount} failure(s), checkpoint=${checkpointRootHash}`;
+
+    if (result.failureCount > 0) {
+      this.logger.error(summaryMessage);
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.ERROR,
+        ChangeTrackingService.name,
+        summaryMessage,
+        {
+          scope,
+          checkpointRootHash,
+          failures: failures.slice(0, 20),
+        },
+      );
+    } else {
+      this.logger.log(summaryMessage);
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.LOG,
+        ChangeTrackingService.name,
+        summaryMessage,
+        {
+          scope,
+          checkpointRootHash,
+          noticeCount: result.noticeCount,
+          eventCount: result.eventCount,
+        },
+      );
+    }
+
+    return result;
+  }
+
+  private async verifyAllChains(): Promise<ChainVerificationReport[]> {
+    const rawNoticeNums = await this.changeEventRepository
+      .createQueryBuilder('event')
+      .select('DISTINCT event.noticeNum', 'noticeNum')
+      .orderBy('event.noticeNum', 'ASC')
+      .getRawMany<{ noticeNum: number | string }>();
+
+    const reports: ChainVerificationReport[] = [];
+    for (const raw of rawNoticeNums) {
+      reports.push(await this.verifyNoticeChain(Number(raw.noticeNum)));
+    }
+
+    return reports;
+  }
+
+  private async verifyNoticeChain(
+    noticeNum: number,
+  ): Promise<ChainVerificationReport> {
+    const events = await this.changeEventRepository.find({
+      where: { noticeNum },
+      order: { eventHeight: 'ASC', id: 'ASC' },
+    });
+    const eventIds = events.map((event) => event.id);
+    const details = eventIds.length
+      ? await this.changeDetailRepository.find({
+          where: { eventId: In(eventIds) },
+          order: { id: 'ASC' },
+        })
+      : [];
+    const deliveryLogs = eventIds.length
+      ? await this.deliveryLogRepository.find({
+          where: { eventId: In(eventIds) },
+          order: { deliveredAt: 'ASC', id: 'ASC' },
+        })
+      : [];
+
+    const detailsByEventId = new Map<number, NoticeChangeDetail[]>();
+    for (const detail of details) {
+      const bucket = detailsByEventId.get(detail.eventId) ?? [];
+      bucket.push(detail);
+      detailsByEventId.set(detail.eventId, bucket);
+    }
+
+    const logsByEventId = new Map<number, NotificationDeliveryLog[]>();
+    for (const log of deliveryLogs) {
+      const bucket = logsByEventId.get(log.eventId) ?? [];
+      bucket.push(log);
+      logsByEventId.set(log.eventId, bucket);
+    }
+
+    const issues: ChainVerificationIssue[] = [];
+    let previousHash: string | null = null;
+    let currentState = this.createEmptyTrackedState();
+
+    events.forEach((event, index) => {
+      const eventDetails = detailsByEventId.get(event.id) ?? [];
+      const beforeState = index === 0 ? null : { ...currentState };
+      const nextState = this.applyDetailsToTrackedState(
+        currentState,
+        eventDetails,
+      );
+      const rebuilt = this.buildDiffEvent({
+        noticeNum,
+        beforeSnapshot: beforeState,
+        afterSnapshot: nextState,
+        detectedAt: event.detectedAt,
+        source: event.source,
+        trackedFields: DEFAULT_TRACKED_FIELDS,
+        hashAlgo: event.hashAlgo,
+        canonVersion: event.canonVersion,
+      });
+
+      if (event.eventHeight !== index + 1) {
+        issues.push({
+          noticeNum,
+          eventId: event.id,
+          eventHeight: event.eventHeight,
+          code: 'event_height_gap',
+          message: `Expected event height ${index + 1} but found ${event.eventHeight}`,
+        });
+      }
+
+      if ((event.prevEventHash ?? null) !== previousHash) {
+        issues.push({
+          noticeNum,
+          eventId: event.id,
+          eventHeight: event.eventHeight,
+          code: 'prev_hash_mismatch',
+          message: `Expected prev_event_hash ${previousHash ?? 'null'} but found ${event.prevEventHash ?? 'null'}`,
+        });
+      }
+
+      if (event.eventHash !== rebuilt.eventHash) {
+        issues.push({
+          noticeNum,
+          eventId: event.id,
+          eventHeight: event.eventHeight,
+          code: 'event_hash_mismatch',
+          message:
+            'Stored event hash does not match the reconstructed canonical event hash',
+        });
+      }
+
+      if (event.eventType !== rebuilt.eventType) {
+        issues.push({
+          noticeNum,
+          eventId: event.id,
+          eventHeight: event.eventHeight,
+          code: 'event_type_mismatch',
+          message: `Expected event type ${rebuilt.eventType} but found ${event.eventType}`,
+        });
+      }
+
+      if (event.changedFieldCount !== rebuilt.diff.changedFieldCount) {
+        issues.push({
+          noticeNum,
+          eventId: event.id,
+          eventHeight: event.eventHeight,
+          code: 'changed_field_count_mismatch',
+          message: `Expected changedFieldCount ${rebuilt.diff.changedFieldCount} but found ${event.changedFieldCount}`,
+        });
+      }
+
+      if ((event.diffSummaryJson ?? null) !== rebuilt.diff.diffSummaryJson) {
+        issues.push({
+          noticeNum,
+          eventId: event.id,
+          eventHeight: event.eventHeight,
+          code: 'diff_summary_mismatch',
+          message:
+            'Stored diff summary does not match the reconstructed diff summary',
+        });
+      }
+
+      for (const detail of eventDetails) {
+        const expectedBeforeHash = detail.beforeValue
+          ? sha256Hex(detail.beforeValue)
+          : null;
+        const expectedAfterHash = detail.afterValue
+          ? sha256Hex(detail.afterValue)
+          : null;
+
+        if ((detail.beforeHash ?? null) !== expectedBeforeHash) {
+          issues.push({
+            noticeNum,
+            eventId: event.id,
+            eventHeight: event.eventHeight,
+            code: 'detail_before_hash_mismatch',
+            message: `before_hash mismatch on field ${detail.fieldPath}`,
+          });
+        }
+
+        if ((detail.afterHash ?? null) !== expectedAfterHash) {
+          issues.push({
+            noticeNum,
+            eventId: event.id,
+            eventHeight: event.eventHeight,
+            code: 'detail_after_hash_mismatch',
+            message: `after_hash mismatch on field ${detail.fieldPath}`,
+          });
+        }
+      }
+
+      const eventLogs = logsByEventId.get(event.id) ?? [];
+      if (eventLogs.length > 0) {
+        const distinctPayloadHashes = new Set(
+          eventLogs.map((log) => log.payloadHash),
+        );
+
+        if (distinctPayloadHashes.size > 1) {
+          issues.push({
+            noticeNum,
+            eventId: event.id,
+            eventHeight: event.eventHeight,
+            code: 'payload_hash_inconsistent',
+            message:
+              'Delivery logs for a single event contain multiple payload hashes',
+          });
+        }
+      }
+
+      currentState = nextState;
+      previousHash = event.eventHash;
+    });
+
+    return {
+      noticeNum,
+      eventCount: events.length,
+      latestEventHash: previousHash,
+      issues,
+    };
+  }
+
+  private async getDeliveryLogsByEventIds(
+    eventIds: number[],
+  ): Promise<NotificationDeliveryLogItem[]> {
+    if (eventIds.length === 0) {
+      return [];
+    }
+
+    const logs = await this.deliveryLogRepository.find({
+      where: { eventId: In(eventIds) },
+      order: { deliveredAt: 'DESC', id: 'DESC' },
+    });
+
+    return logs.map((log) => ({
+      id: log.id,
+      eventId: log.eventId,
+      webhookId: log.webhookId,
+      deliveredAt: log.deliveredAt,
+      status: log.status,
+      payloadHash: log.payloadHash,
+      responseCode: log.responseCode,
+      errorMessage: log.errorMessage,
+    }));
+  }
+
+  private buildChangeNotificationPayloadHash(
+    input: DispatchChangeNotificationInput,
+  ): string {
+    return sha256Hex(
+      canonicalStringify({
+        noticeNum: input.event.noticeNum,
+        subject: input.subject,
+        eventType: input.event.eventType,
+        source: input.event.source ?? null,
+        changedFields: input.changedFields,
+        eventHash: input.event.eventHash,
+      }),
+    );
+  }
+
+  private createEmptyTrackedState(): Record<string, string | null> {
+    return Object.fromEntries(
+      DEFAULT_TRACKED_FIELDS.map((fieldPath) => [fieldPath, null]),
+    ) as Record<string, string | null>;
+  }
+
+  private applyDetailsToTrackedState(
+    previousState: Record<string, string | null>,
+    details: NoticeChangeDetail[],
+  ): Record<string, string | null> {
+    const nextState = { ...previousState };
+
+    for (const detail of details) {
+      nextState[detail.fieldPath] = detail.afterValue ?? null;
+    }
+
+    return nextState;
+  }
+
+  private computeCheckpointRootHash(
+    reports: ChainVerificationReport[],
+  ): string {
+    return sha256Hex(
+      canonicalStringify(
+        reports.map((report) => ({
+          noticeNum: report.noticeNum,
+          eventCount: report.eventCount,
+          latestEventHash: report.latestEventHash,
+          issueCount: report.issues.length,
+        })),
+      ),
+    );
   }
 
   private parseDiffSummary(

@@ -20,14 +20,16 @@ describe('ChangeTrackingService (diffchain batching)', () => {
 
     const changeEventRepository = {} as any;
     const changeDetailRepository = {} as any;
+    const deliveryLogRepository = {} as any;
 
     const service = new ChangeTrackingService(
       changeEventRepository,
       changeDetailRepository,
+      deliveryLogRepository,
       notificationBatchService as any,
     );
 
-    return { service, notificationBatchService };
+    return { service, notificationBatchService, deliveryLogRepository };
   };
 
   beforeEach(() => {
@@ -144,6 +146,28 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     ).toHaveBeenCalledTimes(1);
   });
 
+  it('skips created events because regular notice notifications already cover them', async () => {
+    const { service, notificationBatchService } = createService();
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 5,
+        noticeNum: 4001,
+        eventType: 'created',
+        source: 'archive:upsert',
+        eventHash: 'hash-created',
+      } as any,
+      subject: '신규 법률안',
+      changedFields: ['subject'],
+    });
+
+    await jest.advanceTimersByTimeAsync(200);
+
+    expect(
+      notificationBatchService.processChangeNotificationBatch,
+    ).not.toHaveBeenCalled();
+  });
+
   it('retries atomic append on event-height unique conflicts', async () => {
     const inTxEventRepo = {
       findOne: jest
@@ -193,6 +217,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
 
     const service = new ChangeTrackingService(
       changeEventRepository,
+      {} as any,
       {} as any,
       undefined as any,
     );
@@ -289,6 +314,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const service = new ChangeTrackingService(
       changeEventRepository,
       {} as any,
+      {} as any,
       undefined as any,
     );
 
@@ -321,5 +347,226 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     expect(currentHeight).toBe(6);
     expect(changeEventRepository.manager.transaction).toHaveBeenCalledTimes(6);
     expect(inTxDetailRepo.save).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries when sqlite transaction start conflicts occur', async () => {
+    const inTxEventRepo = {
+      findOne: jest
+        .fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValue({ eventHeight: 7, eventHash: 'prev-hash' }),
+      create: jest.fn((payload: unknown) => payload),
+      save: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({
+        id: 1007,
+        noticeNum: 2219530,
+        eventHeight: 8,
+        eventHash: 'hash-sqlite-retry',
+      }),
+    };
+
+    const inTxDetailRepo = {
+      create: jest.fn((payload: unknown) => payload),
+      save: jest
+        .fn<(...args: any[]) => Promise<void>>()
+        .mockResolvedValue(undefined),
+    };
+
+    const manager = {
+      getRepository: jest.fn((entity: unknown) => {
+        if (entity === NoticeChangeEvent) return inTxEventRepo;
+        if (entity === NoticeChangeDetail) return inTxDetailRepo;
+        throw new Error('Unexpected repository requested in test');
+      }),
+    };
+
+    const sqliteTxStartError = Object.assign(
+      new Error(
+        'SQLITE_ERROR: cannot start a transaction within a transaction',
+      ),
+      {
+        code: 'SQLITE_ERROR',
+        driverError: {
+          code: 'SQLITE_ERROR',
+          message:
+            'SQLITE_ERROR: cannot start a transaction within a transaction',
+        },
+      },
+    );
+
+    const changeEventRepository = {
+      manager: {
+        transaction: jest
+          .fn<(fn: (manager: any) => Promise<any>) => Promise<any>>()
+          .mockRejectedValueOnce(sqliteTxStartError)
+          .mockImplementationOnce(async (fn) => fn(manager)),
+      },
+      findOne: jest.fn(),
+      create: jest.fn(),
+      save: jest.fn(),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      {} as any,
+      {} as any,
+      undefined as any,
+    );
+
+    const savedPromise = service.appendChangeEventWithDetails({
+      noticeNum: 2219530,
+      eventType: 'updated',
+      eventHash: 'hash-sqlite-retry',
+      changedFieldCount: 1,
+      details: [
+        {
+          fieldPath: 'subject',
+          changeType: 'modified',
+          beforeValue: 'old',
+          afterValue: 'new',
+        },
+      ],
+      maxRetries: 2,
+    });
+
+    await jest.advanceTimersByTimeAsync(20);
+    const saved = await savedPromise;
+
+    expect(saved).toMatchObject({ noticeNum: 2219530, eventHeight: 8 });
+    expect(changeEventRepository.manager.transaction).toHaveBeenCalledTimes(2);
+    expect(inTxEventRepo.save).toHaveBeenCalledTimes(1);
+    expect(inTxDetailRepo.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('reconstructs and validates a notice chain and computes a checkpoint hash', async () => {
+    const bootstrapService = new ChangeTrackingService(
+      {} as any,
+      {} as any,
+      {} as any,
+      undefined as any,
+      undefined as any,
+    );
+    const createdDetectedAt = new Date('2026-07-03T00:00:00.000Z');
+    const updatedDetectedAt = new Date('2026-07-03T01:00:00.000Z');
+    const createdSnapshot = {
+      num: '5001',
+      subject: '초기 법률안',
+      proposerCategory: null,
+      committee: null,
+      proposalReason: null,
+      billNumber: null,
+      proposer: null,
+      proposalDate: null,
+      contentCommittee: null,
+      referralDate: null,
+      noticePeriod: null,
+      proposalSession: null,
+      isDone: null,
+    };
+    const updatedSnapshot = {
+      ...createdSnapshot,
+      committee: '법제사법위원회',
+    };
+    const createdBuilt = bootstrapService.buildDiffEvent({
+      noticeNum: 5001,
+      beforeSnapshot: null,
+      afterSnapshot: createdSnapshot,
+      detectedAt: createdDetectedAt,
+      source: 'archive:upsert',
+    });
+    const updatedBuilt = bootstrapService.buildDiffEvent({
+      noticeNum: 5001,
+      beforeSnapshot: createdSnapshot,
+      afterSnapshot: updatedSnapshot,
+      detectedAt: updatedDetectedAt,
+      source: 'archive:updateSourceHtml',
+    });
+
+    const changeEventRepository = {
+      createQueryBuilder: jest.fn(() => ({
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn<(...args: any[]) => Promise<Array<{ noticeNum: number }>>>()
+          .mockResolvedValue([{ noticeNum: 5001 }]),
+      })),
+      find: jest
+        .fn<(...args: any[]) => Promise<any[]>>()
+        .mockResolvedValueOnce([
+          {
+            id: 11,
+            noticeNum: 5001,
+            detectedAt: createdDetectedAt,
+            eventType: 'created',
+            source: 'archive:upsert',
+            eventHeight: 1,
+            prevEventHash: null,
+            eventHash: createdBuilt.eventHash,
+            changedFieldCount: createdBuilt.diff.changedFieldCount,
+            diffSummaryJson: createdBuilt.diff.diffSummaryJson,
+            hashAlgo: 'sha256',
+            canonVersion: 1,
+          },
+          {
+            id: 12,
+            noticeNum: 5001,
+            detectedAt: updatedDetectedAt,
+            eventType: 'updated',
+            source: 'archive:updateSourceHtml',
+            eventHeight: 2,
+            prevEventHash: createdBuilt.eventHash,
+            eventHash: updatedBuilt.eventHash,
+            changedFieldCount: updatedBuilt.diff.changedFieldCount,
+            diffSummaryJson: updatedBuilt.diff.diffSummaryJson,
+            hashAlgo: 'sha256',
+            canonVersion: 1,
+          },
+        ]),
+    } as any;
+
+    const changeDetailRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        ...createdBuilt.diff.details.map((detail, index) => ({
+          id: 101 + index,
+          eventId: 11,
+          ...detail,
+        })),
+        ...updatedBuilt.diff.details.map((detail, index) => ({
+          id: 201 + index,
+          eventId: 12,
+          ...detail,
+        })),
+      ]),
+    } as any;
+
+    const deliveryLogRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        {
+          id: 301,
+          eventId: 12,
+          webhookId: 9,
+          deliveredAt: new Date('2026-07-03T01:01:00.000Z'),
+          status: 'delivered',
+          payloadHash:
+            '1f37d0428b37fca84e2be5938d3f7cb3f5f76d0c4186330becaf2f35d8155c45',
+          responseCode: null,
+          errorMessage: null,
+        },
+      ]),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      changeDetailRepository,
+      deliveryLogRepository,
+      undefined as any,
+      undefined as any,
+    );
+
+    const report = await service.runScheduledChainAudit('daily');
+
+    expect(report.failureCount).toBe(0);
+    expect(report.noticeCount).toBe(1);
+    expect(report.eventCount).toBe(2);
+    expect(report.checkpointRootHash).toHaveLength(64);
+    expect(changeEventRepository.createQueryBuilder).toHaveBeenCalled();
   });
 });

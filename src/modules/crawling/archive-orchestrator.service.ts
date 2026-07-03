@@ -120,7 +120,8 @@ export class ArchiveOrchestratorService
         { count: notices.length },
       );
 
-      const concurrency = 5;
+      const concurrency =
+        this.noticeArchiveService.getRecommendedWriteConcurrency?.(5) ?? 5;
       let savedCount = 0;
       const archivedNotices: CachedNotice[] = [];
 

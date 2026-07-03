@@ -26,6 +26,8 @@ import {
 import { mapConcurrently } from '../../utils/concurrency.utils';
 import { NoticeArchiveArtifactSupport } from './utils/notice-archive-artifact-support';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
+import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
+import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 
 export interface ArchiveListQuery {
   page: number;
@@ -158,10 +160,27 @@ export class NoticeArchiveService {
     private readonly archiveRepository: Repository<NoticeArchive>,
     @Optional()
     private readonly changeTrackingService?: ChangeTrackingService,
+    @Optional() private readonly discordBridge?: DiscordBridgeService,
   ) {
     this.artifactSupport = new NoticeArchiveArtifactSupport(
       this.archiveRepository,
     );
+  }
+
+  getRecommendedWriteConcurrency(defaultConcurrency: number): number {
+    return this.isSqliteDriver() ? 1 : defaultConcurrency;
+  }
+
+  private isSqliteDriver(): boolean {
+    const manager = this.archiveRepository.manager as {
+      connection?: { options?: { type?: unknown } };
+      dataSource?: { options?: { type?: unknown } };
+    };
+    const rawType =
+      manager.connection?.options?.type ?? manager.dataSource?.options?.type;
+    const type = String(rawType ?? '').toLowerCase();
+
+    return type === 'sqlite' || type === 'better-sqlite3' || type === 'sqljs';
   }
 
   async upsertNoticeArchive(
@@ -543,23 +562,21 @@ export class NoticeArchiveService {
     }
 
     try {
-      // Export path uses a generous cap to include full trace for most notices.
-      const timeline = await this.changeTrackingService.getNoticeChangeTimeline(
-        {
-          noticeNum,
-          limit: 1000,
-        },
-      );
-
       return {
-        exportedAt: new Date().toISOString(),
-        noticeNum,
-        eventCount: timeline.length,
-        events: timeline,
+        ...(await this.changeTrackingService.getChangeTrackingExportData(
+          noticeNum,
+          1000,
+        )),
       };
     } catch (error) {
       this.logger.warn(
         `Failed to collect change-tracking export data for notice ${noticeNum}: ${(error as Error).message}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        NoticeArchiveService.name,
+        `Failed to collect change-tracking export data for notice ${noticeNum}: ${(error as Error).message}`,
+        { noticeNum },
       );
       return {
         exportedAt: new Date().toISOString(),
@@ -1010,10 +1027,22 @@ export class NoticeArchiveService {
           this.logger.warn(
             `Failed to dispatch change notification for event ${event.id}: ${(dispatchError as Error).message}`,
           );
+          void this.discordBridge?.logEvent(
+            BridgeLogLevel.WARN,
+            NoticeArchiveService.name,
+            `Failed to dispatch change notification for event ${event.id}: ${(dispatchError as Error).message}`,
+            { eventId: event.id, noticeNum },
+          );
         });
     } catch (error) {
       this.logger.warn(
         `Failed to append change event for notice ${noticeNum} (${source}): ${(error as Error).message}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        NoticeArchiveService.name,
+        `Failed to append change event for notice ${noticeNum} (${source}): ${(error as Error).message}`,
+        { noticeNum, source },
       );
       throw error;
     }

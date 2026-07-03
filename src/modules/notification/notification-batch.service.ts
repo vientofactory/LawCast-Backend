@@ -1,4 +1,6 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { WebhookService } from '../webhook/webhook.service';
 import {
   NotificationService,
@@ -13,6 +15,10 @@ import {
 } from '../shared/batch-processing.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
+import {
+  NotificationDeliveryLog,
+  type NotificationDeliveryStatus,
+} from '../change-tracking/notification-delivery-log.entity';
 
 interface NotificationJobResult {
   notice: string;
@@ -41,6 +47,8 @@ export class NotificationBatchService {
     private webhookService: WebhookService,
     private notificationService: NotificationService,
     private batchProcessingService: BatchProcessingService,
+    @InjectRepository(NotificationDeliveryLog)
+    private readonly deliveryLogRepository: Repository<NotificationDeliveryLog>,
     @Optional() private discordBridge: DiscordBridgeService,
   ) {}
 
@@ -306,20 +314,27 @@ export class NotificationBatchService {
     }
 
     const jobs = payloads.map((payload) => async (abortSignal: AbortSignal) => {
-      const { successCount, failedCount, deactivated, temporaryFailures } =
-        await this.dispatchToWebhooks(
-          activeWebhooks,
-          (webhooks) =>
-            this.notificationService.sendDiscordChangeNotificationBatch(
-              payload,
-              webhooks,
-              abortSignal,
-            ),
-          {
-            itemLabel: `${payload.noticeNum}:${payload.subject}`,
-            itemType: 'change',
-          },
-        );
+      const {
+        successCount,
+        failedCount,
+        deactivated,
+        temporaryFailures,
+        results,
+      } = await this.dispatchToWebhooks(
+        activeWebhooks,
+        (webhooks) =>
+          this.notificationService.sendDiscordChangeNotificationBatch(
+            payload,
+            webhooks,
+            abortSignal,
+          ),
+        {
+          itemLabel: `${payload.noticeNum}:${payload.subject}`,
+          itemType: 'change',
+        },
+      );
+
+      await this.persistChangeNotificationDeliveryLogs(payload, results);
 
       return {
         noticeNum: payload.noticeNum,
@@ -356,6 +371,12 @@ export class NotificationBatchService {
     failedCount: number;
     deactivated: number;
     temporaryFailures: number;
+    results: Array<{
+      webhookId: number;
+      success: boolean;
+      error?: unknown;
+      shouldDelete?: boolean;
+    }>;
   }> {
     if (webhooks.length === 0) {
       LoggerUtils.logDev(
@@ -368,6 +389,7 @@ export class NotificationBatchService {
         failedCount: 0,
         deactivated: 0,
         temporaryFailures: 0,
+        results: [],
       };
     }
 
@@ -428,6 +450,47 @@ export class NotificationBatchService {
       failedCount: permanentFailures.length + temporaryFailures.length,
       deactivated: permanentFailures.length,
       temporaryFailures: temporaryFailures.length,
+      results,
     };
+  }
+
+  private async persistChangeNotificationDeliveryLogs(
+    payload: ChangeNotificationPayload,
+    results: Array<{
+      webhookId: number;
+      success: boolean;
+      error?: unknown;
+      shouldDelete?: boolean;
+    }>,
+  ): Promise<void> {
+    if (!payload.eventId || !payload.payloadHash || results.length === 0) {
+      return;
+    }
+
+    const deliveredAt = new Date();
+    const rows = results.map((result) => {
+      const status: NotificationDeliveryStatus = result.success
+        ? 'delivered'
+        : result.shouldDelete
+          ? 'deactivated'
+          : 'failed';
+      const errorMeta = result.error as
+        | { message?: string; response?: { status?: number } }
+        | undefined;
+
+      return this.deliveryLogRepository.create({
+        eventId: payload.eventId,
+        webhookId: result.webhookId,
+        deliveredAt,
+        status,
+        payloadHash: payload.payloadHash,
+        responseCode: errorMeta?.response?.status ?? null,
+        errorMessage: result.success
+          ? null
+          : (errorMeta?.message ?? 'unknown error'),
+      });
+    });
+
+    await this.deliveryLogRepository.save(rows);
   }
 }

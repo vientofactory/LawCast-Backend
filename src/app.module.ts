@@ -9,6 +9,7 @@ import { Webhook } from './modules/webhook/webhook.entity';
 import { NoticeArchive } from './modules/notice/notice-archive.entity';
 import { NoticeChangeEvent } from './modules/change-tracking/notice-change-event.entity';
 import { NoticeChangeDetail } from './modules/change-tracking/notice-change-detail.entity';
+import { NotificationDeliveryLog } from './modules/change-tracking/notification-delivery-log.entity';
 import { migrations } from './migrations';
 import appConfig from './config/app.config';
 // Feature modules
@@ -61,6 +62,7 @@ import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.
           NoticeArchive,
           NoticeChangeEvent,
           NoticeChangeDetail,
+          NotificationDeliveryLog,
         ],
         synchronize: false,
         migrationsRun: false,
