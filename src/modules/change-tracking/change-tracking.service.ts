@@ -159,6 +159,7 @@ export interface ChangeChainAuditReport {
 export class ChangeTrackingService {
   private readonly logger = new Logger(ChangeTrackingService.name);
   private readonly APPEND_EVENT_MAX_RETRIES = 3;
+  private readonly NOTIFICATION_SUPPRESSED_SOURCE_PREFIXES = ['bootstrap:'];
   private readonly queuedChangeNotifications: ChangeNotificationPayload[] = [];
   private flushTimer: NodeJS.Timeout | null = null;
   private isFlushingQueuedNotifications = false;
@@ -181,6 +182,25 @@ export class ChangeTrackingService {
       where: { noticeNum },
       order: { eventHeight: 'DESC' },
     });
+  }
+
+  async getNoticeNumsWithAnyEvent(noticeNums: number[]): Promise<Set<number>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+    if (uniqueNums.length === 0) {
+      return new Set<number>();
+    }
+
+    const rows = await this.changeEventRepository
+      .createQueryBuilder('event')
+      .select('DISTINCT event.notice_num', 'noticeNum')
+      .where('event.notice_num IN (:...noticeNums)', { noticeNums: uniqueNums })
+      .getRawMany<{ noticeNum: number | string }>();
+
+    return new Set(
+      rows
+        .map((row) => Number.parseInt(String(row.noticeNum), 10))
+        .filter((value) => Number.isInteger(value) && value > 0),
+    );
   }
 
   /**
@@ -553,6 +573,24 @@ export class ChangeTrackingService {
           noticeNum: input.event.noticeNum,
           eventHash: input.event.eventHash,
         },
+      );
+      return;
+    }
+
+    const normalizedSource = (input.event.source ?? '').toLowerCase();
+    if (
+      normalizedSource.length > 0 &&
+      this.NOTIFICATION_SUPPRESSED_SOURCE_PREFIXES.some((prefix) =>
+        normalizedSource.startsWith(prefix),
+      )
+    ) {
+      this.logger.debug(
+        `Skipping change notification for notice ${input.event.noticeNum} because source is notification-suppressed (${input.event.source})`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.DEBUG,
+        ChangeTrackingService.name,
+        `Skipped change notification for source-suppressed event (notice=${input.event.noticeNum}, source=${input.event.source})`,
       );
       return;
     }

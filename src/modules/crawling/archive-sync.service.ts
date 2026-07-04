@@ -16,6 +16,7 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { mapConcurrently } from '../../utils/concurrency.utils';
 import { type CachedNotice } from '../../types/cache.types';
 import { AI_SUMMARY_STATUS } from './utils/ai-summary-status.utils';
+import { type LegacyGenesisSeedResult } from '../notice/notice-archive.service';
 import {
   ArchiveSyncPhaseRunner,
   type ArchiveSyncPhaseState,
@@ -114,6 +115,7 @@ export type HtmlBackfillStatus = PhaseStatus<HtmlBackfillResult>;
 export type SummaryUnavailableRetryStatus =
   PhaseStatus<SummaryUnavailableRetryResult>;
 export type PendingSyncStatus = PhaseStatus<PendingSyncResult>;
+export type LegacyGenesisSeedStatus = PhaseStatus<LegacyGenesisSeedResult>;
 
 export interface ArchiveSyncExecutionState {
   isAnyPhaseRunning: boolean;
@@ -162,6 +164,8 @@ export class ArchiveSyncService implements OnModuleInit {
   private readonly unavailableRetry =
     makePhaseTracker<SummaryUnavailableRetryResult>();
   private readonly pendingSync = makePhaseTracker<PendingSyncResult>();
+  private readonly legacyGenesisSeed =
+    makePhaseTracker<LegacyGenesisSeedResult>();
 
   constructor(
     private readonly crawlingCoreService: CrawlingCoreService,
@@ -195,10 +199,14 @@ export class ArchiveSyncService implements OnModuleInit {
       ArchiveSyncService.name,
       'Bootstrap sync pipeline started',
     );
+    const bootstrapBoundaryAt = new Date();
 
     // Pending sync runs first so that "발의" state bills are archived before
     // the pal.assembly.go.kr full sync, enabling the earliest possible detection.
     await this.safeRun('pending sync', () => this.runPendingSync('bootstrap'));
+    await this.safeRun('legacy genesis seed', () =>
+      this.runLegacyGenesisSeed('bootstrap', bootstrapBoundaryAt),
+    );
     await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
 
     // HTML backfill runs before summary backfill so that NSM bills gain their
@@ -331,7 +339,27 @@ export class ArchiveSyncService implements OnModuleInit {
       { name: 'html backfill', tracker: this.htmlBackfill },
       { name: 'unavailable retry', tracker: this.unavailableRetry },
       { name: 'pending sync', tracker: this.pendingSync },
+      { name: 'legacy genesis seed', tracker: this.legacyGenesisSeed },
     ];
+  }
+
+  async runLegacyGenesisSeed(
+    trigger: string,
+    boundaryAt = new Date(),
+  ): Promise<LegacyGenesisSeedResult | null> {
+    return this.runPhase(
+      'Legacy genesis seed',
+      this.legacyGenesisSeed,
+      trigger,
+      () => this.noticeArchiveService.seedLegacyGenesisEvents(boundaryAt),
+      (r) =>
+        `boundary=${r.boundaryAt} scanned=${r.scanned} seeded=${r.seeded} skipped=${r.skipped}`,
+      /* crossPhaseGuard */ true,
+    );
+  }
+
+  getLegacyGenesisSeedStatus(): LegacyGenesisSeedStatus {
+    return this.toStatus(this.legacyGenesisSeed);
   }
 
   // ─────────────────────────────────────────────────────────────────────────

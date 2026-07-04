@@ -166,6 +166,28 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     ).not.toHaveBeenCalled();
   });
 
+  it('skips bootstrap source events to prevent notifications during genesis seeding', async () => {
+    const { service, notificationBatchService } = createService();
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 6,
+        noticeNum: 5001,
+        eventType: 'updated',
+        source: 'bootstrap:legacy-seed',
+        eventHash: 'hash-bootstrap-suppressed',
+      } as any,
+      subject: '레거시 제네시스 시딩 대상',
+      changedFields: ['subject'],
+    });
+
+    await jest.advanceTimersByTimeAsync(200);
+
+    expect(
+      notificationBatchService.processChangeNotificationBatch,
+    ).not.toHaveBeenCalled();
+  });
+
   it('retries atomic append on event-height unique conflicts', async () => {
     const inTxEventRepo = {
       findOne: jest

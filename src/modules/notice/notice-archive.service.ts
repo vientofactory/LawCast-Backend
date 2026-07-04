@@ -181,6 +181,15 @@ type TrackedArchiveRow = Pick<
   | 'sourceDeletedAt'
 >;
 
+export interface LegacyGenesisSeedResult {
+  boundaryAt: string;
+  scanned: number;
+  seeded: number;
+  skipped: number;
+}
+
+export const LEGACY_GENESIS_SOURCE = 'bootstrap:legacy-seed';
+
 @Injectable()
 export class NoticeArchiveService {
   private readonly logger = new Logger(NoticeArchiveService.name);
@@ -217,6 +226,134 @@ export class NoticeArchiveService {
   private normalizeStableId(value: string | null | undefined): string | null {
     const normalized = value?.trim();
     return normalized && normalized.length > 0 ? normalized : null;
+  }
+
+  async seedLegacyGenesisEvents(
+    boundaryAt: Date,
+    batchSize = 300,
+  ): Promise<LegacyGenesisSeedResult> {
+    if (!this.changeTrackingService) {
+      return {
+        boundaryAt: boundaryAt.toISOString(),
+        scanned: 0,
+        seeded: 0,
+        skipped: 0,
+      };
+    }
+
+    const take = Math.max(1, Math.min(batchSize, 2000));
+    let skip = 0;
+    let scanned = 0;
+    let seeded = 0;
+    let skipped = 0;
+
+    while (true) {
+      const rows = await this.getGenesisCandidateRows(skip, take);
+      if (rows.length === 0) {
+        break;
+      }
+
+      scanned += rows.length;
+
+      const existingEventNoticeNums =
+        await this.changeTrackingService.getNoticeNumsWithAnyEvent(
+          rows.map((row) => row.noticeNum),
+        );
+
+      for (const row of rows) {
+        if (existingEventNoticeNums.has(row.noticeNum)) {
+          skipped += 1;
+          continue;
+        }
+
+        const afterSnapshot = this.buildTrackedSnapshot(row);
+        if (!afterSnapshot) {
+          skipped += 1;
+          continue;
+        }
+
+        const diff = computeDiff(null, afterSnapshot);
+
+        const eventHash = sha256Hex(
+          canonicalStringify({
+            noticeNum: row.noticeNum,
+            detectedAt: boundaryAt.toISOString(),
+            eventType: 'created',
+            source: LEGACY_GENESIS_SOURCE,
+            hashAlgo: 'sha256',
+            canonVersion: 1,
+            before: diff.normalizedBefore,
+            after: diff.normalizedAfter,
+            details: diff.details,
+          }),
+        );
+
+        const event =
+          await this.changeTrackingService.appendChangeEventWithDetails({
+            noticeNum: row.noticeNum,
+            eventType: 'created',
+            eventHash,
+            detectedAt: boundaryAt,
+            source: LEGACY_GENESIS_SOURCE,
+            changedFieldCount: diff.changedFieldCount,
+            diffSummaryJson: diff.diffSummaryJson,
+            hashAlgo: 'sha256',
+            canonVersion: 1,
+            details: diff.details.map((detail) => ({
+              fieldPath: detail.fieldPath,
+              changeType: detail.changeType,
+              beforeValue: detail.beforeValue,
+              afterValue: detail.afterValue,
+              beforeHash: detail.beforeHash,
+              afterHash: detail.afterHash,
+            })),
+          });
+
+        if (!event?.id) {
+          skipped += 1;
+          continue;
+        }
+
+        seeded += 1;
+      }
+
+      skip += rows.length;
+    }
+
+    return {
+      boundaryAt: boundaryAt.toISOString(),
+      scanned,
+      seeded,
+      skipped,
+    };
+  }
+
+  private async getGenesisCandidateRows(
+    skip: number,
+    take: number,
+  ): Promise<TrackedArchiveRow[]> {
+    return this.archiveRepository.find({
+      select: {
+        noticeNum: true,
+        subject: true,
+        proposerCategory: true,
+        committee: true,
+        proposalReason: true,
+        contentBillNumber: true,
+        contentProposer: true,
+        contentProposalDate: true,
+        contentCommittee: true,
+        contentReferralDate: true,
+        contentNoticePeriod: true,
+        contentProposalSession: true,
+        isDone: true,
+        lifecycleStatus: true,
+        sourceDeletedAt: true,
+      },
+      order: { noticeNum: 'ASC' },
+      skip,
+      take,
+    });
   }
 
   async upsertNoticeArchive(

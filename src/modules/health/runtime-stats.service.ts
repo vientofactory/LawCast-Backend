@@ -84,6 +84,8 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
       archive: {
         count: archiveCount,
         isDoneSync: archiveSyncService?.getIsDoneSyncStatus() ?? null,
+        legacyGenesisSeed:
+          archiveSyncService?.getLegacyGenesisSeedStatus() ?? null,
       },
       batchProcessing: batchStatus,
       ollama: isProduction

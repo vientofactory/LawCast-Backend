@@ -35,7 +35,10 @@ import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
 import { type ChangeEventType } from '../modules/change-tracking/notice-change-event.entity';
-import { type ArchiveDetailResult } from '../modules/notice/notice-archive.service';
+import {
+  LEGACY_GENESIS_SOURCE,
+  type ArchiveDetailResult,
+} from '../modules/notice/notice-archive.service';
 
 @Controller('api')
 export class ApiController {
@@ -227,6 +230,9 @@ export class ApiController {
       eventsAsc,
       resolvedRev,
     );
+    const legacyGenesisEvent = eventsAsc.find(
+      (event) => event.source === LEGACY_GENESIS_SOURCE,
+    );
 
     return ApiResponseUtils.success({
       ...detailWithRevision,
@@ -239,6 +245,8 @@ export class ApiController {
         hasDiffchain: headRev !== null,
         isHistorical:
           resolvedRev !== null && headRev !== null && resolvedRev < headRev,
+        hasLegacyGenesisBoundary: Boolean(legacyGenesisEvent),
+        legacyGenesisBoundaryAt: legacyGenesisEvent?.detectedAt ?? null,
       },
     });
   }
