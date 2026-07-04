@@ -188,6 +188,32 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     ).not.toHaveBeenCalled();
   });
 
+  it('suppresses all change notifications while bootstrap suppression is active', async () => {
+    const { service, notificationBatchService } = createService();
+
+    service.beginChangeNotificationSuppression();
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 7,
+        noticeNum: 5002,
+        eventType: 'updated',
+        source: 'archive:upsert',
+        eventHash: 'hash-bootstrap-blocked',
+      } as any,
+      subject: '부트스트랩 전체 차단 테스트',
+      changedFields: ['committee'],
+    });
+
+    await jest.advanceTimersByTimeAsync(200);
+
+    expect(
+      notificationBatchService.processChangeNotificationBatch,
+    ).not.toHaveBeenCalled();
+
+    service.endChangeNotificationSuppression();
+  });
+
   it('retries atomic append on event-height unique conflicts', async () => {
     const inTxEventRepo = {
       findOne: jest

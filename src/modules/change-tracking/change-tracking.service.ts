@@ -20,6 +20,7 @@ import { type ChangeNotificationPayload } from '../notification/notification.ser
 import { NotificationBatchService } from '../notification/notification-batch.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
+import { LoggerUtils } from '../../utils/logger.utils';
 
 interface AppendChangeEventInput {
   noticeNum: number;
@@ -164,6 +165,7 @@ export class ChangeTrackingService {
   private flushTimer: NodeJS.Timeout | null = null;
   private isFlushingQueuedNotifications = false;
   private notificationCollectionDepth = 0;
+  private notificationSuppressionDepth = 0;
 
   constructor(
     @InjectRepository(NoticeChangeEvent)
@@ -228,7 +230,8 @@ export class ChangeTrackingService {
     });
 
     const saved = await this.changeEventRepository.save(event);
-    this.logger.debug(
+    LoggerUtils.debugDev(
+      ChangeTrackingService.name,
       `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
     );
     void this.discordBridge?.logEvent(
@@ -285,7 +288,8 @@ export class ChangeTrackingService {
             this.appendEventAndDetailsInTransaction(manager, input, details),
         );
 
-        this.logger.debug(
+        LoggerUtils.debugDev(
+          ChangeTrackingService.name,
           `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
         );
         void this.discordBridge?.logEvent(
@@ -561,8 +565,17 @@ export class ChangeTrackingService {
       return;
     }
 
+    if (this.isSuppressingChangeNotifications()) {
+      LoggerUtils.debugDev(
+        ChangeTrackingService.name,
+        `Skipping change notification for notice ${input.event.noticeNum} because change notifications are suppressed`,
+      );
+      return;
+    }
+
     if (input.event.eventType === 'created') {
-      this.logger.debug(
+      LoggerUtils.debugDev(
+        ChangeTrackingService.name,
         `Skipping change notification for created notice ${input.event.noticeNum} because the regular notice notification already covers it`,
       );
       void this.discordBridge?.logEvent(
@@ -584,7 +597,8 @@ export class ChangeTrackingService {
         normalizedSource.startsWith(prefix),
       )
     ) {
-      this.logger.debug(
+      LoggerUtils.debugDev(
+        ChangeTrackingService.name,
         `Skipping change notification for notice ${input.event.noticeNum} because source is notification-suppressed (${input.event.source})`,
       );
       void this.discordBridge?.logEvent(
@@ -632,6 +646,18 @@ export class ChangeTrackingService {
     }
   }
 
+  beginChangeNotificationSuppression(): void {
+    this.notificationSuppressionDepth += 1;
+  }
+
+  endChangeNotificationSuppression(): void {
+    if (this.notificationSuppressionDepth === 0) {
+      return;
+    }
+
+    this.notificationSuppressionDepth -= 1;
+  }
+
   async flushQueuedChangeNotificationsNow(): Promise<void> {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
@@ -660,7 +686,8 @@ export class ChangeTrackingService {
     if (
       !this.notificationBatchService ||
       this.isFlushingQueuedNotifications ||
-      this.queuedChangeNotifications.length === 0
+      this.queuedChangeNotifications.length === 0 ||
+      this.isCollectingChangeNotifications()
     ) {
       return;
     }
@@ -684,7 +711,8 @@ export class ChangeTrackingService {
           },
         );
 
-      this.logger.debug(
+      LoggerUtils.debugDev(
+        ChangeTrackingService.name,
         `Change notification batch dispatched for ${payloads.length} event(s), job=${batchJobId}`,
       );
       void this.discordBridge?.logEvent(
@@ -721,6 +749,10 @@ export class ChangeTrackingService {
 
   private isCollectingChangeNotifications(): boolean {
     return this.notificationCollectionDepth > 0;
+  }
+
+  private isSuppressingChangeNotifications(): boolean {
+    return this.notificationSuppressionDepth > 0;
   }
 
   async getNoticeChangeTimeline(

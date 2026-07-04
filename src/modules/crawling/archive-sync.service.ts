@@ -201,47 +201,55 @@ export class ArchiveSyncService implements OnModuleInit {
     );
     const bootstrapBoundaryAt = new Date();
 
-    // Pending sync runs first so that "발의" state bills are archived before
-    // the pal.assembly.go.kr full sync, enabling the earliest possible detection.
-    await this.safeRun('pending sync', () => this.runPendingSync('bootstrap'));
-    await this.safeRun('legacy genesis seed', () =>
-      this.runLegacyGenesisSeed('bootstrap', bootstrapBoundaryAt),
-    );
-    await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
+    this.noticeArchiveService.beginChangeNotificationSuppression?.();
 
-    // HTML backfill runs before summary backfill so that NSM bills gain their
-    // proposalReason before Ollama tries to summarise them.
-    await this.safeRun('html backfill', () =>
-      this.runHtmlBackfill('bootstrap'),
-    );
+    try {
+      // Pending sync runs first so that "발의" state bills are archived before
+      // the pal.assembly.go.kr full sync, enabling the earliest possible detection.
+      await this.safeRun('pending sync', () =>
+        this.runPendingSync('bootstrap'),
+      );
+      await this.safeRun('legacy genesis seed', () =>
+        this.runLegacyGenesisSeed('bootstrap', bootstrapBoundaryAt),
+      );
+      await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
 
-    // Summary backfill and unavailable retry run immediately after the full
-    // archive is populated.  They are independent of isDone status and
-    // integrity metadata, so there is no reason to delay them until after the
-    // isDone crawl (which may scan thousands of pages and take minutes).
-    await this.safeRun('summary backfill', () =>
-      this.runSummaryBackfill('bootstrap'),
-    );
-    await this.safeRun('unavailable retry', () =>
-      this.runUnavailableRetry('bootstrap'),
-    );
+      // HTML backfill runs before summary backfill so that NSM bills gain their
+      // proposalReason before Ollama tries to summarise them.
+      await this.safeRun('html backfill', () =>
+        this.runHtmlBackfill('bootstrap'),
+      );
 
-    // isDone sync and integrity check update orthogonal columns (isDone,
-    // integrityVerifiedAt) and are not on the critical path for notifications.
-    await this.safeRun('isDone sync', () => this.runIsDoneSync('bootstrap'));
-    await this.safeRun('integrity check', () =>
-      this.runIntegrityCheck('bootstrap'),
-    );
+      // Summary backfill and unavailable retry run immediately after the full
+      // archive is populated.  They are independent of isDone status and
+      // integrity metadata, so there is no reason to delay them until after the
+      // isDone crawl (which may scan thousands of pages and take minutes).
+      await this.safeRun('summary backfill', () =>
+        this.runSummaryBackfill('bootstrap'),
+      );
+      await this.safeRun('unavailable retry', () =>
+        this.runUnavailableRetry('bootstrap'),
+      );
 
-    LoggerUtils.log(
-      ArchiveSyncService.name,
-      'Bootstrap sync pipeline complete',
-    );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      ArchiveSyncService.name,
-      'Bootstrap sync pipeline complete',
-    );
+      // isDone sync and integrity check update orthogonal columns (isDone,
+      // integrityVerifiedAt) and are not on the critical path for notifications.
+      await this.safeRun('isDone sync', () => this.runIsDoneSync('bootstrap'));
+      await this.safeRun('integrity check', () =>
+        this.runIntegrityCheck('bootstrap'),
+      );
+
+      LoggerUtils.log(
+        ArchiveSyncService.name,
+        'Bootstrap sync pipeline complete',
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.LOG,
+        ArchiveSyncService.name,
+        'Bootstrap sync pipeline complete',
+      );
+    } finally {
+      this.noticeArchiveService.endChangeNotificationSuppression?.();
+    }
   }
 
   /** Runs a named async operation, swallowing errors so the pipeline continues. */

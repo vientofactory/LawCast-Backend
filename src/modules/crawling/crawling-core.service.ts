@@ -397,7 +397,8 @@ export class CrawlingCoreService {
           if (!pageTitle.toLowerCase().includes('waitingroom')) break;
 
           waitingroomHits++;
-          this.logger.debug(
+          LoggerUtils.debugDev(
+            CrawlingCoreService.name,
             `NSM bill ${billNo}: Waitingroom hit (attempt ${
               attempt + 1
             }/${MAX_WAITINGROOM_RETRIES + 1}), waiting for redirect…`,
@@ -514,14 +515,16 @@ export class CrawlingCoreService {
 
       if (raw.length <= maxBytes) return raw;
 
-      this.logger.debug(
+      LoggerUtils.debugDev(
+        CrawlingCoreService.name,
         `NSM screenshot for bill ${billNo} is ${raw.length}B - attempting recompression`,
       );
 
       for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
         const recompressed = await sharp(raw).jpeg({ quality }).toBuffer();
         if (recompressed.length <= maxBytes) {
-          this.logger.debug(
+          LoggerUtils.debugDev(
+            CrawlingCoreService.name,
             `Recompressed NSM screenshot for bill ${billNo} to ${recompressed.length}B (quality=${quality})`,
           );
           return recompressed;
@@ -587,7 +590,8 @@ export class CrawlingCoreService {
       return raw;
     }
 
-    this.logger.debug(
+    LoggerUtils.debugDev(
+      CrawlingCoreService.name,
       `Screenshot for ${contentId} is ${raw.length} B - attempting recompression`,
     );
 
@@ -595,7 +599,8 @@ export class CrawlingCoreService {
     for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
       const recompressed = await recompress(raw, quality);
       if (recompressed) {
-        this.logger.debug(
+        LoggerUtils.debugDev(
+          CrawlingCoreService.name,
           `Recompressed screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
         );
         return recompressed;
@@ -603,14 +608,16 @@ export class CrawlingCoreService {
     }
 
     // ── Step 3: viewport-only (non-full-page) shot ───────────────────────
-    this.logger.debug(
+    LoggerUtils.debugDev(
+      CrawlingCoreService.name,
       `Full-page recompression exhausted for ${contentId} - retrying viewport-only`,
     );
 
     const viewport = await doCapture(false);
 
     if (viewport.length <= maxBytes) {
-      this.logger.debug(
+      LoggerUtils.debugDev(
+        CrawlingCoreService.name,
         `Viewport screenshot for ${contentId} fits: ${viewport.length} B`,
       );
       return viewport;
@@ -620,7 +627,8 @@ export class CrawlingCoreService {
     for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
       const recompressed = await recompress(viewport, quality);
       if (recompressed) {
-        this.logger.debug(
+        LoggerUtils.debugDev(
+          CrawlingCoreService.name,
           `Recompressed viewport screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
         );
         return recompressed;

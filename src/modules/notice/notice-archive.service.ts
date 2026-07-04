@@ -838,12 +838,20 @@ export class NoticeArchiveService {
     this.changeTrackingService?.beginChangeNotificationCollection();
   }
 
+  beginChangeNotificationSuppression(): void {
+    this.changeTrackingService?.beginChangeNotificationSuppression();
+  }
+
   async endChangeNotificationCollection(): Promise<void> {
     if (!this.changeTrackingService) {
       return;
     }
 
     await this.changeTrackingService.endChangeNotificationCollection();
+  }
+
+  endChangeNotificationSuppression(): void {
+    this.changeTrackingService?.endChangeNotificationSuppression();
   }
 
   private async buildChangeTrackingExportData(noticeNum: number): Promise<any> {
