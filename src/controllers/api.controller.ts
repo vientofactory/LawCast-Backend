@@ -217,7 +217,7 @@ export class ApiController {
 
     if (requestedRev !== null && (headRev === null || requestedRev > headRev)) {
       throw new BadRequestException(
-        `rev 파라미터가 유효하지 않습니다. 요청 rev=${requestedRev}, 최신 rev=${headRev ?? 0}`,
+        `요청하신 리비전이 유효하지 않습니다. requested_rev=${requestedRev}, head_rev=${headRev ?? 0}`,
       );
     }
 
