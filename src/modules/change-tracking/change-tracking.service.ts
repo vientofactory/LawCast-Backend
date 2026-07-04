@@ -85,6 +85,8 @@ interface RecentChangesQuery {
   page: number;
   limit: number;
   eventType?: ChangeEventType;
+  excludeLegacyGenesisSource?: boolean;
+  comparableOnly?: boolean;
 }
 
 export interface ChangeTimelineItem {
@@ -131,6 +133,11 @@ export interface RecentChangesResult {
   totalPages: number;
 }
 
+export interface ComparableChangeSummary {
+  comparableEventTotal: number;
+  comparableNoticeCount: number;
+}
+
 interface ChainVerificationIssue {
   noticeNum: number;
   eventId?: number;
@@ -160,6 +167,7 @@ export interface ChangeChainAuditReport {
 export class ChangeTrackingService {
   private readonly logger = new Logger(ChangeTrackingService.name);
   private readonly APPEND_EVENT_MAX_RETRIES = 3;
+  private readonly LEGACY_GENESIS_SOURCE = 'bootstrap:legacy-seed';
   private readonly NOTIFICATION_SUPPRESSED_SOURCE_PREFIXES = ['bootstrap:'];
   private readonly queuedChangeNotifications: ChangeNotificationPayload[] = [];
   private flushTimer: NodeJS.Timeout | null = null;
@@ -203,6 +211,62 @@ export class ChangeTrackingService {
         .map((row) => Number.parseInt(String(row.noticeNum), 10))
         .filter((value) => Number.isInteger(value) && value > 0),
     );
+  }
+
+  async getChangeEventCountsByNoticeNums(
+    noticeNums: number[],
+  ): Promise<Map<number, number>> {
+    const uniqueNums = Array.from(
+      new Set(
+        noticeNums.filter((value) => Number.isInteger(value) && value > 0),
+      ),
+    );
+    if (uniqueNums.length === 0) {
+      return new Map<number, number>();
+    }
+
+    const rows = await this.changeEventRepository
+      .createQueryBuilder('event')
+      .select('event.notice_num', 'noticeNum')
+      .addSelect('COUNT(*)', 'eventCount')
+      .addSelect(
+        `SUM(CASE WHEN event.source = :legacyGenesisSource THEN 1 ELSE 0 END)`,
+        'legacyGenesisCount',
+      )
+      .where('event.notice_num IN (:...noticeNums)', { noticeNums: uniqueNums })
+      .groupBy('event.notice_num')
+      .having(
+        `NOT (COUNT(*) = 1 AND SUM(CASE WHEN event.source = :legacyGenesisSource THEN 1 ELSE 0 END) = 1)`,
+      )
+      .setParameter('legacyGenesisSource', this.LEGACY_GENESIS_SOURCE)
+      .getRawMany<{
+        noticeNum: number | string;
+        eventCount: number | string;
+        legacyGenesisCount: number | string;
+      }>();
+
+    const countMap = new Map<number, number>();
+    for (const row of rows) {
+      const noticeNum = Number.parseInt(String(row.noticeNum), 10);
+      const eventCount = Number.parseInt(String(row.eventCount), 10);
+      const legacyGenesisCount = Number.parseInt(
+        String(row.legacyGenesisCount),
+        10,
+      );
+
+      if (
+        Number.isInteger(noticeNum) &&
+        noticeNum > 0 &&
+        Number.isInteger(eventCount) &&
+        eventCount >= 0 &&
+        Number.isInteger(legacyGenesisCount) &&
+        legacyGenesisCount >= 0
+      ) {
+        countMap.set(noticeNum, eventCount);
+      }
+    }
+
+    return countMap;
   }
 
   /**
@@ -817,14 +881,41 @@ export class ChangeTrackingService {
   ): Promise<RecentChangesResult> {
     const page = Math.max(query.page, 1);
     const limit = Math.min(Math.max(query.limit, 1), 100);
-    const where = query.eventType ? { eventType: query.eventType } : {};
+    const builder = this.changeEventRepository
+      .createQueryBuilder('event')
+      .orderBy('event.detectedAt', 'DESC')
+      .addOrderBy('event.id', 'DESC');
 
-    const [items, total] = await this.changeEventRepository.findAndCount({
-      where,
-      order: { detectedAt: 'DESC', id: 'DESC' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    if (query.eventType) {
+      builder.andWhere('event.eventType = :eventType', {
+        eventType: query.eventType,
+      });
+    }
+
+    if (query.excludeLegacyGenesisSource) {
+      builder.andWhere(
+        '(event.source IS NULL OR event.source != :legacyGenesisSource)',
+      );
+      builder.setParameter('legacyGenesisSource', this.LEGACY_GENESIS_SOURCE);
+    }
+
+    if (query.comparableOnly) {
+      const comparableNoticeSubQuery = this.changeEventRepository
+        .createQueryBuilder('ce')
+        .select('ce.noticeNum')
+        .groupBy('ce.noticeNum')
+        .having(
+          '(COUNT(*) - SUM(CASE WHEN ce.source = :legacyGenesisSource THEN 1 ELSE 0 END)) >= 2',
+        );
+
+      builder
+        .andWhere(`event.noticeNum IN (${comparableNoticeSubQuery.getQuery()})`)
+        .setParameter('legacyGenesisSource', this.LEGACY_GENESIS_SOURCE);
+    }
+
+    builder.skip((page - 1) * limit).take(limit);
+
+    const [items, total] = await builder.getManyAndCount();
 
     return {
       items: items.map((item) => ({
@@ -842,6 +933,39 @@ export class ChangeTrackingService {
       limit,
       total,
       totalPages: total > 0 ? Math.ceil(total / limit) : 1,
+    };
+  }
+
+  async getComparableChangeSummary(): Promise<ComparableChangeSummary> {
+    const rows = await this.changeEventRepository
+      .createQueryBuilder('event')
+      .select('event.notice_num', 'noticeNum')
+      .addSelect(
+        '(COUNT(*) - SUM(CASE WHEN event.source = :legacyGenesisSource THEN 1 ELSE 0 END))',
+        'comparableEventCount',
+      )
+      .groupBy('event.notice_num')
+      .having(
+        '(COUNT(*) - SUM(CASE WHEN event.source = :legacyGenesisSource THEN 1 ELSE 0 END)) >= 2',
+      )
+      .setParameter('legacyGenesisSource', this.LEGACY_GENESIS_SOURCE)
+      .getRawMany<{
+        noticeNum: number | string;
+        comparableEventCount: number | string;
+      }>();
+
+    const comparableEventTotal = rows.reduce((sum, row) => {
+      const value = Number.parseInt(String(row.comparableEventCount), 10);
+      if (!Number.isInteger(value) || value <= 0) {
+        return sum;
+      }
+
+      return sum + value;
+    }, 0);
+
+    return {
+      comparableEventTotal,
+      comparableNoticeCount: rows.length,
     };
   }
 

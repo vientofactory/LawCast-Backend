@@ -89,6 +89,7 @@ export interface ArchiveNoticeItem {
   };
   lifecycleStatus: NoticeLifecycleStatus;
   sourceDeletedAt: Date | null;
+  changeEventCount?: number;
   archiveStartedAt: Date;
   lastUpdatedAt: Date;
 }
@@ -540,72 +541,84 @@ export class NoticeArchiveService {
   async markSourceDeletedByMissingPalNums(
     seenPalActiveNums: Set<number>,
   ): Promise<number> {
-    const candidates = await this.archiveRepository.find({
-      where: {
-        contentId: Not(IsNull()),
-        isDone: false,
-        lifecycleStatus: Not('source_deleted'),
-      },
-      select: {
-        noticeNum: true,
-        subject: true,
-        proposerCategory: true,
-        committee: true,
-        proposalReason: true,
-        contentBillNumber: true,
-        contentProposer: true,
-        contentProposalDate: true,
-        contentCommittee: true,
-        contentReferralDate: true,
-        contentNoticePeriod: true,
-        contentProposalSession: true,
-        isDone: true,
-        lifecycleStatus: true,
-        sourceDeletedAt: true,
-      },
-    });
-
-    const missing = candidates.filter(
-      (row) => !seenPalActiveNums.has(row.noticeNum),
-    );
-
-    if (missing.length === 0) {
-      return 0;
-    }
-
+    const batchSize = 500;
+    let lastNoticeNum = 0;
+    let markedCount = 0;
     const markedAt = new Date();
 
-    for (const row of missing) {
-      await this.archiveRepository.update(
-        { noticeNum: row.noticeNum },
-        {
-          lifecycleStatus: 'source_deleted',
-          sourceDeletedAt: markedAt,
+    while (true) {
+      const candidates = await this.archiveRepository.find({
+        where: {
+          contentId: Not(IsNull()),
+          isDone: false,
+          lifecycleStatus: Not('source_deleted'),
+          noticeNum: MoreThan(lastNoticeNum),
         },
-      );
+        select: {
+          noticeNum: true,
+          subject: true,
+          proposerCategory: true,
+          committee: true,
+          proposalReason: true,
+          contentBillNumber: true,
+          contentProposer: true,
+          contentProposalDate: true,
+          contentCommittee: true,
+          contentReferralDate: true,
+          contentNoticePeriod: true,
+          contentProposalSession: true,
+          isDone: true,
+          lifecycleStatus: true,
+          sourceDeletedAt: true,
+        },
+        order: { noticeNum: 'ASC' },
+        take: batchSize,
+      });
 
-      const beforeSnapshot = this.buildTrackedSnapshot(row);
-      const afterSnapshot = beforeSnapshot
-        ? {
-            ...beforeSnapshot,
+      if (candidates.length === 0) {
+        break;
+      }
+
+      for (const row of candidates) {
+        lastNoticeNum = row.noticeNum;
+
+        if (seenPalActiveNums.has(row.noticeNum)) {
+          continue;
+        }
+
+        await this.archiveRepository.update(
+          { noticeNum: row.noticeNum },
+          {
             lifecycleStatus: 'source_deleted',
-            sourceDeletedAt: markedAt.toISOString(),
-          }
-        : null;
+            sourceDeletedAt: markedAt,
+          },
+        );
 
-      if (beforeSnapshot && afterSnapshot) {
-        await this.appendExplicitEventWithDiff({
-          noticeNum: row.noticeNum,
-          source: 'archive:source-missing',
-          eventType: 'invalidated',
-          beforeSnapshot,
-          afterSnapshot,
-          subject: row.subject,
-        });
+        const beforeSnapshot = this.buildTrackedSnapshot(row);
+        const afterSnapshot = beforeSnapshot
+          ? {
+              ...beforeSnapshot,
+              lifecycleStatus: 'source_deleted',
+              sourceDeletedAt: markedAt.toISOString(),
+            }
+          : null;
+
+        if (beforeSnapshot && afterSnapshot) {
+          await this.appendExplicitEventWithDiff({
+            noticeNum: row.noticeNum,
+            source: 'archive:source-missing',
+            eventType: 'invalidated',
+            beforeSnapshot,
+            afterSnapshot,
+            subject: row.subject,
+          });
+        }
+
+        markedCount += 1;
       }
     }
 
-    return missing.length;
+    return markedCount;
   }
 
   /**

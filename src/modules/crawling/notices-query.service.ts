@@ -3,6 +3,7 @@ import { APP_CONSTANTS } from '../../config/app.config';
 import { type CachedNotice } from '../../types/cache.types';
 import { CrawlingService } from './crawling.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
+import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 
 interface ArchivedNoticesQuery {
   page: number;
@@ -20,6 +21,7 @@ export class NoticesQueryService {
   constructor(
     private readonly crawlingService: CrawlingService,
     private readonly noticeArchiveService: NoticeArchiveService,
+    private readonly changeTrackingService: ChangeTrackingService,
   ) {}
 
   async getArchivedNotices({
@@ -156,8 +158,18 @@ export class NoticesQueryService {
       archiveItems,
     });
 
+    const changeEventCountMap =
+      await this.changeTrackingService.getChangeEventCountsByNoticeNums(
+        items.map((item) => item.num),
+      );
+
+    const itemsWithChangeEventCount = items.map((item) => {
+      const count = changeEventCountMap.get(item.num);
+      return count === undefined ? item : { ...item, changeEventCount: count };
+    });
+
     return {
-      items,
+      items: itemsWithChangeEventCount,
       page: safePage,
       limit: safeLimit,
       total,

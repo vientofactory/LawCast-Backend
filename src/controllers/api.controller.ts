@@ -410,6 +410,8 @@ export class ApiController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('eventType') eventTypeRaw?: string,
+    @Query('excludeLegacyGenesisSource') excludeLegacyGenesisSourceRaw?: string,
+    @Query('comparableOnly') comparableOnlyRaw?: string,
   ) {
     const allowedEventTypes: ChangeEventType[] = [
       'created',
@@ -424,13 +426,25 @@ export class ApiController {
       ? (eventTypeRaw as ChangeEventType)
       : undefined;
 
+    const excludeLegacyGenesisSource = excludeLegacyGenesisSourceRaw === 'true';
+    const comparableOnly = comparableOnlyRaw === 'true';
+
     const result = await this.changeTrackingService.getRecentChanges({
       page,
       limit,
       eventType,
+      excludeLegacyGenesisSource,
+      comparableOnly,
     });
 
     return ApiResponseUtils.success(result);
+  }
+
+  @Get('notices/changes/summary')
+  async getComparableNoticeChangesSummary() {
+    const summary =
+      await this.changeTrackingService.getComparableChangeSummary();
+    return ApiResponseUtils.success(summary);
   }
 
   @Get('notices/:num/screenshot')
@@ -485,6 +499,7 @@ export class ApiController {
       this.batchProcessingService,
       this.noticeArchiveService,
       this.archiveSyncService,
+      this.changeTrackingService,
     );
     return ApiResponseUtils.success(stats);
   }
