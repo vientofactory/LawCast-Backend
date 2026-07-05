@@ -309,11 +309,13 @@ Base path: `/api`
 | ------ | -------------------------- | ------------------------------------------ |
 | `POST` | `/webhooks`                | Discord 웹훅 등록 (PoW proof 필요)         |
 | `GET`  | `/notices/recent`          | 최근 입법예고 목록                         |
+| `GET`  | `/notices/keywords`        | 홈 빠른 검색용 추천 키워드                 |
 | `GET`  | `/notices/archive`         | 아카이브 목록 조회(필터/정렬/페이지네이션) |
 | `GET`  | `/notices/search`          | 통합 검색                                  |
 | `GET`  | `/notices/:num/detail`     | 의안번호 상세(아카이브 기반)               |
 | `GET`  | `/notices/:num/changes`    | 의안번호별 변경 이벤트 타임라인            |
 | `GET`  | `/notices/changes`         | 전체 의안 변경 이벤트 목록(페이지네이션)   |
+| `GET`  | `/notices/changes/summary` | 비교 가능한 변경 이벤트 요약               |
 | `GET`  | `/notices/:num/screenshot` | 아카이브 스크린샷 이미지                   |
 | `GET`  | `/notices/:num/export`     | 아카이브 ZIP 내보내기                      |
 | `GET`  | `/stats`                   | 런타임 통계(아카이브/요약/캐시 포함)       |
@@ -326,6 +328,10 @@ Base path: `/api`
 | `GET`  | `/packages`                | 패키지 버전 정보                           |
 
 ### 주요 쿼리 파라미터
+
+`GET /api/notices/keywords`
+
+- `limit` (default: `8`, 최대 응답 개수)
 
 `GET /api/notices/archive`
 
@@ -340,8 +346,25 @@ Base path: `/api`
 `GET /api/notices/search`
 
 - `q` (검색어)
-- `page`, `limit`
+- `page` (default: `1`)
+- `limit` (default: `10`, max: `50`)
 - `includeDone` (default: `true`)
+
+`GET /api/notices/:num/detail`
+
+- `rev` (선택, `1` 이상의 정수. 특정 변경 리비전 시점으로 상세 복원)
+
+`GET /api/notices/:num/changes`
+
+- `limit` (default: `20`)
+
+`GET /api/notices/changes`
+
+- `page` (default: `1`)
+- `limit` (default: `20`)
+- `eventType` (`created` | `updated` | `redacted` | `invalidated`)
+- `excludeLegacyGenesisSource` (`true`일 때 legacy bootstrap seed 이벤트 제외)
+- `comparableOnly` (`true`일 때 비교 가능한 변경 이벤트만 조회)
 
 ## 아카이브 Export ZIP 구성
 
