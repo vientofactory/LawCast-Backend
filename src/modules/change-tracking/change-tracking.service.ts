@@ -1114,13 +1114,15 @@ export class ChangeTrackingService {
         });
       }
 
-      if ((event.prevEventHash ?? null) !== previousHash) {
+      // Height=1 is the chain root and must not reference a previous hash.
+      const expectedPrevHash = event.eventHeight === 1 ? null : previousHash;
+      if ((event.prevEventHash ?? null) !== expectedPrevHash) {
         issues.push({
           noticeNum,
           eventId: event.id,
           eventHeight: event.eventHeight,
           code: 'prev_hash_mismatch',
-          message: `Expected prev_event_hash ${previousHash ?? 'null'} but found ${event.prevEventHash ?? 'null'}`,
+          message: `Expected prev_event_hash ${expectedPrevHash ?? 'null'} but found ${event.prevEventHash ?? 'null'}`,
         });
       }
 
