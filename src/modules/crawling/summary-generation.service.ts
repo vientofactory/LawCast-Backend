@@ -6,7 +6,10 @@ import {
   type CachedNotice,
 } from '../../types/cache.types';
 import { OllamaClientService } from '../ollama/ollama-client.service';
-import { type ArchiveSummaryState } from '../notice/notice-archive.service';
+import {
+  NoticeArchiveService,
+  type ArchiveSummaryState,
+} from '../notice/notice-archive.service';
 import { CrawlingCoreService } from './crawling-core.service';
 import {
   AI_SUMMARY_STATUS,
@@ -24,6 +27,7 @@ export class SummaryGenerationService {
   constructor(
     private ollamaClientService: OllamaClientService,
     private crawlingCoreService: CrawlingCoreService,
+    private noticeArchiveService: NoticeArchiveService,
   ) {}
 
   /**
@@ -180,13 +184,18 @@ export class SummaryGenerationService {
 
     if (!notice.contentId) {
       // NsmLmSts bills (발의 상태) have no contentId but may have proposalReason
-      // stored directly in the archive. Use it if available.
+      // stored in the archive snapshot or, after bootstrap repair, in the change chain.
       const storedReason = (notice as CachedNotice).proposalReason?.trim();
+      const latestReason = storedReason
+        ? storedReason
+        : await this.noticeArchiveService.getLatestProposalReasonForNotice(
+            notice.num,
+          );
 
-      if (!storedReason) {
+      if (!latestReason) {
         if (logOllamaActivity) {
           this.logOllama(
-            `Skip summary ${progressLabel} (num=${notice.num}) - no contentId and no stored proposalReason`,
+            `Skip summary ${progressLabel} (num=${notice.num}) - no contentId and no proposalReason available in archive or change chain`,
             phase,
           );
         }
@@ -198,7 +207,7 @@ export class SummaryGenerationService {
 
       if (logOllamaActivity) {
         this.logOllama(
-          `Request summary ${progressLabel} (num=${notice.num}, NsmLmSts stored reason)`,
+          `Request summary ${progressLabel} (num=${notice.num}, NsmLmSts resolved reason)`,
           phase,
         );
       }
@@ -206,7 +215,7 @@ export class SummaryGenerationService {
       try {
         const summary = await this.ollamaClientService.summarizeProposal(
           notice.subject,
-          storedReason,
+          latestReason,
         );
 
         if (logOllamaActivity) {

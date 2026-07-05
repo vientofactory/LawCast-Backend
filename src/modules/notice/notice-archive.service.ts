@@ -1102,9 +1102,11 @@ export class NoticeArchiveService {
   }
 
   /**
-   * Updates `sourceHtml`, `sourceHtmlSha256`, `proposalReason`, HTTP-metadata,
-   * and optionally `screenshotBlob` for a NsmLmSts bill in a single DB write.
+   * Updates `sourceHtml`, `sourceHtmlSha256`, HTTP-metadata, and optionally
+   * `screenshotBlob` for a NsmLmSts bill in a single DB write.
    * Used by the HTML backfill pipeline when `captureNsmDetailFull` succeeds.
+   * `proposalReason` is intentionally kept out of the archive row so it can be
+   * recorded as an append-only change event instead of mutating the snapshot.
    * `screenshotBlob` is only written when explicitly provided (non-undefined).
    */
   async updateNsmHtmlAndDetail(
@@ -1124,7 +1126,6 @@ export class NoticeArchiveService {
     const baseUpdate: Partial<NoticeArchive> = {
       sourceHtml: payload.html,
       sourceHtmlSha256: payload.sha256,
-      proposalReason: payload.proposalReason,
       httpMetadataJson: normalized ? JSON.stringify(normalized) : null,
       httpFetchedAt: parseOptionalDate(normalized?.fetchedAt),
       httpStatusCode: normalized?.statusCode ?? null,
@@ -1138,48 +1139,23 @@ export class NoticeArchiveService {
       baseUpdate.screenshotFormat = payload.screenshotFormat ?? 'jpeg';
     }
 
-    if (payload.proposalReason) {
-      // When proposalReason is now populated, rows that were previously marked
-      // 'not_supported' (because proposalReason was empty at archive time) must
-      // be reset to `not_requested` so the summary backfill can pick them up.
-      // Only rows still in the terminal-skip state are touched; rows that already
-      // have a real status (ready / unavailable / not_requested) are left alone.
-      await this.archiveRepository
-        .createQueryBuilder()
-        .update(NoticeArchive)
-        .set({
-          ...baseUpdate,
-          aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
-        })
-        .where('noticeNum = :noticeNum AND aiSummaryStatus = :skip', {
-          noticeNum,
-          skip: 'not_supported',
-        })
-        .execute();
+    await this.archiveRepository.update({ noticeNum }, baseUpdate);
 
-      // For rows whose aiSummaryStatus is already something other than
-      // 'not_supported', update only the HTML/detail fields without touching
-      // the status.
-      await this.archiveRepository
-        .createQueryBuilder()
-        .update(NoticeArchive)
-        .set(baseUpdate)
-        .where('noticeNum = :noticeNum AND aiSummaryStatus != :skip', {
-          noticeNum,
-          skip: 'not_supported',
-        })
-        .execute();
-    } else {
-      await this.archiveRepository.update({ noticeNum }, baseUpdate);
+    if (payload.proposalReason && beforeRow) {
+      const afterSnapshot = {
+        ...beforeRow,
+        proposalReason: payload.proposalReason,
+      };
+
+      await this.appendExplicitEventWithDiff({
+        noticeNum,
+        source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+        eventType: 'updated',
+        beforeSnapshot: this.buildTrackedSnapshot(beforeRow),
+        afterSnapshot: this.buildTrackedSnapshot(afterSnapshot),
+        subject: beforeRow.subject,
+      });
     }
-
-    const afterRow = await this.getTrackedRowByNoticeNum(noticeNum);
-    await this.appendTrackedDiffEvent(
-      noticeNum,
-      NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
-      beforeRow,
-      afterRow,
-    );
   }
 
   private async getTrackedRowByNoticeNum(
@@ -1367,7 +1343,7 @@ export class NoticeArchiveService {
   private async appendExplicitEventWithDiff(input: {
     noticeNum: number;
     source: NoticeChangeSource;
-    eventType: Extract<ChangeEventType, 'invalidated' | 'redacted'>;
+    eventType: ChangeEventType;
     beforeSnapshot: Record<string, unknown> | null;
     afterSnapshot: Record<string, unknown>;
     subject: string;
@@ -1539,6 +1515,39 @@ export class NoticeArchiveService {
     return rows.map((row) =>
       mapArchiveEntityToCachedNotice(row, 'not_requested'),
     );
+  }
+
+  async getLatestProposalReasonForNotice(
+    noticeNum: number,
+  ): Promise<string | null> {
+    if (!this.changeTrackingService) {
+      return null;
+    }
+
+    try {
+      const events = await this.changeTrackingService.getNoticeChangeTimeline({
+        noticeNum,
+        limit: 1000,
+      });
+
+      for (const event of events) {
+        const proposalReasonDetail = event.details.find(
+          (detail) => detail.fieldPath === 'proposalReason',
+        );
+
+        const proposalReason = proposalReasonDetail?.afterValue?.trim();
+        if (proposalReason) {
+          return proposalReason;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.warn(
+        `Failed to load latest proposalReason from change chain for notice ${noticeNum}: ${(error as Error).message}`,
+      );
+      return null;
+    }
   }
 
   /**

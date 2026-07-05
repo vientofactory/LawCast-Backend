@@ -9,6 +9,7 @@ describe('SummaryGenerationService', () => {
   let service: SummaryGenerationService;
   let ollamaClientService: OllamaClientService;
   let crawlingCoreService: CrawlingCoreService;
+  let noticeArchiveService: NoticeArchiveService;
 
   const mockNotice: ITableData = {
     num: 1,
@@ -48,6 +49,7 @@ describe('SummaryGenerationService', () => {
           useValue: {
             getSummaryStateByNoticeNums: jest.fn(),
             updateSummaryStateByNoticeNum: jest.fn(),
+            getLatestProposalReasonForNotice: jest.fn().mockResolvedValue(null),
           },
         },
         {
@@ -62,6 +64,8 @@ describe('SummaryGenerationService', () => {
     service = module.get<SummaryGenerationService>(SummaryGenerationService);
     ollamaClientService = module.get<OllamaClientService>(OllamaClientService);
     crawlingCoreService = module.get<CrawlingCoreService>(CrawlingCoreService);
+    noticeArchiveService =
+      module.get<NoticeArchiveService>(NoticeArchiveService);
   });
 
   afterEach(() => {
@@ -260,6 +264,29 @@ describe('SummaryGenerationService', () => {
         aiSummaryStatus: 'not_supported',
       });
       expect(crawlingCoreService.getContent).not.toHaveBeenCalled();
+    });
+
+    it('should use the latest proposalReason from the change chain when archive snapshot is empty', async () => {
+      (ollamaClientService.isEnabled as jest.Mock).mockReturnValue(true);
+      (
+        noticeArchiveService.getLatestProposalReasonForNotice as jest.Mock
+      ).mockResolvedValue('제네시스 이후 보정된 제안이유');
+      (ollamaClientService.summarizeProposal as jest.Mock).mockResolvedValue(
+        '변경 체인 기반 요약',
+      );
+
+      const result = await service.generateSummaryForNotice(
+        mockNoticeWithoutContentId,
+      );
+
+      expect(result).toEqual({
+        aiSummary: '변경 체인 기반 요약',
+        aiSummaryStatus: 'ready',
+      });
+      expect(ollamaClientService.summarizeProposal).toHaveBeenCalledWith(
+        '컨텐츠 ID 없는 입법예고',
+        '제네시스 이후 보정된 제안이유',
+      );
     });
 
     it('should return not_supported when content has no proposalReason', async () => {
