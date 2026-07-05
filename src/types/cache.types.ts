@@ -24,3 +24,22 @@ export interface CachedNotice extends CachedBaseNotice {
    */
   proposalReason?: string | null;
 }
+
+export interface QuickKeywordSuggestion {
+  keyword: string;
+  score: number;
+  matchCount: number;
+}
+
+export interface QuickKeywordSuggestionsCache {
+  items: QuickKeywordSuggestion[];
+  updatedAt: string;
+  sourceNoticeCount: number;
+}
+
+export interface QuickKeywordSuggestionsResult {
+  items: QuickKeywordSuggestion[];
+  updatedAt: string | null;
+  sourceNoticeCount: number;
+  refreshIntervalMs: number;
+}

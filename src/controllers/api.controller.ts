@@ -115,6 +115,15 @@ export class ApiController {
     return ApiResponseUtils.success(notices);
   }
 
+  @Get('notices/keywords')
+  async getQuickKeywordSuggestions(
+    @Query('limit', new DefaultValuePipe(8), ParseIntPipe) limit: number,
+  ) {
+    const suggestions =
+      await this.crawlingService.getQuickKeywordSuggestions(limit);
+    return ApiResponseUtils.success(suggestions);
+  }
+
   @Get('notices/archive')
   async getArchivedNotices(
     @Query(

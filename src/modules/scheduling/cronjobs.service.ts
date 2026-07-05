@@ -294,4 +294,15 @@ export class CronJobsService {
       () => this.archiveOrchestratorService.handleScreenshotBackfill(),
     );
   }
+
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.QUICK_KEYWORDS_REFRESH, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleQuickKeywordRefresh(): Promise<void> {
+    await this.execute('quick keyword refresh', () =>
+      this.crawlingService
+        .refreshQuickKeywordSuggestions()
+        .then(() => undefined),
+    );
+  }
 }
