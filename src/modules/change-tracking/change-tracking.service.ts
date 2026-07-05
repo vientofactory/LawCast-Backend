@@ -301,20 +301,20 @@ export class ChangeTrackingService {
     });
 
     const saved = await this.changeEventRepository.save(event);
-    LoggerUtils.debugDev(
-      ChangeTrackingService.name,
-      `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
-    );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.DEBUG,
-      ChangeTrackingService.name,
-      `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight}`,
-      {
-        noticeNum: saved.noticeNum,
-        eventHeight: saved.eventHeight,
-        eventHash: saved.eventHash,
-      },
-    );
+    // LoggerUtils.debugDev(
+    //   ChangeTrackingService.name,
+    //   `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
+    // );
+    // void this.discordBridge?.logEvent(
+    //   BridgeLogLevel.DEBUG,
+    //   ChangeTrackingService.name,
+    //   `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight}`,
+    //   {
+    //     noticeNum: saved.noticeNum,
+    //     eventHeight: saved.eventHeight,
+    //     eventHash: saved.eventHash,
+    //   },
+    // );
     return saved;
   }
 
@@ -351,6 +351,9 @@ export class ChangeTrackingService {
       input.maxRetries ?? this.APPEND_EVENT_MAX_RETRIES,
       1,
     );
+    const shouldEmitPerEventAppendDebug = this.shouldEmitPerEventAppendDebug(
+      input.source,
+    );
 
     for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
       try {
@@ -359,20 +362,22 @@ export class ChangeTrackingService {
             this.appendEventAndDetailsInTransaction(manager, input, details),
         );
 
-        LoggerUtils.debugDev(
-          ChangeTrackingService.name,
-          `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
-        );
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.DEBUG,
-          ChangeTrackingService.name,
-          `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight}`,
-          {
-            noticeNum: saved.noticeNum,
-            eventHeight: saved.eventHeight,
-            eventHash: saved.eventHash,
-          },
-        );
+        if (shouldEmitPerEventAppendDebug) {
+          LoggerUtils.debugDev(
+            ChangeTrackingService.name,
+            `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
+          );
+          void this.discordBridge?.logEvent(
+            BridgeLogLevel.DEBUG,
+            ChangeTrackingService.name,
+            `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight}`,
+            {
+              noticeNum: saved.noticeNum,
+              eventHeight: saved.eventHeight,
+              eventHash: saved.eventHash,
+            },
+          );
+        }
         return saved;
       } catch (error) {
         if (this.isEventHeightConflictError(error) && attempt < maxRetries) {
@@ -637,10 +642,10 @@ export class ChangeTrackingService {
     }
 
     if (this.isSuppressingChangeNotifications()) {
-      LoggerUtils.debugDev(
-        ChangeTrackingService.name,
-        `Skipping change notification for notice ${input.event.noticeNum} because change notifications are suppressed`,
-      );
+      // LoggerUtils.debugDev(
+      //   ChangeTrackingService.name,
+      //   `Skipping change notification for notice ${input.event.noticeNum} because change notifications are suppressed`,
+      // );
       return;
     }
 
@@ -668,15 +673,15 @@ export class ChangeTrackingService {
         normalizedSource.startsWith(prefix),
       )
     ) {
-      LoggerUtils.debugDev(
-        ChangeTrackingService.name,
-        `Skipping change notification for notice ${input.event.noticeNum} because source is notification-suppressed (${input.event.source})`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.DEBUG,
-        ChangeTrackingService.name,
-        `Skipped change notification for source-suppressed event (notice=${input.event.noticeNum}, source=${input.event.source})`,
-      );
+      // LoggerUtils.debugDev(
+      //   ChangeTrackingService.name,
+      //   `Skipping change notification for notice ${input.event.noticeNum} because source is notification-suppressed (${input.event.source})`,
+      // );
+      // void this.discordBridge?.logEvent(
+      //   BridgeLogLevel.DEBUG,
+      //   ChangeTrackingService.name,
+      //   `Skipped change notification for source-suppressed event (notice=${input.event.noticeNum}, source=${input.event.source})`,
+      // );
       return;
     }
 
@@ -822,6 +827,19 @@ export class ChangeTrackingService {
     return this.notificationCollectionDepth > 0;
   }
 
+  private shouldEmitPerEventAppendDebug(
+    source?: NoticeChangeSource | null,
+  ): boolean {
+    const normalizedSource = (source ?? '').toLowerCase();
+    if (!normalizedSource) {
+      return true;
+    }
+
+    return !this.NOTIFICATION_SUPPRESSED_SOURCE_PREFIXES.some((prefix) =>
+      normalizedSource.startsWith(prefix),
+    );
+  }
+
   private isSuppressingChangeNotifications(): boolean {
     return this.notificationSuppressionDepth > 0;
   }
@@ -912,7 +930,7 @@ export class ChangeTrackingService {
         .select('ce.noticeNum')
         .groupBy('ce.noticeNum')
         .having(
-          '(COUNT(*) - SUM(CASE WHEN ce.source = :legacyGenesisSource THEN 1 ELSE 0 END)) >= 2',
+          '(COUNT(*) - SUM(CASE WHEN ce.source = :legacyGenesisSource THEN 1 ELSE 0 END)) >= 1',
         );
 
       builder
@@ -953,7 +971,7 @@ export class ChangeTrackingService {
       )
       .groupBy('event.notice_num')
       .having(
-        '(COUNT(*) - SUM(CASE WHEN event.source = :legacyGenesisSource THEN 1 ELSE 0 END)) >= 2',
+        '(COUNT(*) - SUM(CASE WHEN event.source = :legacyGenesisSource THEN 1 ELSE 0 END)) >= 1',
       )
       .setParameter('legacyGenesisSource', this.LEGACY_GENESIS_SOURCE)
       .getRawMany<{

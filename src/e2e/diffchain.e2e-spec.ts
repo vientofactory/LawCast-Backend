@@ -270,7 +270,7 @@ describe('Diffchain API (e2e)', () => {
     expect(multiComparable).toMatchObject({ num: 1003, changeEventCount: 3 });
   });
 
-  it('filters recent changes down to truly comparable revisions and computes the matching summary', async () => {
+  it('treats height=2 and above as comparable revisions and computes the matching summary', async () => {
     const [changesResponse, summaryResponse] = await Promise.all([
       request(app.getHttpServer())
         .get(
@@ -283,14 +283,14 @@ describe('Diffchain API (e2e)', () => {
     ]);
 
     expect(changesResponse.body.success).toBe(true);
-    expect(changesResponse.body.data.total).toBe(2);
-    expect(changesResponse.body.data.items).toHaveLength(2);
+    expect(changesResponse.body.data.total).toBe(3);
+    expect(changesResponse.body.data.items).toHaveLength(3);
     expect(
       changesResponse.body.data.items.map((item: any) => item.noticeNum),
-    ).toEqual([1003, 1003]);
+    ).toEqual([1003, 1003, 1002]);
     expect(
       changesResponse.body.data.items.map((item: any) => item.eventHeight),
-    ).toEqual([3, 2]);
+    ).toEqual([3, 2, 2]);
     expect(
       changesResponse.body.data.items.every(
         (item: any) => item.source !== LEGACY_GENESIS_SOURCE,
@@ -299,8 +299,8 @@ describe('Diffchain API (e2e)', () => {
 
     expect(summaryResponse.body.success).toBe(true);
     expect(summaryResponse.body.data).toEqual({
-      comparableEventTotal: 2,
-      comparableNoticeCount: 1,
+      comparableEventTotal: 3,
+      comparableNoticeCount: 2,
     });
   });
 
