@@ -35,10 +35,8 @@ import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
 import { type ChangeEventType } from '../modules/change-tracking/notice-change-event.entity';
-import {
-  LEGACY_GENESIS_SOURCE,
-  type ArchiveDetailResult,
-} from '../modules/notice/notice-archive.service';
+import { NoticeChangeSource } from '../modules/change-tracking/notice-change-source.enum';
+import { type ArchiveDetailResult } from '../modules/notice/notice-archive.service';
 
 @Controller('api')
 export class ApiController {
@@ -231,7 +229,7 @@ export class ApiController {
       resolvedRev,
     );
     const legacyGenesisEvent = eventsAsc.find(
-      (event) => event.source === LEGACY_GENESIS_SOURCE,
+      (event) => event.source === NoticeChangeSource.BOOTSTRAP_LEGACY_SEED,
     );
 
     return ApiResponseUtils.success({

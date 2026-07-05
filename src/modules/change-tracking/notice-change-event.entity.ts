@@ -6,6 +6,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { type NoticeChangeSource } from './notice-change-source.enum';
 
 export type ChangeEventType =
   | 'created'
@@ -43,7 +44,7 @@ export class NoticeChangeEvent {
   eventType: ChangeEventType;
 
   @Column({ type: 'varchar', length: 80, nullable: true })
-  source: string | null;
+  source: NoticeChangeSource | null;
 
   @Column({ type: 'integer', name: 'event_height' })
   eventHeight: number;

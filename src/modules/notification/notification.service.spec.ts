@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { ConfigService } from '@nestjs/config';
 import { NotificationService } from './notification.service';
+import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 import { CacheService } from '../cache/cache.service';
 import { Webhook } from '../webhook/webhook.entity';
 import {
@@ -421,7 +422,7 @@ describe('NotificationService', () => {
           noticeNum: 2210001,
           subject: '변경 추적 테스트 법률안',
           eventType: 'updated',
-          source: 'archive:upsert',
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
           changedFields: ['subject', 'billNumber', 'unknown.field'],
           eventHash: 'hash-test-1',
           eventHeight: 5,

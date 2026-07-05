@@ -16,6 +16,10 @@ import {
   sha256Hex,
   type DiffComputationResult,
 } from './change-tracking-diff.utils';
+import {
+  NoticeChangeSource,
+  NoticeChangeSourcePrefix,
+} from './notice-change-source.enum';
 import { type ChangeNotificationPayload } from '../notification/notification.service';
 import { NotificationBatchService } from '../notification/notification-batch.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
@@ -27,7 +31,7 @@ interface AppendChangeEventInput {
   eventType: ChangeEventType;
   eventHash: string;
   detectedAt?: Date;
-  source?: string | null;
+  source?: NoticeChangeSource | null;
   changedFieldCount?: number;
   diffSummaryJson?: string | null;
   crawlerRunId?: string | null;
@@ -54,7 +58,7 @@ interface BuildDiffEventInput {
   beforeSnapshot: Record<string, unknown> | null;
   afterSnapshot: Record<string, unknown>;
   detectedAt?: Date;
-  source?: string | null;
+  source?: NoticeChangeSource | null;
   trackedFields?: readonly string[];
   hashAlgo?: string;
   canonVersion?: number;
@@ -94,7 +98,7 @@ export interface ChangeTimelineItem {
   noticeNum: number;
   detectedAt: Date;
   eventType: ChangeEventType;
-  source: string | null;
+  source: NoticeChangeSource | null;
   eventHeight: number;
   prevEventHash: string | null;
   eventHash: string;
@@ -118,7 +122,7 @@ export interface RecentChangeItem {
   noticeNum: number;
   detectedAt: Date;
   eventType: ChangeEventType;
-  source: string | null;
+  source: NoticeChangeSource | null;
   eventHeight: number;
   eventHash: string;
   changedFieldCount: number;
@@ -167,8 +171,11 @@ export interface ChangeChainAuditReport {
 export class ChangeTrackingService {
   private readonly logger = new Logger(ChangeTrackingService.name);
   private readonly APPEND_EVENT_MAX_RETRIES = 3;
-  private readonly LEGACY_GENESIS_SOURCE = 'bootstrap:legacy-seed';
-  private readonly NOTIFICATION_SUPPRESSED_SOURCE_PREFIXES = ['bootstrap:'];
+  private readonly LEGACY_GENESIS_SOURCE =
+    NoticeChangeSource.BOOTSTRAP_LEGACY_SEED;
+  private readonly NOTIFICATION_SUPPRESSED_SOURCE_PREFIXES = [
+    NoticeChangeSourcePrefix.BOOTSTRAP,
+  ];
   private readonly queuedChangeNotifications: ChangeNotificationPayload[] = [];
   private flushTimer: NodeJS.Timeout | null = null;
   private isFlushingQueuedNotifications = false;

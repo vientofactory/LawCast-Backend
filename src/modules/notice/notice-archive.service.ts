@@ -36,6 +36,7 @@ import {
   computeDiff,
   sha256Hex,
 } from '../change-tracking/change-tracking-diff.utils';
+import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 
@@ -189,7 +190,7 @@ export interface LegacyGenesisSeedResult {
   skipped: number;
 }
 
-export const LEGACY_GENESIS_SOURCE = 'bootstrap:legacy-seed';
+export const LEGACY_GENESIS_SOURCE = NoticeChangeSource.BOOTSTRAP_LEGACY_SEED;
 
 @Injectable()
 export class NoticeArchiveService {
@@ -448,7 +449,7 @@ export class NoticeArchiveService {
         };
         await this.appendExplicitEventWithDiff({
           noticeNum: previousNoticeNum,
-          source: 'archive:renumbered',
+          source: NoticeChangeSource.ARCHIVE_RENUMBERED,
           eventType: 'invalidated',
           beforeSnapshot,
           afterSnapshot: invalidatedSnapshot,
@@ -483,23 +484,28 @@ export class NoticeArchiveService {
       );
     }
 
-    await this.appendTrackedDiffEvent(notice.num, 'archive:upsert', beforeRow, {
-      noticeNum: coreFields.noticeNum,
-      subject: coreFields.subject,
-      proposerCategory: coreFields.proposerCategory,
-      committee: coreFields.committee,
-      proposalReason: coreFields.proposalReason,
-      contentBillNumber: coreFields.contentBillNumber,
-      contentProposer: coreFields.contentProposer,
-      contentProposalDate: coreFields.contentProposalDate,
-      contentCommittee: coreFields.contentCommittee,
-      contentReferralDate: coreFields.contentReferralDate,
-      contentNoticePeriod: coreFields.contentNoticePeriod,
-      contentProposalSession: coreFields.contentProposalSession,
-      isDone: coreFields.isDone,
-      lifecycleStatus: coreFields.lifecycleStatus,
-      sourceDeletedAt: coreFields.sourceDeletedAt,
-    });
+    await this.appendTrackedDiffEvent(
+      notice.num,
+      NoticeChangeSource.ARCHIVE_UPSERT,
+      beforeRow,
+      {
+        noticeNum: coreFields.noticeNum,
+        subject: coreFields.subject,
+        proposerCategory: coreFields.proposerCategory,
+        committee: coreFields.committee,
+        proposalReason: coreFields.proposalReason,
+        contentBillNumber: coreFields.contentBillNumber,
+        contentProposer: coreFields.contentProposer,
+        contentProposalDate: coreFields.contentProposalDate,
+        contentCommittee: coreFields.contentCommittee,
+        contentReferralDate: coreFields.contentReferralDate,
+        contentNoticePeriod: coreFields.contentNoticePeriod,
+        contentProposalSession: coreFields.contentProposalSession,
+        isDone: coreFields.isDone,
+        lifecycleStatus: coreFields.lifecycleStatus,
+        sourceDeletedAt: coreFields.sourceDeletedAt,
+      },
+    );
   }
 
   /**
@@ -606,7 +612,7 @@ export class NoticeArchiveService {
         if (beforeSnapshot && afterSnapshot) {
           await this.appendExplicitEventWithDiff({
             noticeNum: row.noticeNum,
-            source: 'archive:source-missing',
+            source: NoticeChangeSource.ARCHIVE_SOURCE_MISSING,
             eventType: 'invalidated',
             beforeSnapshot,
             afterSnapshot,
@@ -1089,7 +1095,7 @@ export class NoticeArchiveService {
     const afterRow = await this.getTrackedRowByNoticeNum(noticeNum);
     await this.appendTrackedDiffEvent(
       noticeNum,
-      'archive:updateSourceHtml',
+      NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
       beforeRow,
       afterRow,
     );
@@ -1170,7 +1176,7 @@ export class NoticeArchiveService {
     const afterRow = await this.getTrackedRowByNoticeNum(noticeNum);
     await this.appendTrackedDiffEvent(
       noticeNum,
-      'archive:updateNsmHtmlAndDetail',
+      NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
       beforeRow,
       afterRow,
     );
@@ -1277,7 +1283,7 @@ export class NoticeArchiveService {
 
   private async appendTrackedDiffEvent(
     noticeNum: number,
-    source: string,
+    source: NoticeChangeSource,
     beforeRow: TrackedArchiveRow | null,
     afterRow: TrackedArchiveRow | null,
   ): Promise<void> {
@@ -1360,7 +1366,7 @@ export class NoticeArchiveService {
 
   private async appendExplicitEventWithDiff(input: {
     noticeNum: number;
-    source: string;
+    source: NoticeChangeSource;
     eventType: Extract<ChangeEventType, 'invalidated' | 'redacted'>;
     beforeSnapshot: Record<string, unknown> | null;
     afterSnapshot: Record<string, unknown>;

@@ -9,6 +9,7 @@ import {
 import { ChangeTrackingService } from './change-tracking.service';
 import { NoticeChangeEvent } from './notice-change-event.entity';
 import { NoticeChangeDetail } from './notice-change-detail.entity';
+import { NoticeChangeSource } from './notice-change-source.enum';
 
 describe('ChangeTrackingService (diffchain batching)', () => {
   const createService = () => {
@@ -50,7 +51,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 1,
         noticeNum: 1001,
         eventType: 'updated',
-        source: 'archive:upsert',
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-1',
       } as any,
       subject: '법률안 A',
@@ -62,7 +63,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 2,
         noticeNum: 1002,
         eventType: 'updated',
-        source: 'archive:upsert',
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-2',
       } as any,
       subject: '법률안 B',
@@ -100,7 +101,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 3,
         noticeNum: 2001,
         eventType: 'updated',
-        source: 'archive:updateSourceHtml',
+        source: NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
         eventHash: 'hash-nested',
       } as any,
       subject: '중첩 테스트',
@@ -126,7 +127,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 4,
         noticeNum: 3001,
         eventType: 'updated',
-        source: 'archive:updateNsmHtmlAndDetail',
+        source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
         eventHash: 'hash-auto',
       } as any,
       subject: '자동 flush 테스트',
@@ -152,7 +153,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 5,
         noticeNum: 4001,
         eventType: 'created',
-        source: 'archive:upsert',
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-created',
       } as any,
       subject: '신규 법률안',
@@ -174,7 +175,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 6,
         noticeNum: 5001,
         eventType: 'updated',
-        source: 'bootstrap:legacy-seed',
+        source: NoticeChangeSource.BOOTSTRAP_LEGACY_SEED,
         eventHash: 'hash-bootstrap-suppressed',
       } as any,
       subject: '레거시 제네시스 시딩 대상',
@@ -198,7 +199,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 7,
         noticeNum: 5002,
         eventType: 'updated',
-        source: 'archive:upsert',
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-bootstrap-blocked',
       } as any,
       subject: '부트스트랩 전체 차단 테스트',
@@ -513,14 +514,14 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       beforeSnapshot: null,
       afterSnapshot: createdSnapshot,
       detectedAt: createdDetectedAt,
-      source: 'archive:upsert',
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
     });
     const updatedBuilt = bootstrapService.buildDiffEvent({
       noticeNum: 5001,
       beforeSnapshot: createdSnapshot,
       afterSnapshot: updatedSnapshot,
       detectedAt: updatedDetectedAt,
-      source: 'archive:updateSourceHtml',
+      source: NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
     });
 
     const changeEventRepository = {
@@ -539,7 +540,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
             noticeNum: 5001,
             detectedAt: createdDetectedAt,
             eventType: 'created',
-            source: 'archive:upsert',
+            source: NoticeChangeSource.ARCHIVE_UPSERT,
             eventHeight: 1,
             prevEventHash: null,
             eventHash: createdBuilt.eventHash,
@@ -553,7 +554,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
             noticeNum: 5001,
             detectedAt: updatedDetectedAt,
             eventType: 'updated',
-            source: 'archive:updateSourceHtml',
+            source: NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
             eventHeight: 2,
             prevEventHash: createdBuilt.eventHash,
             eventHash: updatedBuilt.eventHash,

@@ -9,12 +9,13 @@ import { APP_CONSTANTS } from '../../config/app.config';
 import { CacheService } from '../cache/cache.service';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { type CachedNotice } from '../../types/cache.types';
+import { type NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 
 export interface ChangeNotificationPayload {
   noticeNum: number;
   subject: string;
   eventType: 'created' | 'updated' | 'redacted' | 'invalidated';
-  source?: string | null;
+  source?: NoticeChangeSource | null;
   changedFields: string[];
   eventHash: string;
   eventHeight?: number;
