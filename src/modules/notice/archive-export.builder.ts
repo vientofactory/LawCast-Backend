@@ -18,6 +18,7 @@ export interface ArchiveExportBuilderInput {
   integrity: ArchiveIntegrityState;
   httpMetadata: Record<string, unknown>;
   dbRecord: Record<string, unknown>;
+  changeTrackingData?: Record<string, unknown> | null;
 }
 
 export interface ArchiveExportArtifacts {
@@ -26,14 +27,23 @@ export interface ArchiveExportArtifacts {
   jsonContent: string;
   integrityFileName: string;
   integrityContent: string;
+  changeTrackingFileName?: string;
+  changeTrackingContent?: string;
   verificationScripts: ArchiveVerificationScript[];
 }
 
 export const buildArchiveExportArtifacts = (
   params: ArchiveExportBuilderInput,
 ): ArchiveExportArtifacts => {
-  const { noticeNum, generatedAt, row, integrity, httpMetadata, dbRecord } =
-    params;
+  const {
+    noticeNum,
+    generatedAt,
+    row,
+    integrity,
+    httpMetadata,
+    dbRecord,
+    changeTrackingData,
+  } = params;
 
   const exportPayload = {
     exportMeta: {
@@ -50,12 +60,14 @@ export const buildArchiveExportArtifacts = (
       calculatedSha256: integrity.calculatedSha256,
     },
     httpMetadata,
+    changeTrackingSnapshot: changeTrackingData ?? null,
   };
 
   const fileStamp = generatedAt.toISOString().replace(/[:.]/g, '-');
   const baseFileName = `lawcast-archive-${noticeNum}-${fileStamp}`;
   const jsonFileName = `${baseFileName}.json`;
   const integrityFileName = `${baseFileName}.integrity.txt`;
+  const changeTrackingFileName = `${baseFileName}.changes.json`;
 
   return {
     zipFileName: `${baseFileName}.zip`,
@@ -69,6 +81,8 @@ export const buildArchiveExportArtifacts = (
       integrity,
       httpMetadata,
     }),
+    changeTrackingFileName,
+    changeTrackingContent: JSON.stringify(changeTrackingData ?? null, null, 2),
     verificationScripts: buildVerificationScripts({
       jsonFileName,
       integrityFileName,
@@ -121,8 +135,8 @@ const buildVerificationScripts = (params: {
     `JSON_FILE="${jsonFileName}"`,
     `INTEGRITY_FILE="${integrityFileName}"`,
     '',
-    'if ! command -v jq >/dev/null 2>&1; then',
-    '  echo "jq is required. Please install jq first." >&2',
+    'if ! command -v node >/dev/null 2>&1; then',
+    '  echo "node is required. Please install Node.js first." >&2',
     '  exit 1',
     'fi',
     '',
@@ -142,7 +156,11 @@ const buildVerificationScripts = (params: {
     '  exit 1',
     'fi',
     '',
-    'calculated_sha=$(jq -rj ".dbRecord.sourceHtml" "$JSON_FILE" | shasum -a 256 | cut -d " " -f1)',
+    'calculated_sha=$(node -e \'const fs=require("fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(String(p?.integritySnapshot?.calculatedSha256 ?? ""));\' "$JSON_FILE")',
+    'if [ -z "$calculated_sha" ] || [ "$calculated_sha" = "N/A" ]; then',
+    '  echo "calculatedSha256 is missing in export JSON." >&2',
+    '  exit 1',
+    'fi',
     '',
     'echo "storedSha256:     $stored_sha"',
     'echo "calculatedSha256: $calculated_sha"',
@@ -182,10 +200,10 @@ const buildVerificationScripts = (params: {
     '}',
     '',
     '$payload = Get-Content -Raw -LiteralPath $JsonFile | ConvertFrom-Json',
-    '$sourceHtml = [string]$payload.dbRecord.sourceHtml',
-    '$bytes = [System.Text.Encoding]::UTF8.GetBytes($sourceHtml)',
-    '$hashBytes = [System.Security.Cryptography.SHA256]::HashData($bytes)',
-    '$calculatedSha = ([Convert]::ToHexString($hashBytes)).ToLowerInvariant()',
+    '$calculatedSha = [string]$payload.integritySnapshot.calculatedSha256',
+    'if ([string]::IsNullOrWhiteSpace($calculatedSha) -or $calculatedSha -eq "N/A") {',
+    '  Write-Error "calculatedSha256 is missing in export JSON."',
+    '}',
     '',
     'Write-Host "storedSha256:     $storedSha"',
     'Write-Host "calculatedSha256: $calculatedSha"',

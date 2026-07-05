@@ -1,6 +1,9 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { WebhookService } from '../webhook/webhook.service';
-import { NotificationService } from './notification.service';
+import {
+  NotificationService,
+  type ChangeNotificationPayload,
+} from './notification.service';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { type CachedNotice } from '../../types/cache.types';
 import {
@@ -13,6 +16,16 @@ import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 
 interface NotificationJobResult {
   notice: string;
+  totalWebhooks: number;
+  successCount: number;
+  failedCount: number;
+  deactivated: number;
+  temporaryFailures: number;
+}
+
+interface ChangeNotificationJobResult {
+  noticeNum: number;
+  subject: string;
   totalWebhooks: number;
   successCount: number;
   failedCount: number;
@@ -122,6 +135,84 @@ export class NotificationBatchService {
     return batchRunId;
   }
 
+  async processChangeNotificationBatch(
+    payloadOrPayloads: ChangeNotificationPayload | ChangeNotificationPayload[],
+    options: BatchProcessingOptions = {},
+  ): Promise<string> {
+    const payloads = Array.isArray(payloadOrPayloads)
+      ? payloadOrPayloads
+      : [payloadOrPayloads];
+
+    if (payloads.length === 0) {
+      return BatchProcessingService.generateId('change_notification_batch');
+    }
+
+    const batchRunId = BatchProcessingService.generateId(
+      'change_notification_batch',
+    );
+
+    LoggerUtils.logDev(
+      NotificationBatchService.name,
+      `Starting change-notification batch for ${payloads.length} change event(s)`,
+    );
+
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.LOG,
+      NotificationBatchService.name,
+      `Change-notification batch started for **${payloads.length}** event(s)`,
+      {
+        batchRunId,
+        eventCount: payloads.length,
+        noticeNums: payloads.map((payload) => payload.noticeNum),
+      },
+    );
+
+    const batchPromise = this.executeChangeNotificationBatch(payloads, {
+      ...options,
+      batchRunId,
+    });
+
+    batchPromise
+      .then((results) => {
+        const successCount = results.filter((r) => r.success).length;
+        const failureCount = results.length - successCount;
+
+        const totalWebhooks = results.reduce(
+          (sum, r) => sum + ((r.data?.totalWebhooks as number) ?? 0),
+          0,
+        );
+        const deactivated = results.reduce(
+          (sum, r) => sum + ((r.data?.deactivated as number) ?? 0),
+          0,
+        );
+        const temporaryFailures = results.reduce(
+          (sum, r) => sum + ((r.data?.temporaryFailures as number) ?? 0),
+          0,
+        );
+
+        this.batchProcessingService.updateRecentJobMetadata(batchRunId, {
+          totalWebhooks,
+          deactivated,
+          temporaryFailures,
+          eventCount: payloads.length,
+          noticeNums: payloads.map((payload) => payload.noticeNum),
+        });
+
+        this.logger.log(
+          `Change batch ${batchRunId} completed: ${successCount} success, ${failureCount} failed` +
+            ` (webhooks: ${totalWebhooks}, deactivated: ${deactivated}, temporary failures: ${temporaryFailures})`,
+        );
+      })
+      .catch((error) => {
+        this.logger.error(
+          `Change batch ${batchRunId} processing error:`,
+          error,
+        );
+      });
+
+    return batchRunId;
+  }
+
   /**
    * Execute the notification batch by sending notifications for each notice to all active webhooks, handling immediate deactivation of permanently failing webhooks and logging temporary failures with minimal verbosity.
    * @param notices - Array of notices to process
@@ -164,92 +255,28 @@ export class NotificationBatchService {
 
     const notificationJobs = notices.map(
       (notice) => async (abortSignal: AbortSignal) => {
-        const currentWebhooks = activeWebhooks;
-
-        if (currentWebhooks.length === 0) {
-          LoggerUtils.logDev(
-            NotificationBatchService.name,
-            'No active webhooks available for notification',
-          );
-          return {
-            notice: notice.subject,
-            totalWebhooks: 0,
-            successCount: 0,
-            failedCount: 0,
-            deactivated: 0,
-            temporaryFailures: 0,
-          };
-        }
-
-        const results =
-          await this.notificationService.sendDiscordNotificationBatch(
-            notice,
-            currentWebhooks,
-            abortSignal,
-          );
-
-        const permanentFailures = results.filter(
-          (result) => !result.success && result.shouldDelete,
-        );
-        const temporaryFailures = results.filter(
-          (result) => !result.success && !result.shouldDelete,
-        );
-
-        if (permanentFailures.length > 0) {
-          const permanentFailureIds = permanentFailures.map(
-            (result) => result.webhookId,
-          );
-
-          for (const webhookId of permanentFailureIds) {
-            try {
-              await this.webhookService.remove(webhookId);
-              this.notificationService.clearPermanentFailureFlag(webhookId);
-
-              LoggerUtils.debugDev(
-                NotificationBatchService.name,
-                `Webhook ${webhookId} immediately deactivated after first failure for notice: ${notice.subject}`,
-              );
-            } catch (error) {
-              this.logger.error(
-                `Failed to deactivate webhook ${webhookId}:`,
-                error,
-              );
-            }
-          }
-
-          LoggerUtils.debugDev(
-            NotificationBatchService.name,
-            `Immediately deactivated ${permanentFailures.length} webhooks that failed on first attempt`,
-          );
-
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.WARN,
-            NotificationBatchService.name,
-            `Deactivated **${permanentFailures.length}** permanently-failing webhook(s) for notice: **${notice.subject}**`,
+        const { successCount, failedCount, deactivated, temporaryFailures } =
+          await this.dispatchToWebhooks(
+            activeWebhooks,
+            (webhooks) =>
+              this.notificationService.sendDiscordNotificationBatch(
+                notice,
+                webhooks,
+                abortSignal,
+              ),
             {
-              deactivatedCount: permanentFailures.length,
-              webhookIds: permanentFailureIds,
-              notice: notice.subject,
+              itemLabel: notice.subject,
+              itemType: 'notice',
             },
           );
-        }
-
-        if (temporaryFailures.length > 0) {
-          LoggerUtils.logDev(
-            NotificationBatchService.name,
-            `${temporaryFailures.length} webhooks failed temporarily for notice: ${notice.subject}`,
-          );
-        }
-
-        const successCount = results.filter((r) => r.success).length;
 
         return {
           notice: notice.subject,
-          totalWebhooks: currentWebhooks.length,
+          totalWebhooks: activeWebhooks.length,
           successCount,
-          failedCount: permanentFailures.length + temporaryFailures.length,
-          deactivated: permanentFailures.length,
-          temporaryFailures: temporaryFailures.length,
+          failedCount,
+          deactivated,
+          temporaryFailures,
         };
       },
     );
@@ -258,5 +285,157 @@ export class NotificationBatchService {
       notificationJobs,
       { ...options, label: 'notification_batch' },
     );
+  }
+
+  async executeChangeNotificationBatch(
+    payloads: ChangeNotificationPayload[],
+    options: BatchProcessingOptions = {},
+  ): Promise<BatchJobResult<ChangeNotificationJobResult>[]> {
+    if (payloads.length === 0) {
+      return [];
+    }
+
+    let activeWebhooks: Awaited<ReturnType<typeof this.webhookService.findAll>>;
+    try {
+      activeWebhooks = (await this.webhookService.findAll()) ?? [];
+    } catch (error) {
+      this.logger.error(
+        `Failed to load webhooks for change-notification batch, skipping dispatch: ${(error as Error).message}`,
+      );
+      return [];
+    }
+
+    const jobs = payloads.map((payload) => async (abortSignal: AbortSignal) => {
+      const { successCount, failedCount, deactivated, temporaryFailures } =
+        await this.dispatchToWebhooks(
+          activeWebhooks,
+          (webhooks) =>
+            this.notificationService.sendDiscordChangeNotificationBatch(
+              payload,
+              webhooks,
+              abortSignal,
+            ),
+          {
+            itemLabel: `${payload.noticeNum}:${payload.subject}`,
+            itemType: 'change',
+          },
+        );
+
+      return {
+        noticeNum: payload.noticeNum,
+        subject: payload.subject,
+        totalWebhooks: activeWebhooks.length,
+        successCount,
+        failedCount,
+        deactivated,
+        temporaryFailures,
+      };
+    });
+
+    return this.batchProcessingService.executeBatch<ChangeNotificationJobResult>(
+      jobs,
+      { ...options, label: 'change_notification_batch' },
+    );
+  }
+
+  private async dispatchToWebhooks(
+    webhooks: Awaited<ReturnType<typeof this.webhookService.findAll>>,
+    send: (
+      webhooks: Awaited<ReturnType<typeof this.webhookService.findAll>>,
+    ) => Promise<
+      Array<{
+        webhookId: number;
+        success: boolean;
+        error?: unknown;
+        shouldDelete?: boolean;
+      }>
+    >,
+    context: { itemLabel: string; itemType: 'notice' | 'change' },
+  ): Promise<{
+    successCount: number;
+    failedCount: number;
+    deactivated: number;
+    temporaryFailures: number;
+    results: Array<{
+      webhookId: number;
+      success: boolean;
+      error?: unknown;
+      shouldDelete?: boolean;
+    }>;
+  }> {
+    if (webhooks.length === 0) {
+      LoggerUtils.logDev(
+        NotificationBatchService.name,
+        `No active webhooks available for ${context.itemType} notification`,
+      );
+
+      return {
+        successCount: 0,
+        failedCount: 0,
+        deactivated: 0,
+        temporaryFailures: 0,
+        results: [],
+      };
+    }
+
+    const results = await send(webhooks);
+
+    const permanentFailures = results.filter(
+      (result) => !result.success && result.shouldDelete,
+    );
+    const temporaryFailures = results.filter(
+      (result) => !result.success && !result.shouldDelete,
+    );
+
+    if (permanentFailures.length > 0) {
+      const permanentFailureIds = permanentFailures.map(
+        (result) => result.webhookId,
+      );
+
+      for (const webhookId of permanentFailureIds) {
+        try {
+          await this.webhookService.remove(webhookId);
+          this.notificationService.clearPermanentFailureFlag(webhookId);
+
+          LoggerUtils.debugDev(
+            NotificationBatchService.name,
+            `Webhook ${webhookId} immediately deactivated after first failure for ${context.itemType}: ${context.itemLabel}`,
+          );
+        } catch (error) {
+          this.logger.error(
+            `Failed to deactivate webhook ${webhookId}:`,
+            error,
+          );
+        }
+      }
+
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        NotificationBatchService.name,
+        `Deactivated **${permanentFailures.length}** permanently-failing webhook(s) for ${context.itemType}: **${context.itemLabel}**`,
+        {
+          deactivatedCount: permanentFailures.length,
+          webhookIds: permanentFailureIds,
+          itemType: context.itemType,
+          itemLabel: context.itemLabel,
+        },
+      );
+    }
+
+    if (temporaryFailures.length > 0) {
+      LoggerUtils.logDev(
+        NotificationBatchService.name,
+        `${temporaryFailures.length} webhooks failed temporarily for ${context.itemType}: ${context.itemLabel}`,
+      );
+    }
+
+    const successCount = results.filter((r) => r.success).length;
+    return {
+      successCount,
+      failedCount: permanentFailures.length + temporaryFailures.length,
+      deactivated: permanentFailures.length,
+      temporaryFailures: temporaryFailures.length,
+      results,
+    };
   }
 }

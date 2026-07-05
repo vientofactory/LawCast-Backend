@@ -12,6 +12,7 @@ import {
   Req,
   Res,
   NotFoundException,
+  BadRequestException,
   StreamableFile,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -32,6 +33,10 @@ import { APP_CONSTANTS } from '../config/app.config';
 import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
+import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
+import { type ChangeEventType } from '../modules/change-tracking/notice-change-event.entity';
+import { NoticeChangeSource } from '../modules/change-tracking/notice-change-source.enum';
+import { type ArchiveDetailResult } from '../modules/notice/notice-archive.service';
 
 @Controller('api')
 export class ApiController {
@@ -49,6 +54,7 @@ export class ApiController {
     private readonly runtimeStatsService: RuntimeStatsService,
     private readonly archiveSyncService: ArchiveSyncService,
     private readonly packagesService: PackagesService,
+    private readonly changeTrackingService: ChangeTrackingService,
   ) {}
 
   @Post('webhooks')
@@ -107,6 +113,15 @@ export class ApiController {
       APP_CONSTANTS.CACHE.NOTICES_RECENT_LIMIT,
     );
     return ApiResponseUtils.success(notices);
+  }
+
+  @Get('notices/keywords')
+  async getQuickKeywordSuggestions(
+    @Query('limit', new DefaultValuePipe(8), ParseIntPipe) limit: number,
+  ) {
+    const suggestions =
+      await this.crawlingService.getQuickKeywordSuggestions(limit);
+    return ApiResponseUtils.success(suggestions);
   }
 
   @Get('notices/archive')
@@ -186,7 +201,10 @@ export class ApiController {
   }
 
   @Get('notices/:num/detail')
-  async getNoticeDetail(@Param('num', ParseIntPipe) num: number) {
+  async getNoticeDetail(
+    @Param('num', ParseIntPipe) num: number,
+    @Query('rev') revRaw?: string,
+  ) {
     const detail = await this.noticeArchiveService.getArchivedNoticeDetail(num);
 
     if (!detail) {
@@ -195,11 +213,245 @@ export class ApiController {
       );
     }
 
+    const timeline = await this.changeTrackingService.getNoticeChangeTimeline({
+      noticeNum: num,
+      limit: 1000,
+    });
+
+    const eventsAsc = [...timeline].sort(
+      (a, b) => a.eventHeight - b.eventHeight,
+    );
+    const headRev =
+      eventsAsc.length > 0 ? eventsAsc[eventsAsc.length - 1].eventHeight : null;
+    const requestedRev = this.parseRevisionQuery(revRaw);
+
+    if (requestedRev !== null && (headRev === null || requestedRev > headRev)) {
+      throw new BadRequestException(
+        `요청하신 리비전이 유효하지 않습니다. requested_rev=${requestedRev}, head_rev=${headRev ?? 0}`,
+      );
+    }
+
+    const resolvedRev = requestedRev ?? headRev;
+    const detailWithRevision = this.applyRevisionOverlay(
+      detail,
+      eventsAsc,
+      resolvedRev,
+    );
+    const legacyGenesisEvent = eventsAsc.find(
+      (event) => event.source === NoticeChangeSource.BOOTSTRAP_LEGACY_SEED,
+    );
+
     return ApiResponseUtils.success({
-      ...detail,
+      ...detailWithRevision,
       aiSummaryEnabled: (await this.healthCheckService.getOllamaMetrics())
         .enabled,
+      revision: {
+        requestedRev,
+        resolvedRev,
+        headRev,
+        hasDiffchain: headRev !== null,
+        isHistorical:
+          resolvedRev !== null && headRev !== null && resolvedRev < headRev,
+        hasLegacyGenesisBoundary: Boolean(legacyGenesisEvent),
+        legacyGenesisBoundaryAt: legacyGenesisEvent?.detectedAt ?? null,
+      },
     });
+  }
+
+  private parseRevisionQuery(revRaw?: string): number | null {
+    if (revRaw === undefined || revRaw === null || revRaw.trim() === '') {
+      return null;
+    }
+
+    const parsed = Number.parseInt(revRaw, 10);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new BadRequestException('rev 파라미터는 1 이상의 정수여야 합니다.');
+    }
+
+    return parsed;
+  }
+
+  private applyRevisionOverlay(
+    base: ArchiveDetailResult,
+    eventsAsc: Awaited<
+      ReturnType<ChangeTrackingService['getNoticeChangeTimeline']>
+    >,
+    targetRev: number | null,
+  ): ArchiveDetailResult {
+    const copied: ArchiveDetailResult = {
+      ...base,
+      notice: {
+        ...base.notice,
+        attachments: { ...base.notice.attachments },
+      },
+      originalContent: { ...base.originalContent },
+      archiveMetadata: {
+        ...base.archiveMetadata,
+        integrity: { ...base.archiveMetadata.integrity },
+        http: { ...base.archiveMetadata.http },
+      },
+      screenshotMeta: { ...base.screenshotMeta },
+    };
+
+    const overlays = new Map<string, string | null>();
+    for (const event of eventsAsc) {
+      if (targetRev !== null && event.eventHeight > targetRev) {
+        break;
+      }
+
+      for (const detail of event.details) {
+        overlays.set(detail.fieldPath, detail.afterValue);
+      }
+    }
+
+    for (const [fieldPath, value] of overlays.entries()) {
+      this.applyTrackedValue(copied, fieldPath, value);
+    }
+
+    return copied;
+  }
+
+  private applyTrackedValue(
+    detail: ArchiveDetailResult,
+    fieldPath: string,
+    value: string | null,
+  ): void {
+    const toStringOrNull = (raw: string | null): string | null => {
+      if (raw === null) return null;
+      const normalized = raw.trim();
+      return normalized.length > 0 ? normalized : null;
+    };
+
+    switch (fieldPath) {
+      case 'num': {
+        const parsed = value === null ? Number.NaN : Number.parseInt(value, 10);
+        if (Number.isInteger(parsed) && parsed > 0) {
+          detail.notice.num = parsed;
+        }
+        return;
+      }
+      case 'subject':
+        detail.notice.subject = value ?? '';
+        return;
+      case 'proposerCategory':
+        detail.notice.proposerCategory = value ?? '';
+        return;
+      case 'committee':
+        detail.notice.committee = value ?? '';
+        return;
+      case 'proposalReason':
+        detail.originalContent.proposalReason = value ?? '';
+        return;
+      case 'billNumber':
+        detail.originalContent.billNumber = toStringOrNull(value);
+        return;
+      case 'proposer':
+        detail.originalContent.proposer = toStringOrNull(value);
+        return;
+      case 'proposalDate':
+        detail.originalContent.proposalDate = toStringOrNull(value);
+        return;
+      case 'contentCommittee':
+        detail.originalContent.committee = toStringOrNull(value);
+        return;
+      case 'referralDate':
+        detail.originalContent.referralDate = toStringOrNull(value);
+        return;
+      case 'noticePeriod':
+        detail.originalContent.noticePeriod = toStringOrNull(value);
+        return;
+      case 'proposalSession':
+        detail.originalContent.proposalSession = toStringOrNull(value);
+        return;
+      case 'isDone':
+        detail.notice.isDone = value === 'true';
+        return;
+      case 'lifecycleStatus': {
+        const normalized = toStringOrNull(value);
+        if (
+          normalized === 'active' ||
+          normalized === 'source_deleted' ||
+          normalized === 'renumbered'
+        ) {
+          detail.notice.lifecycleStatus = normalized;
+        }
+        return;
+      }
+      case 'sourceDeletedAt': {
+        const normalized = toStringOrNull(value);
+        if (!normalized) {
+          detail.notice.sourceDeletedAt = null;
+          return;
+        }
+
+        const parsed = new Date(normalized);
+        detail.notice.sourceDeletedAt = Number.isNaN(parsed.getTime())
+          ? null
+          : parsed;
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  @Get('notices/:num/changes')
+  async getNoticeChanges(
+    @Param('num', ParseIntPipe) num: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    const timeline = await this.changeTrackingService.getNoticeChangeTimeline({
+      noticeNum: num,
+      limit,
+    });
+
+    return ApiResponseUtils.success({
+      noticeNum: num,
+      items: timeline,
+      count: timeline.length,
+    });
+  }
+
+  @Get('notices/changes')
+  async getRecentNoticeChanges(
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('eventType') eventTypeRaw?: string,
+    @Query('excludeLegacyGenesisSource') excludeLegacyGenesisSourceRaw?: string,
+    @Query('comparableOnly') comparableOnlyRaw?: string,
+  ) {
+    const allowedEventTypes: ChangeEventType[] = [
+      'created',
+      'updated',
+      'redacted',
+      'invalidated',
+    ];
+
+    const eventType = allowedEventTypes.includes(
+      eventTypeRaw as ChangeEventType,
+    )
+      ? (eventTypeRaw as ChangeEventType)
+      : undefined;
+
+    const excludeLegacyGenesisSource = excludeLegacyGenesisSourceRaw === 'true';
+    const comparableOnly = comparableOnlyRaw === 'true';
+
+    const result = await this.changeTrackingService.getRecentChanges({
+      page,
+      limit,
+      eventType,
+      excludeLegacyGenesisSource,
+      comparableOnly,
+    });
+
+    return ApiResponseUtils.success(result);
+  }
+
+  @Get('notices/changes/summary')
+  async getComparableNoticeChangesSummary() {
+    const summary =
+      await this.changeTrackingService.getComparableChangeSummary();
+    return ApiResponseUtils.success(summary);
   }
 
   @Get('notices/:num/screenshot')
@@ -254,6 +506,7 @@ export class ApiController {
       this.batchProcessingService,
       this.noticeArchiveService,
       this.archiveSyncService,
+      this.changeTrackingService,
     );
     return ApiResponseUtils.success(stats);
   }

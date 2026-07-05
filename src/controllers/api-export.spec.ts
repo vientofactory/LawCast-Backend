@@ -14,6 +14,7 @@ import { NoticeSearchService } from '../modules/crawling/notice-search.service';
 import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
+import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
 
 // NoticeArchiveService 모킹
 const mockBuildArchiveExportZip = jest.fn();
@@ -119,6 +120,19 @@ describe('ApiController archive export', () => {
           provide: PackagesService,
           useValue: {
             getPackages: jest.fn().mockReturnValue([]),
+          },
+        },
+        {
+          provide: ChangeTrackingService,
+          useValue: {
+            getNoticeChangeTimeline: jest.fn().mockResolvedValue([]),
+            getRecentChanges: jest.fn().mockResolvedValue({
+              items: [],
+              page: 1,
+              limit: 10,
+              total: 0,
+              totalPages: 0,
+            }),
           },
         },
       ],

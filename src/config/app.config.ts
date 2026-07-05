@@ -64,12 +64,14 @@ export const APP_CONSTANTS = {
       NOTICES: 30 * 60 * 1000, // 30 minutes (milliseconds)
       CACHE_INFO: 60 * 1000, // 1 minute (milliseconds)
       STATS: 5 * 60 * 1000, // 5 minutes (milliseconds)
+      QUICK_KEYWORDS: 60 * 60 * 1000, // 1 hour (milliseconds)
     },
     KEYS: {
       RECENT_NOTICES: 'recent_notices',
       CACHE_INFO: 'cache_info',
       NEW_NOTICES_SET: 'new_notices_set',
       LAST_UPDATED: 'last_updated',
+      QUICK_KEYWORDS: 'quick_keywords',
     },
   },
   API: {
@@ -204,7 +206,10 @@ export const APP_CONSTANTS = {
       IS_DONE_SYNC: '13 */6 * * *', // Every 6 hours, staggered away from heavy minute-0 jobs
       HTML_BACKFILL: '17 * * * *', // Every hour, staggered from crawling and isDone sync
       INTEGRITY_RESCAN: '43 3 * * *', // Daily at 03:43, isolated from top-of-hour workload
+      CHANGE_TRACKING_DAILY_AUDIT: '7 4 * * *', // Daily at 04:07 after integrity rescan
+      CHANGE_TRACKING_WEEKLY_AUDIT: '19 4 * * 1', // Every Monday at 04:19
       SCREENSHOT_BACKFILL: '37 * * * *', // Every hour, staggered from HTML backfill
+      QUICK_KEYWORDS_REFRESH: '11 * * * *', // Every hour, refresh homepage keyword suggestions
     },
     OFFSETS_MS: {
       SCREENSHOT_BACKFILL: 0, // No extra offset; schedule is already staggered

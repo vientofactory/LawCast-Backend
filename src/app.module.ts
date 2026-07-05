@@ -7,6 +7,8 @@ import { createKeyv } from '@keyv/redis';
 import { ApiController } from './controllers/api.controller';
 import { Webhook } from './modules/webhook/webhook.entity';
 import { NoticeArchive } from './modules/notice/notice-archive.entity';
+import { NoticeChangeEvent } from './modules/change-tracking/notice-change-event.entity';
+import { NoticeChangeDetail } from './modules/change-tracking/notice-change-detail.entity';
 import { migrations } from './migrations';
 import appConfig from './config/app.config';
 // Feature modules
@@ -20,6 +22,7 @@ import { HealthModule } from './modules/health/health.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { OllamaModule } from './modules/ollama/ollama.module';
 import { DiscordBridgeModule } from './modules/discord-bridge/discord-bridge.module';
+import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.module';
 
 @Module({
   imports: [
@@ -53,7 +56,12 @@ import { DiscordBridgeModule } from './modules/discord-bridge/discord-bridge.mod
       useFactory: (configService: ConfigService) => ({
         type: 'sqlite',
         database: configService.get<string>('database.path'),
-        entities: [Webhook, NoticeArchive],
+        entities: [
+          Webhook,
+          NoticeArchive,
+          NoticeChangeEvent,
+          NoticeChangeDetail,
+        ],
         synchronize: false,
         migrationsRun: false,
         migrationsTableName: 'migrations',
@@ -71,6 +79,7 @@ import { DiscordBridgeModule } from './modules/discord-bridge/discord-bridge.mod
     CrawlingModule,
     HealthModule,
     SchedulingModule,
+    ChangeTrackingModule,
     // Third-party integration modules
     OllamaModule,
     DiscordBridgeModule,

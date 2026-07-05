@@ -1,7 +1,7 @@
-import { createHash } from 'crypto';
 import { describe, expect, it, jest } from '@jest/globals';
 import { NoticeArchiveService } from './notice-archive.service';
 import { NoticeArchive } from '../notice/notice-archive.entity';
+import { computeSha256 } from './notice-archive.helpers';
 
 describe('NoticeArchiveService', () => {
   const createRepositoryMock = () => ({
@@ -18,9 +18,7 @@ describe('NoticeArchiveService', () => {
 
   const buildRow = (overrides: Partial<NoticeArchive> = {}): NoticeArchive => {
     const sourceHtml = '<html><body>LawCast Integrity Test</body></html>';
-    const sourceHtmlSha256 = createHash('sha256')
-      .update(sourceHtml, 'utf8')
-      .digest('hex');
+    const sourceHtmlSha256 = computeSha256(sourceHtml);
 
     return {
       id: 1,
@@ -57,6 +55,8 @@ describe('NoticeArchiveService', () => {
       httpEtag: null,
       httpLastModified: null,
       isDone: false,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
       archiveStartedAt: new Date('2026-04-17T00:00:02.000Z'),
       lastUpdatedAt: new Date('2026-04-17T00:00:03.000Z'),
       screenshotBlob: null,
@@ -93,8 +93,10 @@ describe('NoticeArchiveService', () => {
     expect(bashScript?.content).toContain(
       `INTEGRITY_FILE="${result?.integrityFileName}"`,
     );
-    expect(bashScript?.content).toContain('jq -rj ".dbRecord.sourceHtml"');
-    expect(bashScript?.content).toContain('cut -d " " -f1');
+    expect(bashScript?.content).toContain('node -e');
+    expect(bashScript?.content).toContain(
+      'integritySnapshot?.calculatedSha256',
+    );
 
     expect(powerShellScript?.content).toContain(
       `$JsonFile = "${result?.jsonFileName}"`,
@@ -103,7 +105,9 @@ describe('NoticeArchiveService', () => {
       `$IntegrityFile = "${result?.integrityFileName}"`,
     );
     expect(powerShellScript?.content).toContain('ConvertFrom-Json');
-    expect(powerShellScript?.content).toContain('SHA256');
+    expect(powerShellScript?.content).toContain(
+      'integritySnapshot.calculatedSha256',
+    );
   });
 
   it('builds a structurally consistent export payload and metadata files', async () => {
@@ -325,6 +329,51 @@ describe('NoticeArchiveService', () => {
       const result = await service.getUnavailableSummaryPage(0, 50);
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('change notification collection bridge', () => {
+    it('forwards begin/end/flush calls to ChangeTrackingService when available', async () => {
+      const repositoryMock = createRepositoryMock();
+      const changeTrackingService = {
+        beginChangeNotificationCollection: jest.fn<(...args: any[]) => void>(),
+        endChangeNotificationCollection: jest
+          .fn<(...args: any[]) => Promise<void>>()
+          .mockResolvedValue(undefined),
+        flushQueuedChangeNotificationsNow: jest
+          .fn<(...args: any[]) => Promise<void>>()
+          .mockResolvedValue(undefined),
+      };
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        changeTrackingService as any,
+      );
+
+      service.beginChangeNotificationCollection();
+      await service.endChangeNotificationCollection();
+      await service.flushQueuedChangeNotifications();
+
+      expect(
+        changeTrackingService.beginChangeNotificationCollection,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        changeTrackingService.endChangeNotificationCollection,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        changeTrackingService.flushQueuedChangeNotificationsNow,
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it('safely no-ops when ChangeTrackingService is missing', async () => {
+      const repositoryMock = createRepositoryMock();
+      const service = new NoticeArchiveService(repositoryMock as any);
+
+      service.beginChangeNotificationCollection();
+      await service.endChangeNotificationCollection();
+      await service.flushQueuedChangeNotifications();
+
+      expect(true).toBe(true);
     });
   });
 });

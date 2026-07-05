@@ -8,6 +8,7 @@ import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { ArchiveSyncService } from '../crawling/archive-sync.service';
 import { ArchiveOrchestratorService } from '../crawling/archive-orchestrator.service';
+import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 
 const CRON_TIMEZONE = appConfig().cron.timezone;
 
@@ -23,6 +24,7 @@ export class CronJobsService {
     private readonly crawlingService: CrawlingService,
     private readonly archiveSyncService: ArchiveSyncService,
     private readonly archiveOrchestratorService: ArchiveOrchestratorService,
+    private readonly changeTrackingService: ChangeTrackingService,
     @Optional() private readonly discordBridge: DiscordBridgeService,
   ) {}
 
@@ -247,6 +249,34 @@ export class CronJobsService {
     );
   }
 
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CHANGE_TRACKING_DAILY_AUDIT, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleChangeTrackingDailyAudit(): Promise<void> {
+    if (this.shouldSkipArchiveSyncCron('change-tracking daily audit')) {
+      return;
+    }
+    await this.execute('change-tracking daily audit', () =>
+      this.changeTrackingService
+        .runScheduledChainAudit('daily')
+        .then(() => undefined),
+    );
+  }
+
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CHANGE_TRACKING_WEEKLY_AUDIT, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleChangeTrackingWeeklyAudit(): Promise<void> {
+    if (this.shouldSkipArchiveSyncCron('change-tracking weekly audit')) {
+      return;
+    }
+    await this.execute('change-tracking weekly audit', () =>
+      this.changeTrackingService
+        .runScheduledChainAudit('weekly')
+        .then(() => undefined),
+    );
+  }
+
   /**
    * Periodically re-triggers the screenshot backfill so notices that were
    * permanently skipped in a previous session are retried without a full
@@ -262,6 +292,17 @@ export class CronJobsService {
       'screenshot backfill',
       this.screenshotBackfillOffsetMs,
       () => this.archiveOrchestratorService.handleScreenshotBackfill(),
+    );
+  }
+
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.QUICK_KEYWORDS_REFRESH, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleQuickKeywordRefresh(): Promise<void> {
+    await this.execute('quick keyword refresh', () =>
+      this.crawlingService
+        .refreshQuickKeywordSuggestions()
+        .then(() => undefined),
     );
   }
 }

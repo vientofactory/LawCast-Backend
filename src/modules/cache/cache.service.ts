@@ -4,7 +4,11 @@ import { Cache } from 'cache-manager';
 import { type ITableData } from 'pal-crawl';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { LoggerUtils } from '../../utils/logger.utils';
-import { type CacheInfo, type CachedNotice } from '../../types/cache.types';
+import {
+  type CacheInfo,
+  type CachedNotice,
+  type QuickKeywordSuggestionsCache,
+} from '../../types/cache.types';
 
 @Injectable()
 export class CacheService implements OnModuleDestroy {
@@ -213,6 +217,7 @@ export class CacheService implements OnModuleDestroy {
       await Promise.all([
         this.cacheManager.del(this.CACHE_KEYS.RECENT_NOTICES),
         this.cacheManager.del(this.CACHE_KEYS.LAST_UPDATED),
+        this.cacheManager.del(this.CACHE_KEYS.QUICK_KEYWORDS),
       ]);
       LoggerUtils.logDev(CacheService.name, 'Redis cache cleared');
     } catch (error) {
@@ -290,6 +295,40 @@ export class CacheService implements OnModuleDestroy {
         },
         error: message || 'Unknown Redis error',
       };
+    }
+  }
+
+  async getQuickKeywordSuggestions(): Promise<QuickKeywordSuggestionsCache | null> {
+    try {
+      const cached = await this.cacheManager.get<QuickKeywordSuggestionsCache>(
+        this.CACHE_KEYS.QUICK_KEYWORDS,
+      );
+
+      if (!cached || !Array.isArray(cached.items) || !cached.updatedAt) {
+        return null;
+      }
+
+      return {
+        items: cached.items,
+        updatedAt: cached.updatedAt,
+        sourceNoticeCount: Number.isFinite(cached.sourceNoticeCount)
+          ? cached.sourceNoticeCount
+          : cached.items.length,
+      };
+    } catch (error) {
+      this.logger.error('Error getting cached quick keywords:', error);
+      return null;
+    }
+  }
+
+  async setQuickKeywordSuggestions(
+    payload: QuickKeywordSuggestionsCache,
+  ): Promise<void> {
+    try {
+      await this.cacheManager.set(this.CACHE_KEYS.QUICK_KEYWORDS, payload, 0);
+    } catch (error) {
+      this.logger.error('Error setting cached quick keywords:', error);
+      throw error;
     }
   }
 

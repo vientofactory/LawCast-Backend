@@ -71,6 +71,13 @@ describe('ArchiveOrchestratorService', () => {
           useValue: {
             upsertNoticeArchive: jest.fn(),
             getExistingNoticeNumSet: jest.fn(),
+            beginChangeNotificationCollection: jest.fn(),
+            endChangeNotificationCollection: jest
+              .fn()
+              .mockResolvedValue(undefined),
+            flushQueuedChangeNotifications: jest
+              .fn()
+              .mockResolvedValue(undefined),
             updateScreenshot: jest.fn().mockResolvedValue(undefined),
             getNoticesWithMissingScreenshots: jest.fn().mockResolvedValue([]),
             getNoticesWithMissingNsmScreenshots: jest

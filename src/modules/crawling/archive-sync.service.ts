@@ -16,6 +16,7 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { mapConcurrently } from '../../utils/concurrency.utils';
 import { type CachedNotice } from '../../types/cache.types';
 import { AI_SUMMARY_STATUS } from './utils/ai-summary-status.utils';
+import { type LegacyGenesisSeedResult } from '../notice/notice-archive.service';
 import {
   ArchiveSyncPhaseRunner,
   type ArchiveSyncPhaseState,
@@ -114,6 +115,7 @@ export type HtmlBackfillStatus = PhaseStatus<HtmlBackfillResult>;
 export type SummaryUnavailableRetryStatus =
   PhaseStatus<SummaryUnavailableRetryResult>;
 export type PendingSyncStatus = PhaseStatus<PendingSyncResult>;
+export type LegacyGenesisSeedStatus = PhaseStatus<LegacyGenesisSeedResult>;
 
 export interface ArchiveSyncExecutionState {
   isAnyPhaseRunning: boolean;
@@ -162,6 +164,8 @@ export class ArchiveSyncService implements OnModuleInit {
   private readonly unavailableRetry =
     makePhaseTracker<SummaryUnavailableRetryResult>();
   private readonly pendingSync = makePhaseTracker<PendingSyncResult>();
+  private readonly legacyGenesisSeed =
+    makePhaseTracker<LegacyGenesisSeedResult>();
 
   constructor(
     private readonly crawlingCoreService: CrawlingCoreService,
@@ -195,45 +199,57 @@ export class ArchiveSyncService implements OnModuleInit {
       ArchiveSyncService.name,
       'Bootstrap sync pipeline started',
     );
+    const bootstrapBoundaryAt = new Date();
 
-    // Pending sync runs first so that "발의" state bills are archived before
-    // the pal.assembly.go.kr full sync, enabling the earliest possible detection.
-    await this.safeRun('pending sync', () => this.runPendingSync('bootstrap'));
-    await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
+    this.noticeArchiveService.beginChangeNotificationSuppression?.();
 
-    // HTML backfill runs before summary backfill so that NSM bills gain their
-    // proposalReason before Ollama tries to summarise them.
-    await this.safeRun('html backfill', () =>
-      this.runHtmlBackfill('bootstrap'),
-    );
+    try {
+      // Pending sync runs first so that "발의" state bills are archived before
+      // the pal.assembly.go.kr full sync, enabling the earliest possible detection.
+      await this.safeRun('pending sync', () =>
+        this.runPendingSync('bootstrap'),
+      );
+      await this.safeRun('legacy genesis seed', () =>
+        this.runLegacyGenesisSeed('bootstrap', bootstrapBoundaryAt),
+      );
+      await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
 
-    // Summary backfill and unavailable retry run immediately after the full
-    // archive is populated.  They are independent of isDone status and
-    // integrity metadata, so there is no reason to delay them until after the
-    // isDone crawl (which may scan thousands of pages and take minutes).
-    await this.safeRun('summary backfill', () =>
-      this.runSummaryBackfill('bootstrap'),
-    );
-    await this.safeRun('unavailable retry', () =>
-      this.runUnavailableRetry('bootstrap'),
-    );
+      // HTML backfill runs before summary backfill so that NSM bills gain their
+      // proposalReason before Ollama tries to summarise them.
+      await this.safeRun('html backfill', () =>
+        this.runHtmlBackfill('bootstrap'),
+      );
 
-    // isDone sync and integrity check update orthogonal columns (isDone,
-    // integrityVerifiedAt) and are not on the critical path for notifications.
-    await this.safeRun('isDone sync', () => this.runIsDoneSync('bootstrap'));
-    await this.safeRun('integrity check', () =>
-      this.runIntegrityCheck('bootstrap'),
-    );
+      // Summary backfill and unavailable retry run immediately after the full
+      // archive is populated.  They are independent of isDone status and
+      // integrity metadata, so there is no reason to delay them until after the
+      // isDone crawl (which may scan thousands of pages and take minutes).
+      await this.safeRun('summary backfill', () =>
+        this.runSummaryBackfill('bootstrap'),
+      );
+      await this.safeRun('unavailable retry', () =>
+        this.runUnavailableRetry('bootstrap'),
+      );
 
-    LoggerUtils.log(
-      ArchiveSyncService.name,
-      'Bootstrap sync pipeline complete',
-    );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      ArchiveSyncService.name,
-      'Bootstrap sync pipeline complete',
-    );
+      // isDone sync and integrity check update orthogonal columns (isDone,
+      // integrityVerifiedAt) and are not on the critical path for notifications.
+      await this.safeRun('isDone sync', () => this.runIsDoneSync('bootstrap'));
+      await this.safeRun('integrity check', () =>
+        this.runIntegrityCheck('bootstrap'),
+      );
+
+      LoggerUtils.log(
+        ArchiveSyncService.name,
+        'Bootstrap sync pipeline complete',
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.LOG,
+        ArchiveSyncService.name,
+        'Bootstrap sync pipeline complete',
+      );
+    } finally {
+      this.noticeArchiveService.endChangeNotificationSuppression?.();
+    }
   }
 
   /** Runs a named async operation, swallowing errors so the pipeline continues. */
@@ -331,7 +347,27 @@ export class ArchiveSyncService implements OnModuleInit {
       { name: 'html backfill', tracker: this.htmlBackfill },
       { name: 'unavailable retry', tracker: this.unavailableRetry },
       { name: 'pending sync', tracker: this.pendingSync },
+      { name: 'legacy genesis seed', tracker: this.legacyGenesisSeed },
     ];
+  }
+
+  async runLegacyGenesisSeed(
+    trigger: string,
+    boundaryAt = new Date(),
+  ): Promise<LegacyGenesisSeedResult | null> {
+    return this.runPhase(
+      'Legacy genesis seed',
+      this.legacyGenesisSeed,
+      trigger,
+      () => this.noticeArchiveService.seedLegacyGenesisEvents(boundaryAt),
+      (r) =>
+        `boundary=${r.boundaryAt} scanned=${r.scanned} seeded=${r.seeded} skipped=${r.skipped}`,
+      /* crossPhaseGuard */ true,
+    );
+  }
+
+  getLegacyGenesisSeedStatus(): LegacyGenesisSeedStatus {
+    return this.toStatus(this.legacyGenesisSeed);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -359,102 +395,125 @@ export class ArchiveSyncService implements OnModuleInit {
     let totalPagesScanned = 0;
     let totalNoticesScanned = 0;
     let newlyArchivedCount = 0;
+    const seenPalActiveNums = new Set<number>();
 
-    for await (const page of this.crawlingCoreService.getAllPages(
-      { pageUnit: CRAWLER_PAGE_UNIT },
-      { delayMs: CRAWLER_DELAY_MS, concurrency: 1 },
-    )) {
-      totalPagesScanned++;
-      // Guard against unexpected null/undefined items from the crawler
-      const pageItems: ITableData[] = page.items ?? [];
-      totalNoticesScanned += pageItems.length;
+    this.noticeArchiveService.beginChangeNotificationCollection();
 
-      const newNotices =
-        await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
-          pageItems,
-        );
+    try {
+      for await (const page of this.crawlingCoreService.getAllPages(
+        { pageUnit: CRAWLER_PAGE_UNIT },
+        { delayMs: CRAWLER_DELAY_MS, concurrency: 1 },
+      )) {
+        totalPagesScanned++;
+        // Guard against unexpected null/undefined items from the crawler
+        const pageItems: ITableData[] = page.items ?? [];
+        for (const item of pageItems) {
+          seenPalActiveNums.add(item.num);
+        }
+        totalNoticesScanned += pageItems.length;
 
-      if (newNotices.length > 0) {
-        const saved = await this.archiveOrchestratorService.archiveNotices(
-          newNotices.map((n) => ({
-            ...n,
-            aiSummary: null,
-            aiSummaryStatus: 'not_requested' as const,
-          })),
-        );
-        newlyArchivedCount += saved;
-      }
-
-      // Upgrade pending bills: bills previously archived from NsmLmSts with
-      // contentId=NULL that now appear in pal.assembly.go.kr with a contentId.
-      const newNums = new Set(newNotices.map((n) => n.num));
-      const alreadyArchivedWithContentId = pageItems.filter(
-        (item) => !newNums.has(item.num) && item.contentId !== null,
-      );
-      if (alreadyArchivedWithContentId.length > 0) {
-        const nullContentIdNums =
-          await this.noticeArchiveService.getArchivedNullContentIdNums(
-            alreadyArchivedWithContentId.map((i) => i.num),
+        const newNotices =
+          await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
+            pageItems,
           );
-        if (nullContentIdNums.size > 0) {
-          const toUpgrade = alreadyArchivedWithContentId.filter((item) =>
-            nullContentIdNums.has(item.num),
+
+        if (newNotices.length > 0) {
+          const saved = await this.archiveOrchestratorService.archiveNotices(
+            newNotices.map((n) => ({
+              ...n,
+              aiSummary: null,
+              aiSummaryStatus: 'not_requested' as const,
+            })),
           );
-          const summaryStates =
-            await this.noticeArchiveService.getSummaryStateByNoticeNums(
-              toUpgrade.map((item) => item.num),
+          newlyArchivedCount += saved;
+        }
+
+        // Upgrade pending bills: bills previously archived from NsmLmSts with
+        // contentId=NULL that now appear in pal.assembly.go.kr with a contentId.
+        const newNums = new Set(newNotices.map((n) => n.num));
+        const alreadyArchivedWithContentId = pageItems.filter(
+          (item) => !newNums.has(item.num) && item.contentId !== null,
+        );
+        if (alreadyArchivedWithContentId.length > 0) {
+          const nullContentIdNums =
+            await this.noticeArchiveService.getArchivedNullContentIdNums(
+              alreadyArchivedWithContentId.map((i) => i.num),
             );
+          if (nullContentIdNums.size > 0) {
+            const toUpgrade = alreadyArchivedWithContentId.filter((item) =>
+              nullContentIdNums.has(item.num),
+            );
+            const summaryStates =
+              await this.noticeArchiveService.getSummaryStateByNoticeNums(
+                toUpgrade.map((item) => item.num),
+              );
 
-          // Re-archive with PAL source/detail so NSM-first rows are naturally
-          // refreshed (proposal metadata/source HTML/etc.) once PAL publishes.
-          const upgraded = await this.archiveOrchestratorService.archiveNotices(
-            toUpgrade.map((item) => {
-              const summary = summaryStates.get(item.num);
-              return {
-                num: item.num,
-                subject: item.subject,
-                proposerCategory: item.proposerCategory,
-                committee: item.committee,
-                link: item.link,
-                contentId: item.contentId,
-                attachments: item.attachments ?? {
-                  pdfFile: null,
-                  hwpFile: null,
+            // Re-archive with PAL source/detail so NSM-first rows are naturally
+            // refreshed (proposal metadata/source HTML/etc.) once PAL publishes.
+            const upgraded =
+              await this.archiveOrchestratorService.archiveNotices(
+                toUpgrade.map((item) => {
+                  const summary = summaryStates.get(item.num);
+                  return {
+                    num: item.num,
+                    subject: item.subject,
+                    proposerCategory: item.proposerCategory,
+                    committee: item.committee,
+                    link: item.link,
+                    contentId: item.contentId,
+                    attachments: item.attachments ?? {
+                      pdfFile: null,
+                      hwpFile: null,
+                    },
+                    aiSummary: summary?.aiSummary ?? null,
+                    aiSummaryStatus:
+                      summary?.aiSummaryStatus ?? 'not_requested',
+                  };
+                }),
+              );
+            if (upgraded > 0) {
+              LoggerUtils.logDev(
+                ArchiveSyncService.name,
+                `Upgraded ${upgraded} pending bill(s) from NSM to PAL with full archive refresh`,
+              );
+              void this.discordBridge?.logEvent(
+                BridgeLogLevel.DEBUG,
+                ArchiveSyncService.name,
+                `NSM->PAL archive refresh applied: upgraded **${upgraded}** bill(s) on full sync`,
+                {
+                  upgraded,
+                  detected: toUpgrade.length,
+                  sampleNoticeNums: toUpgrade
+                    .slice(0, 10)
+                    .map((item) => item.num),
                 },
-                aiSummary: summary?.aiSummary ?? null,
-                aiSummaryStatus: summary?.aiSummaryStatus ?? 'not_requested',
-              };
-            }),
-          );
-          if (upgraded > 0) {
-            LoggerUtils.logDev(
-              ArchiveSyncService.name,
-              `Upgraded ${upgraded} pending bill(s) from NSM to PAL with full archive refresh`,
-            );
-            void this.discordBridge?.logEvent(
-              BridgeLogLevel.DEBUG,
-              ArchiveSyncService.name,
-              `NSM->PAL archive refresh applied: upgraded **${upgraded}** bill(s) on full sync`,
-              {
-                upgraded,
-                detected: toUpgrade.length,
-                sampleNoticeNums: toUpgrade
-                  .slice(0, 10)
-                  .map((item) => item.num),
-              },
-            );
+              );
+            }
           }
         }
+
+        LoggerUtils.debugDev(
+          ArchiveSyncService.name,
+          `Page ${page.currentPage}/${page.totalPages}: ` +
+            `total=${pageItems.length} new=${newNotices.length}`,
+        );
       }
 
-      LoggerUtils.debugDev(
-        ArchiveSyncService.name,
-        `Page ${page.currentPage}/${page.totalPages}: ` +
-          `total=${pageItems.length} new=${newNotices.length}`,
-      );
-    }
+      const sourceDeletedCount =
+        await this.noticeArchiveService.markSourceDeletedByMissingPalNums(
+          seenPalActiveNums,
+        );
+      if (sourceDeletedCount > 0) {
+        LoggerUtils.log(
+          ArchiveSyncService.name,
+          `Marked ${sourceDeletedCount} notice(s) as source_deleted after PAL full sync reconciliation`,
+        );
+      }
 
-    return { totalPagesScanned, totalNoticesScanned, newlyArchivedCount };
+      return { totalPagesScanned, totalNoticesScanned, newlyArchivedCount };
+    } finally {
+      await this.noticeArchiveService.endChangeNotificationCollection();
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -488,62 +547,68 @@ export class ArchiveSyncService implements OnModuleInit {
       'Pending bills sync (NsmLmSts) started',
     );
 
-    const rawItemMap = new Map<number, INsmBillItem>();
-    const pendingNotices: ReturnType<
-      typeof CrawlingCoreService.nsmBillToCachedNotice
-    >[] = [];
+    this.noticeArchiveService.beginChangeNotificationCollection();
 
-    for await (const page of this.crawlingCoreService.getAllNsmPendingPages(
-      {},
-      { delayMs: CRAWLER_DELAY_MS, concurrency: 1 },
-    )) {
-      for (const item of page.items ?? []) {
-        const notice = CrawlingCoreService.nsmBillToCachedNotice(item);
-        if (!rawItemMap.has(notice.num)) {
-          rawItemMap.set(notice.num, item);
-          pendingNotices.push(notice);
+    try {
+      const rawItemMap = new Map<number, INsmBillItem>();
+      const pendingNotices: ReturnType<
+        typeof CrawlingCoreService.nsmBillToCachedNotice
+      >[] = [];
+
+      for await (const page of this.crawlingCoreService.getAllNsmPendingPages(
+        {},
+        { delayMs: CRAWLER_DELAY_MS, concurrency: 1 },
+      )) {
+        for (const item of page.items ?? []) {
+          const notice = CrawlingCoreService.nsmBillToCachedNotice(item);
+          if (!rawItemMap.has(notice.num)) {
+            rawItemMap.set(notice.num, item);
+            pendingNotices.push(notice);
+          }
         }
       }
-    }
 
-    const totalScanned = pendingNotices.length;
+      const totalScanned = pendingNotices.length;
 
-    if (totalScanned === 0) {
-      LoggerUtils.logDev(
-        ArchiveSyncService.name,
-        'No pending bills found in NsmLmSts',
-      );
-      return { totalScanned: 0, newlyArchivedCount: 0 };
-    }
-
-    const newPendingNotices =
-      await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
-        pendingNotices,
-      );
-
-    let newlyArchivedCount = 0;
-    if (newPendingNotices.length > 0) {
-      const newPendingItems = newPendingNotices
-        .map((n) => rawItemMap.get(n.num))
-        .filter((item): item is INsmBillItem => item !== undefined);
-      const archived =
-        await this.archiveOrchestratorService.archiveNsmBillItems(
-          newPendingItems,
+      if (totalScanned === 0) {
+        LoggerUtils.logDev(
+          ArchiveSyncService.name,
+          'No pending bills found in NsmLmSts',
         );
-      newlyArchivedCount = archived.length;
+        return { totalScanned: 0, newlyArchivedCount: 0 };
+      }
+
+      const newPendingNotices =
+        await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
+          pendingNotices,
+        );
+
+      let newlyArchivedCount = 0;
+      if (newPendingNotices.length > 0) {
+        const newPendingItems = newPendingNotices
+          .map((n) => rawItemMap.get(n.num))
+          .filter((item): item is INsmBillItem => item !== undefined);
+        const archived =
+          await this.archiveOrchestratorService.archiveNsmBillItems(
+            newPendingItems,
+          );
+        newlyArchivedCount = archived.length;
+      }
+
+      LoggerUtils.log(
+        ArchiveSyncService.name,
+        `Pending sync done - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.LOG,
+        ArchiveSyncService.name,
+        `Pending sync complete - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
+      );
+
+      return { totalScanned, newlyArchivedCount };
+    } finally {
+      await this.noticeArchiveService.endChangeNotificationCollection();
     }
-
-    LoggerUtils.log(
-      ArchiveSyncService.name,
-      `Pending sync done - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
-    );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      ArchiveSyncService.name,
-      `Pending sync complete - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
-    );
-
-    return { totalScanned, newlyArchivedCount };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -734,10 +799,16 @@ export class ArchiveSyncService implements OnModuleInit {
       'HTML backfill',
       this.htmlBackfill,
       trigger,
-      () =>
-        this.archiveOrchestratorService.backfillMissingHtml(
-          HTML_BACKFILL_BATCH_SIZE,
-        ),
+      async () => {
+        this.noticeArchiveService.beginChangeNotificationCollection();
+        try {
+          return await this.archiveOrchestratorService.backfillMissingHtml(
+            HTML_BACKFILL_BATCH_SIZE,
+          );
+        } finally {
+          await this.noticeArchiveService.endChangeNotificationCollection();
+        }
+      },
       (r) =>
         `pal=${r.pal.processed}ok/${r.pal.failed}fail nsm=${r.nsm.processed}ok/${r.nsm.failed}fail`,
     );

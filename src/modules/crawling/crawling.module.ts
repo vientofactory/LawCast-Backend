@@ -5,6 +5,7 @@ import { NotificationModule } from '../notification/notification.module';
 import { HealthModule } from '../health/health.module';
 import { OllamaModule } from '../ollama/ollama.module';
 import { DiscordBridgeModule } from '../discord-bridge/discord-bridge.module';
+import { ChangeTrackingModule } from '../change-tracking/change-tracking.module';
 import { CrawlingCoreService } from './crawling-core.service';
 import { SummaryGenerationService } from './summary-generation.service';
 import { ArchiveOrchestratorService } from './archive-orchestrator.service';
@@ -22,6 +23,7 @@ import { NoticeSearchService } from './notice-search.service';
     HealthModule,
     OllamaModule,
     DiscordBridgeModule,
+    ChangeTrackingModule,
   ],
   providers: [
     CrawlingCoreService,

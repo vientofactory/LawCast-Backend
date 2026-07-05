@@ -5,6 +5,7 @@ import { CrawlingService } from '../crawling/crawling.service';
 import { BatchProcessingService } from '../shared/batch-processing.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { ArchiveSyncService } from '../crawling/archive-sync.service';
+import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 
 @Injectable()
 export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
@@ -51,6 +52,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     batchProcessingService: BatchProcessingService,
     noticeArchiveService: NoticeArchiveService,
     archiveSyncService?: ArchiveSyncService,
+    changeTrackingService?: ChangeTrackingService,
   ) {
     const nodeEnv = params.nodeEnv;
     if (
@@ -61,14 +63,22 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     ) {
       throw new Error('All service dependencies must be provided');
     }
-    const [webhookStats, cacheInfo, batchStatus, archiveCount, ollamaMetrics] =
-      await Promise.all([
-        webhookService.getDetailedStatsForApi({ nodeEnv }),
-        crawlingService.getCacheInfo(),
-        batchProcessingService.getBatchStatusForApi({ nodeEnv }),
-        noticeArchiveService.getArchiveCount(),
-        crawlingService.getOllamaMetrics(),
-      ]);
+    const [
+      webhookStats,
+      cacheInfo,
+      batchStatus,
+      archiveCount,
+      ollamaMetrics,
+      comparableChangeSummary,
+    ] = await Promise.all([
+      webhookService.getDetailedStatsForApi({ nodeEnv }),
+      crawlingService.getCacheInfo(),
+      batchProcessingService.getBatchStatusForApi({ nodeEnv }),
+      noticeArchiveService.getArchiveCount(),
+      crawlingService.getOllamaMetrics(),
+      changeTrackingService?.getComparableChangeSummary() ??
+        Promise.resolve({ comparableEventTotal: 0, comparableNoticeCount: 0 }),
+    ]);
     const nodeRuntime = this.getNodeRuntimeStats();
     const isProduction = nodeEnv === 'production';
     return {
@@ -84,8 +94,11 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
       archive: {
         count: archiveCount,
         isDoneSync: archiveSyncService?.getIsDoneSyncStatus() ?? null,
+        legacyGenesisSeed:
+          archiveSyncService?.getLegacyGenesisSeedStatus() ?? null,
       },
       batchProcessing: batchStatus,
+      changeTracking: comparableChangeSummary,
       ollama: isProduction
         ? {
             enabled: ollamaMetrics.enabled,

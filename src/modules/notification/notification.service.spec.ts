@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { ConfigService } from '@nestjs/config';
 import { NotificationService } from './notification.service';
+import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 import { CacheService } from '../cache/cache.service';
 import { Webhook } from '../webhook/webhook.entity';
 import {
@@ -28,6 +29,7 @@ describe('NotificationService', () => {
     mockMessageBuilder = {
       setTitle: jest.fn().mockReturnThis(),
       setDescription: jest.fn().mockReturnThis(),
+      setAuthor: jest.fn().mockReturnThis(),
       addField: jest.fn().mockReturnThis(),
       setColor: jest.fn().mockReturnThis(),
       setTimestamp: jest.fn().mockReturnThis(),
@@ -400,6 +402,52 @@ describe('NotificationService', () => {
         );
         expect(result.shouldDelete).toBe(false);
       }
+    });
+  });
+
+  describe('sendDiscordChangeNotificationBatch', () => {
+    const mockWebhooks: Webhook[] = [
+      {
+        id: 10,
+        url: 'https://discord.com/api/webhooks/10/token10',
+        isActive: true,
+      } as Webhook,
+    ];
+
+    it('should render changed fields with Korean labels in embed', async () => {
+      mockDiscordWebhook.send.mockResolvedValue(undefined);
+
+      await service.sendDiscordChangeNotificationBatch(
+        {
+          noticeNum: 2210001,
+          subject: '변경 추적 테스트 법률안',
+          eventType: 'updated',
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          changedFields: ['subject', 'billNumber', 'unknown.field'],
+          eventHash: 'hash-test-1',
+          eventHeight: 5,
+        },
+        mockWebhooks,
+      );
+
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '변경 필드',
+        '법률안명, 입법예고 의안번호, 기타(unknown.field)',
+        true,
+      );
+
+      const detailFieldCall = (
+        mockMessageBuilder.addField as jest.Mock
+      ).mock.calls.find((call) => call[0] === '자세히 보기');
+
+      expect(detailFieldCall).toBeDefined();
+      expect(detailFieldCall?.[2]).toBe(false);
+      expect(detailFieldCall?.[1]).toContain(
+        'http://localhost:5173/notices/2210001',
+      );
+      expect(detailFieldCall?.[1]).toContain('cmpFrom=4');
+      expect(detailFieldCall?.[1]).toContain('cmpTo=5');
+      expect(detailFieldCall?.[1]).toMatch(/cmpShowAll=(1|true)/);
     });
   });
 });

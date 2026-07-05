@@ -361,6 +361,13 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
           useValue: {
             upsertNoticeArchive: jest.fn().mockResolvedValue(undefined),
             getExistingNoticeNumSet: jest.fn().mockResolvedValue(new Set()),
+            beginChangeNotificationCollection: jest.fn(),
+            endChangeNotificationCollection: jest
+              .fn()
+              .mockResolvedValue(undefined),
+            flushQueuedChangeNotifications: jest
+              .fn()
+              .mockResolvedValue(undefined),
             getNoticesWithMissingScreenshots: jest.fn().mockResolvedValue([]),
             getNoticesWithMissingNsmScreenshots: jest
               .fn()
@@ -608,6 +615,10 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
         {
           provide: NoticeArchiveService,
           useValue: {
+            beginChangeNotificationCollection: jest.fn(),
+            endChangeNotificationCollection: jest
+              .fn()
+              .mockResolvedValue(undefined),
             getPendingSummaryPage: jest.fn().mockResolvedValue([]),
             getUnavailableSummaryPage: jest.fn().mockResolvedValue([]),
             runIntegrityScan: jest.fn().mockResolvedValue({
@@ -625,6 +636,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
             getArchivedNullContentIdNums: jest
               .fn()
               .mockResolvedValue(new Set()),
+            markSourceDeletedByMissingPalNums: jest.fn().mockResolvedValue(0),
             upgradePendingNotices: jest.fn().mockResolvedValue(0),
           },
         },
