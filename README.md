@@ -244,7 +244,7 @@ flowchart LR
 	E1[Event#1\nheight=1\nprev=NULL\nhash=H1] --> E2[Event#2\nheight=2\nprev=H1\nhash=H2]
 	E2 --> E3[Event#3\nheight=3\nprev=H2\nhash=H3]
 	E3 --> E4[Tombstone/Event#4\nheight=4\nprev=H3\nhash=H4]
-	E4 --> CP[Checkpoint Root\n(day/week)]
+	E4 --> CP[Checkpoint Root\nday/week]
 ```
 
 ### 수집 및 변경 처리 흐름
