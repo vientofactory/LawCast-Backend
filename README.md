@@ -247,6 +247,15 @@ flowchart LR
 	E4 --> CP[Checkpoint Root\nday/week]
 ```
 
+체크포인트 블록(`Checkpoint Root`)은 단일 이벤트를 저장하는 별도 테이블이 아니라, 일/주간 감사 시점에 전체 체인 검증 결과를 요약해 계산한 루트 해시를 의미합니다. 구현상 `ChangeTrackingService.runScheduledChainAudit()`가 모든 의안 체인을 재검증한 뒤, 의안별 요약(`noticeNum`, `eventCount`, `latestEventHash`, `issueCount`)을 canonical JSON으로 직렬화하고 SHA-256을 계산해 `checkpointRootHash`를 만듭니다.
+
+왜 필요한가:
+
+- 전체 체인 상태를 한 값으로 고정해 같은 입력이면 같은 감사 결과가 재현됩니다.
+- 운영 시점(일/주) 간에 감사 결과가 달라졌는지 빠르게 비교할 수 있습니다.
+- 실패 건수와 함께 로그/Discord 브릿지로 남겨 사후 포렌식 시 "그 시점의 체인 상태"를 식별하는 기준점으로 사용됩니다.
+- 개별 이벤트 검증(`prev_event_hash`, `event_hash`, detail hash)과 별개로, 전체 집합 무결성의 상위 요약 지문 역할을 합니다.
+
 ### 수집 및 변경 처리 흐름
 
 ```mermaid
@@ -269,6 +278,8 @@ flowchart TD
 3. `prev_event_hash` 연결성과 `event_height` 연속성을 검증합니다.
 4. 이벤트 해시와 chain linkage를 검증합니다.
 5. 최종 이벤트 해시를 체크포인트 루트 계산 입력과 대조합니다.
+
+체크포인트 루트는 감사 결과 객체(`ChangeChainAuditReport`)에 포함되어 반환되며, `scope=daily|weekly`와 함께 운영 로그 및 Discord Debug Bridge에 기록됩니다. 즉, 체크포인트는 "검증 이후 보고용 루트 해시"로써 감사 결과의 비교/추적 가능성을 높이는 장치입니다.
 
 일일 감사는 최근 운영 상태를 빠르게 확인하기 위한 기본 검증이고, 주간 감사는 전체 체인을 다시 훑어 더 긴 시간 축의 무결성을 확인하는 용도입니다. 검증 실패가 발생하면 운영 채널과 Discord Debug Bridge에 요약이 남아 후속 대응이 가능해야 합니다.
 
