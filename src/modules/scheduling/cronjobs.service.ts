@@ -201,36 +201,6 @@ export class CronJobsService {
   }
 
   /**
-   * Re-runs HTML backfill so legacy rows with missing `sourceHtml` or
-   * missing NsmLmSts `proposalReason` are gradually repaired after bootstrap.
-   *
-   * Immediately follows with summary backfill and unavailable retry so rows
-   * that became summarizable in this pass (e.g. proposalReason just filled)
-   * are processed without waiting for a server restart/bootstrap pipeline.
-   * Schedule offset is applied in service logic.
-   */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.HTML_BACKFILL, {
-    timeZone: CRON_TIMEZONE,
-  })
-  async handleHtmlBackfill(): Promise<void> {
-    if (
-      this.shouldSkipArchiveSyncCron(
-        'html/proposalReason backfill + summary pipeline',
-      )
-    ) {
-      return;
-    }
-    await this.execute(
-      'html/proposalReason backfill + summary pipeline',
-      async () => {
-        await this.archiveSyncService.runHtmlBackfill('cron');
-        await this.archiveSyncService.runSummaryBackfill('cron');
-        await this.archiveSyncService.runUnavailableRetry('cron');
-      },
-    );
-  }
-
-  /**
    * Re-validates the SHA-256 integrity of every archive record once a day.
    * Forces `integrityVerifiedAt` to be refreshed on all verifiable rows so
    * operators can confirm recency of the last check.
@@ -274,24 +244,6 @@ export class CronJobsService {
       this.changeTrackingService
         .runScheduledChainAudit('weekly')
         .then(() => undefined),
-    );
-  }
-
-  /**
-   * Periodically re-triggers the screenshot backfill so notices that were
-   * permanently skipped in a previous session are retried without a full
-   * server restart. The schedule cadence is every 6 hours, and the 30-minute
-   * offset is applied in service logic. Skipped when a capture is already in
-   * progress or the queue still has pending items.
-   */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SCREENSHOT_BACKFILL, {
-    timeZone: CRON_TIMEZONE,
-  })
-  async handleScreenshotBackfill(): Promise<void> {
-    await this.executeWithOffset(
-      'screenshot backfill',
-      this.screenshotBackfillOffsetMs,
-      () => this.archiveOrchestratorService.handleScreenshotBackfill(),
     );
   }
 

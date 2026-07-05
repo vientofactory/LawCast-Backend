@@ -100,10 +100,8 @@ export class NoticeArchive {
   })
   contentProposalSession: string | null;
 
-  @Column({ type: 'text', nullable: true })
   aiSummary: string | null;
 
-  @Column({ type: 'varchar', length: 30, default: 'not_requested' })
   aiSummaryStatus: string;
 
   @Column({ type: 'text', default: '' })

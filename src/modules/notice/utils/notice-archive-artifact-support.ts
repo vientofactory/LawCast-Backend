@@ -1,6 +1,7 @@
 import { MoreThan, type Repository } from 'typeorm';
 import JSZip from 'jszip';
 import { NoticeArchive } from '../notice-archive.entity';
+import { NoticeArchiveSummaryState } from '../notice-archive-summary-state.entity';
 import { buildArchiveExportArtifacts } from '../archive-export.builder';
 import {
   computeSha256,
@@ -14,7 +15,31 @@ import type {
 } from '../notice-archive.service';
 
 export class NoticeArchiveArtifactSupport {
-  constructor(private readonly archiveRepository: Repository<NoticeArchive>) {}
+  constructor(
+    private readonly archiveRepository: Repository<NoticeArchive>,
+    private readonly summaryStateRepository?: Repository<NoticeArchiveSummaryState>,
+  ) {}
+
+  private async hydrateSummaryState(row: NoticeArchive): Promise<void> {
+    if (!this.summaryStateRepository) {
+      return;
+    }
+
+    const summaryState = await this.summaryStateRepository.findOne({
+      where: { noticeNum: row.noticeNum },
+      select: {
+        aiSummary: true,
+        aiSummaryStatus: true,
+      },
+    });
+
+    if (!summaryState) {
+      return;
+    }
+
+    row.aiSummary = summaryState.aiSummary;
+    row.aiSummaryStatus = summaryState.aiSummaryStatus;
+  }
 
   async getArchivedNoticeDetail(
     noticeNum: number,
@@ -26,6 +51,8 @@ export class NoticeArchiveArtifactSupport {
     if (!row) {
       return null;
     }
+
+    await this.hydrateSummaryState(row);
 
     const integrity = await this.verifyAndRefreshIntegrity(row);
     const httpMetadata = parseHttpMetadata(row.httpMetadataJson);
@@ -91,6 +118,8 @@ export class NoticeArchiveArtifactSupport {
     if (!row) {
       return null;
     }
+
+    await this.hydrateSummaryState(row);
 
     const integrity = await this.verifyAndRefreshIntegrity(row);
     const httpMetadata = parseHttpMetadata(row.httpMetadataJson);

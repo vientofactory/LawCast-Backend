@@ -19,6 +19,7 @@ import {
   NoticeArchive,
   type NoticeLifecycleStatus,
 } from '../notice/notice-archive.entity';
+import { NoticeArchiveSummaryState } from './notice-archive-summary-state.entity';
 import {
   NOTICE_ITEM_SELECT,
   buildArchiveWhereConditions,
@@ -201,11 +202,15 @@ export class NoticeArchiveService {
     @InjectRepository(NoticeArchive)
     private readonly archiveRepository: Repository<NoticeArchive>,
     @Optional()
+    @InjectRepository(NoticeArchiveSummaryState)
+    private readonly summaryStateRepository?: Repository<NoticeArchiveSummaryState>,
+    @Optional()
     private readonly changeTrackingService?: ChangeTrackingService,
     @Optional() private readonly discordBridge?: DiscordBridgeService,
   ) {
     this.artifactSupport = new NoticeArchiveArtifactSupport(
       this.archiveRepository,
+      this.summaryStateRepository,
     );
   }
 
@@ -416,9 +421,6 @@ export class NoticeArchiveService {
       contentReferralDate: originalContent.referralDate?.trim() || null,
       contentNoticePeriod: originalContent.noticePeriod?.trim() || null,
       contentProposalSession: originalContent.proposalSession?.trim() || null,
-      aiSummary: notice.aiSummary ?? null,
-      aiSummaryStatus:
-        notice.aiSummaryStatus ?? AI_SUMMARY_STATUS.NOT_REQUESTED,
       attachmentPdfFile: notice.attachments?.pdfFile ?? '',
       attachmentHwpFile: notice.attachments?.hwpFile ?? '',
       archivedAt: originalContent.archivedAt ?? new Date(),
@@ -439,6 +441,15 @@ export class NoticeArchiveService {
 
     const existing = beforeRow !== null;
     const updateNoticeNum = previousNoticeNum ?? notice.num;
+    const hasExplicitSummary =
+      Object.prototype.hasOwnProperty.call(notice, 'aiSummary') ||
+      Object.prototype.hasOwnProperty.call(notice, 'aiSummaryStatus');
+    const summaryStatus =
+      notice.aiSummaryStatus ?? AI_SUMMARY_STATUS.NOT_REQUESTED;
+    const summaryPayload = {
+      aiSummary: notice.aiSummary ?? null,
+      aiSummaryStatus: summaryStatus,
+    };
 
     if (isRenumbering && beforeRow) {
       const beforeSnapshot = this.buildTrackedSnapshot(beforeRow);
@@ -481,6 +492,62 @@ export class NoticeArchiveService {
           screenshotBlob: originalContent.screenshotBlob ?? null,
           screenshotFormat: originalContent.screenshotFormat ?? null,
         }),
+      );
+    }
+
+    if (this.summaryStateRepository) {
+      if (isRenumbering && previousNoticeNum !== null) {
+        const previousSummaryState = await this.summaryStateRepository.findOne({
+          where: { noticeNum: previousNoticeNum },
+          select: {
+            aiSummary: true,
+            aiSummaryStatus: true,
+          },
+        });
+
+        if (previousSummaryState) {
+          await this.summaryStateRepository.upsert(
+            {
+              noticeNum: notice.num,
+              aiSummary: previousSummaryState.aiSummary ?? null,
+              aiSummaryStatus: previousSummaryState.aiSummaryStatus,
+            },
+            ['noticeNum'],
+          );
+
+          await this.summaryStateRepository.delete({
+            noticeNum: previousNoticeNum,
+          });
+        }
+      }
+
+      if (hasExplicitSummary) {
+        await this.summaryStateRepository.upsert(
+          {
+            noticeNum: notice.num,
+            ...summaryPayload,
+          },
+          ['noticeNum'],
+        );
+      } else {
+        await this.summaryStateRepository
+          .createQueryBuilder()
+          .insert()
+          .values({
+            noticeNum: notice.num,
+            aiSummary: null,
+            aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
+          })
+          .orIgnore()
+          .execute();
+      }
+    } else {
+      await this.archiveRepository.update(
+        { noticeNum: notice.num },
+        {
+          aiSummary: summaryPayload.aiSummary,
+          aiSummaryStatus: summaryPayload.aiSummaryStatus,
+        },
       );
     }
 
@@ -653,22 +720,82 @@ export class NoticeArchiveService {
    * naturally drop out of subsequent calls.
    */
   async getPendingSummaryPage(take: number): Promise<CachedNotice[]> {
-    const rows = await this.archiveRepository.find({
-      where: { aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED },
-      select: {
-        noticeNum: true,
-        subject: true,
-        proposerCategory: true,
-        committee: true,
-        assemblyLink: true,
-        contentId: true,
-        proposalReason: true,
-        attachmentPdfFile: true,
-        attachmentHwpFile: true,
-      },
-      order: { noticeNum: 'ASC' },
-      take,
-    });
+    const rows = this.summaryStateRepository
+      ? await this.archiveRepository
+          .createQueryBuilder('archive')
+          .innerJoin(
+            NoticeArchiveSummaryState,
+            'summary',
+            'summary.notice_num = archive.noticeNum',
+          )
+          .select([
+            'archive.noticeNum AS noticeNum',
+            'archive.subject AS subject',
+            'archive.proposerCategory AS proposerCategory',
+            'archive.committee AS committee',
+            'archive.assemblyLink AS assemblyLink',
+            'archive.contentId AS contentId',
+            'archive.proposalReason AS proposalReason',
+            'archive.attachmentPdfFile AS attachmentPdfFile',
+            'archive.attachmentHwpFile AS attachmentHwpFile',
+            'summary.aiSummary AS aiSummary',
+            'summary.aiSummaryStatus AS aiSummaryStatus',
+          ])
+          .where('summary.aiSummaryStatus = :status', {
+            status: AI_SUMMARY_STATUS.NOT_REQUESTED,
+          })
+          .orderBy('archive.noticeNum', 'ASC')
+          .take(take)
+          .getRawMany<{
+            noticeNum: number;
+            subject: string;
+            proposerCategory: string;
+            committee: string;
+            assemblyLink: string;
+            contentId: string | null;
+            proposalReason: string | null;
+            attachmentPdfFile: string | null;
+            attachmentHwpFile: string | null;
+            aiSummary: string | null;
+            aiSummaryStatus: AISummaryStatus;
+          }>()
+      : await this.archiveRepository.find({
+          where: { aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED },
+          select: {
+            noticeNum: true,
+            subject: true,
+            proposerCategory: true,
+            committee: true,
+            assemblyLink: true,
+            contentId: true,
+            proposalReason: true,
+            attachmentPdfFile: true,
+            attachmentHwpFile: true,
+          },
+          order: { noticeNum: 'ASC' },
+          take,
+        });
+
+    if (this.summaryStateRepository) {
+      return rows.map((row) =>
+        mapArchiveEntityToCachedNotice(
+          {
+            noticeNum: row.noticeNum,
+            subject: row.subject,
+            proposerCategory: row.proposerCategory,
+            committee: row.committee,
+            assemblyLink: row.assemblyLink,
+            contentId: row.contentId,
+            proposalReason: row.proposalReason ?? '',
+            attachmentPdfFile: row.attachmentPdfFile ?? '',
+            attachmentHwpFile: row.attachmentHwpFile ?? '',
+            aiSummary: row.aiSummary,
+            aiSummaryStatus: row.aiSummaryStatus,
+          },
+          AI_SUMMARY_STATUS.NOT_REQUESTED,
+        ),
+      );
+    }
 
     return rows.map((row) =>
       mapArchiveEntityToCachedNotice(row, AI_SUMMARY_STATUS.NOT_REQUESTED),
@@ -689,23 +816,84 @@ export class NoticeArchiveService {
     skip: number,
     take: number,
   ): Promise<CachedNotice[]> {
-    const rows = await this.archiveRepository.find({
-      where: { aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE },
-      select: {
-        noticeNum: true,
-        subject: true,
-        proposerCategory: true,
-        committee: true,
-        assemblyLink: true,
-        contentId: true,
-        proposalReason: true,
-        attachmentPdfFile: true,
-        attachmentHwpFile: true,
-      },
-      order: { noticeNum: 'ASC' },
-      skip,
-      take,
-    });
+    const rows = this.summaryStateRepository
+      ? await this.archiveRepository
+          .createQueryBuilder('archive')
+          .innerJoin(
+            NoticeArchiveSummaryState,
+            'summary',
+            'summary.notice_num = archive.noticeNum',
+          )
+          .select([
+            'archive.noticeNum AS noticeNum',
+            'archive.subject AS subject',
+            'archive.proposerCategory AS proposerCategory',
+            'archive.committee AS committee',
+            'archive.assemblyLink AS assemblyLink',
+            'archive.contentId AS contentId',
+            'archive.proposalReason AS proposalReason',
+            'archive.attachmentPdfFile AS attachmentPdfFile',
+            'archive.attachmentHwpFile AS attachmentHwpFile',
+            'summary.aiSummary AS aiSummary',
+            'summary.aiSummaryStatus AS aiSummaryStatus',
+          ])
+          .where('summary.aiSummaryStatus = :status', {
+            status: AI_SUMMARY_STATUS.UNAVAILABLE,
+          })
+          .orderBy('archive.noticeNum', 'ASC')
+          .skip(skip)
+          .take(take)
+          .getRawMany<{
+            noticeNum: number;
+            subject: string;
+            proposerCategory: string;
+            committee: string;
+            assemblyLink: string;
+            contentId: string | null;
+            proposalReason: string | null;
+            attachmentPdfFile: string | null;
+            attachmentHwpFile: string | null;
+            aiSummary: string | null;
+            aiSummaryStatus: AISummaryStatus;
+          }>()
+      : await this.archiveRepository.find({
+          where: { aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE },
+          select: {
+            noticeNum: true,
+            subject: true,
+            proposerCategory: true,
+            committee: true,
+            assemblyLink: true,
+            contentId: true,
+            proposalReason: true,
+            attachmentPdfFile: true,
+            attachmentHwpFile: true,
+          },
+          order: { noticeNum: 'ASC' },
+          skip,
+          take,
+        });
+
+    if (this.summaryStateRepository) {
+      return rows.map((row) =>
+        mapArchiveEntityToCachedNotice(
+          {
+            noticeNum: row.noticeNum,
+            subject: row.subject,
+            proposerCategory: row.proposerCategory,
+            committee: row.committee,
+            assemblyLink: row.assemblyLink,
+            contentId: row.contentId,
+            proposalReason: row.proposalReason ?? '',
+            attachmentPdfFile: row.attachmentPdfFile ?? '',
+            attachmentHwpFile: row.attachmentHwpFile ?? '',
+            aiSummary: row.aiSummary,
+            aiSummaryStatus: row.aiSummaryStatus,
+          },
+          AI_SUMMARY_STATUS.UNAVAILABLE,
+        ),
+      );
+    }
 
     return rows.map((row) =>
       mapArchiveEntityToCachedNotice(row, AI_SUMMARY_STATUS.UNAVAILABLE),
@@ -743,6 +931,19 @@ export class NoticeArchiveService {
       skip,
       take: limit,
     });
+
+    if (this.summaryStateRepository && rows.length > 0) {
+      const summaryStates = await this.getSummaryStateByNoticeNums(
+        rows.map((row) => row.noticeNum),
+      );
+
+      for (const row of rows) {
+        const summaryState = summaryStates.get(row.noticeNum);
+        if (!summaryState) continue;
+        row.aiSummary = summaryState.aiSummary;
+        row.aiSummaryStatus = summaryState.aiSummaryStatus;
+      }
+    }
 
     return {
       items: rows.map((row) => mapArchiveEntityToNoticeItem(row)),
@@ -811,6 +1012,19 @@ export class NoticeArchiveService {
       skip,
       take,
     });
+
+    if (this.summaryStateRepository && rows.length > 0) {
+      const summaryStates = await this.getSummaryStateByNoticeNums(
+        rows.map((row) => row.noticeNum),
+      );
+
+      for (const row of rows) {
+        const summaryState = summaryStates.get(row.noticeNum);
+        if (!summaryState) continue;
+        row.aiSummary = summaryState.aiSummary;
+        row.aiSummaryStatus = summaryState.aiSummaryStatus;
+      }
+    }
 
     return {
       items: rows.map((row) => mapArchiveEntityToNoticeItem(row)),
@@ -1504,13 +1718,24 @@ export class NoticeArchiveService {
         contentId: true,
         attachmentPdfFile: true,
         attachmentHwpFile: true,
-        aiSummary: true,
-        aiSummaryStatus: true,
       },
       where: { isDone: false },
       order: { noticeNum: 'DESC' },
       take: limit,
     });
+
+    if (this.summaryStateRepository && rows.length > 0) {
+      const summaryStates = await this.getSummaryStateByNoticeNums(
+        rows.map((row) => row.noticeNum),
+      );
+
+      for (const row of rows) {
+        const summaryState = summaryStates.get(row.noticeNum);
+        if (!summaryState) continue;
+        row.aiSummary = summaryState.aiSummary;
+        row.aiSummaryStatus = summaryState.aiSummaryStatus;
+      }
+    }
 
     return rows.map((row) =>
       mapArchiveEntityToCachedNotice(row, 'not_requested'),
@@ -1620,19 +1845,28 @@ export class NoticeArchiveService {
       return new Map();
     }
 
-    const rows = await this.archiveRepository.find({
-      where: {
-        noticeNum: In(uniqueNums),
-      },
-      select: {
-        noticeNum: true,
-        aiSummary: true,
-        aiSummaryStatus: true,
-      },
-    });
+    const rows = this.summaryStateRepository
+      ? await this.summaryStateRepository.find({
+          where: { noticeNum: In(uniqueNums) },
+          select: {
+            noticeNum: true,
+            aiSummary: true,
+            aiSummaryStatus: true,
+          },
+        })
+      : await this.archiveRepository.find({
+          where: {
+            noticeNum: In(uniqueNums),
+          },
+          select: {
+            noticeNum: true,
+            aiSummary: true,
+            aiSummaryStatus: true,
+          },
+        });
 
-    return new Map(
-      rows.map((row) => [
+    return new Map<number, ArchiveSummaryState>(
+      rows.map((row): [number, ArchiveSummaryState] => [
         row.noticeNum,
         {
           aiSummary: row.aiSummary ?? null,
@@ -1648,10 +1882,24 @@ export class NoticeArchiveService {
     summary: string | null,
     status: AISummaryStatus,
   ): Promise<void> {
+    const normalizedSummary = summary?.trim() ? summary : null;
+
+    if (this.summaryStateRepository) {
+      await this.summaryStateRepository.upsert(
+        {
+          noticeNum,
+          aiSummary: normalizedSummary,
+          aiSummaryStatus: status,
+        },
+        ['noticeNum'],
+      );
+      return;
+    }
+
     await this.archiveRepository.update(
       { noticeNum },
       {
-        aiSummary: summary?.trim() ? summary : null,
+        aiSummary: normalizedSummary,
         aiSummaryStatus: status,
       },
     );

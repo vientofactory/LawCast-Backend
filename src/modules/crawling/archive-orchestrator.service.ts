@@ -42,10 +42,7 @@ export class ArchiveOrchestratorService
     });
   }
 
-  onModuleInit(): void {
-    // Fire-and-forget so it never delays module initialization.
-    void this.runStartupScreenshotBackfill();
-  }
+  onModuleInit(): void {}
 
   /**
    * Startup screenshot pipeline.
@@ -60,44 +57,13 @@ export class ArchiveOrchestratorService
    * Without the flag this behaves identically to the previous single-call
    * `backfillMissingScreenshots()` path.
    */
-  private async runStartupScreenshotBackfill(): Promise<void> {
-    if (process.env.SCREENSHOT_REQUEUE_PAL === 'true') {
-      await this.requeueAllPalScreenshots();
-    }
-    await this.screenshotCoordinator.backfillMissingScreenshots();
-  }
+  private async runStartupScreenshotBackfill(): Promise<void> {}
 
   /**
    * Queues every pal.assembly.go.kr archived notice for screenshot (re-)capture.
    * Called at startup when `SCREENSHOT_REQUEUE_PAL=true`.
    */
-  private async requeueAllPalScreenshots(): Promise<void> {
-    try {
-      const notices =
-        await this.noticeArchiveService.getAllPalNoticesForScreenshotRequeue();
-
-      if (notices.length === 0) {
-        this.logger.log('PAL screenshot requeue: no notices found in archive');
-        return;
-      }
-
-      this.logger.log(
-        `PAL screenshot requeue: queuing ${notices.length} notice(s) for full re-capture`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
-        ArchiveOrchestratorService.name,
-        `PAL screenshot requeue: queuing **${notices.length}** notice(s) for full re-capture`,
-        { count: notices.length },
-      );
-
-      this.scheduleScreenshots(notices);
-    } catch (error) {
-      this.logger.warn(
-        `PAL screenshot requeue failed: ${(error as Error).message}`,
-      );
-    }
-  }
+  private async requeueAllPalScreenshots(): Promise<void> {}
 
   /**
    * Archives the given notices by fetching their content and source HTML, then saving them to the archive database. This method processes notices in batches
@@ -241,15 +207,6 @@ export class ArchiveOrchestratorService
         archivedNotices.push(...saved);
       }
 
-      // Fire-and-forget: screenshots run in the background so archiveNotices
-      // returns immediately.  A single drain loop (guarded by isCaptureRunning)
-      // ensures at most one Puppeteer instance is live at any time.
-      this.scheduleScreenshots(
-        archivedNotices
-          .filter((n) => n.contentId)
-          .map((n) => ({ num: n.num, contentId: n.contentId!, isDone: false })),
-      );
-
       await this.noticeArchiveService.flushQueuedChangeNotifications();
 
       return savedCount;
@@ -383,40 +340,9 @@ export class ArchiveOrchestratorService
                 htmlSha256: sourceHtmlSha256,
                 archivedAt,
                 httpMetadata,
+                screenshotBlob: capturedScreenshot,
+                screenshotFormat: capturedScreenshot ? 'jpeg' : null,
               });
-
-              // Persist the screenshot immediately if we captured it inline.
-              // If capturedScreenshot is null the backfill queue will retry.
-              if (capturedScreenshot) {
-                try {
-                  await this.noticeArchiveService.updateScreenshot(
-                    notice.num,
-                    capturedScreenshot,
-                    'jpeg',
-                  );
-                } catch (ssErr) {
-                  const message =
-                    ssErr instanceof Error ? ssErr.message : String(ssErr);
-                  this.logger.warn(
-                    `Screenshot persist failed for bill ${item.billNo}: ${message} - backfill will retry`,
-                  );
-                  // Fall through: schedule via queue so backfill retries it.
-                  capturedScreenshot = null;
-                }
-              }
-
-              if (!capturedScreenshot) {
-                // Screenshot was not captured or persist failed - queue for
-                // backfill so it is retried on the next backfill cron/restart.
-                this.scheduleScreenshots([
-                  {
-                    num: notice.num,
-                    contentId: '',
-                    isDone: false,
-                    nsmBillNo: notice.num.toString(),
-                  },
-                ]);
-              }
 
               const enriched: CachedNotice = {
                 ...notice,
@@ -484,9 +410,7 @@ export class ArchiveOrchestratorService
     await this.screenshotCoordinator.handleShutdown(signal);
   }
 
-  async handleScreenshotBackfill(): Promise<void> {
-    await this.screenshotCoordinator.handleScreenshotBackfill();
-  }
+  async handleScreenshotBackfill(): Promise<void> {}
 
   // ─────────────────────────────────────────────────────────────────────────
   // proposalReason on-demand retry
@@ -507,41 +431,10 @@ export class ArchiveOrchestratorService
     billNo: string,
     noticeLink: string,
   ): Promise<string | null> {
-    try {
-      const full = await this.crawlingCoreService.captureNsmDetailFull(billNo);
-      const proposalReason = full.detail?.proposalReason?.trim() ?? '';
-
-      if (!proposalReason) {
-        return null;
-      }
-
-      const sha256 = this.computeSha256(full.html);
-      const httpMetadata: ArchiveHttpMetadata = {
-        requestUrl: noticeLink,
-        responseUrl: full.responseUrl,
-        fetchedAt: new Date().toISOString(),
-        statusCode: full.statusCode,
-      };
-
-      await this.noticeArchiveService.updateNsmHtmlAndDetail(num, {
-        html: full.html,
-        sha256,
-        proposalReason,
-        httpMetadata,
-        ...(full.screenshot
-          ? { screenshotBlob: full.screenshot, screenshotFormat: 'jpeg' }
-          : {}),
-      });
-
-      return proposalReason;
-    } catch (error) {
-      this.logger.warn(
-        `fetchAndUpdateProposalReason failed for bill ${billNo}: ${
-          (error as Error).message
-        }`,
-      );
-      return null;
-    }
+    void num;
+    void billNo;
+    void noticeLink;
+    return null;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -569,130 +462,15 @@ export class ArchiveOrchestratorService
     pal: { processed: number; failed: number };
     nsm: { processed: number; failed: number };
   }> {
-    const { pal, nsm } =
-      await this.noticeArchiveService.getNoticesWithMissingHtml(limit);
-
-    const result = {
+    void limit;
+    LoggerUtils.debugDev(
+      ArchiveOrchestratorService.name,
+      'HTML backfill skipped: notice_archives is immutable',
+    );
+    return {
       pal: { ...APP_CONSTANTS.ARCHIVE_SYNC.HTML_BACKFILL_RESULT_ZERO.pal },
       nsm: { ...APP_CONSTANTS.ARCHIVE_SYNC.HTML_BACKFILL_RESULT_ZERO.nsm },
     };
-
-    if (pal.length === 0 && nsm.length === 0) {
-      LoggerUtils.debugDev(
-        ArchiveOrchestratorService.name,
-        'HTML backfill: no notices with missing HTML/proposalReason found',
-      );
-      return result;
-    }
-
-    this.logger.log(
-      `HTML backfill: ${pal.length} PAL + ${nsm.length} NSM notice(s) requiring HTML/detail repair`,
-    );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      ArchiveOrchestratorService.name,
-      `HTML backfill: **${pal.length}** PAL + **${nsm.length}** NSM notice(s) requiring HTML/proposalReason repair`,
-      { pal: pal.length, nsm: nsm.length },
-    );
-
-    // ── PAL: concurrent plain-HTTP fetches ───────────────────────────────
-
-    if (pal.length > 0) {
-      const PAL_CONCURRENCY = 5;
-      for (let i = 0; i < pal.length; i += PAL_CONCURRENCY) {
-        const chunk = pal.slice(i, i + PAL_CONCURRENCY);
-        await Promise.all(
-          chunk.map(async ({ num, assemblyLink }) => {
-            try {
-              const { html, sha256, httpMetadata } =
-                await this.captureNoticePageSource(assemblyLink);
-              await this.noticeArchiveService.updateSourceHtml(
-                num,
-                html,
-                sha256,
-                httpMetadata,
-              );
-              result.pal.processed++;
-              LoggerUtils.debugDev(
-                ArchiveOrchestratorService.name,
-                `HTML backfill PAL: stored HTML for notice ${num}`,
-              );
-            } catch (err) {
-              result.pal.failed++;
-              this.logger.warn(
-                `HTML backfill PAL failed for notice ${num}: ${(err as Error).message}`,
-              );
-            }
-          }),
-        );
-      }
-    }
-
-    // ── NSM: sequential Puppeteer captures with rate-limit delay ─────────
-
-    for (let idx = 0; idx < nsm.length; idx++) {
-      const { num } = nsm[idx];
-      const billNo = num.toString();
-
-      if (idx > 0) {
-        await new Promise<void>((resolve) =>
-          setTimeout(
-            resolve,
-            APP_CONSTANTS.SCREENSHOT.NSM_INTER_CAPTURE_DELAY_MS,
-          ),
-        );
-      }
-
-      try {
-        const full =
-          await this.crawlingCoreService.captureNsmDetailFull(billNo);
-
-        const sha256 = this.computeSha256(full.html);
-        const httpMetadata: ArchiveHttpMetadata = {
-          requestUrl: `https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/${billNo}/detailRP`,
-          responseUrl: full.responseUrl,
-          fetchedAt: new Date().toISOString(),
-          statusCode: full.statusCode,
-        };
-
-        const proposalReason = full.detail?.proposalReason?.trim() ?? '';
-
-        // Also fill in screenshot if it is still missing (single Puppeteer
-        // session already captured it - no extra cost).
-        const hasScreenshot = full.screenshot !== null;
-
-        await this.noticeArchiveService.updateNsmHtmlAndDetail(num, {
-          html: full.html,
-          sha256,
-          proposalReason,
-          httpMetadata,
-          ...(hasScreenshot
-            ? {
-                screenshotBlob: full.screenshot!,
-                screenshotFormat: 'jpeg',
-              }
-            : {}),
-        });
-
-        result.nsm.processed++;
-        LoggerUtils.debugDev(
-          ArchiveOrchestratorService.name,
-          `HTML backfill NSM: stored HTML${hasScreenshot ? ' + screenshot' : ''} for bill ${billNo}`,
-        );
-      } catch (err) {
-        result.nsm.failed++;
-        this.logger.warn(
-          `HTML backfill NSM failed for bill ${billNo}: ${(err as Error).message}`,
-        );
-      }
-    }
-
-    this.logger.log(
-      `HTML backfill complete - PAL: ${result.pal.processed} ok / ${result.pal.failed} failed, ` +
-        `NSM: ${result.nsm.processed} ok / ${result.nsm.failed} failed`,
-    );
-
-    return result;
   }
 
   /**

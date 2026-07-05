@@ -26,8 +26,6 @@ export const NOTICE_ITEM_SELECT = {
   assemblyLink: true,
   contentId: true,
   isDone: true,
-  aiSummary: true,
-  aiSummaryStatus: true,
   attachmentPdfFile: true,
   attachmentHwpFile: true,
   lifecycleStatus: true,

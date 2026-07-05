@@ -9,6 +9,8 @@ import { AddChangeTrackingTables1751500801000 } from './202607030001-add-change-
 import { AddArchiveLifecycleAndNoDelete1751587201000 } from './202607040001-add-archive-lifecycle-and-no-delete.migration';
 import { AddQueryOptimizationIndexes1751590802000 } from './202607040002-add-query-optimization-indexes.migration';
 import { RestoreContaminatedProposalReasonSnapshots1751760001000 } from './202607060001-restore-contaminated-proposal-reason-snapshots.migration';
+import { AddNoticeArchiveSummaryStates1751760002000 } from './202607060002-add-notice-archive-summary-states.migration';
+import { RemoveArchiveSummaryColumns1751760003000 } from './202607060003-remove-archive-summary-columns.migration';
 
 export const migrations: (new () => MigrationInterface)[] = [
   InitialSchemaMigration1744953900000,
@@ -21,4 +23,6 @@ export const migrations: (new () => MigrationInterface)[] = [
   AddArchiveLifecycleAndNoDelete1751587201000,
   AddQueryOptimizationIndexes1751590802000,
   RestoreContaminatedProposalReasonSnapshots1751760001000,
+  AddNoticeArchiveSummaryStates1751760002000,
+  RemoveArchiveSummaryColumns1751760003000,
 ];

@@ -14,7 +14,6 @@ import { APP_CONSTANTS } from '../../config/app.config';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { mapConcurrently } from '../../utils/concurrency.utils';
-import { CrawlingSchedulerProposalRetry } from './utils/crawling-scheduler-proposal-retry';
 import { CrawlingSchedulerSummarySupport } from './utils/crawling-scheduler-summary-support';
 
 const { PENDING_CRAWL_MAX_RETRIES, PENDING_CRAWL_RETRY_BASE_MS } =
@@ -47,7 +46,6 @@ export class CrawlingSchedulerService implements OnModuleInit {
   private isProcessing = false;
   private isInitialized = false;
   private readonly activeBackgroundTasks = new Set<string>();
-  private readonly proposalReasonRetry: CrawlingSchedulerProposalRetry;
   private readonly summarySupport: CrawlingSchedulerSummarySupport;
 
   constructor(
@@ -59,15 +57,6 @@ export class CrawlingSchedulerService implements OnModuleInit {
     private noticeArchiveService: NoticeArchiveService,
     @Optional() private discordBridge: DiscordBridgeService,
   ) {
-    this.proposalReasonRetry = new CrawlingSchedulerProposalRetry({
-      cacheService: this.cacheService,
-      archiveOrchestratorService: this.archiveOrchestratorService,
-      summaryGenerationService: this.summaryGenerationService,
-      notificationOrchestratorService: this.notificationOrchestratorService,
-      noticeArchiveService: this.noticeArchiveService,
-      logger: this.logger,
-      discordBridge: this.discordBridge,
-    });
     this.summarySupport = new CrawlingSchedulerSummarySupport({
       cacheService: this.cacheService,
       noticeArchiveService: this.noticeArchiveService,
@@ -810,9 +799,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
         `Pending bills crawl failed: ${(lastError as Error).message}`,
       );
     } finally {
-      // Drain the proposalReason retry queue on every cron tick (including
-      // after a failed crawl) so queued items are retried on schedule.
-      this.proposalReasonRetry.drainInBackground();
+      /* empty */
     }
   }
 
@@ -924,8 +911,8 @@ export class CrawlingSchedulerService implements OnModuleInit {
         aiSummaryStatus: 'not_supported' as const,
       }));
 
-    // Notify immediately even when proposalReason is missing so users still
-    // receive the bill alert without waiting for retry resolution.
+    // Notify immediately even when proposalReason is missing. The archive row
+    // is immutable after first write, so we do not run a repair/retry queue.
     if (noticesWithoutReasonForNotification.length > 0) {
       void this.notificationOrchestratorService
         .sendNotifications(noticesWithoutReasonForNotification)
@@ -945,31 +932,23 @@ export class CrawlingSchedulerService implements OnModuleInit {
               ),
               proposalReasonState: 'missing',
               notificationMode: 'immediate',
-              retryQueueSize: noticesWithoutReason.length,
               guidanceIncluded: true,
             },
           );
         });
     }
 
-    // Enqueue bills with missing proposalReason for background retry.
-    for (const notice of noticesWithoutReason) {
-      await this.proposalReasonRetry.enqueue(notice);
-    }
-
-    const retryQueueLength = await this.proposalReasonRetry.getQueueLength();
-
     if (noticesWithoutReason.length > 0) {
       this.logger.log(
-        `${noticesWithoutReason.length} pending bill(s) archived without proposalReason - queued for retry`,
+        `${noticesWithoutReason.length} pending bill(s) archived without proposalReason`,
       );
       void this.discordBridge?.logEvent(
         BridgeLogLevel.WARN,
         CrawlingSchedulerService.name,
-        `**${noticesWithoutReason.length}** pending bill(s) missing proposalReason - queued for retry`,
+        `**${noticesWithoutReason.length}** pending bill(s) missing proposalReason`,
         {
           nums: noticesWithoutReason.map((n) => n.num),
-          queueSize: retryQueueLength,
+          immutableSnapshot: true,
         },
       );
     }
