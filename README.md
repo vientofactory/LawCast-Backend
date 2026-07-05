@@ -176,34 +176,6 @@ flowchart TD
 		F -->|false| F2[Queue + drain screenshot capture]
 ```
 
-```mermaid
-stateDiagram-v2
-		[*] --> Idle
-
-		state "Archive Phase Tracker" as AP {
-			[*] --> IdleP
-			IdleP --> RunningP: runPhase enter\ntracker.isRunning=true
-			RunningP --> IdleP: success\nstatus=idle
-			RunningP --> FailedP: error\nstatus=failed
-			FailedP --> IdleP: finally\ntracker.isRunning=false
-			IdleP --> IdleP: concurrent call\nskip when running/cross-guard
-		}
-
-		state "Crawling Scheduler" as CS {
-			[*] --> Ready
-			Ready --> Processing: handleCron enter\nisProcessing=true
-			Processing --> Ready: finally\nisProcessing=false
-			Ready --> Ready: handleCron while processing\nskip
-		}
-
-		state "Background Tasks" as BG {
-			[*] --> None
-			None --> Active: runBackgroundTask add(name)
-			Active --> None: finally delete(name)
-			Active --> Active: duplicate name\nskip launch
-		}
-```
-
 ## Project Diffchain: 변경 추적 및 감사 기능
 
 Project Diffchain은 LawCast 아카이브 위에 올라가는 변경 추적 기능입니다. 주기적 재크롤링 결과를 기존 스냅샷과 비교해 필드 단위 diff를 생성하고, 이를 append-only 체인으로 저장한 뒤, 변경 알림·프론트 타임라인·ZIP export·감사 자동화까지 한 흐름으로 제공합니다.
