@@ -16,6 +16,19 @@ describe('NoticeArchiveService', () => {
       .mockResolvedValue(undefined),
   });
 
+  const createChangeTrackingServiceMock = () => ({
+    beginChangeNotificationCollection: jest.fn<(...args: any[]) => void>(),
+    endChangeNotificationCollection: jest
+      .fn<(...args: any[]) => Promise<void>>()
+      .mockResolvedValue(undefined),
+    flushQueuedChangeNotificationsNow: jest
+      .fn<(...args: any[]) => Promise<void>>()
+      .mockResolvedValue(undefined),
+    getNoticeChangeTimeline: jest
+      .fn<(...args: any[]) => Promise<any[]>>()
+      .mockResolvedValue([]),
+  });
+
   const buildRow = (overrides: Partial<NoticeArchive> = {}): NoticeArchive => {
     const sourceHtml = '<html><body>LawCast Integrity Test</body></html>';
     const sourceHtmlSha256 = computeSha256(sourceHtml);
@@ -67,7 +80,12 @@ describe('NoticeArchiveService', () => {
 
   it('includes bash and powershell verification scripts in archive export', async () => {
     const repositoryMock = createRepositoryMock();
-    const service = new NoticeArchiveService(repositoryMock as any);
+    const changeTrackingService = createChangeTrackingServiceMock();
+    const service = new NoticeArchiveService(
+      repositoryMock as any,
+      undefined as any,
+      changeTrackingService as any,
+    );
     const row = buildRow();
 
     repositoryMock.findOne.mockResolvedValue(row);
@@ -112,7 +130,12 @@ describe('NoticeArchiveService', () => {
 
   it('builds a structurally consistent export payload and metadata files', async () => {
     const repositoryMock = createRepositoryMock();
-    const service = new NoticeArchiveService(repositoryMock as any);
+    const changeTrackingService = createChangeTrackingServiceMock();
+    const service = new NoticeArchiveService(
+      repositoryMock as any,
+      undefined as any,
+      changeTrackingService as any,
+    );
     const row = buildRow({ noticeNum: 2218363 });
 
     repositoryMock.findOne.mockResolvedValue(row);
@@ -204,7 +227,12 @@ describe('NoticeArchiveService', () => {
 
   it('returns null when archive row is missing', async () => {
     const repositoryMock = createRepositoryMock();
-    const service = new NoticeArchiveService(repositoryMock as any);
+    const changeTrackingService = createChangeTrackingServiceMock();
+    const service = new NoticeArchiveService(
+      repositoryMock as any,
+      undefined as any,
+      changeTrackingService as any,
+    );
 
     repositoryMock.findOne.mockResolvedValue(null);
 
@@ -234,7 +262,12 @@ describe('NoticeArchiveService', () => {
         .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
         .mockResolvedValue(pendingRows);
       const repoMock = { ...createRepositoryMock(), find: findMock };
-      const service = new NoticeArchiveService(repoMock as any);
+      const changeTrackingService = createChangeTrackingServiceMock();
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
 
       const result = await service.getPendingSummaryPage(50);
 
@@ -264,7 +297,12 @@ describe('NoticeArchiveService', () => {
         .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
         .mockResolvedValue([]);
       const repoMock = { ...createRepositoryMock(), find: findMock };
-      const service = new NoticeArchiveService(repoMock as any);
+      const changeTrackingService = createChangeTrackingServiceMock();
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
 
       const result = await service.getPendingSummaryPage(50);
 
@@ -293,7 +331,12 @@ describe('NoticeArchiveService', () => {
         .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
         .mockResolvedValue(unavailableRows);
       const repoMock = { ...createRepositoryMock(), find: findMock };
-      const service = new NoticeArchiveService(repoMock as any);
+      const changeTrackingService = createChangeTrackingServiceMock();
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
 
       const result = await service.getUnavailableSummaryPage(50, 25);
 
@@ -324,7 +367,12 @@ describe('NoticeArchiveService', () => {
         .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
         .mockResolvedValue([]);
       const repoMock = { ...createRepositoryMock(), find: findMock };
-      const service = new NoticeArchiveService(repoMock as any);
+      const changeTrackingService = createChangeTrackingServiceMock();
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
 
       const result = await service.getUnavailableSummaryPage(0, 50);
 
@@ -335,15 +383,7 @@ describe('NoticeArchiveService', () => {
   describe('change notification collection bridge', () => {
     it('forwards begin/end/flush calls to ChangeTrackingService when available', async () => {
       const repositoryMock = createRepositoryMock();
-      const changeTrackingService = {
-        beginChangeNotificationCollection: jest.fn<(...args: any[]) => void>(),
-        endChangeNotificationCollection: jest
-          .fn<(...args: any[]) => Promise<void>>()
-          .mockResolvedValue(undefined),
-        flushQueuedChangeNotificationsNow: jest
-          .fn<(...args: any[]) => Promise<void>>()
-          .mockResolvedValue(undefined),
-      };
+      const changeTrackingService = createChangeTrackingServiceMock();
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
@@ -366,15 +406,11 @@ describe('NoticeArchiveService', () => {
       ).toHaveBeenCalledTimes(1);
     });
 
-    it('safely no-ops when ChangeTrackingService is missing', async () => {
+    it('throws when ChangeTrackingService is missing in immutable diffchain mode', async () => {
       const repositoryMock = createRepositoryMock();
-      const service = new NoticeArchiveService(repositoryMock as any);
-
-      service.beginChangeNotificationCollection();
-      await service.endChangeNotificationCollection();
-      await service.flushQueuedChangeNotifications();
-
-      expect(true).toBe(true);
+      expect(() => new NoticeArchiveService(repositoryMock as any)).toThrow(
+        'ChangeTrackingService is required for immutable diffchain mode.',
+      );
     });
   });
 });

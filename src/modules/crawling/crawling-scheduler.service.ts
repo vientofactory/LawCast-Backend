@@ -507,15 +507,16 @@ export class CrawlingSchedulerService implements OnModuleInit {
     await this.cacheService.updateCache(noticesWithExistingSummary);
 
     // If a bill was archived earlier from NSM (contentId=NULL) and now appears
-    // in PAL with contentId, refresh that row in the background so periodic
-    // cron cycles also perform NSM->PAL upgrades (not only bootstrap full sync).
+    // in PAL with contentId, refresh that row in the background. Also run a
+    // bounded periodic re-compare pass for already archived PAL notices so
+    // title/proposal metadata drifts are captured as append-only diff events.
     const newNums = new Set(newNotices.map((n) => n.num));
     const alreadyArchivedWithContentId = crawledData.filter(
       (item) => !newNums.has(item.num) && item.contentId !== null,
     );
     if (alreadyArchivedWithContentId.length > 0) {
-      this.runBackgroundTask('refresh-nsm-to-pal', async () => {
-        await this.refreshNsmToPalUpgradesInBackground(
+      this.runBackgroundTask('refresh-existing-pal-notices', async () => {
+        await this.refreshExistingPalNoticesInBackground(
           alreadyArchivedWithContentId,
         );
       });
@@ -747,9 +748,11 @@ export class CrawlingSchedulerService implements OnModuleInit {
    * `contentId = NULL`, then re-archives them using PAL detail/source HTML
    * once PAL exposes a real contentId for the same notice number.
    */
-  private async refreshNsmToPalUpgradesInBackground(
+  private async refreshExistingPalNoticesInBackground(
     itemsWithContentId: ITableData[],
   ): Promise<void> {
+    const compareBatchLimit =
+      APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_BATCH_SIZE;
     const nullContentIdNums =
       await this.noticeArchiveService.getArchivedNullContentIdNums(
         itemsWithContentId.map((item) => item.num),
@@ -762,7 +765,11 @@ export class CrawlingSchedulerService implements OnModuleInit {
     const toUpgrade = itemsWithContentId.filter((item) =>
       nullContentIdNums.has(item.num),
     );
-    if (toUpgrade.length === 0) {
+    const toRecompare = itemsWithContentId
+      .filter((item) => !nullContentIdNums.has(item.num))
+      .slice(0, compareBatchLimit);
+
+    if (toUpgrade.length === 0 && toRecompare.length === 0) {
       return;
     }
 
@@ -770,34 +777,39 @@ export class CrawlingSchedulerService implements OnModuleInit {
     try {
       summaryStates =
         await this.noticeArchiveService.getSummaryStateByNoticeNums(
-          toUpgrade.map((item) => item.num),
+          [...toUpgrade, ...toRecompare].map((item) => item.num),
         );
     } catch (error) {
       this.logger.warn(
-        `Failed to load summary states for periodic NSM->PAL refresh, using defaults: ${(error as Error).message}`,
+        `Failed to load summary states for periodic PAL re-compare, using defaults: ${(error as Error).message}`,
       );
       summaryStates = new Map();
     }
 
-    const upgraded = await this.archiveOrchestratorService.archiveNotices(
-      toUpgrade.map((item) => {
-        const summary = summaryStates.get(item.num);
-        return {
-          num: item.num,
-          subject: item.subject,
-          proposerCategory: item.proposerCategory,
-          committee: item.committee,
-          link: item.link,
-          contentId: item.contentId,
-          attachments: item.attachments ?? {
-            pdfFile: null,
-            hwpFile: null,
-          },
-          aiSummary: summary?.aiSummary ?? null,
-          aiSummaryStatus: summary?.aiSummaryStatus ?? 'not_requested',
-        };
-      }),
-    );
+    const toCachedNotice = (item: ITableData): CachedNotice => {
+      const summary = summaryStates.get(item.num);
+      return {
+        num: item.num,
+        subject: item.subject,
+        proposerCategory: item.proposerCategory,
+        committee: item.committee,
+        link: item.link,
+        contentId: item.contentId,
+        attachments: item.attachments ?? {
+          pdfFile: null,
+          hwpFile: null,
+        },
+        aiSummary: summary?.aiSummary ?? null,
+        aiSummaryStatus: summary?.aiSummaryStatus ?? 'not_requested',
+      };
+    };
+
+    const upgraded =
+      toUpgrade.length > 0
+        ? await this.archiveOrchestratorService.archiveNotices(
+            toUpgrade.map(toCachedNotice),
+          )
+        : 0;
 
     if (upgraded > 0) {
       this.logger.log(
@@ -812,6 +824,15 @@ export class CrawlingSchedulerService implements OnModuleInit {
           detected: toUpgrade.length,
           sampleNoticeNums: toUpgrade.slice(0, 10).map((item) => item.num),
         },
+      );
+    }
+
+    if (toRecompare.length > 0) {
+      await this.archiveOrchestratorService.archiveNotices(
+        toRecompare.map(toCachedNotice),
+      );
+      this.logger.log(
+        `Periodic PAL re-compare scanned ${toRecompare.length} archived notice(s)`,
       );
     }
   }
@@ -886,6 +907,21 @@ export class CrawlingSchedulerService implements OnModuleInit {
         pendingNotices,
       );
 
+    const newPendingNumSet = new Set(newPendingNotices.map((n) => n.num));
+    const existingPendingItems = pendingNotices
+      .filter((notice) => !newPendingNumSet.has(notice.num))
+      .map((notice) => rawItemMap.get(notice.num))
+      .filter((item): item is INsmBillItem => item !== undefined)
+      .slice(0, APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_BATCH_SIZE);
+
+    if (existingPendingItems.length > 0) {
+      this.runBackgroundTask('refresh-existing-pending-bills', async () => {
+        await this.refreshExistingPendingBillsInBackground(
+          existingPendingItems,
+        );
+      });
+    }
+
     if (newPendingNotices.length === 0) return;
 
     this.logger.log(
@@ -924,6 +960,19 @@ export class CrawlingSchedulerService implements OnModuleInit {
         );
       }
     });
+  }
+
+  private async refreshExistingPendingBillsInBackground(
+    items: INsmBillItem[],
+  ): Promise<void> {
+    const refreshed =
+      await this.archiveOrchestratorService.archiveNsmBillItems(items);
+
+    if (refreshed.length > 0) {
+      this.logger.log(
+        `Periodic NSM re-compare scanned ${refreshed.length} archived pending bill(s)`,
+      );
+    }
   }
 
   private async processPendingBillsInBackground(
