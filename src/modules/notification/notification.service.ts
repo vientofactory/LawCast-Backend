@@ -247,7 +247,6 @@ export class NotificationService {
             timeline: 'true',
             cmpFrom: String(payload.eventHeight - 1),
             cmpTo: String(payload.eventHeight),
-            cmpShowAll: 'true',
           })
         : this.buildFrontendNoticeDetailUrlByNoticeNum(payload.noticeNum, {
             timeline: 'true',
