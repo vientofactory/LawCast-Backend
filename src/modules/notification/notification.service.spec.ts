@@ -1,10 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Logger } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { ConfigService } from '@nestjs/config';
 import { NotificationService } from './notification.service';
 import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 import { CacheService } from '../cache/cache.service';
+import { LoggerUtils } from '../../utils/logger.utils';
 import { Webhook } from '../webhook/webhook.entity';
 import {
   MessageBuilder,
@@ -45,6 +45,14 @@ describe('NotificationService', () => {
     MockedMessageBuilder.mockImplementation(() => mockMessageBuilder);
     MockedDiscordWebhook.mockImplementation(() => mockDiscordWebhook);
 
+    jest.spyOn(LoggerUtils, 'getContextLogger').mockReturnValue({
+      log: jest.fn(),
+      error: jest.fn(),
+      warn: jest.fn(),
+      debug: jest.fn(),
+      verbose: jest.fn(),
+    } as any);
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         NotificationService,
@@ -73,10 +81,6 @@ describe('NotificationService', () => {
     }).compile();
 
     service = module.get<NotificationService>(NotificationService);
-
-    // Logger 모킹하여 테스트 출력 정리
-    jest.spyOn(Logger.prototype, 'log').mockImplementation();
-    jest.spyOn(Logger.prototype, 'error').mockImplementation();
   });
 
   afterEach(() => {

@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { type EntityManager, In, Repository } from 'typeorm';
 import {
@@ -171,7 +171,9 @@ export interface ChangeChainAuditReport {
 
 @Injectable()
 export class ChangeTrackingService {
-  private readonly logger = new Logger(ChangeTrackingService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    ChangeTrackingService.name,
+  );
   private readonly APPEND_EVENT_MAX_RETRIES = 3;
   private readonly BASELINE_EVENT_HEIGHT = 1;
   private readonly LEGACY_GENESIS_SOURCE =

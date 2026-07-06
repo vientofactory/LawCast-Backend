@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   Injectable,
-  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
@@ -46,6 +45,7 @@ import {
 import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
+import { LoggerUtils } from '../../utils/logger.utils';
 
 export interface ArchiveListQuery {
   page: number;
@@ -201,7 +201,9 @@ export const LEGACY_GENESIS_SOURCE = NoticeChangeSource.BOOTSTRAP_LEGACY_SEED;
 
 @Injectable()
 export class NoticeArchiveService {
-  private readonly logger = new Logger(NoticeArchiveService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    NoticeArchiveService.name,
+  );
   private readonly artifactSupport: NoticeArchiveArtifactSupport;
   private readonly revisionTrackedFieldPaths = [
     ...DEFAULT_TRACKED_FIELDS,

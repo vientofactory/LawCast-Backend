@@ -437,7 +437,6 @@ describe('ArchiveOrchestratorService', () => {
       const result = await service.fetchAndUpdateProposalReason(
         2219775,
         '2219775',
-        'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219775/detailRP',
       );
 
       expect(result).toBe('사유 본문');
@@ -467,7 +466,6 @@ describe('ArchiveOrchestratorService', () => {
       const result = await service.fetchAndUpdateProposalReason(
         2219777,
         '2219777',
-        'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219777/detailRP',
       );
 
       expect(result).toBeNull();

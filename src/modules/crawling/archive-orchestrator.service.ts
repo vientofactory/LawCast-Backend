@@ -1,6 +1,5 @@
 import {
   Injectable,
-  Logger,
   OnApplicationShutdown,
   OnModuleInit,
   Optional,
@@ -24,7 +23,9 @@ import { ArchiveOrchestratorScreenshotCoordinator } from './utils/archive-orches
 export class ArchiveOrchestratorService
   implements OnModuleInit, OnApplicationShutdown
 {
-  private readonly logger = new Logger(ArchiveOrchestratorService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    ArchiveOrchestratorService.name,
+  );
   private readonly screenshotCoordinator: ArchiveOrchestratorScreenshotCoordinator;
 
   constructor(

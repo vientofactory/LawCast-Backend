@@ -1,5 +1,6 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { type CachedNotice } from '../../types/cache.types';
+import { LoggerUtils } from '../../utils/logger.utils';
 import { NotificationBatchService } from './notification-batch.service';
 import { BatchProcessingOptions } from '../shared/batch-processing.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
@@ -7,7 +8,9 @@ import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 
 @Injectable()
 export class NotificationOrchestratorService {
-  private readonly logger = new Logger(NotificationOrchestratorService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    NotificationOrchestratorService.name,
+  );
 
   constructor(
     private notificationBatchService: NotificationBatchService,

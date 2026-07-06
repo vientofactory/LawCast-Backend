@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { randomUUID } from 'crypto';
 import {
@@ -16,12 +16,13 @@ import {
   TextInputBuilder,
   TextInputStyle,
 } from 'discord.js';
+import { LoggerUtils } from '../../utils/logger.utils';
 import { NotificationService } from '../notification/notification.service';
 import { WebhookService } from '../webhook/webhook.service';
 
 @Injectable()
 export class DiscordBridgeAdminAnnouncementCommandService {
-  private readonly logger = new Logger(
+  private readonly logger = LoggerUtils.getContextLogger(
     DiscordBridgeAdminAnnouncementCommandService.name,
   );
   private readonly ANNOUNCEMENT_PREFIX = 'admin_announcement';

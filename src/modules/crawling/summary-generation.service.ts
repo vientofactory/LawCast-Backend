@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { type ITableData } from 'pal-crawl';
 import { APP_CONSTANTS } from '../../config/app.config';
 import {
   type AISummaryStatus,
   type CachedNotice,
 } from '../../types/cache.types';
+import { LoggerUtils } from '../../utils/logger.utils';
 import { OllamaClientService } from '../ollama/ollama-client.service';
 import {
   NoticeArchiveService,
@@ -19,7 +20,9 @@ import {
 
 @Injectable()
 export class SummaryGenerationService {
-  private readonly logger = new Logger(SummaryGenerationService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    SummaryGenerationService.name,
+  );
   private readonly LOG_PREFIX = {
     OLLAMA: '[Ollama]',
   };

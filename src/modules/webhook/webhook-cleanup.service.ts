@@ -1,9 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { LoggerUtils } from '../../utils/logger.utils';
 import { WebhookService } from './webhook.service';
 
 @Injectable()
 export class WebhookCleanupService {
-  private readonly logger = new Logger(WebhookCleanupService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    WebhookCleanupService.name,
+  );
 
   /**
    * Shared execution lock for all cleanup methods.

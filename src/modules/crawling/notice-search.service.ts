@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { type ISearchQuery } from 'pal-crawl';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type AISummaryStatus } from '../../types/cache.types';
+import { LoggerUtils } from '../../utils/logger.utils';
 import { CrawlingCoreService } from './crawling-core.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { AI_SUMMARY_STATUS } from './utils/ai-summary-status.utils';
@@ -41,7 +42,9 @@ export interface SearchNoticesResult {
 
 @Injectable()
 export class NoticeSearchService {
-  private readonly logger = new Logger(NoticeSearchService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    NoticeSearchService.name,
+  );
   // Deduplicates concurrent requests for the same search parameters
   private readonly inFlight = new Map<string, Promise<SearchNoticesResult>>();
 

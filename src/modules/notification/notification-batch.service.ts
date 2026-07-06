@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { WebhookService } from '../webhook/webhook.service';
 import {
   NotificationService,
@@ -35,7 +35,9 @@ interface ChangeNotificationJobResult {
 
 @Injectable()
 export class NotificationBatchService {
-  private readonly logger = new Logger(NotificationBatchService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    NotificationBatchService.name,
+  );
 
   constructor(
     private webhookService: WebhookService,

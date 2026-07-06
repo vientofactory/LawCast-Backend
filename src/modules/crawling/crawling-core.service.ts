@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import {
   NsmLmSts,
   NsmLmStsParser,
@@ -34,7 +34,9 @@ const SCREENSHOT_FALLBACK_QUALITIES =
 
 @Injectable()
 export class CrawlingCoreService {
-  private readonly logger = new Logger(CrawlingCoreService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    CrawlingCoreService.name,
+  );
   private readonly crawlConfig: PalCrawlConfig;
 
   constructor() {

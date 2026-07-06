@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
+import { LoggerUtils } from '../../utils/logger.utils';
 
 interface OllamaGenerateResponse {
   // Basic response fields
@@ -59,7 +60,9 @@ export interface OllamaRuntimeMetrics {
 
 @Injectable()
 export class OllamaClientService {
-  private readonly logger = new Logger(OllamaClientService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    OllamaClientService.name,
+  );
   private readonly client: AxiosInstance | null;
   private readonly enabled: boolean;
   private readonly model: string;

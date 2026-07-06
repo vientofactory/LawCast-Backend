@@ -1,13 +1,16 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { CacheService } from '../cache/cache.service';
 import {
   OllamaClientService,
   type OllamaRuntimeMetrics,
 } from '../ollama/ollama-client.service';
+import { LoggerUtils } from '../../utils/logger.utils';
 
 @Injectable()
 export class HealthCheckService {
-  private readonly logger = new Logger(HealthCheckService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    HealthCheckService.name,
+  );
   private ollamaMetricsCache: OllamaRuntimeMetrics | null = null;
   private ollamaMetricsCacheAt: number | null = null;
   private readonly ollamaMetricsCacheTtlMs = 30000;

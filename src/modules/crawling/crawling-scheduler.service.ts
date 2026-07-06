@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
 import { type ITableData, type INsmBillItem } from 'pal-crawl';
 import { type CachedNotice } from '../../types/cache.types';
 import { CacheService } from '../cache/cache.service';
@@ -14,6 +14,7 @@ import { APP_CONSTANTS } from '../../config/app.config';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { mapConcurrently } from '../../utils/concurrency.utils';
+import { LoggerUtils } from '../../utils/logger.utils';
 import { CrawlingSchedulerSummarySupport } from './utils/crawling-scheduler-summary-support';
 import { CrawlingSchedulerProposalRetry } from './utils/crawling-scheduler-proposal-retry';
 
@@ -43,7 +44,9 @@ function isRetryableNetworkError(error: unknown): boolean {
 }
 @Injectable()
 export class CrawlingSchedulerService implements OnModuleInit {
-  private readonly logger = new Logger(CrawlingSchedulerService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    CrawlingSchedulerService.name,
+  );
   private isProcessing = false;
   private isInitialized = false;
   private readonly activeBackgroundTasks = new Set<string>();
@@ -184,9 +187,9 @@ export class CrawlingSchedulerService implements OnModuleInit {
    */
   private runBackgroundTask(taskName: string, task: () => Promise<void>): void {
     if (this.activeBackgroundTasks.has(taskName)) {
-      Logger.debug(
-        `Background task already running - skipping duplicate launch: ${taskName}`,
+      LoggerUtils.debug(
         CrawlingSchedulerService.name,
+        `Background task already running - skipping duplicate launch: ${taskName}`,
       );
       return;
     }

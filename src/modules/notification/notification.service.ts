@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   MessageBuilder,
@@ -38,7 +38,9 @@ type NotificationSendResult = {
 
 @Injectable()
 export class NotificationService {
-  private readonly logger = new Logger(NotificationService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    NotificationService.name,
+  );
   private readonly PROPOSAL_REASON_MISSING_GUIDANCE =
     '법률안 제안이유를 아직 수집하지 못했습니다. 자세히 보기 링크를 통해 국회 페이지에서 직접 확인해 주세요.';
   // Mapping of change-tracking field paths to user-friendly labels for Discord embeds

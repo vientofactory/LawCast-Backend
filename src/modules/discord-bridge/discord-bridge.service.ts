@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleInit,
-  OnModuleDestroy,
-} from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   Client,
@@ -24,6 +19,7 @@ import {
   BRIDGE_LOG_LEVEL_ICONS,
 } from './discord-bridge.types';
 import { DiscordBridgeCommandsService } from './discord-bridge-commands.service';
+import { LoggerUtils } from '../../utils/logger.utils';
 
 const SLASH_COMMAND_DEFINITIONS = [
   { name: 'status', description: 'Server uptime, memory, and runtime info' },
@@ -72,7 +68,9 @@ const SLASH_COMMAND_DEFINITIONS = [
 
 @Injectable()
 export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(DiscordBridgeService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    DiscordBridgeService.name,
+  );
   private client: Client | null = null;
   private isReady = false;
   private currentLogLevel: BridgeLogLevel;

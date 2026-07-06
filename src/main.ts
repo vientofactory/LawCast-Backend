@@ -1,13 +1,14 @@
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { BatchProcessingService } from './modules/shared/batch-processing.service';
 import { WebhookValidationUtils } from './utils/webhook-validation.utils';
 import { DiscordBridgeService } from './modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from './modules/discord-bridge/discord-bridge.types';
+import { LoggerUtils } from './utils/logger.utils';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -15,16 +16,21 @@ async function bootstrap() {
   const dataSource = app.get(DataSource);
   const batchProcessingService = app.get(BatchProcessingService);
   const discordBridge = app.get(DiscordBridgeService);
-  const logger = new Logger('Bootstrap');
+  const loggerContext = 'Bootstrap';
   const frontendUrls = configService.get<string[]>('frontend.urls');
   const { getValidationPipeOptions } = WebhookValidationUtils;
 
   // Initialize shutdown handlers
   app.enableShutdownHooks();
-  initShutdownHandlers(app, batchProcessingService, logger, discordBridge);
+  initShutdownHandlers(
+    app,
+    batchProcessingService,
+    loggerContext,
+    discordBridge,
+  );
 
   // Ensure database migrations are applied before starting the application
-  await ensureDatabaseMigrations(dataSource, logger);
+  await ensureDatabaseMigrations(dataSource, loggerContext);
 
   // initialize global validation pipe with custom options
   app.useGlobalPipes(new ValidationPipe(getValidationPipeOptions()));
@@ -42,7 +48,7 @@ async function bootstrap() {
   const port = configService.get<number>('port');
   await app.listen(port);
 
-  logger.log(`LawCast Backend is running on port ${port}`);
+  LoggerUtils.log(loggerContext, `LawCast Backend is running on port ${port}`);
 }
 
 /**
@@ -56,22 +62,24 @@ async function bootstrap() {
  */
 async function ensureDatabaseMigrations(
   dataSource: DataSource,
-  logger: Logger,
+  loggerContext: string,
 ): Promise<void> {
-  logger.log('Checking TypeORM migration status...');
+  LoggerUtils.log(loggerContext, 'Checking TypeORM migration status...');
 
   const hasPendingMigrations = await dataSource.showMigrations();
   if (!hasPendingMigrations) {
-    logger.log('Database migrations are up to date');
+    LoggerUtils.log(loggerContext, 'Database migrations are up to date');
     return;
   }
 
-  logger.warn(
+  LoggerUtils.warn(
+    loggerContext,
     'Pending migrations detected. Running migrations during bootstrap...',
   );
 
   const result = await dataSource.runMigrations({ transaction: 'all' });
-  logger.log(
+  LoggerUtils.log(
+    loggerContext,
     `Migration initialization completed (${result.length} migration(s) applied)`,
   );
 }
@@ -87,7 +95,7 @@ async function ensureDatabaseMigrations(
 async function gracefulShutdown(
   app: NestExpressApplication,
   batchProcessingService: BatchProcessingService,
-  logger: Logger,
+  loggerContext: string,
   exitCode = 0,
 ): Promise<void> {
   const shutdownTimeout = 30000; // 30 seconds
@@ -96,28 +104,34 @@ async function gracefulShutdown(
   try {
     // Forceful shutdown timer
     shutdownTimer = setTimeout(() => {
-      logger.error('Graceful shutdown timeout, forcing exit...');
+      LoggerUtils.error(
+        loggerContext,
+        'Graceful shutdown timeout, forcing exit...',
+      );
       process.exit(1);
     }, shutdownTimeout);
 
-    logger.log('Waiting for ongoing batch jobs to complete...');
+    LoggerUtils.log(
+      loggerContext,
+      'Waiting for ongoing batch jobs to complete...',
+    );
 
     // Batch jobs graceful shutdown
     await batchProcessingService.gracefulShutdown();
 
-    logger.log('Closing NestJS application...');
+    LoggerUtils.log(loggerContext, 'Closing NestJS application...');
 
     // NestJS application shutdown
     await app.close();
 
-    logger.log('Graceful shutdown completed successfully');
+    LoggerUtils.log(loggerContext, 'Graceful shutdown completed successfully');
 
     // Clear timer
     clearTimeout(shutdownTimer);
 
     process.exit(exitCode);
   } catch (error) {
-    logger.error('Error during graceful shutdown:', error);
+    LoggerUtils.error(loggerContext, 'Error during graceful shutdown:', error);
     clearTimeout(shutdownTimer!);
     process.exit(1);
   }
@@ -136,22 +150,31 @@ async function gracefulShutdown(
 function initShutdownHandlers(
   app: NestExpressApplication,
   batchProcessingService: BatchProcessingService,
-  logger: Logger,
+  loggerContext: string,
   discordBridge: DiscordBridgeService,
 ): void {
   process.on('SIGTERM', async () => {
-    logger.log('SIGTERM received, starting graceful shutdown...');
-    await gracefulShutdown(app, batchProcessingService, logger);
+    LoggerUtils.log(
+      loggerContext,
+      'SIGTERM received, starting graceful shutdown...',
+    );
+    await gracefulShutdown(app, batchProcessingService, loggerContext);
   });
 
   process.on('SIGINT', async () => {
-    logger.log('SIGINT received, starting graceful shutdown...');
-    await gracefulShutdown(app, batchProcessingService, logger);
+    LoggerUtils.log(
+      loggerContext,
+      'SIGINT received, starting graceful shutdown...',
+    );
+    await gracefulShutdown(app, batchProcessingService, loggerContext);
   });
 
   // Node.js runtime warnings (e.g. MaxListenersExceeded, DeprecationWarning)
   process.on('warning', (warning) => {
-    logger.warn(`Node.js Warning [${warning.name}]: ${warning.message}`);
+    LoggerUtils.warn(
+      loggerContext,
+      `Node.js Warning [${warning.name}]: ${warning.message}`,
+    );
     void discordBridge.logEvent(
       BridgeLogLevel.WARN,
       `Warning:${warning.name}`,
@@ -162,17 +185,23 @@ function initShutdownHandlers(
 
   // Unexpected error handling
   process.on('uncaughtException', async (error) => {
-    logger.error('Uncaught Exception:', error);
+    LoggerUtils.error(loggerContext, 'Uncaught Exception:', error);
     await discordBridge.sendCriticalAlert(
       'UncaughtException',
       error.message,
       error,
     );
-    await gracefulShutdown(app, batchProcessingService, logger, 1);
+    await gracefulShutdown(app, batchProcessingService, loggerContext, 1);
   });
 
   process.on('unhandledRejection', async (reason, promise) => {
-    logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    LoggerUtils.error(
+      loggerContext,
+      'Unhandled Rejection at:',
+      promise,
+      'reason:',
+      reason,
+    );
     const message =
       reason instanceof Error
         ? reason.message
@@ -182,12 +211,11 @@ function initShutdownHandlers(
       message,
       reason,
     );
-    await gracefulShutdown(app, batchProcessingService, logger, 1);
+    await gracefulShutdown(app, batchProcessingService, loggerContext, 1);
   });
 }
 
 bootstrap().catch((error) => {
-  const logger = new Logger('Bootstrap');
-  logger.error('Failed to start application:', error);
+  LoggerUtils.error('Bootstrap', 'Failed to start application:', error);
   process.exit(1);
 });

@@ -1,6 +1,7 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { LoggerUtils } from '../../utils/logger.utils';
 
 export interface PackageEntry {
   name: string;
@@ -10,7 +11,7 @@ export interface PackageEntry {
 
 @Injectable()
 export class PackagesService implements OnModuleInit {
-  private readonly logger = new Logger(PackagesService.name);
+  private readonly logger = LoggerUtils.getContextLogger(PackagesService.name);
   private packages: PackageEntry[] = [];
 
   onModuleInit() {

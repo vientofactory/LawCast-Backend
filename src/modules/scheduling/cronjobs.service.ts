@@ -1,4 +1,4 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { WebhookCleanupService } from '../webhook/webhook-cleanup.service';
 import { CrawlingService } from '../crawling/crawling.service';
@@ -13,7 +13,7 @@ const CRON_TIMEZONE = appConfig().cron.timezone;
 
 @Injectable()
 export class CronJobsService {
-  private readonly logger = new Logger(CronJobsService.name);
+  private readonly logger = LoggerUtils.getContextLogger(CronJobsService.name);
 
   constructor(
     private readonly webhookCleanupService: WebhookCleanupService,

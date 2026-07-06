@@ -1,6 +1,5 @@
 import {
   Injectable,
-  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -16,10 +15,11 @@ import { CacheService } from '../cache/cache.service';
 import { CrawlingSchedulerService } from './crawling-scheduler.service';
 import { HealthCheckService } from '../health/health-check.service';
 import { CrawlingCoreService } from './crawling-core.service';
+import { LoggerUtils } from '../../utils/logger.utils';
 
 @Injectable()
 export class CrawlingService {
-  private readonly logger = new Logger(CrawlingService.name);
+  private readonly logger = LoggerUtils.getContextLogger(CrawlingService.name);
   private readonly quickKeywordRefreshIntervalMs =
     APP_CONSTANTS.CACHE.TTL.QUICK_KEYWORDS;
   private readonly quickKeywordSourceLimit = 300;

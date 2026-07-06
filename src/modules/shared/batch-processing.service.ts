@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
+import { Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { APP_CONSTANTS } from '../../config/app.config';
 const { BATCH } = APP_CONSTANTS;
@@ -43,7 +43,9 @@ export interface BatchRunRecord {
 
 @Injectable()
 export class BatchProcessingService implements OnApplicationShutdown {
-  private readonly logger = new Logger(BatchProcessingService.name);
+  private readonly logger = LoggerUtils.getContextLogger(
+    BatchProcessingService.name,
+  );
   private readonly jobQueue = new Map<string, Promise<any>>();
   private readonly activeTimeouts = new Set<NodeJS.Timeout>();
   private isShuttingDown = false;

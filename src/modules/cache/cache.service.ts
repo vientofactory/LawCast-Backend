@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Inject, OnModuleDestroy } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { type ITableData } from 'pal-crawl';
@@ -12,7 +12,7 @@ import {
 
 @Injectable()
 export class CacheService implements OnModuleDestroy {
-  private readonly logger = new Logger(CacheService.name);
+  private readonly logger = LoggerUtils.getContextLogger(CacheService.name);
   private readonly MAX_CACHE_SIZE = APP_CONSTANTS.CACHE.MAX_SIZE;
   private readonly CACHE_KEYS = APP_CONSTANTS.CACHE.KEYS;
   private readonly HEALTH_CHECK_TTL_SECONDS = 30;
