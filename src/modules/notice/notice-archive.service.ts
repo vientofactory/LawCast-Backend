@@ -1904,23 +1904,10 @@ export class NoticeArchiveService {
     }
 
     try {
-      const events = await this.changeTrackingService.getNoticeChangeTimeline({
+      return this.changeTrackingService.getLatestFieldAfterValue(
         noticeNum,
-        limit: 1000,
-      });
-
-      for (const event of events) {
-        const proposalReasonDetail = event.details.find(
-          (detail) => detail.fieldPath === 'proposalReason',
-        );
-
-        const proposalReason = proposalReasonDetail?.afterValue?.trim();
-        if (proposalReason) {
-          return proposalReason;
-        }
-      }
-
-      return null;
+        'proposalReason',
+      );
     } catch (error) {
       this.logger.warn(
         `Failed to load latest proposalReason from change chain for notice ${noticeNum}: ${(error as Error).message}`,

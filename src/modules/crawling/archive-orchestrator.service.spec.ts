@@ -71,6 +71,7 @@ describe('ArchiveOrchestratorService', () => {
           useValue: {
             upsertNoticeArchive: jest.fn(),
             updateNsmHtmlAndDetail: jest.fn().mockResolvedValue(undefined),
+            getLatestProposalReasonForNotice: jest.fn().mockResolvedValue(null),
             getExistingNoticeNumSet: jest.fn(),
             beginChangeNotificationCollection: jest.fn(),
             endChangeNotificationCollection: jest
@@ -433,6 +434,9 @@ describe('ArchiveOrchestratorService', () => {
           statusCode: 200,
         },
       );
+      (
+        noticeArchiveService.getLatestProposalReasonForNotice as jest.Mock
+      ).mockResolvedValue('사유 본문');
 
       const result = await service.fetchAndUpdateProposalReason(
         2219775,

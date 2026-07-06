@@ -458,6 +458,15 @@ export class ArchiveOrchestratorService
         return null;
       }
 
+      const latestReason =
+        await this.noticeArchiveService.getLatestProposalReasonForNotice(num);
+      if (!latestReason || latestReason !== proposalReason) {
+        this.logger.warn(
+          `proposalReason backfill verification failed for bill ${normalizedBillNo} (notice=${num})`,
+        );
+        return null;
+      }
+
       LoggerUtils.logDev(
         ArchiveOrchestratorService.name,
         `proposalReason backfill succeeded for bill ${normalizedBillNo} (${proposalReason.length} chars${proposalSession ? `, session=${proposalSession}` : ''})`,

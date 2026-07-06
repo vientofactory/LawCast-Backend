@@ -114,21 +114,21 @@ export class CrawlingSchedulerProposalRetry {
   }
 
   drainInBackground(): void {
-    void this.drainForeground().catch((error) => {
+    void this.runDrainOnceOrJoin().catch((error) => {
       this.options.logger.error(
         `proposalReason retry queue drain failed: ${(error as Error).message}`,
       );
     });
   }
 
-  async drainForeground(): Promise<void> {
+  private async runDrainOnceOrJoin(): Promise<void> {
     if (this.activeRun) {
       this.rerunRequested = true;
       await this.activeRun;
       return;
     }
 
-    this.activeRun = this.runDrainLoop();
+    this.activeRun = this.drainLoop();
     try {
       await this.activeRun;
     } finally {
@@ -136,7 +136,7 @@ export class CrawlingSchedulerProposalRetry {
     }
   }
 
-  private async runDrainLoop(): Promise<void> {
+  private async drainLoop(): Promise<void> {
     do {
       this.rerunRequested = false;
       await this.drain();
