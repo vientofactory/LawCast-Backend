@@ -28,6 +28,13 @@ export class ArchiveOrchestratorService
   );
   private readonly screenshotCoordinator: ArchiveOrchestratorScreenshotCoordinator;
 
+  private normalizeProposalReasonText(
+    value: string | null | undefined,
+  ): string | null {
+    const normalized = value?.replace(/\s+/g, ' ').trim();
+    return normalized && normalized.length > 0 ? normalized : null;
+  }
+
   constructor(
     private readonly cacheService: CacheService,
     private noticeArchiveService: NoticeArchiveService,
@@ -460,7 +467,11 @@ export class ArchiveOrchestratorService
 
       const latestReason =
         await this.noticeArchiveService.getLatestProposalReasonForNotice(num);
-      if (!latestReason || latestReason !== proposalReason) {
+      if (
+        !latestReason ||
+        this.normalizeProposalReasonText(latestReason) !==
+          this.normalizeProposalReasonText(proposalReason)
+      ) {
         this.logger.warn(
           `proposalReason backfill verification failed for bill ${normalizedBillNo} (notice=${num})`,
         );

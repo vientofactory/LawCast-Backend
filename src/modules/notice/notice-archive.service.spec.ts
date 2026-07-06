@@ -27,6 +27,15 @@ describe('NoticeArchiveService', () => {
     getNoticeChangeTimeline: jest
       .fn<(...args: any[]) => Promise<any[]>>()
       .mockResolvedValue([]),
+    getLatestFieldAfterValue: jest
+      .fn<(...args: any[]) => Promise<string | null>>()
+      .mockResolvedValue(null),
+    appendChangeEventWithDetails: jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue({ id: 1 }),
+    dispatchChangeNotification: jest
+      .fn<(...args: any[]) => Promise<void>>()
+      .mockResolvedValue(undefined),
   });
 
   const buildRow = (overrides: Partial<NoticeArchive> = {}): NoticeArchive => {
@@ -411,6 +420,103 @@ describe('NoticeArchiveService', () => {
       expect(() => new NoticeArchiveService(repositoryMock as any)).toThrow(
         'ChangeTrackingService is required for immutable diffchain mode.',
       );
+    });
+  });
+
+  describe('proposalReason no-op protections', () => {
+    it('does not append an event when proposalReason differs only by whitespace normalization', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldAfterValue.mockResolvedValue(
+        '사유   본문',
+      );
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219775,
+          subject: '테스트 법률안',
+          proposalReason: '',
+          contentId: null,
+          contentBillNumber: '2219775',
+        }),
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.updateNsmHtmlAndDetail(2219775, {
+        html: '',
+        sha256: '',
+        proposalReason: ' 사유 본문 ',
+        httpMetadata: null,
+      });
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+      expect(
+        changeTrackingService.dispatchChangeNotification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('includes NOT EXISTS guard in retry-candidate query to skip already-resolved chain rows', async () => {
+      const qb = {
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockImplementation(async () => [
+          {
+            noticeNum: 2219775,
+            subject: '테스트 법률안',
+            proposerCategory: '의원',
+            committee: '법사위',
+            assemblyLink: 'https://example.com/nsm/2219775',
+            contentBillNumber: '2219775',
+            attachmentPdfFile: '',
+            attachmentHwpFile: '',
+          },
+        ]),
+      };
+
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        createQueryBuilder: jest.fn().mockReturnValue(qb),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.getNsmProposalReasonRetryCandidates(10);
+
+      expect(repositoryMock.createQueryBuilder).toHaveBeenCalledWith('na');
+      const notExistsCall = (qb.andWhere as jest.Mock).mock.calls.find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          (call[0] as string).includes('NOT EXISTS'),
+      );
+      expect(notExistsCall).toBeDefined();
+      expect(notExistsCall?.[1]).toEqual({
+        proposalReasonFieldPath: 'proposalReason',
+      });
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        billNo: '2219775',
+        notice: {
+          num: 2219775,
+          subject: '테스트 법률안',
+          aiSummaryStatus: 'not_supported',
+        },
+      });
     });
   });
 });

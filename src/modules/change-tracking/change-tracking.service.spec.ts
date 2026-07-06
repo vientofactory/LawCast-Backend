@@ -291,6 +291,80 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     expect(inTxDetailRepo.save).toHaveBeenCalledTimes(1);
   });
 
+  it('skips appending when latest event payload and details are identical', async () => {
+    const latestEvent = {
+      id: 77,
+      noticeNum: 2219775,
+      eventType: 'updated',
+      source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+      eventHeight: 9,
+      eventHash: 'hash-existing',
+      changedFieldCount: 1,
+      diffSummaryJson: JSON.stringify({
+        changedFields: ['proposalReason'],
+        total: 1,
+      }),
+    } as any;
+
+    const changeEventRepository = {
+      findOne: jest
+        .fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValue(latestEvent),
+      manager: {
+        transaction: jest
+          .fn<(fn: (manager: any) => Promise<any>) => Promise<any>>()
+          .mockImplementation(async (fn) => fn({})),
+      },
+    } as any;
+
+    const changeDetailRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        {
+          eventId: 77,
+          fieldPath: 'proposalReason',
+          changeType: 'modified',
+          beforeValue: null,
+          afterValue: '사유 본문',
+          beforeHash: null,
+          afterHash: 'hash-after',
+        },
+      ]),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      changeDetailRepository,
+      undefined as any,
+    );
+
+    const saved = await service.appendChangeEventWithDetails({
+      noticeNum: 2219775,
+      eventType: 'updated',
+      source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+      eventHash: 'hash-new-but-should-skip',
+      changedFieldCount: 1,
+      diffSummaryJson: JSON.stringify({
+        changedFields: ['proposalReason'],
+        total: 1,
+      }),
+      details: [
+        {
+          fieldPath: 'proposalReason',
+          changeType: 'modified',
+          beforeValue: null,
+          afterValue: '사유 본문',
+          beforeHash: null,
+          afterHash: 'hash-after',
+        },
+      ],
+    });
+
+    expect(saved).toBe(latestEvent);
+    expect(changeEventRepository.findOne).toHaveBeenCalledTimes(1);
+    expect(changeDetailRepository.find).toHaveBeenCalledTimes(1);
+    expect(changeEventRepository.manager.transaction).not.toHaveBeenCalled();
+  });
+
   it('appends concurrent events with retries and preserves monotonic heights', async () => {
     let currentHeight = 3;
     let idSequence = 100;

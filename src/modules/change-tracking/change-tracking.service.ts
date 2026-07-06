@@ -352,6 +352,12 @@ export class ChangeTrackingService {
     input: AppendChangeEventWithDetailsInput,
   ): Promise<NoticeChangeEvent> {
     const details = input.details ?? [];
+
+    const duplicated = await this.findLatestDuplicateEvent(input, details);
+    if (duplicated) {
+      return duplicated;
+    }
+
     const maxRetries = Math.max(
       input.maxRetries ?? this.APPEND_EVENT_MAX_RETRIES,
       1,
@@ -438,6 +444,59 @@ export class ChangeTrackingService {
     throw new Error(
       `Failed to append change event after ${maxRetries} attempts for notice=${input.noticeNum}`,
     );
+  }
+
+  private async findLatestDuplicateEvent(
+    input: AppendChangeEventWithDetailsInput,
+    details: ChangeDetailInput[],
+  ): Promise<NoticeChangeEvent | null> {
+    const latest = await this.getLastEventForNotice(input.noticeNum);
+    if (!latest) {
+      return null;
+    }
+
+    if (latest.eventType !== input.eventType) {
+      return null;
+    }
+
+    if ((latest.source ?? null) !== (input.source ?? null)) {
+      return null;
+    }
+
+    if (latest.changedFieldCount !== (input.changedFieldCount ?? 0)) {
+      return null;
+    }
+
+    if ((latest.diffSummaryJson ?? null) !== (input.diffSummaryJson ?? null)) {
+      return null;
+    }
+
+    const latestDetails = await this.changeDetailRepository.find({
+      where: { eventId: latest.id },
+      order: { id: 'ASC' },
+    });
+
+    if (latestDetails.length !== details.length) {
+      return null;
+    }
+
+    for (let index = 0; index < details.length; index += 1) {
+      const incoming = details[index];
+      const existing = latestDetails[index];
+
+      if (
+        existing.fieldPath !== incoming.fieldPath ||
+        existing.changeType !== incoming.changeType ||
+        (existing.beforeValue ?? null) !== (incoming.beforeValue ?? null) ||
+        (existing.afterValue ?? null) !== (incoming.afterValue ?? null) ||
+        (existing.beforeHash ?? null) !== (incoming.beforeHash ?? null) ||
+        (existing.afterHash ?? null) !== (incoming.afterHash ?? null)
+      ) {
+        return null;
+      }
+    }
+
+    return latest;
   }
 
   private async appendEventAndDetailsInTransaction(

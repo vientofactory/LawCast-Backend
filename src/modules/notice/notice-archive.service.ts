@@ -260,6 +260,13 @@ export class NoticeArchiveService {
     return normalized && normalized.length > 0 ? normalized : null;
   }
 
+  private normalizeProposalReasonText(
+    value: string | null | undefined,
+  ): string | null {
+    const normalized = value?.replace(/\s+/g, ' ').trim();
+    return normalized && normalized.length > 0 ? normalized : null;
+  }
+
   async seedLegacyGenesisEvents(
     boundaryAt: Date,
     batchSize = 300,
@@ -1484,17 +1491,44 @@ export class NoticeArchiveService {
     },
   ): Promise<void> {
     const beforeRow = await this.getTrackedRowByNoticeNum(noticeNum);
+    if (!beforeRow) {
+      return;
+    }
+
+    const beforeSnapshot = this.buildTrackedSnapshot(beforeRow);
+    if (!beforeSnapshot) {
+      return;
+    }
+
     const latestProposalReason =
       await this.getLatestProposalReasonForNotice(noticeNum);
-    const normalizedProposalReason = payload.proposalReason.trim();
+    const normalizedLatestProposalReason =
+      this.normalizeProposalReasonText(latestProposalReason);
+    const normalizedProposalReason = this.normalizeProposalReasonText(
+      payload.proposalReason,
+    );
 
-    if (
-      normalizedProposalReason &&
-      normalizedProposalReason !== latestProposalReason &&
-      beforeRow
-    ) {
+    if (!normalizedProposalReason) {
+      return;
+    }
+
+    // Use chain-head value as the effective baseline to avoid re-appending
+    // semantically identical proposalReason changes from immutable archive rows.
+    const effectiveBeforeSnapshot = {
+      ...beforeSnapshot,
+      proposalReason:
+        normalizedLatestProposalReason ??
+        this.normalizeProposalReasonText(
+          typeof beforeSnapshot.proposalReason === 'string'
+            ? beforeSnapshot.proposalReason
+            : null,
+        ) ??
+        '',
+    };
+
+    if (normalizedProposalReason !== effectiveBeforeSnapshot.proposalReason) {
       const afterSnapshot = {
-        ...beforeRow,
+        ...beforeSnapshot,
         proposalReason: normalizedProposalReason,
       };
 
@@ -1502,8 +1536,8 @@ export class NoticeArchiveService {
         noticeNum,
         source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
         eventType: 'updated',
-        beforeSnapshot: this.buildTrackedSnapshot(beforeRow),
-        afterSnapshot: this.buildTrackedSnapshot(afterSnapshot),
+        beforeSnapshot: effectiveBeforeSnapshot,
+        afterSnapshot,
         subject: beforeRow.subject,
       });
     }
@@ -1852,6 +1886,18 @@ export class NoticeArchiveService {
       .andWhere('na.is_done = :isDone', { isDone: 0 })
       .andWhere('na.lifecycle_status = :status', { status: 'active' })
       .andWhere("(na.proposalReason IS NULL OR TRIM(na.proposalReason) = '')")
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM notice_change_events e
+          INNER JOIN notice_change_details d ON d.event_id = e.id
+          WHERE e.notice_num = na.noticeNum
+            AND d.field_path = :proposalReasonFieldPath
+            AND d.after_value IS NOT NULL
+            AND TRIM(d.after_value) != ''
+        )`,
+        { proposalReasonFieldPath: 'proposalReason' },
+      )
       .orderBy('na.noticeNum', 'ASC')
       .limit(limit)
       .getRawMany<{
