@@ -202,15 +202,11 @@ export const APP_CONSTANTS = {
       WEBHOOK_OPTIMIZATION: '1 2 * * *', // Every day at 02:01
       SYSTEM_MONITORING: '0 * * * *', // Every hour
       IS_DONE_SYNC: '13 */6 * * *', // Every 6 hours, staggered away from heavy minute-0 jobs
-      HTML_BACKFILL: '17 * * * *', // Every hour, staggered from crawling and isDone sync
+      PROPOSAL_REASON_BACKFILL_DRAIN: '9-59/15 * * * *', // Every 15 minutes at 9/24/39/54, staggered from crawl/pending/isDone
       INTEGRITY_RESCAN: '43 3 * * *', // Daily at 03:43, isolated from top-of-hour workload
       CHANGE_TRACKING_DAILY_AUDIT: '7 4 * * *', // Daily at 04:07 after integrity rescan
       CHANGE_TRACKING_WEEKLY_AUDIT: '19 4 * * 1', // Every Monday at 04:19
-      SCREENSHOT_BACKFILL: '37 * * * *', // Every hour, staggered from HTML backfill
       QUICK_KEYWORDS_REFRESH: '11 * * * *', // Every hour, refresh homepage keyword suggestions
-    },
-    OFFSETS_MS: {
-      SCREENSHOT_BACKFILL: 0, // No extra offset; schedule is already staggered
     },
   },
 } as const;

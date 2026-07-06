@@ -156,6 +156,21 @@ export class CrawlingSchedulerService implements OnModuleInit {
   }
 
   /**
+   * Drains the proposalReason retry queue from a dedicated cron trigger.
+   * Keeps immutable snapshot policy by relying on append-only repair path.
+   */
+  async handleProposalReasonBackfillCron(): Promise<void> {
+    if (!this.isInitialized) {
+      this.logger.warn(
+        'Cache not initialized yet, skipping proposalReason retry drain',
+      );
+      return;
+    }
+
+    this.proposalRetrySupport.drainInBackground();
+  }
+
+  /**
    * Returns true when scheduler is actively handling cron work.
    * By default includes background tasks launched after the fast path.
    */

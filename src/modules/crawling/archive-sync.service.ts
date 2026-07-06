@@ -82,11 +82,6 @@ export interface SummaryBackfillResult {
   failed: number;
 }
 
-export interface HtmlBackfillResult {
-  pal: { processed: number; failed: number };
-  nsm: { processed: number; failed: number };
-}
-
 /**
  * Result of a single unavailable-summary retry pass.
  * `recovered` = rows that transitioned to `'ready'`;
@@ -110,7 +105,6 @@ export type FullSyncStatus = PhaseStatus<FullSyncResult>;
 export type IsDoneSyncStatus = PhaseStatus<IsDoneSyncResult>;
 export type IntegrityCheckStatus = PhaseStatus<IntegrityCheckResult>;
 export type SummaryBackfillStatus = PhaseStatus<SummaryBackfillResult>;
-export type HtmlBackfillStatus = PhaseStatus<HtmlBackfillResult>;
 export type SummaryUnavailableRetryStatus =
   PhaseStatus<SummaryUnavailableRetryResult>;
 export type PendingSyncStatus = PhaseStatus<PendingSyncResult>;
@@ -159,7 +153,6 @@ export class ArchiveSyncService implements OnModuleInit {
   private readonly isDoneSync = makePhaseTracker<IsDoneSyncResult>();
   private readonly integrityCheck = makePhaseTracker<IntegrityCheckResult>();
   private readonly summaryBackfill = makePhaseTracker<SummaryBackfillResult>();
-  private readonly htmlBackfill = makePhaseTracker<HtmlBackfillResult>();
   private readonly unavailableRetry =
     makePhaseTracker<SummaryUnavailableRetryResult>();
   private readonly pendingSync = makePhaseTracker<PendingSyncResult>();
@@ -203,8 +196,6 @@ export class ArchiveSyncService implements OnModuleInit {
     this.noticeArchiveService.beginChangeNotificationSuppression?.();
 
     try {
-      // Pending sync runs first so that "발의" state bills are archived before
-      // the pal.assembly.go.kr full sync, enabling the earliest possible detection.
       await this.safeRun('pending sync', () =>
         this.runPendingSync('bootstrap'),
       );
@@ -212,24 +203,12 @@ export class ArchiveSyncService implements OnModuleInit {
         this.runLegacyGenesisSeed('bootstrap', bootstrapBoundaryAt),
       );
       await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
-      await this.safeRun('html backfill', () =>
-        this.runHtmlBackfill('bootstrap'),
-      );
-
-      // Summary backfill and unavailable retry run immediately after the full
-      // archive is populated and missing HTML/reason fields are backfilled.
-      // They are independent of isDone status and integrity metadata, so there
-      // is no reason to delay them until after the isDone crawl (which may
-      // scan thousands of pages and take minutes).
       await this.safeRun('summary backfill', () =>
         this.runSummaryBackfill('bootstrap'),
       );
       await this.safeRun('unavailable retry', () =>
         this.runUnavailableRetry('bootstrap'),
       );
-
-      // isDone sync and integrity check update orthogonal columns (isDone,
-      // integrityVerifiedAt) and are not on the critical path for notifications.
       await this.safeRun('isDone sync', () => this.runIsDoneSync('bootstrap'));
       await this.safeRun('integrity check', () =>
         this.runIntegrityCheck('bootstrap'),
@@ -341,7 +320,6 @@ export class ArchiveSyncService implements OnModuleInit {
       { name: 'isDone sync', tracker: this.isDoneSync },
       { name: 'integrity check', tracker: this.integrityCheck },
       { name: 'summary backfill', tracker: this.summaryBackfill },
-      { name: 'html backfill', tracker: this.htmlBackfill },
       { name: 'unavailable retry', tracker: this.unavailableRetry },
       { name: 'pending sync', tracker: this.pendingSync },
       { name: 'legacy genesis seed', tracker: this.legacyGenesisSeed },
@@ -387,7 +365,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   private async executeFullSync(): Promise<FullSyncResult> {
-    LoggerUtils.logDev(ArchiveSyncService.name, 'Full archive sync started');
+    LoggerUtils.log(ArchiveSyncService.name, 'Full archive sync started');
 
     let totalPagesScanned = 0;
     let totalNoticesScanned = 0;
@@ -673,10 +651,7 @@ export class ArchiveSyncService implements OnModuleInit {
    *            noticeNum is absent from the fetched done-set.
    */
   private async reconcileIsDone(): Promise<IsDoneSyncResult> {
-    LoggerUtils.logDev(
-      ArchiveSyncService.name,
-      'isDone reconciliation started',
-    );
+    LoggerUtils.log(ArchiveSyncService.name, 'isDone reconciliation started');
 
     // Iterates all done-notice pages and marks matching archive rows as
     // isDone=true. Marks are never reverted - once done, always done.
@@ -776,39 +751,6 @@ export class ArchiveSyncService implements OnModuleInit {
 
   getIntegrityCheckStatus(): IntegrityCheckStatus {
     return this.toStatus(this.integrityCheck);
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Phase 3b - HTML backfill
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Re-fetches source HTML (and for NSM bills: proposalReason + screenshot)
-   * for archive rows that have `sourceHtml = NULL`, plus NSM rows whose
-   * `proposalReason` is still empty.
-   *
-   * Runs between the full-sync and the summary-backfill phases so that NSM
-   * bills have their `proposalReason` populated before Ollama tries to
-   * summarise them.
-   */
-  async runHtmlBackfill(trigger: string): Promise<HtmlBackfillResult | null> {
-    return this.runPhase(
-      'HTML backfill',
-      this.htmlBackfill,
-      trigger,
-      () =>
-        this.archiveOrchestratorService.backfillMissingHtml(
-          SUMMARY_BACKFILL_BATCH_SIZE,
-        ),
-      (r) =>
-        `pal_processed=${r.pal.processed} pal_failed=${r.pal.failed} ` +
-        `nsm_processed=${r.nsm.processed} nsm_failed=${r.nsm.failed}`,
-      /* crossPhaseGuard */ true,
-    );
-  }
-
-  getHtmlBackfillStatus(): HtmlBackfillStatus {
-    return this.toStatus(this.htmlBackfill);
   }
 
   // ─────────────────────────────────────────────────────────────────────────

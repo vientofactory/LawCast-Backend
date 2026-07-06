@@ -478,47 +478,6 @@ export class ArchiveOrchestratorService
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // HTML backfill
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Re-fetches source HTML/detail for archived notices that still have
-   * `sourceHtml = NULL`, plus NsmLmSts rows with empty `proposalReason`.
-   *
-   * Two capture strategies:
-   *  - **PAL** (`contentId NOT NULL`): plain HTTP fetch via
-   *    `captureNoticePageSource` - fast, no Puppeteer required.
-   *  - **NSM** (`contentId IS NULL`): `captureNsmDetailFull` via Puppeteer
-   *    with Waitingroom bypass - also updates `proposalReason` and fills in
-   *    the screenshot if it too is missing.
-   *
-   * NSM requests are rate-limited with `NSM_INTER_CAPTURE_DELAY_MS` between
-   * items; PAL requests run concurrently (capped at 5 in-flight).
-   *
-   * Called from the bootstrap pipeline (before the summary-backfill phase so
-   * `proposalReason` is available for Ollama summarisation).
-   */
-  async backfillMissingHtml(limit: number): Promise<{
-    pal: { processed: number; failed: number };
-    nsm: { processed: number; failed: number };
-  }> {
-    void limit;
-
-    LoggerUtils.logDev(
-      ArchiveOrchestratorService.name,
-      'HTML/source backfill skipped by strict immutable snapshot policy',
-    );
-
-    // Under strict immutable mode, archive snapshots are never updated after
-    // insertion. Backfill keeps only append-only proposalReason events via
-    // fetchAndUpdateProposalReason().
-    return {
-      pal: { processed: 0, failed: 0 },
-      nsm: { processed: 0, failed: 0 },
-    };
-  }
-
   /**
    * Filters out notices that have already been archived.
    * @param notices An array of notices to be filtered.

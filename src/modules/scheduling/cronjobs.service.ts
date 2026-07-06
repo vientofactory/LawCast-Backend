@@ -124,6 +124,19 @@ export class CronJobsService {
   }
 
   /**
+   * Drains proposalReason retry queue on a dedicated schedule.
+   * Uses append-only repair path (strict immutable snapshot policy).
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.PROPOSAL_REASON_BACKFILL_DRAIN, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleProposalReasonBackfillDrain(): Promise<void> {
+    await this.execute('proposalReason backfill drain', () =>
+      this.crawlingService.handleProposalReasonBackfillCron(),
+    );
+  }
+
+  /**
    * Syncs isDone flags for expired legislative notices every 6 hours
    */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC, {

@@ -125,6 +125,13 @@ export class CrawlingService {
   }
 
   /**
+   * Dedicated cron entrypoint for draining proposalReason retry queue.
+   */
+  async handleProposalReasonBackfillCron() {
+    await this.crawlingSchedulerService.handleProposalReasonBackfillCron();
+  }
+
+  /**
    * True when crawling scheduler is in fast-path processing or running
    * background follow-up tasks.
    */
