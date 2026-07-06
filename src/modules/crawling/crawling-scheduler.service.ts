@@ -15,6 +15,7 @@ import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { mapConcurrently } from '../../utils/concurrency.utils';
 import { CrawlingSchedulerSummarySupport } from './utils/crawling-scheduler-summary-support';
+import { CrawlingSchedulerProposalRetry } from './utils/crawling-scheduler-proposal-retry';
 
 const { PENDING_CRAWL_MAX_RETRIES, PENDING_CRAWL_RETRY_BASE_MS } =
   APP_CONSTANTS.ARCHIVE_SYNC;
@@ -47,6 +48,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
   private isInitialized = false;
   private readonly activeBackgroundTasks = new Set<string>();
   private readonly summarySupport: CrawlingSchedulerSummarySupport;
+  private readonly proposalRetrySupport: CrawlingSchedulerProposalRetry;
 
   constructor(
     private cacheService: CacheService,
@@ -61,6 +63,16 @@ export class CrawlingSchedulerService implements OnModuleInit {
       cacheService: this.cacheService,
       noticeArchiveService: this.noticeArchiveService,
       summaryGenerationService: this.summaryGenerationService,
+      logger: this.logger,
+      discordBridge: this.discordBridge,
+    });
+
+    this.proposalRetrySupport = new CrawlingSchedulerProposalRetry({
+      cacheService: this.cacheService,
+      archiveOrchestratorService: this.archiveOrchestratorService,
+      summaryGenerationService: this.summaryGenerationService,
+      notificationOrchestratorService: this.notificationOrchestratorService,
+      noticeArchiveService: this.noticeArchiveService,
       logger: this.logger,
       discordBridge: this.discordBridge,
     });
@@ -100,6 +112,9 @@ export class CrawlingSchedulerService implements OnModuleInit {
       );
     } finally {
       this.isInitialized = true;
+
+      // Resume persisted proposalReason retry queue after startup.
+      this.proposalRetrySupport.drainInBackground();
     }
   }
 
@@ -911,8 +926,8 @@ export class CrawlingSchedulerService implements OnModuleInit {
         aiSummaryStatus: 'not_supported' as const,
       }));
 
-    // Notify immediately even when proposalReason is missing. The archive row
-    // is immutable after first write, so we do not run a repair/retry queue.
+    // Notify immediately even when proposalReason is missing.
+    // Snapshot is immutable; recovery writes only append-only change events.
     if (noticesWithoutReasonForNotification.length > 0) {
       void this.notificationOrchestratorService
         .sendNotifications(noticesWithoutReasonForNotification)
@@ -951,6 +966,12 @@ export class CrawlingSchedulerService implements OnModuleInit {
           immutableSnapshot: true,
         },
       );
+
+      for (const notice of noticesWithoutReason) {
+        await this.proposalRetrySupport.enqueue(notice);
+      }
+
+      this.proposalRetrySupport.drainInBackground();
     }
 
     // Stage 2: AI summary generation - only for bills that have proposalReason.

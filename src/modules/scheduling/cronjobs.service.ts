@@ -7,7 +7,6 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { ArchiveSyncService } from '../crawling/archive-sync.service';
-import { ArchiveOrchestratorService } from '../crawling/archive-orchestrator.service';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 
 const CRON_TIMEZONE = appConfig().cron.timezone;
@@ -16,14 +15,10 @@ const CRON_TIMEZONE = appConfig().cron.timezone;
 export class CronJobsService {
   private readonly logger = new Logger(CronJobsService.name);
 
-  private readonly screenshotBackfillOffsetMs =
-    APP_CONSTANTS.CRON.OFFSETS_MS.SCREENSHOT_BACKFILL;
-
   constructor(
     private readonly webhookCleanupService: WebhookCleanupService,
     private readonly crawlingService: CrawlingService,
     private readonly archiveSyncService: ArchiveSyncService,
-    private readonly archiveOrchestratorService: ArchiveOrchestratorService,
     private readonly changeTrackingService: ChangeTrackingService,
     @Optional() private readonly discordBridge: DiscordBridgeService,
   ) {}
@@ -67,27 +62,6 @@ export class CronJobsService {
     }
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  private async executeWithOffset(
-    taskName: string,
-    offsetMs: number,
-    task: () => Promise<void>,
-  ): Promise<void> {
-    await this.execute(taskName, async () => {
-      if (offsetMs > 0) {
-        LoggerUtils.debugDev(
-          CronJobsService.name,
-          `Applying ${offsetMs}ms offset before ${taskName}.`,
-        );
-        await this.sleep(offsetMs);
-      }
-      await task();
-    });
-  }
-
   private shouldSkipCrawlingCron(taskName: string): boolean {
     if (!this.archiveSyncService.isAnyPhaseRunning()) return false;
 
@@ -114,42 +88,6 @@ export class CronJobsService {
       message,
     );
     return true;
-  }
-
-  /**
-   * Runs webhook cleanup daily at midnight
-   */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP, {
-    timeZone: CRON_TIMEZONE,
-  })
-  async handleWebhookCleanup(): Promise<void> {
-    await this.execute('webhook cleanup', () =>
-      this.webhookCleanupService.intelligentWebhookCleanup(),
-    );
-  }
-
-  /**
-   * Runs deep system optimization daily at 2 AM
-   */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION, {
-    timeZone: CRON_TIMEZONE,
-  })
-  async handleWebhookOptimization(): Promise<void> {
-    await this.execute('webhook optimization', () =>
-      this.webhookCleanupService.runSystemOptimization(),
-    );
-  }
-
-  /**
-   * Runs real-time system monitoring and self-healing every hour
-   */
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING, {
-    timeZone: CRON_TIMEZONE,
-  })
-  async handleSystemMonitoring(): Promise<void> {
-    await this.execute('system monitoring', () =>
-      this.webhookCleanupService.realTimeSystemMonitoring(),
-    );
   }
 
   /**
@@ -196,7 +134,43 @@ export class CronJobsService {
       return;
     }
     await this.execute('isDone sync', () =>
-      this.archiveSyncService.runIsDoneSync('cron').then(() => undefined),
+      this.archiveSyncService.runIsDoneSync('cron').then(() => {}),
+    );
+  }
+
+  /**
+   * Runs webhook cleanup daily at midnight
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleWebhookCleanup(): Promise<void> {
+    await this.execute('webhook cleanup', () =>
+      this.webhookCleanupService.intelligentWebhookCleanup(),
+    );
+  }
+
+  /**
+   * Runs deep system optimization daily at 2 AM
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleWebhookOptimization(): Promise<void> {
+    await this.execute('webhook optimization', () =>
+      this.webhookCleanupService.runSystemOptimization(),
+    );
+  }
+
+  /**
+   * Runs real-time system monitoring and self-healing every hour
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleSystemMonitoring(): Promise<void> {
+    await this.execute('system monitoring', () =>
+      this.webhookCleanupService.realTimeSystemMonitoring(),
     );
   }
 
@@ -215,7 +189,7 @@ export class CronJobsService {
     await this.execute('integrity re-scan', () =>
       this.archiveSyncService
         .runScheduledIntegrityRescan('cron')
-        .then(() => undefined),
+        .then(() => {}),
     );
   }
 
@@ -227,9 +201,7 @@ export class CronJobsService {
       return;
     }
     await this.execute('change-tracking daily audit', () =>
-      this.changeTrackingService
-        .runScheduledChainAudit('daily')
-        .then(() => undefined),
+      this.changeTrackingService.runScheduledChainAudit('daily').then(() => {}),
     );
   }
 
@@ -243,7 +215,7 @@ export class CronJobsService {
     await this.execute('change-tracking weekly audit', () =>
       this.changeTrackingService
         .runScheduledChainAudit('weekly')
-        .then(() => undefined),
+        .then(() => {}),
     );
   }
 
@@ -252,9 +224,7 @@ export class CronJobsService {
   })
   async handleQuickKeywordRefresh(): Promise<void> {
     await this.execute('quick keyword refresh', () =>
-      this.crawlingService
-        .refreshQuickKeywordSuggestions()
-        .then(() => undefined),
+      this.crawlingService.refreshQuickKeywordSuggestions().then(() => {}),
     );
   }
 }
