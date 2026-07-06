@@ -171,6 +171,7 @@ export interface ChangeChainAuditReport {
 export class ChangeTrackingService {
   private readonly logger = new Logger(ChangeTrackingService.name);
   private readonly APPEND_EVENT_MAX_RETRIES = 3;
+  private readonly BASELINE_EVENT_HEIGHT = 1;
   private readonly LEGACY_GENESIS_SOURCE =
     NoticeChangeSource.BOOTSTRAP_LEGACY_SEED;
   private readonly NOTIFICATION_SUPPRESSED_SOURCE_PREFIXES = [
@@ -237,37 +238,34 @@ export class ChangeTrackingService {
       .select('event.notice_num', 'noticeNum')
       .addSelect('COUNT(*)', 'eventCount')
       .addSelect(
-        `SUM(CASE WHEN event.source = :legacyGenesisSource THEN 1 ELSE 0 END)`,
-        'legacyGenesisCount',
+        `SUM(CASE WHEN event.event_height = :baselineEventHeight THEN 1 ELSE 0 END)`,
+        'baselineCount',
       )
       .where('event.notice_num IN (:...noticeNums)', { noticeNums: uniqueNums })
       .groupBy('event.notice_num')
       .having(
-        `NOT (COUNT(*) = 1 AND SUM(CASE WHEN event.source = :legacyGenesisSource THEN 1 ELSE 0 END) = 1)`,
+        `NOT (COUNT(*) = 1 AND SUM(CASE WHEN event.event_height = :baselineEventHeight THEN 1 ELSE 0 END) = 1)`,
       )
-      .setParameter('legacyGenesisSource', this.LEGACY_GENESIS_SOURCE)
+      .setParameter('baselineEventHeight', this.BASELINE_EVENT_HEIGHT)
       .getRawMany<{
         noticeNum: number | string;
         eventCount: number | string;
-        legacyGenesisCount: number | string;
+        baselineCount: number | string;
       }>();
 
     const countMap = new Map<number, number>();
     for (const row of rows) {
       const noticeNum = Number.parseInt(String(row.noticeNum), 10);
       const eventCount = Number.parseInt(String(row.eventCount), 10);
-      const legacyGenesisCount = Number.parseInt(
-        String(row.legacyGenesisCount),
-        10,
-      );
+      const baselineCount = Number.parseInt(String(row.baselineCount), 10);
 
       if (
         Number.isInteger(noticeNum) &&
         noticeNum > 0 &&
         Number.isInteger(eventCount) &&
         eventCount >= 0 &&
-        Number.isInteger(legacyGenesisCount) &&
-        legacyGenesisCount >= 0
+        Number.isInteger(baselineCount) &&
+        baselineCount >= 0
       ) {
         countMap.set(noticeNum, eventCount);
       }
@@ -925,17 +923,21 @@ export class ChangeTrackingService {
     }
 
     if (query.comparableOnly) {
+      builder.andWhere('event.eventHeight > :baselineEventHeight', {
+        baselineEventHeight: this.BASELINE_EVENT_HEIGHT,
+      });
+
       const comparableNoticeSubQuery = this.changeEventRepository
         .createQueryBuilder('ce')
         .select('ce.noticeNum')
         .groupBy('ce.noticeNum')
         .having(
-          '(COUNT(*) - SUM(CASE WHEN ce.source = :legacyGenesisSource THEN 1 ELSE 0 END)) >= 1',
+          '(COUNT(*) - SUM(CASE WHEN ce.eventHeight = :baselineEventHeight THEN 1 ELSE 0 END)) >= 1',
         );
 
       builder
         .andWhere(`event.noticeNum IN (${comparableNoticeSubQuery.getQuery()})`)
-        .setParameter('legacyGenesisSource', this.LEGACY_GENESIS_SOURCE);
+        .setParameter('baselineEventHeight', this.BASELINE_EVENT_HEIGHT);
     }
 
     builder.skip((page - 1) * limit).take(limit);
@@ -966,14 +968,14 @@ export class ChangeTrackingService {
       .createQueryBuilder('event')
       .select('event.notice_num', 'noticeNum')
       .addSelect(
-        '(COUNT(*) - SUM(CASE WHEN event.source = :legacyGenesisSource THEN 1 ELSE 0 END))',
+        '(COUNT(*) - SUM(CASE WHEN event.event_height = :baselineEventHeight THEN 1 ELSE 0 END))',
         'comparableEventCount',
       )
       .groupBy('event.notice_num')
       .having(
-        '(COUNT(*) - SUM(CASE WHEN event.source = :legacyGenesisSource THEN 1 ELSE 0 END)) >= 1',
+        '(COUNT(*) - SUM(CASE WHEN event.event_height = :baselineEventHeight THEN 1 ELSE 0 END)) >= 1',
       )
-      .setParameter('legacyGenesisSource', this.LEGACY_GENESIS_SOURCE)
+      .setParameter('baselineEventHeight', this.BASELINE_EVENT_HEIGHT)
       .getRawMany<{
         noticeNum: number | string;
         comparableEventCount: number | string;
