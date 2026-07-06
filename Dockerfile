@@ -56,6 +56,7 @@ COPY --from=hardened-malloc /hardened_malloc/out/libhardened_malloc.so /usr/loca
 
 ENV NODE_ENV=production
 ENV LD_PRELOAD=/usr/local/lib/libhardened_malloc.so
+ENV TZ=Asia/Seoul
 
 # Install system Chromium for Puppeteer
 # - chromium:      headless browser
@@ -65,7 +66,9 @@ ENV LD_PRELOAD=/usr/local/lib/libhardened_malloc.so
 # - ttf-freefont:  basic Unicode font coverage
 # PUPPETEER_EXECUTABLE_PATH tells puppeteer to use this binary instead of the
 # bundled Chrome that was skipped during npm install.
-RUN apk add --no-cache chromium nss freetype harfbuzz ttf-freefont
+RUN apk add --no-cache chromium nss freetype harfbuzz ttf-freefont tzdata && \
+  cp /usr/share/zoneinfo/Asia/Seoul /etc/localtime && \
+  echo "Asia/Seoul" > /etc/timezone
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
