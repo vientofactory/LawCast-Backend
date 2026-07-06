@@ -5,13 +5,6 @@ export class RemoveArchiveSummaryColumns1751760003000 implements MigrationInterf
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
-      `DROP TRIGGER IF EXISTS "trg_notice_archives_prevent_delete"`,
-    );
-    await queryRunner.query(
-      `DROP TRIGGER IF EXISTS "trg_notice_archives_prevent_update"`,
-    );
-
-    await queryRunner.query(
       `DROP INDEX IF EXISTS "idx_notice_archives_ai_summary_status_notice_num"`,
     );
 
@@ -193,32 +186,9 @@ export class RemoveArchiveSummaryColumns1751760003000 implements MigrationInterf
       ON "notice_archives" ("noticeNum")
       WHERE "screenshot_blob" IS NULL AND "contentId" IS NULL
     `);
-
-    await queryRunner.query(`
-      CREATE TRIGGER "trg_notice_archives_prevent_update"
-      BEFORE UPDATE ON "notice_archives"
-      BEGIN
-        SELECT RAISE(ABORT, 'notice_archives is immutable');
-      END
-    `);
-
-    await queryRunner.query(`
-      CREATE TRIGGER "trg_notice_archives_prevent_delete"
-      BEFORE DELETE ON "notice_archives"
-      BEGIN
-        SELECT RAISE(ABORT, 'notice_archives is immutable');
-      END
-    `);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      `DROP TRIGGER IF EXISTS "trg_notice_archives_prevent_delete"`,
-    );
-    await queryRunner.query(
-      `DROP TRIGGER IF EXISTS "trg_notice_archives_prevent_update"`,
-    );
-
     await queryRunner.query(
       `ALTER TABLE "notice_archives" ADD COLUMN "aiSummary" text`,
     );
@@ -247,22 +217,6 @@ export class RemoveArchiveSummaryColumns1751760003000 implements MigrationInterf
     await queryRunner.query(`
       CREATE INDEX IF NOT EXISTS "idx_notice_archives_ai_summary_status_notice_num"
       ON "notice_archives" ("aiSummaryStatus", "noticeNum")
-    `);
-
-    await queryRunner.query(`
-      CREATE TRIGGER IF NOT EXISTS "trg_notice_archives_prevent_update"
-      BEFORE UPDATE ON "notice_archives"
-      BEGIN
-        SELECT RAISE(ABORT, 'notice_archives is immutable');
-      END
-    `);
-
-    await queryRunner.query(`
-      CREATE TRIGGER IF NOT EXISTS "trg_notice_archives_prevent_delete"
-      BEFORE DELETE ON "notice_archives"
-      BEGIN
-        SELECT RAISE(ABORT, 'notice_archives is immutable');
-      END
     `);
   }
 }

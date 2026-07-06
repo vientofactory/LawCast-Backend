@@ -39,31 +39,9 @@ export class AddNoticeArchiveSummaryStates1751760002000 implements MigrationInte
       WHERE "aiSummary" IS NOT NULL
          OR "aiSummaryStatus" IS NOT NULL
     `);
-
-    await queryRunner.query(`
-      CREATE TRIGGER IF NOT EXISTS "trg_notice_archives_prevent_update"
-      BEFORE UPDATE ON "notice_archives"
-      BEGIN
-        SELECT RAISE(ABORT, 'notice_archives is immutable');
-      END
-    `);
-
-    await queryRunner.query(`
-      CREATE TRIGGER IF NOT EXISTS "trg_notice_archives_prevent_delete"
-      BEFORE DELETE ON "notice_archives"
-      BEGIN
-        SELECT RAISE(ABORT, 'notice_archives is immutable');
-      END
-    `);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(
-      `DROP TRIGGER IF EXISTS "trg_notice_archives_prevent_delete"`,
-    );
-    await queryRunner.query(
-      `DROP TRIGGER IF EXISTS "trg_notice_archives_prevent_update"`,
-    );
     await queryRunner.query(
       `DROP INDEX IF EXISTS "idx_notice_archive_summary_states_status_notice_num"`,
     );

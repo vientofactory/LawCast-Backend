@@ -11,6 +11,7 @@ import { AddQueryOptimizationIndexes1751590802000 } from './202607040002-add-que
 import { RestoreContaminatedProposalReasonSnapshots1751760001000 } from './202607060001-restore-contaminated-proposal-reason-snapshots.migration';
 import { AddNoticeArchiveSummaryStates1751760002000 } from './202607060002-add-notice-archive-summary-states.migration';
 import { RemoveArchiveSummaryColumns1751760003000 } from './202607060003-remove-archive-summary-columns.migration';
+import { RemoveNoticeArchiveImmutabilityTriggers1751760004000 } from './202607060004-remove-notice-archive-immutability-triggers.migration';
 
 export const migrations: (new () => MigrationInterface)[] = [
   InitialSchemaMigration1744953900000,
@@ -25,4 +26,5 @@ export const migrations: (new () => MigrationInterface)[] = [
   RestoreContaminatedProposalReasonSnapshots1751760001000,
   AddNoticeArchiveSummaryStates1751760002000,
   RemoveArchiveSummaryColumns1751760003000,
+  RemoveNoticeArchiveImmutabilityTriggers1751760004000,
 ];
