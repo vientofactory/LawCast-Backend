@@ -212,11 +212,15 @@ export class ArchiveSyncService implements OnModuleInit {
         this.runLegacyGenesisSeed('bootstrap', bootstrapBoundaryAt),
       );
       await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
+      await this.safeRun('html backfill', () =>
+        this.runHtmlBackfill('bootstrap'),
+      );
 
       // Summary backfill and unavailable retry run immediately after the full
-      // archive is populated.  They are independent of isDone status and
-      // integrity metadata, so there is no reason to delay them until after the
-      // isDone crawl (which may scan thousands of pages and take minutes).
+      // archive is populated and missing HTML/reason fields are backfilled.
+      // They are independent of isDone status and integrity metadata, so there
+      // is no reason to delay them until after the isDone crawl (which may
+      // scan thousands of pages and take minutes).
       await this.safeRun('summary backfill', () =>
         this.runSummaryBackfill('bootstrap'),
       );
@@ -788,8 +792,19 @@ export class ArchiveSyncService implements OnModuleInit {
    * summarise them.
    */
   async runHtmlBackfill(trigger: string): Promise<HtmlBackfillResult | null> {
-    void trigger;
-    return null;
+    return this.runPhase(
+      'HTML backfill',
+      this.htmlBackfill,
+      trigger,
+      () =>
+        this.archiveOrchestratorService.backfillMissingHtml(
+          SUMMARY_BACKFILL_BATCH_SIZE,
+        ),
+      (r) =>
+        `pal_processed=${r.pal.processed} pal_failed=${r.pal.failed} ` +
+        `nsm_processed=${r.nsm.processed} nsm_failed=${r.nsm.failed}`,
+      /* crossPhaseGuard */ true,
+    );
   }
 
   getHtmlBackfillStatus(): HtmlBackfillStatus {

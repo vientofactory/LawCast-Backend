@@ -194,7 +194,6 @@ export class CrawlingSchedulerProposalRetry {
         await this.options.archiveOrchestratorService.fetchAndUpdateProposalReason(
           item.notice.num,
           item.billNo,
-          item.notice.link,
         );
 
       if (!proposalReason) {

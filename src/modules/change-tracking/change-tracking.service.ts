@@ -383,6 +383,15 @@ export class ChangeTrackingService {
         }
         return saved;
       } catch (error) {
+        if (this.isEventHashConflictError(error)) {
+          const existing = await this.changeEventRepository.findOne({
+            where: { eventHash: input.eventHash },
+          });
+          if (existing) {
+            return existing;
+          }
+        }
+
         if (this.isEventHeightConflictError(error) && attempt < maxRetries) {
           this.logger.warn(
             `Change event append conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`,
@@ -518,6 +527,81 @@ export class ChangeTrackingService {
         'notice_change_events.notice_num, notice_change_events.event_height',
       ) ||
       text.includes('notice_num_event_height');
+
+    const isKnownUniqueCode = (meta: {
+      code: string;
+      errno: number | null;
+    }): boolean =>
+      meta.code === '23505' ||
+      meta.code === 'sqlite_constraint' ||
+      meta.code === 'sqlite_constraint_unique' ||
+      meta.code === 'er_dup_entry' ||
+      meta.errno === 1062;
+
+    const candidates = [error];
+    const driverError = (error as { driverError?: unknown } | undefined)
+      ?.driverError;
+    if (driverError) {
+      candidates.push(driverError);
+    }
+
+    for (const candidate of candidates) {
+      const meta = extractErrorMeta(candidate);
+      const joinedText = `${meta.constraint} ${meta.detail} ${meta.message}`;
+
+      if (!isTargetConstraint(joinedText)) {
+        continue;
+      }
+
+      const hasUniqueViolationText =
+        meta.message.includes('unique constraint') ||
+        meta.detail.includes('unique constraint') ||
+        meta.detail.includes('duplicate key');
+
+      if (isKnownUniqueCode(meta) || hasUniqueViolationText) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private isEventHashConflictError(error: unknown): boolean {
+    const extractErrorMeta = (
+      value: unknown,
+    ): {
+      code: string;
+      constraint: string;
+      message: string;
+      detail: string;
+      errno: number | null;
+    } => {
+      const obj = (value as Record<string, unknown> | undefined) ?? {};
+      const code = String(obj.code ?? '').toLowerCase();
+      const constraint = String(obj.constraint ?? '').toLowerCase();
+      const message = String(obj.message ?? '').toLowerCase();
+      const detail = String(obj.detail ?? '').toLowerCase();
+      const errnoRaw = obj.errno;
+      const errno =
+        typeof errnoRaw === 'number'
+          ? errnoRaw
+          : typeof errnoRaw === 'string'
+            ? Number.parseInt(errnoRaw, 10)
+            : null;
+
+      return {
+        code,
+        constraint,
+        message,
+        detail,
+        errno: Number.isNaN(errno ?? Number.NaN) ? null : errno,
+      };
+    };
+
+    const isTargetConstraint = (text: string): boolean =>
+      text.includes('idx_notice_change_events_event_hash_unique') ||
+      text.includes('notice_change_events.event_hash') ||
+      text.includes('event_hash');
 
     const isKnownUniqueCode = (meta: {
       code: string;

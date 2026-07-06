@@ -34,7 +34,6 @@ import {
   normalizeSortOrder,
   parseOptionalDate,
 } from './notice-archive.helpers';
-import { mapConcurrently } from '../../utils/concurrency.utils';
 import { NoticeArchiveArtifactSupport } from './utils/notice-archive-artifact-support';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 import { type ChangeEventType } from '../change-tracking/notice-change-event.entity';
@@ -457,7 +456,6 @@ export class NoticeArchiveService {
     };
 
     const existing = beforeRow !== null;
-    const updateNoticeNum = previousNoticeNum ?? notice.num;
     const hasExplicitSummary =
       Object.prototype.hasOwnProperty.call(notice, 'aiSummary') ||
       Object.prototype.hasOwnProperty.call(notice, 'aiSummaryStatus');
@@ -487,21 +485,8 @@ export class NoticeArchiveService {
     }
 
     if (existing) {
-      // On UPDATE, only include screenshot fields when they were explicitly
-      // provided - this prevents wiping a screenshot that was captured
-      // asynchronously via updateScreenshot() after the initial archive.
-      const screenshotUpdate =
-        originalContent.screenshotBlob !== undefined
-          ? {
-              screenshotBlob: originalContent.screenshotBlob,
-              screenshotFormat: originalContent.screenshotFormat ?? null,
-            }
-          : {};
-
-      await this.archiveRepository.update(
-        { noticeNum: updateNoticeNum },
-        { ...coreFields, ...screenshotUpdate },
-      );
+      // Strict immutability: existing archive rows are never updated.
+      // Any observed changes are represented only as appended diffchain events.
     } else {
       await this.archiveRepository.save(
         this.archiveRepository.create({
@@ -559,13 +544,8 @@ export class NoticeArchiveService {
           .execute();
       }
     } else {
-      await this.archiveRepository.update(
-        { noticeNum: notice.num },
-        {
-          aiSummary: summaryPayload.aiSummary,
-          aiSummaryStatus: summaryPayload.aiSummaryStatus,
-        },
-      );
+      // Strict immutability: keep summary state outside notice_archives.
+      // When summary_state table is unavailable we intentionally skip write.
     }
 
     await this.appendTrackedDiffEvent(
@@ -598,16 +578,8 @@ export class NoticeArchiveService {
    * @returns Number of rows actually changed
    */
   async markNoticesDoneByNums(nums: number[]): Promise<number> {
-    if (nums.length === 0) return 0;
-    const result = await this.archiveRepository.update(
-      { noticeNum: In(nums), isDone: false },
-      {
-        isDone: true,
-        lifecycleStatus: 'active',
-        sourceDeletedAt: null,
-      },
-    );
-    return result.affected ?? 0;
+    void nums;
+    return 0;
   }
 
   /**
@@ -616,99 +588,15 @@ export class NoticeArchiveService {
    * @returns Number of rows actually changed
    */
   async revertNoticesDoneByNums(nums: number[]): Promise<number> {
-    if (nums.length === 0) return 0;
-    const result = await this.archiveRepository.update(
-      { noticeNum: In(nums), isDone: true },
-      {
-        isDone: false,
-        lifecycleStatus: 'active',
-        sourceDeletedAt: null,
-      },
-    );
-    return result.affected ?? 0;
+    void nums;
+    return 0;
   }
 
   async markSourceDeletedByMissingPalNums(
     seenPalActiveNums: Set<number>,
   ): Promise<number> {
-    const batchSize = 500;
-    let lastNoticeNum = 0;
-    let markedCount = 0;
-    const markedAt = new Date();
-
-    while (true) {
-      const candidates = await this.archiveRepository.find({
-        where: {
-          contentId: Not(IsNull()),
-          isDone: false,
-          lifecycleStatus: Not('source_deleted'),
-          noticeNum: MoreThan(lastNoticeNum),
-        },
-        select: {
-          noticeNum: true,
-          subject: true,
-          proposerCategory: true,
-          committee: true,
-          proposalReason: true,
-          contentBillNumber: true,
-          contentProposer: true,
-          contentProposalDate: true,
-          contentCommittee: true,
-          contentReferralDate: true,
-          contentNoticePeriod: true,
-          contentProposalSession: true,
-          isDone: true,
-          lifecycleStatus: true,
-          sourceDeletedAt: true,
-        },
-        order: { noticeNum: 'ASC' },
-        take: batchSize,
-      });
-
-      if (candidates.length === 0) {
-        break;
-      }
-
-      for (const row of candidates) {
-        lastNoticeNum = row.noticeNum;
-
-        if (seenPalActiveNums.has(row.noticeNum)) {
-          continue;
-        }
-
-        await this.archiveRepository.update(
-          { noticeNum: row.noticeNum },
-          {
-            lifecycleStatus: 'source_deleted',
-            sourceDeletedAt: markedAt,
-          },
-        );
-
-        const beforeSnapshot = this.buildTrackedSnapshot(row);
-        const afterSnapshot = beforeSnapshot
-          ? {
-              ...beforeSnapshot,
-              lifecycleStatus: 'source_deleted',
-              sourceDeletedAt: markedAt.toISOString(),
-            }
-          : null;
-
-        if (beforeSnapshot && afterSnapshot) {
-          await this.appendExplicitEventWithDiff({
-            noticeNum: row.noticeNum,
-            source: NoticeChangeSource.ARCHIVE_SOURCE_MISSING,
-            eventType: 'invalidated',
-            beforeSnapshot,
-            afterSnapshot,
-            subject: row.subject,
-          });
-        }
-
-        markedCount += 1;
-      }
-    }
-
-    return markedCount;
+    void seenPalActiveNums;
+    return 0;
   }
 
   /**
@@ -1498,10 +1386,9 @@ export class NoticeArchiveService {
     blob: Buffer,
     format: string,
   ): Promise<void> {
-    await this.archiveRepository.update(
-      { noticeNum },
-      { screenshotBlob: blob, screenshotFormat: format },
-    );
+    void noticeNum;
+    void blob;
+    void format;
   }
 
   /**
@@ -1562,29 +1449,10 @@ export class NoticeArchiveService {
     sha256: string,
     httpMetadata: ArchiveHttpMetadata | null,
   ): Promise<void> {
-    const beforeRow = await this.getTrackedRowByNoticeNum(noticeNum);
-    const normalized = httpMetadata || null;
-    await this.archiveRepository.update(
-      { noticeNum },
-      {
-        sourceHtml: html,
-        sourceHtmlSha256: sha256,
-        httpMetadataJson: normalized ? JSON.stringify(normalized) : null,
-        httpFetchedAt: parseOptionalDate(normalized?.fetchedAt),
-        httpStatusCode: normalized?.statusCode ?? null,
-        httpContentType: normalized?.contentType ?? null,
-        httpEtag: normalized?.etag ?? null,
-        httpLastModified: normalized?.lastModified ?? null,
-      },
-    );
-
-    const afterRow = await this.getTrackedRowByNoticeNum(noticeNum);
-    await this.appendTrackedDiffEvent(
-      noticeNum,
-      NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
-      beforeRow,
-      afterRow,
-    );
+    void noticeNum;
+    void html;
+    void sha256;
+    void httpMetadata;
   }
 
   /**
@@ -1607,30 +1475,18 @@ export class NoticeArchiveService {
     },
   ): Promise<void> {
     const beforeRow = await this.getTrackedRowByNoticeNum(noticeNum);
-    const normalized = payload.httpMetadata || null;
+    const latestProposalReason =
+      await this.getLatestProposalReasonForNotice(noticeNum);
+    const normalizedProposalReason = payload.proposalReason.trim();
 
-    const baseUpdate: Partial<NoticeArchive> = {
-      sourceHtml: payload.html,
-      sourceHtmlSha256: payload.sha256,
-      httpMetadataJson: normalized ? JSON.stringify(normalized) : null,
-      httpFetchedAt: parseOptionalDate(normalized?.fetchedAt),
-      httpStatusCode: normalized?.statusCode ?? null,
-      httpContentType: normalized?.contentType ?? null,
-      httpEtag: normalized?.etag ?? null,
-      httpLastModified: normalized?.lastModified ?? null,
-    };
-
-    if (payload.screenshotBlob !== undefined) {
-      baseUpdate.screenshotBlob = payload.screenshotBlob;
-      baseUpdate.screenshotFormat = payload.screenshotFormat ?? 'jpeg';
-    }
-
-    await this.archiveRepository.update({ noticeNum }, baseUpdate);
-
-    if (payload.proposalReason && beforeRow) {
+    if (
+      normalizedProposalReason &&
+      normalizedProposalReason !== latestProposalReason &&
+      beforeRow
+    ) {
       const afterSnapshot = {
         ...beforeRow,
-        proposalReason: payload.proposalReason,
+        proposalReason: normalizedProposalReason,
       };
 
       await this.appendExplicitEventWithDiff({
@@ -1949,21 +1805,8 @@ export class NoticeArchiveService {
       committee: string;
     }>,
   ): Promise<number> {
-    if (items.length === 0) return 0;
-
-    const updatedCounts = await mapConcurrently(items, 10, async (item) => {
-      const result = await this.archiveRepository.update(
-        { noticeNum: item.num, contentId: IsNull() },
-        {
-          contentId: item.contentId,
-          assemblyLink: item.link,
-          committee: item.committee,
-        },
-      );
-      return result.affected ?? 0;
-    });
-
-    return updatedCounts.reduce((sum, count) => sum + count, 0);
+    void items;
+    return 0;
   }
 
   async getArchiveCount(): Promise<number> {
@@ -2157,14 +2000,33 @@ export class NoticeArchiveService {
     const normalizedSummary = summary?.trim() ? summary : null;
 
     if (this.summaryStateRepository) {
-      await this.summaryStateRepository.upsert(
+      const updateResult = await this.summaryStateRepository.update(
+        { noticeNum },
         {
-          noticeNum,
           aiSummary: normalizedSummary,
           aiSummaryStatus: status,
         },
-        ['noticeNum'],
       );
+
+      if ((updateResult.affected ?? 0) === 0) {
+        try {
+          await this.summaryStateRepository.insert({
+            noticeNum,
+            aiSummary: normalizedSummary,
+            aiSummaryStatus: status,
+          });
+        } catch {
+          // Another worker may have inserted the row concurrently.
+          // Retry as UPDATE to converge state without relying on primary-key id.
+          await this.summaryStateRepository.update(
+            { noticeNum },
+            {
+              aiSummary: normalizedSummary,
+              aiSummaryStatus: status,
+            },
+          );
+        }
+      }
       return;
     }
 

@@ -70,6 +70,7 @@ describe('ArchiveOrchestratorService', () => {
           provide: NoticeArchiveService,
           useValue: {
             upsertNoticeArchive: jest.fn(),
+            updateNsmHtmlAndDetail: jest.fn().mockResolvedValue(undefined),
             getExistingNoticeNumSet: jest.fn(),
             beginChangeNotificationCollection: jest.fn(),
             endChangeNotificationCollection: jest
@@ -92,6 +93,7 @@ describe('ArchiveOrchestratorService', () => {
           provide: CrawlingCoreService,
           useValue: {
             getContent: jest.fn(),
+            captureNsmDetailFull: jest.fn(),
             captureContentScreenshot: jest.fn().mockResolvedValue(null),
           },
         },
@@ -416,6 +418,68 @@ describe('ArchiveOrchestratorService', () => {
       const result = await service.filterAlreadyArchivedNotices(notices);
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('fetchAndUpdateProposalReason', () => {
+    it('returns proposalReason and appends NSM detail update when capture succeeds', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '<html>nsm detail</html>',
+          screenshot: Buffer.from('shot'),
+          detail: { proposalReason: '  사유 본문  ', session: '제418회' },
+          responseUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219775/detailRP',
+          statusCode: 200,
+        },
+      );
+
+      const result = await service.fetchAndUpdateProposalReason(
+        2219775,
+        '2219775',
+        'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219775/detailRP',
+      );
+
+      expect(result).toBe('사유 본문');
+      expect(noticeArchiveService.updateNsmHtmlAndDetail).toHaveBeenCalledWith(
+        2219775,
+        expect.objectContaining({
+          proposalReason: '사유 본문',
+          html: '',
+          sha256: '',
+          httpMetadata: null,
+        }),
+      );
+    });
+
+    it('returns null when proposalReason is still empty after capture', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '<html>nsm detail</html>',
+          screenshot: null,
+          detail: { proposalReason: '   ', session: null },
+          responseUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219777/detailRP',
+          statusCode: 200,
+        },
+      );
+
+      const result = await service.fetchAndUpdateProposalReason(
+        2219777,
+        '2219777',
+        'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219777/detailRP',
+      );
+
+      expect(result).toBeNull();
+      expect(noticeArchiveService.updateNsmHtmlAndDetail).toHaveBeenCalledWith(
+        2219777,
+        expect.objectContaining({
+          proposalReason: '',
+          html: '',
+          sha256: '',
+          httpMetadata: null,
+        }),
+      );
     });
   });
 });

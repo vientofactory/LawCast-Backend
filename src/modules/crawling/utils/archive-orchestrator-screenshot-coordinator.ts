@@ -116,18 +116,6 @@ export class ArchiveOrchestratorScreenshotCoordinator {
     }
   }
 
-  async handleScreenshotBackfill(): Promise<void> {
-    const queueLength = await this.getScreenshotQueueLength();
-    if (this.isCaptureRunning || queueLength > 0) {
-      LoggerUtils.debugDev(
-        'ArchiveOrchestratorService',
-        'Screenshot backfill cron skipped: capture already running or queue not empty',
-      );
-      return;
-    }
-    await this.backfillMissingScreenshots();
-  }
-
   private async drainScreenshotQueue(): Promise<void> {
     if (this.isCaptureRunning) return;
     this.isCaptureRunning = true;

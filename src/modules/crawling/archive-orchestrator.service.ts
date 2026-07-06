@@ -410,8 +410,6 @@ export class ArchiveOrchestratorService
     await this.screenshotCoordinator.handleShutdown(signal);
   }
 
-  async handleScreenshotBackfill(): Promise<void> {}
-
   // ─────────────────────────────────────────────────────────────────────────
   // proposalReason on-demand retry
   // ─────────────────────────────────────────────────────────────────────────
@@ -429,12 +427,54 @@ export class ArchiveOrchestratorService
   async fetchAndUpdateProposalReason(
     num: number,
     billNo: string,
-    noticeLink: string,
   ): Promise<string | null> {
-    void num;
-    void billNo;
-    void noticeLink;
-    return null;
+    const normalizedBillNo = billNo.trim();
+    if (!normalizedBillNo) {
+      this.logger.warn(
+        `proposalReason backfill skipped: empty billNo for notice ${num}`,
+      );
+      return null;
+    }
+
+    try {
+      const full =
+        await this.crawlingCoreService.captureNsmDetailFull(normalizedBillNo);
+      const proposalReason = full.detail?.proposalReason?.trim() ?? '';
+      const proposalSession = full.detail?.session?.trim() || null;
+
+      await this.noticeArchiveService.updateNsmHtmlAndDetail(num, {
+        html: '',
+        sha256: '',
+        proposalReason,
+        httpMetadata: null,
+      });
+
+      if (!proposalReason) {
+        LoggerUtils.warn(
+          ArchiveOrchestratorService.name,
+          `proposalReason backfill still empty for bill ${normalizedBillNo}`,
+        );
+        return null;
+      }
+
+      LoggerUtils.logDev(
+        ArchiveOrchestratorService.name,
+        `proposalReason backfill succeeded for bill ${normalizedBillNo} (${proposalReason.length} chars${proposalSession ? `, session=${proposalSession}` : ''})`,
+      );
+      return proposalReason;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `proposalReason backfill failed for bill ${normalizedBillNo}: ${message}`,
+      );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        ArchiveOrchestratorService.name,
+        `proposalReason backfill failed for bill **${normalizedBillNo}**: ${message}`,
+        { noticeNum: num, billNo: normalizedBillNo },
+      );
+      return null;
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -463,13 +503,18 @@ export class ArchiveOrchestratorService
     nsm: { processed: number; failed: number };
   }> {
     void limit;
-    LoggerUtils.debugDev(
+
+    LoggerUtils.logDev(
       ArchiveOrchestratorService.name,
-      'HTML backfill skipped: notice_archives is immutable',
+      'HTML/source backfill skipped by strict immutable snapshot policy',
     );
+
+    // Under strict immutable mode, archive snapshots are never updated after
+    // insertion. Backfill keeps only append-only proposalReason events via
+    // fetchAndUpdateProposalReason().
     return {
-      pal: { ...APP_CONSTANTS.ARCHIVE_SYNC.HTML_BACKFILL_RESULT_ZERO.pal },
-      nsm: { ...APP_CONSTANTS.ARCHIVE_SYNC.HTML_BACKFILL_RESULT_ZERO.nsm },
+      pal: { processed: 0, failed: 0 },
+      nsm: { processed: 0, failed: 0 },
     };
   }
 
