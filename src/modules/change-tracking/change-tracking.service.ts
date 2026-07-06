@@ -9,6 +9,7 @@ import {
   NoticeChangeDetail,
   type ChangeDetailType,
 } from './notice-change-detail.entity';
+import { NoticeArchive } from '../notice/notice-archive.entity';
 import {
   canonicalStringify,
   computeDiff,
@@ -120,6 +121,7 @@ export interface ChangeTimelineItem {
 export interface RecentChangeItem {
   id: number;
   noticeNum: number;
+  subject: string | null;
   detectedAt: Date;
   eventType: ChangeEventType;
   source: NoticeChangeSource | null;
@@ -188,6 +190,9 @@ export class ChangeTrackingService {
     private readonly changeEventRepository: Repository<NoticeChangeEvent>,
     @InjectRepository(NoticeChangeDetail)
     private readonly changeDetailRepository: Repository<NoticeChangeDetail>,
+    @Optional()
+    @InjectRepository(NoticeArchive)
+    private readonly noticeArchiveRepository?: Repository<NoticeArchive>,
     @Optional()
     private readonly notificationBatchService?: NotificationBatchService,
     @Optional() private readonly discordBridge?: DiscordBridgeService,
@@ -944,10 +949,26 @@ export class ChangeTrackingService {
 
     const [items, total] = await builder.getManyAndCount();
 
+    const noticeNumToSubject = new Map<number, string>();
+    if (this.noticeArchiveRepository && items.length > 0) {
+      const uniqueNoticeNums = Array.from(
+        new Set(items.map((item) => item.noticeNum)),
+      );
+      const archives = await this.noticeArchiveRepository.find({
+        where: { noticeNum: In(uniqueNoticeNums) },
+        select: { noticeNum: true, subject: true },
+      });
+
+      for (const archive of archives) {
+        noticeNumToSubject.set(archive.noticeNum, archive.subject);
+      }
+    }
+
     return {
       items: items.map((item) => ({
         id: item.id,
         noticeNum: item.noticeNum,
+        subject: noticeNumToSubject.get(item.noticeNum) ?? null,
         detectedAt: item.detectedAt,
         eventType: item.eventType,
         source: item.source,
