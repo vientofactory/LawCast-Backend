@@ -230,6 +230,13 @@ export class NoticeArchiveService {
       this.archiveRepository,
       this.summaryStateRepository,
     );
+
+    if (!this.changeTrackingService) {
+      const message =
+        'ChangeTrackingService is required for immutable diffchain mode.';
+      this.logger.error(message);
+      throw new Error(message);
+    }
   }
 
   getRecommendedWriteConcurrency(defaultConcurrency: number): number {
@@ -1774,6 +1781,35 @@ export class NoticeArchiveService {
   }
 
   /**
+   * Returns a map of noticeNum -> NSM billNumber for NsmLmSts-origin rows.
+   * Used by proposalReason retry queue normalization to recover canonical
+   * bill identifiers from persisted archive metadata.
+   */
+  async getNsmBillNumberByNoticeNums(
+    noticeNums: number[],
+  ): Promise<Map<number, string>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+    if (uniqueNums.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.archiveRepository.find({
+      where: { noticeNum: In(uniqueNums), contentId: IsNull() },
+      select: { noticeNum: true, contentBillNumber: true },
+    });
+
+    const map = new Map<number, string>();
+    for (const row of rows) {
+      const billNumber = row.contentBillNumber?.trim();
+      if (billNumber) {
+        map.set(row.noticeNum, billNumber);
+      }
+    }
+
+    return map;
+  }
+
+  /**
    * Returns the subset of the given notice numbers that exist in the archive
    * with a NULL contentId (i.e. records sourced from NsmLmSts pending sync
    * that have not yet been enriched with a pal.assembly.go.kr contentId).
@@ -1833,6 +1869,7 @@ export class NoticeArchiveService {
         committee: true,
         assemblyLink: true,
         contentId: true,
+        proposalReason: true,
         attachmentPdfFile: true,
         attachmentHwpFile: true,
       },

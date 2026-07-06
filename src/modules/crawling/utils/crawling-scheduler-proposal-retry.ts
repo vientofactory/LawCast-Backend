@@ -50,13 +50,18 @@ interface ProposalRetryOptions {
 }
 
 export class CrawlingSchedulerProposalRetry {
-  private isRunning = false;
+  private activeRun: Promise<void> | null = null;
   private rerunRequested = false;
 
   constructor(private readonly options: ProposalRetryOptions) {}
 
-  async enqueue(notice: CachedNotice): Promise<void> {
+  async enqueue(
+    notice: CachedNotice,
+    options?: { billNo?: string | null },
+  ): Promise<void> {
     const queue = await this.getQueue();
+    const normalizedBillNo =
+      options?.billNo?.trim() || notice.num.toString().trim();
 
     if (queue.length >= PROPOSAL_REASON_RETRY_QUEUE.MAX_SIZE) {
       this.options.logger.warn(
@@ -74,12 +79,23 @@ export class CrawlingSchedulerProposalRetry {
       return;
     }
 
-    const alreadyQueued = queue.some((item) => item.notice.num === notice.num);
-    if (alreadyQueued) return;
+    const existing = queue.find((item) => item.notice.num === notice.num);
+    if (existing) {
+      if (normalizedBillNo && existing.billNo !== normalizedBillNo) {
+        existing.billNo = normalizedBillNo;
+        const written = await this.setQueue(queue);
+        if (!written) {
+          this.options.logger.warn(
+            `proposalReason retry: failed to persist queue after billNo refresh for bill ${notice.num}`,
+          );
+        }
+      }
+      return;
+    }
 
     queue.push({
       notice,
-      billNo: notice.num.toString(),
+      billNo: normalizedBillNo,
       retryCount: 0,
       queuedAt: new Date(),
     });
@@ -98,27 +114,33 @@ export class CrawlingSchedulerProposalRetry {
   }
 
   drainInBackground(): void {
-    if (this.isRunning) {
+    void this.drainForeground().catch((error) => {
+      this.options.logger.error(
+        `proposalReason retry queue drain failed: ${(error as Error).message}`,
+      );
+    });
+  }
+
+  async drainForeground(): Promise<void> {
+    if (this.activeRun) {
       this.rerunRequested = true;
+      await this.activeRun;
       return;
     }
 
-    this.isRunning = true;
-    void this.drain()
-      .catch((error) => {
-        this.options.logger.error(
-          `proposalReason retry queue drain failed: ${(error as Error).message}`,
-        );
-      })
-      .finally(() => {
-        this.isRunning = false;
-        if (!this.rerunRequested) {
-          return;
-        }
+    this.activeRun = this.runDrainLoop();
+    try {
+      await this.activeRun;
+    } finally {
+      this.activeRun = null;
+    }
+  }
 
-        this.rerunRequested = false;
-        this.drainInBackground();
-      });
+  private async runDrainLoop(): Promise<void> {
+    do {
+      this.rerunRequested = false;
+      await this.drain();
+    } while (this.rerunRequested);
   }
 
   async getQueueLength(): Promise<number> {
@@ -131,7 +153,7 @@ export class CrawlingSchedulerProposalRetry {
     if (queue.length === 0) return;
 
     const now = Date.now();
-    let queueDirty = false;
+    let queueDirty = await this.normalizeQueueBillNos(queue);
 
     const evicted: ProposalReasonRetryItem[] = [];
     let index = queue.length;
@@ -305,6 +327,48 @@ export class CrawlingSchedulerProposalRetry {
         pending: queue.length,
       },
     );
+  }
+
+  private normalizeBillNo(value: string | null | undefined): string | null {
+    const normalized = value?.trim();
+    if (!normalized) {
+      return null;
+    }
+    return /^\d+$/.test(normalized) ? normalized : null;
+  }
+
+  private async normalizeQueueBillNos(
+    queue: ProposalReasonRetryItem[],
+  ): Promise<boolean> {
+    if (queue.length === 0) {
+      return false;
+    }
+
+    const byArchive =
+      await this.options.noticeArchiveService.getNsmBillNumberByNoticeNums(
+        queue.map((item) => item.notice.num),
+      );
+
+    let changed = 0;
+    for (const item of queue) {
+      const fromArchive = this.normalizeBillNo(byArchive.get(item.notice.num));
+      const fromQueue = this.normalizeBillNo(item.billNo);
+      const fromNoticeNum = item.notice.num.toString();
+      const next = fromArchive ?? fromQueue ?? fromNoticeNum;
+
+      if (item.billNo !== next) {
+        item.billNo = next;
+        changed++;
+      }
+    }
+
+    if (changed > 0) {
+      this.options.logger.log(
+        `proposalReason retry: normalized billNo for ${changed} queued item(s)`,
+      );
+    }
+
+    return changed > 0;
   }
 
   private toQueueRecord(

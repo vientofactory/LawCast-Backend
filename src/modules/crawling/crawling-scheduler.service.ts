@@ -985,8 +985,18 @@ export class CrawlingSchedulerService implements OnModuleInit {
         },
       );
 
+      const billNoByNum = new Map<number, string>();
+      for (const item of newPendingItems) {
+        const parsed = Number.parseInt(item.billNo, 10);
+        if (!Number.isNaN(parsed) && item.billNo?.trim()) {
+          billNoByNum.set(parsed, item.billNo.trim());
+        }
+      }
+
       for (const notice of noticesWithoutReason) {
-        await this.proposalRetrySupport.enqueue(notice);
+        await this.proposalRetrySupport.enqueue(notice, {
+          billNo: billNoByNum.get(notice.num) ?? null,
+        });
       }
 
       this.proposalRetrySupport.drainInBackground();

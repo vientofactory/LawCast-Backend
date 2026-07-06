@@ -453,14 +453,7 @@ export class DiscordBridgeOperationsCommandsService {
       )
       .join('\n');
 
-    const cronLayout = {
-      crawlingCheck: APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK,
-      pendingCrawling: APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK,
-      isDoneSync: APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC,
-      proposalReasonBackfill:
-        APP_CONSTANTS.CRON.EXPRESSIONS.PROPOSAL_REASON_BACKFILL_DRAIN,
-      integrityRescan: APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN,
-    };
+    const cronLayout = APP_CONSTANTS.CRON.EXPRESSIONS;
 
     const embed = new EmbedBuilder()
       .setColor(0xf59e0b)
