@@ -167,7 +167,33 @@ export class CrawlingSchedulerService implements OnModuleInit {
       return;
     }
 
-    this.proposalRetrySupport.drainInBackground();
+    this.runBackgroundTask('proposal-reason-retry-drain', async () => {
+      const limit = APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_BATCH_SIZE;
+      const queueBefore = await this.proposalRetrySupport.getQueueLength();
+
+      const candidates =
+        await this.noticeArchiveService.getNsmProposalReasonRetryCandidates(
+          limit,
+        );
+
+      for (const candidate of candidates) {
+        await this.proposalRetrySupport.enqueue(candidate.notice, {
+          billNo: candidate.billNo,
+        });
+      }
+
+      const queueAfterSeed = await this.proposalRetrySupport.getQueueLength();
+      this.logger.log(
+        `proposalReason retry cron: queue before=${queueBefore}, seeded=${candidates.length}, queue after seed=${queueAfterSeed}`,
+      );
+
+      await this.proposalRetrySupport.drain();
+
+      const queueAfterDrain = await this.proposalRetrySupport.getQueueLength();
+      this.logger.log(
+        `proposalReason retry cron: drain completed, queue after drain=${queueAfterDrain}`,
+      );
+    });
   }
 
   /**

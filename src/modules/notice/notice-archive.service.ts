@@ -1826,6 +1826,66 @@ export class NoticeArchiveService {
   }
 
   /**
+   * Returns NSM-origin archived notices that still have empty proposalReason.
+   * Used by proposalReason backfill cron to periodically re-seed retry queue
+   * even when no newly discovered pending bills arrive.
+   */
+  async getNsmProposalReasonRetryCandidates(limit: number): Promise<
+    Array<{
+      notice: CachedNotice;
+      billNo: string | null;
+    }>
+  > {
+    const rows = await this.archiveRepository
+      .createQueryBuilder('na')
+      .select([
+        'na.noticeNum AS noticeNum',
+        'na.subject AS subject',
+        'na.proposerCategory AS proposerCategory',
+        'na.committee AS committee',
+        'na.assemblyLink AS assemblyLink',
+        'na.content_bill_number AS contentBillNumber',
+        'na.attachmentPdfFile AS attachmentPdfFile',
+        'na.attachmentHwpFile AS attachmentHwpFile',
+      ])
+      .where('na.contentId IS NULL')
+      .andWhere('na.is_done = :isDone', { isDone: 0 })
+      .andWhere('na.lifecycle_status = :status', { status: 'active' })
+      .andWhere("(na.proposalReason IS NULL OR TRIM(na.proposalReason) = '')")
+      .orderBy('na.noticeNum', 'ASC')
+      .limit(limit)
+      .getRawMany<{
+        noticeNum: number;
+        subject: string;
+        proposerCategory: string;
+        committee: string;
+        assemblyLink: string;
+        contentBillNumber: string | null;
+        attachmentPdfFile: string | null;
+        attachmentHwpFile: string | null;
+      }>();
+
+    return rows.map((row) => ({
+      notice: {
+        num: row.noticeNum,
+        subject: row.subject,
+        proposerCategory: row.proposerCategory,
+        committee: row.committee,
+        link: row.assemblyLink,
+        contentId: null,
+        proposalReason: null,
+        attachments: {
+          pdfFile: row.attachmentPdfFile ?? '',
+          hwpFile: row.attachmentHwpFile ?? '',
+        },
+        aiSummary: null,
+        aiSummaryStatus: 'not_supported',
+      },
+      billNo: row.contentBillNumber?.trim() || null,
+    }));
+  }
+
+  /**
    * Upgrades previously-pending archive records (contentId=NULL) with the
    * pal.assembly.go.kr contentId, updated assembly link, and committee once
    * those bills appear in the \uc785\ubc95\uc608\uace0 system.
