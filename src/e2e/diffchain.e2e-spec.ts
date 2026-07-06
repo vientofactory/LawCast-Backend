@@ -8,8 +8,7 @@ import { ApiController } from '../controllers/api.controller';
 import { WebhookService } from '../modules/webhook/webhook.service';
 import { CrawlingService } from '../modules/crawling/crawling.service';
 import { HealthCheckService } from '../modules/health/health-check.service';
-import { NotificationService } from '../modules/notification/notification.service';
-import { HashguardService } from '../modules/shared/hashguard.service';
+import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
 import { BatchProcessingService } from '../modules/shared/batch-processing.service';
 import {
   LEGACY_GENESIS_SOURCE,
@@ -136,16 +135,9 @@ describe('Diffchain API (e2e)', () => {
         { provide: CrawlingService, useValue: mockCrawlingService },
         { provide: HealthCheckService, useValue: mockHealthCheckService },
         {
-          provide: NotificationService,
+          provide: WebhookRegistrationService,
           useValue: {
-            testWebhook: jest.fn(),
-            sendDiscordNotificationBatch: jest.fn(),
-          },
-        },
-        {
-          provide: HashguardService,
-          useValue: {
-            verifyProof: jest.fn().mockResolvedValue(true),
+            registerWebhook: jest.fn(),
           },
         },
         {

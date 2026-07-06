@@ -56,6 +56,9 @@ export class NoticeArchiveArtifactSupport {
 
     const integrity = await this.verifyAndRefreshIntegrity(row);
     const httpMetadata = parseHttpMetadata(row.httpMetadataJson);
+    const fallbackFromHtml = this.extractPalFieldsFromSourceHtml(
+      row.sourceHtml,
+    );
 
     return {
       notice: mapArchiveEntityToNoticeItem(row),
@@ -63,13 +66,14 @@ export class NoticeArchiveArtifactSupport {
         contentId: row.contentId ?? '',
         title: row.sourceTitle?.trim() || row.subject,
         proposalReason: row.proposalReason || '',
-        billNumber: row.contentBillNumber ?? null,
-        proposer: row.contentProposer ?? null,
-        proposalDate: row.contentProposalDate ?? null,
-        committee: row.contentCommittee ?? null,
-        referralDate: row.contentReferralDate ?? null,
-        noticePeriod: row.contentNoticePeriod ?? null,
-        proposalSession: row.contentProposalSession ?? null,
+        billNumber: row.contentBillNumber ?? fallbackFromHtml.billNumber,
+        proposer: row.contentProposer ?? fallbackFromHtml.proposer,
+        proposalDate: row.contentProposalDate ?? fallbackFromHtml.proposalDate,
+        committee: row.contentCommittee ?? fallbackFromHtml.committee,
+        referralDate: row.contentReferralDate ?? fallbackFromHtml.referralDate,
+        noticePeriod: row.contentNoticePeriod ?? fallbackFromHtml.noticePeriod,
+        proposalSession:
+          row.contentProposalSession ?? fallbackFromHtml.proposalSession,
       },
       archiveMetadata: {
         archivedAt: row.archivedAt,
@@ -102,6 +106,89 @@ export class NoticeArchiveArtifactSupport {
         hasScreenshot: row.screenshotBlob != null,
         format: row.screenshotFormat ?? null,
       },
+    };
+  }
+
+  private extractPalFieldsFromSourceHtml(sourceHtml: string | null): {
+    billNumber: string | null;
+    proposer: string | null;
+    proposalDate: string | null;
+    committee: string | null;
+    referralDate: string | null;
+    noticePeriod: string | null;
+    proposalSession: string | null;
+  } {
+    const empty = {
+      billNumber: null,
+      proposer: null,
+      proposalDate: null,
+      committee: null,
+      referralDate: null,
+      noticePeriod: null,
+      proposalSession: null,
+    };
+
+    if (!sourceHtml || sourceHtml.trim().length === 0) {
+      return empty;
+    }
+
+    const normalize = (value: string | null): string | null => {
+      if (!value) return null;
+      const decoded = value
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'");
+      const compact = decoded.replace(/\s+/g, ' ').trim();
+      return compact.length > 0 ? compact : null;
+    };
+
+    const stripTags = (html: string | null): string | null => {
+      if (!html) return null;
+      return normalize(html.replace(/<[^>]+>/g, ' '));
+    };
+
+    const readLabelValue = (label: string): string | null => {
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const pattern = new RegExp(
+        `<li>\\s*${escaped}\\s*:\\s*([^<]+)<\\/li>`,
+        'i',
+      );
+      const matched = sourceHtml.match(pattern);
+      return normalize(matched?.[1] ?? null);
+    };
+
+    const bodyRow = sourceHtml.match(
+      /<tbody[^>]*>[\s\S]*?<tr[^>]*>([\s\S]*?)<\/tr>/i,
+    )?.[1];
+
+    if (!bodyRow) {
+      return {
+        ...empty,
+        noticePeriod: readLabelValue('입법예고기간'),
+        proposalSession: readLabelValue('제안회기'),
+      };
+    }
+
+    const cells = Array.from(
+      bodyRow.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi),
+    ).map((match) => match[1]);
+
+    const rawCommitteeCell = cells[3] ?? null;
+    const committeeMain = rawCommitteeCell
+      ? rawCommitteeCell.split(/<div\s+class=['"]m_subject['"]/i)[0]
+      : null;
+
+    return {
+      billNumber: stripTags(cells[0] ?? null),
+      proposer: stripTags(cells[1] ?? null),
+      proposalDate: stripTags(cells[2] ?? null),
+      committee: stripTags(committeeMain),
+      referralDate: stripTags(cells[4] ?? null),
+      noticePeriod: readLabelValue('입법예고기간'),
+      proposalSession: readLabelValue('제안회기'),
     };
   }
 

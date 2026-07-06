@@ -12,7 +12,6 @@ import {
   Req,
   Res,
   NotFoundException,
-  BadRequestException,
   StreamableFile,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -20,33 +19,28 @@ import { Request, Response } from 'express';
 import { WebhookService } from '../modules/webhook/webhook.service';
 import { CrawlingService } from '../modules/crawling/crawling.service';
 import { HealthCheckService } from '../modules/health/health-check.service';
-import { NotificationService } from '../modules/notification/notification.service';
-import { HashguardService } from '../modules/shared/hashguard.service';
 import { BatchProcessingService } from '../modules/shared/batch-processing.service';
 import { NoticeArchiveService } from '../modules/notice/notice-archive.service';
 import { NoticesQueryService } from '../modules/crawling/notices-query.service';
 import { NoticeSearchService } from '../modules/crawling/notice-search.service';
 import { CreateWebhookDto } from '../modules/webhook/dto/create-webhook.dto';
-import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
-import { ApiResponseUtils, ErrorContext } from '../utils/api-response.utils';
+import { ApiResponseUtils } from '../utils/api-response.utils';
 import { APP_CONSTANTS } from '../config/app.config';
 import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
 import { type ChangeEventType } from '../modules/change-tracking/notice-change-event.entity';
-import { NoticeChangeSource } from '../modules/change-tracking/notice-change-source.enum';
-import { type ArchiveDetailResult } from '../modules/notice/notice-archive.service';
+import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
 
 @Controller('api')
 export class ApiController {
   constructor(
     private readonly configService: ConfigService,
+    private readonly webhookRegistrationService: WebhookRegistrationService,
     private readonly webhookService: WebhookService,
     private readonly crawlingService: CrawlingService,
     private readonly healthCheckService: HealthCheckService,
-    private readonly notificationService: NotificationService,
-    private readonly hashguardService: HashguardService,
     private readonly batchProcessingService: BatchProcessingService,
     private readonly noticeArchiveService: NoticeArchiveService,
     private readonly noticesQueryService: NoticesQueryService,
@@ -63,48 +57,10 @@ export class ApiController {
     @Body() createWebhookDto: CreateWebhookDto,
     @Req() req: Request,
   ) {
-    try {
-      // URL 유효성 검증
-      WebhookValidationUtils.validateDiscordWebhookUrl(createWebhookDto.url);
-
-      // PoW 검증
-      const clientIp = WebhookValidationUtils.extractClientIp(req);
-      const isProofValid = await this.hashguardService.verifyProof(
-        createWebhookDto.proof,
-        clientIp,
-      );
-
-      if (!isProofValid) {
-        throw ApiResponseUtils.createPoWFailedException();
-      }
-
-      // 중복 웹훅 URL 체크
-      const existingWebhook = await this.webhookService.findByUrl(
-        createWebhookDto.url,
-      );
-      if (existingWebhook) {
-        throw ApiResponseUtils.createDuplicateWebhookException();
-      }
-
-      // 웹훅 테스트
-      const testResult = await this.notificationService.testWebhook(
-        createWebhookDto.url,
-      );
-
-      if (!testResult.success) {
-        throw ApiResponseUtils.createWebhookTestFailedException(
-          testResult.error?.message,
-          testResult.errorType,
-        );
-      }
-
-      // 웹훅 생성
-      await this.webhookService.create(createWebhookDto.url);
-
-      return ApiResponseUtils.webhookSuccess(testResult);
-    } catch (error) {
-      ApiResponseUtils.handleError(error, ErrorContext.WEBHOOK_REGISTRATION);
-    }
+    return this.webhookRegistrationService.registerWebhook(
+      createWebhookDto,
+      req,
+    );
   }
 
   @Get('notices/recent')
@@ -205,194 +161,18 @@ export class ApiController {
     @Param('num', ParseIntPipe) num: number,
     @Query('rev') revRaw?: string,
   ) {
-    const detail = await this.noticeArchiveService.getArchivedNoticeDetail(num);
-
-    if (!detail) {
-      throw new NotFoundException(
-        `의안번호 ${num}에 해당하는 아카이브 입법예고를 찾을 수 없습니다.`,
+    const { detail, revision } =
+      await this.noticeArchiveService.getArchivedNoticeDetailWithRevision(
+        num,
+        revRaw,
       );
-    }
-
-    const timeline = await this.changeTrackingService.getNoticeChangeTimeline({
-      noticeNum: num,
-      limit: 1000,
-    });
-
-    const eventsAsc = [...timeline].sort(
-      (a, b) => a.eventHeight - b.eventHeight,
-    );
-    const headRev =
-      eventsAsc.length > 0 ? eventsAsc[eventsAsc.length - 1].eventHeight : null;
-    const requestedRev = this.parseRevisionQuery(revRaw);
-
-    if (requestedRev !== null && (headRev === null || requestedRev > headRev)) {
-      throw new BadRequestException(
-        `요청하신 리비전이 유효하지 않습니다. requested_rev=${requestedRev}, head_rev=${headRev ?? 0}`,
-      );
-    }
-
-    const resolvedRev = requestedRev ?? headRev;
-    const detailWithRevision = this.applyRevisionOverlay(
-      detail,
-      eventsAsc,
-      resolvedRev,
-    );
-    const legacyGenesisEvent = eventsAsc.find(
-      (event) => event.source === NoticeChangeSource.BOOTSTRAP_LEGACY_SEED,
-    );
 
     return ApiResponseUtils.success({
-      ...detailWithRevision,
+      ...detail,
       aiSummaryEnabled: (await this.healthCheckService.getOllamaMetrics())
         .enabled,
-      revision: {
-        requestedRev,
-        resolvedRev,
-        headRev,
-        hasDiffchain: headRev !== null,
-        isHistorical:
-          resolvedRev !== null && headRev !== null && resolvedRev < headRev,
-        hasLegacyGenesisBoundary: Boolean(legacyGenesisEvent),
-        legacyGenesisBoundaryAt: legacyGenesisEvent?.detectedAt ?? null,
-      },
+      revision,
     });
-  }
-
-  private parseRevisionQuery(revRaw?: string): number | null {
-    if (revRaw === undefined || revRaw === null || revRaw.trim() === '') {
-      return null;
-    }
-
-    const parsed = Number.parseInt(revRaw, 10);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-      throw new BadRequestException('rev 파라미터는 1 이상의 정수여야 합니다.');
-    }
-
-    return parsed;
-  }
-
-  private applyRevisionOverlay(
-    base: ArchiveDetailResult,
-    eventsAsc: Awaited<
-      ReturnType<ChangeTrackingService['getNoticeChangeTimeline']>
-    >,
-    targetRev: number | null,
-  ): ArchiveDetailResult {
-    const copied: ArchiveDetailResult = {
-      ...base,
-      notice: {
-        ...base.notice,
-        attachments: { ...base.notice.attachments },
-      },
-      originalContent: { ...base.originalContent },
-      archiveMetadata: {
-        ...base.archiveMetadata,
-        integrity: { ...base.archiveMetadata.integrity },
-        http: { ...base.archiveMetadata.http },
-      },
-      screenshotMeta: { ...base.screenshotMeta },
-    };
-
-    const overlays = new Map<string, string | null>();
-    for (const event of eventsAsc) {
-      if (targetRev !== null && event.eventHeight > targetRev) {
-        break;
-      }
-
-      for (const detail of event.details) {
-        overlays.set(detail.fieldPath, detail.afterValue);
-      }
-    }
-
-    for (const [fieldPath, value] of overlays.entries()) {
-      this.applyTrackedValue(copied, fieldPath, value);
-    }
-
-    return copied;
-  }
-
-  private applyTrackedValue(
-    detail: ArchiveDetailResult,
-    fieldPath: string,
-    value: string | null,
-  ): void {
-    const toStringOrNull = (raw: string | null): string | null => {
-      if (raw === null) return null;
-      const normalized = raw.trim();
-      return normalized.length > 0 ? normalized : null;
-    };
-
-    switch (fieldPath) {
-      case 'num': {
-        const parsed = value === null ? Number.NaN : Number.parseInt(value, 10);
-        if (Number.isInteger(parsed) && parsed > 0) {
-          detail.notice.num = parsed;
-        }
-        return;
-      }
-      case 'subject':
-        detail.notice.subject = value ?? '';
-        return;
-      case 'proposerCategory':
-        detail.notice.proposerCategory = value ?? '';
-        return;
-      case 'committee':
-        detail.notice.committee = value ?? '';
-        return;
-      case 'proposalReason':
-        detail.originalContent.proposalReason = value ?? '';
-        return;
-      case 'billNumber':
-        detail.originalContent.billNumber = toStringOrNull(value);
-        return;
-      case 'proposer':
-        detail.originalContent.proposer = toStringOrNull(value);
-        return;
-      case 'proposalDate':
-        detail.originalContent.proposalDate = toStringOrNull(value);
-        return;
-      case 'contentCommittee':
-        detail.originalContent.committee = toStringOrNull(value);
-        return;
-      case 'referralDate':
-        detail.originalContent.referralDate = toStringOrNull(value);
-        return;
-      case 'noticePeriod':
-        detail.originalContent.noticePeriod = toStringOrNull(value);
-        return;
-      case 'proposalSession':
-        detail.originalContent.proposalSession = toStringOrNull(value);
-        return;
-      case 'isDone':
-        detail.notice.isDone = value === 'true';
-        return;
-      case 'lifecycleStatus': {
-        const normalized = toStringOrNull(value);
-        if (
-          normalized === 'active' ||
-          normalized === 'source_deleted' ||
-          normalized === 'renumbered'
-        ) {
-          detail.notice.lifecycleStatus = normalized;
-        }
-        return;
-      }
-      case 'sourceDeletedAt': {
-        const normalized = toStringOrNull(value);
-        if (!normalized) {
-          detail.notice.sourceDeletedAt = null;
-          return;
-        }
-
-        const parsed = new Date(normalized);
-        detail.notice.sourceDeletedAt = Number.isNaN(parsed.getTime())
-          ? null
-          : parsed;
-        return;
-      }
-      default:
-        return;
-    }
   }
 
   @Get('notices/:num/changes')

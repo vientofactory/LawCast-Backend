@@ -25,6 +25,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const service = new ChangeTrackingService(
       changeEventRepository,
       changeDetailRepository,
+      undefined as any,
       notificationBatchService as any,
     );
 

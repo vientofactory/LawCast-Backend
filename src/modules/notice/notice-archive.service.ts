@@ -1,4 +1,10 @@
-import { Injectable, Logger, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   In,
@@ -35,6 +41,7 @@ import { type ChangeEventType } from '../change-tracking/notice-change-event.ent
 import {
   canonicalStringify,
   computeDiff,
+  DEFAULT_TRACKED_FIELDS,
   sha256Hex,
 } from '../change-tracking/change-tracking-diff.utils';
 import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
@@ -197,6 +204,16 @@ export const LEGACY_GENESIS_SOURCE = NoticeChangeSource.BOOTSTRAP_LEGACY_SEED;
 export class NoticeArchiveService {
   private readonly logger = new Logger(NoticeArchiveService.name);
   private readonly artifactSupport: NoticeArchiveArtifactSupport;
+  private readonly revisionTrackedFieldPaths = [
+    ...DEFAULT_TRACKED_FIELDS,
+    // Accept legacy/alias field keys emitted across NSM -> PAL transition paths.
+    'contentBillNumber',
+    'contentProposer',
+    'contentProposalDate',
+    'contentReferralDate',
+    'contentNoticePeriod',
+    'contentProposalSession',
+  ] as const;
 
   constructor(
     @InjectRepository(NoticeArchive)
@@ -1037,6 +1054,261 @@ export class NoticeArchiveService {
     noticeNum: number,
   ): Promise<ArchiveDetailResult | null> {
     return this.artifactSupport.getArchivedNoticeDetail(noticeNum);
+  }
+
+  async getArchivedNoticeDetailWithRevision(
+    noticeNum: number,
+    revRaw?: string,
+  ): Promise<{
+    detail: ArchiveDetailResult;
+    revision: {
+      requestedRev: number | null;
+      resolvedRev: number | null;
+      headRev: number | null;
+      hasDiffchain: boolean;
+      isHistorical: boolean;
+      hasLegacyGenesisBoundary: boolean;
+      legacyGenesisBoundaryAt: Date | null;
+    };
+  }> {
+    const detail = await this.getArchivedNoticeDetail(noticeNum);
+    if (!detail) {
+      throw new NotFoundException(
+        `의안번호 ${noticeNum}에 해당하는 아카이브 입법예고를 찾을 수 없습니다.`,
+      );
+    }
+
+    const timeline = this.changeTrackingService
+      ? await this.changeTrackingService.getNoticeChangeTimeline({
+          noticeNum,
+          limit: 1000,
+        })
+      : [];
+
+    const eventsAsc = [...timeline].sort(
+      (a, b) => a.eventHeight - b.eventHeight,
+    );
+    const headRev =
+      eventsAsc.length > 0 ? eventsAsc[eventsAsc.length - 1].eventHeight : null;
+    const requestedRev = this.parseRevisionQuery(revRaw);
+
+    if (requestedRev !== null && (headRev === null || requestedRev > headRev)) {
+      throw new BadRequestException(
+        `요청하신 리비전이 유효하지 않습니다. requested_rev=${requestedRev}, head_rev=${headRev ?? 0}`,
+      );
+    }
+
+    const resolvedRev = requestedRev ?? headRev;
+    const detailWithRevision = this.applyRevisionOverlay(
+      detail,
+      eventsAsc,
+      resolvedRev,
+    );
+    const legacyGenesisEvent = eventsAsc.find(
+      (event) => event.source === NoticeChangeSource.BOOTSTRAP_LEGACY_SEED,
+    );
+
+    return {
+      detail: detailWithRevision,
+      revision: {
+        requestedRev,
+        resolvedRev,
+        headRev,
+        hasDiffchain: headRev !== null,
+        isHistorical:
+          resolvedRev !== null && headRev !== null && resolvedRev < headRev,
+        hasLegacyGenesisBoundary: Boolean(legacyGenesisEvent),
+        legacyGenesisBoundaryAt: legacyGenesisEvent?.detectedAt ?? null,
+      },
+    };
+  }
+
+  private parseRevisionQuery(revRaw?: string): number | null {
+    if (revRaw === undefined || revRaw === null || revRaw.trim() === '') {
+      return null;
+    }
+
+    const parsed = Number.parseInt(revRaw, 10);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new BadRequestException('rev 파라미터는 1 이상의 정수여야 합니다.');
+    }
+
+    return parsed;
+  }
+
+  private applyRevisionOverlay(
+    base: ArchiveDetailResult,
+    eventsAsc: Awaited<
+      ReturnType<ChangeTrackingService['getNoticeChangeTimeline']>
+    >,
+    targetRev: number | null,
+  ): ArchiveDetailResult {
+    const copied: ArchiveDetailResult = {
+      ...base,
+      notice: {
+        ...base.notice,
+        attachments: { ...base.notice.attachments },
+      },
+      originalContent: { ...base.originalContent },
+      archiveMetadata: {
+        ...base.archiveMetadata,
+        integrity: { ...base.archiveMetadata.integrity },
+        http: { ...base.archiveMetadata.http },
+      },
+      screenshotMeta: { ...base.screenshotMeta },
+    };
+
+    const timelineState = new Map<string, string | null>(
+      this.revisionTrackedFieldPaths.map((fieldPath) => [fieldPath, null]),
+    );
+    const firstSeenEventHeight = new Map<string, number>();
+
+    for (const event of eventsAsc) {
+      for (const detail of event.details) {
+        if (!timelineState.has(detail.fieldPath)) {
+          continue;
+        }
+
+        if (!firstSeenEventHeight.has(detail.fieldPath)) {
+          firstSeenEventHeight.set(detail.fieldPath, event.eventHeight);
+        }
+
+        if (targetRev === null || event.eventHeight <= targetRev) {
+          timelineState.set(detail.fieldPath, detail.afterValue);
+        }
+      }
+
+      if (targetRev !== null && event.eventHeight > targetRev) {
+        break;
+      }
+    }
+
+    for (const fieldPath of this.revisionTrackedFieldPaths) {
+      const seenAt = firstSeenEventHeight.get(fieldPath);
+
+      // Legacy chains may not include some fields at all. Keep base values for
+      // never-seen fields instead of forcing null.
+      if (seenAt === undefined) {
+        continue;
+      }
+
+      // If a field first appears after targetRev, it did not exist yet at that
+      // historical point, so force it to null.
+      if (targetRev !== null && targetRev < seenAt) {
+        this.applyTrackedValue(copied, fieldPath, null);
+        continue;
+      }
+
+      this.applyTrackedValue(
+        copied,
+        fieldPath,
+        timelineState.get(fieldPath) ?? null,
+      );
+    }
+
+    return copied;
+  }
+
+  private applyTrackedValue(
+    detail: ArchiveDetailResult,
+    fieldPath: string,
+    value: string | null,
+  ): void {
+    const toStringOrNull = (raw: string | null): string | null => {
+      if (raw === null) return null;
+      const normalized = raw.trim();
+      return normalized.length > 0 ? normalized : null;
+    };
+
+    const toBooleanOrNull = (raw: string | null): boolean | null => {
+      const normalized = toStringOrNull(raw)?.toLowerCase();
+      if (!normalized) return null;
+      if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+      if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+      return null;
+    };
+
+    switch (fieldPath) {
+      case 'num': {
+        const parsed = value === null ? Number.NaN : Number.parseInt(value, 10);
+        if (Number.isInteger(parsed) && parsed > 0) {
+          detail.notice.num = parsed;
+        }
+        return;
+      }
+      case 'subject':
+        detail.notice.subject = value ?? '';
+        return;
+      case 'proposerCategory':
+        detail.notice.proposerCategory = value ?? '';
+        return;
+      case 'committee':
+        detail.notice.committee = value ?? '';
+        return;
+      case 'proposalReason':
+        detail.originalContent.proposalReason = value ?? '';
+        return;
+      case 'billNumber':
+      case 'contentBillNumber':
+        detail.originalContent.billNumber = toStringOrNull(value);
+        return;
+      case 'proposer':
+      case 'contentProposer':
+        detail.originalContent.proposer = toStringOrNull(value);
+        return;
+      case 'proposalDate':
+      case 'contentProposalDate':
+        detail.originalContent.proposalDate = toStringOrNull(value);
+        return;
+      case 'contentCommittee':
+        detail.originalContent.committee = toStringOrNull(value);
+        return;
+      case 'referralDate':
+      case 'contentReferralDate':
+        detail.originalContent.referralDate = toStringOrNull(value);
+        return;
+      case 'noticePeriod':
+      case 'contentNoticePeriod':
+        detail.originalContent.noticePeriod = toStringOrNull(value);
+        return;
+      case 'proposalSession':
+      case 'contentProposalSession':
+        detail.originalContent.proposalSession = toStringOrNull(value);
+        return;
+      case 'isDone': {
+        const parsed = toBooleanOrNull(value);
+        if (parsed !== null) {
+          detail.notice.isDone = parsed;
+        }
+        return;
+      }
+      case 'lifecycleStatus': {
+        const normalized = toStringOrNull(value);
+        if (
+          normalized === 'active' ||
+          normalized === 'source_deleted' ||
+          normalized === 'renumbered'
+        ) {
+          detail.notice.lifecycleStatus = normalized;
+        }
+        return;
+      }
+      case 'sourceDeletedAt': {
+        const normalized = toStringOrNull(value);
+        if (!normalized) {
+          detail.notice.sourceDeletedAt = null;
+          return;
+        }
+
+        const parsed = new Date(normalized);
+        detail.notice.sourceDeletedAt = Number.isNaN(parsed.getTime())
+          ? null
+          : parsed;
+        return;
+      }
+      default:
+        return;
+    }
   }
 
   async buildArchiveExportFile(

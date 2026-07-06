@@ -347,6 +347,7 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
+        undefined as any,
         changeTrackingService as any,
       );
 

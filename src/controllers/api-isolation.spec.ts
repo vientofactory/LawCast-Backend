@@ -11,8 +11,7 @@ import { BatchProcessingService } from '../modules/shared/batch-processing.servi
 import { CrawlingService } from '../modules/crawling/crawling.service';
 import { WebhookService } from '../modules/webhook/webhook.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
-import { NotificationService } from '../modules/notification/notification.service';
-import { HashguardService } from '../modules/shared/hashguard.service';
+import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
 import { WebhookCleanupService } from '../modules/webhook/webhook-cleanup.service';
 import { NoticeArchiveService } from '../modules/notice/notice-archive.service';
 import { NoticesQueryService } from '../modules/crawling/notices-query.service';
@@ -41,10 +40,6 @@ describe('HTTP-Batch Processing Isolation', () => {
         recentInactive: 20,
         efficiency: 75,
       }),
-    };
-
-    const mockNotificationService = {
-      sendDiscordNotificationBatch: jest.fn().mockResolvedValue([]),
     };
 
     const mockCrawlingService = {
@@ -100,10 +95,6 @@ describe('HTTP-Batch Processing Isolation', () => {
 
     const mockHealthCheckService = {
       getApiHealthPayload: jest.fn().mockResolvedValue({ status: 'healthy' }),
-    };
-
-    const mockHashguardService = {
-      verifyProof: jest.fn().mockResolvedValue(true),
     };
 
     const mockWebhookCleanupService = {
@@ -220,9 +211,13 @@ describe('HTTP-Batch Processing Isolation', () => {
         { provide: ConfigService, useValue: mockConfigService },
         { provide: WebhookService, useValue: mockWebhookService },
         { provide: CrawlingService, useValue: mockCrawlingService },
-        { provide: NotificationService, useValue: mockNotificationService },
+        {
+          provide: WebhookRegistrationService,
+          useValue: {
+            registerWebhook: jest.fn(),
+          },
+        },
         { provide: HealthCheckService, useValue: mockHealthCheckService },
-        { provide: HashguardService, useValue: mockHashguardService },
         { provide: WebhookCleanupService, useValue: mockWebhookCleanupService },
         { provide: NoticeArchiveService, useValue: mockNoticeArchiveService },
         { provide: NoticesQueryService, useValue: mockNoticesQueryService },
