@@ -10,6 +10,10 @@ import { DiscordBridgeService } from './modules/discord-bridge/discord-bridge.se
 import { BridgeLogLevel } from './modules/discord-bridge/discord-bridge.types';
 import { LoggerUtils } from './utils/logger.utils';
 
+if (!process.env.TZ) {
+  process.env.TZ = 'Asia/Seoul';
+}
+
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
