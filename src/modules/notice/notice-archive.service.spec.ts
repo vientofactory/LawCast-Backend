@@ -2,6 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { NoticeArchiveService } from './notice-archive.service';
 import { NoticeArchive } from '../notice/notice-archive.entity';
 import { computeSha256 } from './notice-archive.helpers';
+import { computeDiff } from '../change-tracking/change-tracking-diff.utils';
 
 describe('NoticeArchiveService', () => {
   const createRepositoryMock = () => ({
@@ -14,6 +15,12 @@ describe('NoticeArchiveService', () => {
     update: jest
       .fn<(criteria: { id: number }, partialEntity: unknown) => Promise<void>>()
       .mockResolvedValue(undefined),
+    create: jest.fn<(entity: Partial<NoticeArchive>) => NoticeArchive>(
+      (entity) => entity as NoticeArchive,
+    ),
+    save: jest
+      .fn<(entity: NoticeArchive) => Promise<NoticeArchive>>()
+      .mockImplementation(async (entity) => entity),
   });
 
   const createChangeTrackingServiceMock = () => ({
@@ -30,6 +37,18 @@ describe('NoticeArchiveService', () => {
     getLatestFieldAfterValue: jest
       .fn<(...args: any[]) => Promise<string | null>>()
       .mockResolvedValue(null),
+    buildDiffEvent: jest.fn((input: any) => {
+      const diff = computeDiff(input.beforeSnapshot, input.afterSnapshot);
+      return {
+        shouldAppend: input.beforeSnapshot === null || diff.changed,
+        eventType: input.beforeSnapshot === null ? 'created' : 'updated',
+        diff,
+        eventHash: 'test-event-hash',
+        detectedAt: new Date('2026-01-01T00:00:00.000Z'),
+        hashAlgo: 'sha256',
+        canonVersion: 1,
+      };
+    }),
     appendChangeEventWithDetails: jest
       .fn<(...args: any[]) => Promise<any>>()
       .mockResolvedValue({ id: 1 }),
@@ -517,6 +536,203 @@ describe('NoticeArchiveService', () => {
           aiSummaryStatus: 'not_supported',
         },
       });
+    });
+  });
+
+  describe('upsert diff false-removal protections', () => {
+    it('does not emit removed changes when content fetch fails and existing tracked values are still valid', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219801,
+          subject: '기존 법률안',
+          proposerCategory: '정부',
+          committee: '정무위원회',
+          proposalReason: '기존 제안이유',
+          contentBillNumber: '220001',
+          contentProposer: '홍길동',
+          contentProposalDate: '2026-01-01',
+          contentCommittee: '정무위원회',
+          contentReferralDate: '2026-01-02',
+          contentNoticePeriod: '2026-01-03~2026-02-02',
+          contentProposalSession: '제420회',
+          isDone: true,
+        }),
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219801,
+          subject: '기존 법률안',
+          proposerCategory: '정부',
+          committee: '정무위원회',
+          link: 'https://example.com/2219801',
+          contentId: 'PRC_2219801',
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          // fetch 실패 상황과 동일하게 빈값/누락 전달
+          proposalReason: '',
+          billNumber: undefined,
+          proposer: undefined,
+          proposalDate: undefined,
+          committee: undefined,
+          referralDate: undefined,
+          noticePeriod: undefined,
+          proposalSession: undefined,
+          isDone: undefined,
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+      expect(repositoryMock.save).not.toHaveBeenCalled();
+    });
+
+    it('uses chain-head baseline to avoid stale-row re-emission', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219802,
+          proposalReason: 'stale row value',
+          contentId: 'PRC_2219802',
+        }),
+      );
+
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 1,
+          details: [
+            {
+              fieldPath: 'proposalReason',
+              afterValue: 'chain head value',
+            },
+          ],
+        },
+      ]);
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219802,
+          subject: '테스트 법률안',
+          proposerCategory: '정부',
+          committee: '정무위원회',
+          link: 'https://example.com/2219802',
+          contentId: 'PRC_2219802',
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          proposalReason: 'chain head value',
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('restores a previously removed field when a later crawl provides the value again', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219803,
+          subject: '복구 테스트 법률안',
+          proposalReason: 'legacy db value',
+          contentId: 'PRC_2219803',
+        }),
+      );
+
+      // 체인 헤드가 이미 removed 상태(null)로 오염된 상황을 가정
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 1,
+          details: [
+            {
+              fieldPath: 'proposalReason',
+              afterValue: null,
+            },
+          ],
+        },
+      ]);
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219803,
+          subject: '복구 테스트 법률안',
+          proposerCategory: '정부',
+          committee: '정무위원회',
+          link: 'https://example.com/2219803',
+          contentId: 'PRC_2219803',
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          proposalReason: '정상 제안이유 복구값',
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).toHaveBeenCalledTimes(1);
+
+      const callArg = (
+        changeTrackingService.appendChangeEventWithDetails as jest.Mock
+      ).mock.calls[0][0] as {
+        details: Array<{
+          fieldPath: string;
+          changeType: string;
+          beforeValue: string | null;
+          afterValue: string | null;
+        }>;
+      };
+
+      const proposalReasonDetail = callArg.details.find(
+        (detail) => detail.fieldPath === 'proposalReason',
+      );
+
+      expect(proposalReasonDetail).toBeDefined();
+      expect(proposalReasonDetail?.changeType).toBe('added');
+      expect(proposalReasonDetail?.beforeValue).toBeNull();
+      expect(proposalReasonDetail?.afterValue).toBe('정상 제안이유 복구값');
     });
   });
 });

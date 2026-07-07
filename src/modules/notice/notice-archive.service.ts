@@ -267,6 +267,50 @@ export class NoticeArchiveService {
     return normalized && normalized.length > 0 ? normalized : null;
   }
 
+  private preferIncomingTrackedValue<T>(
+    incoming: T | null | undefined,
+    existing: T | null | undefined,
+    options?: {
+      preserveExistingWhenIncomingNull?: boolean;
+      normalizeText?: boolean;
+    },
+  ): T | null {
+    const preserve = options?.preserveExistingWhenIncomingNull ?? false;
+    const normalizeText = options?.normalizeText ?? false;
+
+    if (normalizeText) {
+      const normalize = (value: T | null | undefined): T | null => {
+        if (typeof value !== 'string') {
+          return (value ?? null) as T | null;
+        }
+
+        const normalized = value.replace(/\s+/g, ' ').trim();
+        return (normalized.length > 0 ? normalized : null) as T | null;
+      };
+
+      const normalizedIncoming = normalize(incoming);
+      if (normalizedIncoming !== null) {
+        return normalizedIncoming;
+      }
+
+      if (preserve) {
+        return normalize(existing);
+      }
+
+      return null;
+    }
+
+    if (incoming !== null && incoming !== undefined) {
+      return incoming;
+    }
+
+    if (preserve) {
+      return (existing ?? null) as T | null;
+    }
+
+    return null;
+  }
+
   async seedLegacyGenesisEvents(
     boundaryAt: Date,
     batchSize = 300,
@@ -435,6 +479,81 @@ export class NoticeArchiveService {
     const previousNoticeNum = beforeRow?.noticeNum ?? null;
     const isRenumbering =
       previousNoticeNum !== null && previousNoticeNum !== notice.num;
+    const existing = beforeRow !== null;
+
+    const resolvedProposalReason = this.preferIncomingTrackedValue(
+      originalContent.proposalReason,
+      beforeRow?.proposalReason,
+      {
+        preserveExistingWhenIncomingNull: existing,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedContentBillNumber = this.preferIncomingTrackedValue(
+      this.normalizeStableId(originalContent.billNumber),
+      this.normalizeStableId(beforeRow?.contentBillNumber),
+      { preserveExistingWhenIncomingNull: existing },
+    );
+
+    const resolvedContentProposer = this.preferIncomingTrackedValue(
+      originalContent.proposer?.trim() || null,
+      beforeRow?.contentProposer ?? null,
+      {
+        preserveExistingWhenIncomingNull: existing,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedContentProposalDate = this.preferIncomingTrackedValue(
+      originalContent.proposalDate?.trim() || null,
+      beforeRow?.contentProposalDate ?? null,
+      {
+        preserveExistingWhenIncomingNull: existing,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedContentCommittee = this.preferIncomingTrackedValue(
+      originalContent.committee?.trim() || null,
+      beforeRow?.contentCommittee ?? null,
+      {
+        preserveExistingWhenIncomingNull: existing,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedContentReferralDate = this.preferIncomingTrackedValue(
+      originalContent.referralDate?.trim() || null,
+      beforeRow?.contentReferralDate ?? null,
+      {
+        preserveExistingWhenIncomingNull: existing,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedContentNoticePeriod = this.preferIncomingTrackedValue(
+      originalContent.noticePeriod?.trim() || null,
+      beforeRow?.contentNoticePeriod ?? null,
+      {
+        preserveExistingWhenIncomingNull: existing,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedContentProposalSession = this.preferIncomingTrackedValue(
+      originalContent.proposalSession?.trim() || null,
+      beforeRow?.contentProposalSession ?? null,
+      {
+        preserveExistingWhenIncomingNull: existing,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedIsDone =
+      originalContent.isDone !== undefined
+        ? originalContent.isDone
+        : (beforeRow?.isDone ?? false);
 
     // Core content fields - always written on both INSERT and UPDATE.
     const coreFields = {
@@ -444,15 +563,15 @@ export class NoticeArchiveService {
       committee: notice.committee,
       assemblyLink: notice.link,
       contentId: notice.contentId ?? null,
-      proposalReason: originalContent.proposalReason ?? '',
+      proposalReason: resolvedProposalReason ?? '',
       sourceTitle: originalContent.title?.trim() || notice.subject,
-      contentBillNumber: originalContent.billNumber?.trim() || null,
-      contentProposer: originalContent.proposer?.trim() || null,
-      contentProposalDate: originalContent.proposalDate?.trim() || null,
-      contentCommittee: originalContent.committee?.trim() || null,
-      contentReferralDate: originalContent.referralDate?.trim() || null,
-      contentNoticePeriod: originalContent.noticePeriod?.trim() || null,
-      contentProposalSession: originalContent.proposalSession?.trim() || null,
+      contentBillNumber: resolvedContentBillNumber,
+      contentProposer: resolvedContentProposer,
+      contentProposalDate: resolvedContentProposalDate,
+      contentCommittee: resolvedContentCommittee,
+      contentReferralDate: resolvedContentReferralDate,
+      contentNoticePeriod: resolvedContentNoticePeriod,
+      contentProposalSession: resolvedContentProposalSession,
       attachmentPdfFile: notice.attachments?.pdfFile ?? '',
       attachmentHwpFile: notice.attachments?.hwpFile ?? '',
       archivedAt: originalContent.archivedAt ?? new Date(),
@@ -466,12 +585,10 @@ export class NoticeArchiveService {
       httpContentType: normalizedHttpMetadata?.contentType ?? null,
       httpEtag: normalizedHttpMetadata?.etag ?? null,
       httpLastModified: normalizedHttpMetadata?.lastModified ?? null,
-      isDone: originalContent.isDone ?? false,
+      isDone: resolvedIsDone,
       lifecycleStatus: 'active' as NoticeLifecycleStatus,
       sourceDeletedAt: null,
     };
-
-    const existing = beforeRow !== null;
     const hasExplicitSummary =
       Object.prototype.hasOwnProperty.call(notice, 'aiSummary') ||
       Object.prototype.hasOwnProperty.call(notice, 'aiSummaryStatus');
@@ -1653,7 +1770,10 @@ export class NoticeArchiveService {
     }
 
     try {
-      const beforeSnapshot = this.buildTrackedSnapshot(beforeRow);
+      const beforeSnapshot = await this.buildDiffBaselineSnapshot(
+        noticeNum,
+        beforeRow,
+      );
       const afterSnapshot = this.buildTrackedSnapshot(afterRow);
       if (!afterSnapshot) return;
 
@@ -1722,6 +1842,56 @@ export class NoticeArchiveService {
         { noticeNum, source },
       );
       throw error;
+    }
+  }
+
+  private async buildDiffBaselineSnapshot(
+    noticeNum: number,
+    beforeRow: TrackedArchiveRow | null,
+  ): Promise<Record<string, unknown> | null> {
+    const baseSnapshot = this.buildTrackedSnapshot(beforeRow);
+
+    if (!this.changeTrackingService || !baseSnapshot) {
+      return baseSnapshot;
+    }
+
+    try {
+      const timeline = await this.changeTrackingService.getNoticeChangeTimeline(
+        {
+          noticeNum,
+          limit: 1000,
+        },
+      );
+
+      if (timeline.length === 0) {
+        return baseSnapshot;
+      }
+
+      const latestByField = new Map<string, string | null>();
+      const eventsAsc = [...timeline].sort(
+        (left, right) => left.eventHeight - right.eventHeight,
+      );
+
+      for (const event of eventsAsc) {
+        for (const detail of event.details) {
+          latestByField.set(detail.fieldPath, detail.afterValue);
+        }
+      }
+
+      const merged = { ...baseSnapshot };
+      for (const fieldPath of DEFAULT_TRACKED_FIELDS) {
+        if (!latestByField.has(fieldPath)) {
+          continue;
+        }
+        merged[fieldPath] = latestByField.get(fieldPath) ?? null;
+      }
+
+      return merged;
+    } catch (error) {
+      this.logger.warn(
+        `Failed to resolve diff baseline from chain head for notice ${noticeNum}: ${(error as Error).message}`,
+      );
+      return baseSnapshot;
     }
   }
 
