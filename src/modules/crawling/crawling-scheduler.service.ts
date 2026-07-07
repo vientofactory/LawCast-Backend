@@ -1015,8 +1015,10 @@ export class CrawlingSchedulerService implements OnModuleInit {
   private async refreshExistingPendingBillsInBackground(
     items: INsmBillItem[],
   ): Promise<void> {
-    const refreshed =
-      await this.archiveOrchestratorService.archiveNsmBillItems(items);
+    const refreshed = await this.archiveOrchestratorService.archiveNsmBillItems(
+      items,
+      { reason: 'existing-pending-recompare' },
+    );
 
     if (refreshed.length > 0) {
       this.logger.log(
@@ -1039,6 +1041,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       archivedNotices =
         await this.archiveOrchestratorService.archiveNsmBillItems(
           newPendingItems,
+          { reason: 'new-pending-bills' },
         );
     } catch (error) {
       this.logger.error(

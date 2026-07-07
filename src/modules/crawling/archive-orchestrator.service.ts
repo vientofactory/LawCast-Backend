@@ -25,6 +25,14 @@ interface ArchiveRunOptions {
   reason?: ArchiveRunReason;
 }
 
+type NsmPendingArchiveReason =
+  | 'new-pending-bills'
+  | 'existing-pending-recompare';
+
+interface NsmPendingArchiveOptions {
+  reason?: NsmPendingArchiveReason;
+}
+
 @Injectable()
 export class ArchiveOrchestratorService implements OnApplicationShutdown {
   private readonly logger = LoggerUtils.getContextLogger(
@@ -79,6 +87,25 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         return {
           level: BridgeLogLevel.LOG,
           message: `Archiving **${count}** notice(s)`,
+        };
+    }
+  }
+
+  private getNsmPendingArchiveStartLog(
+    count: number,
+    reason: NsmPendingArchiveReason,
+  ): { level: BridgeLogLevel; message: string } {
+    switch (reason) {
+      case 'existing-pending-recompare':
+        return {
+          level: BridgeLogLevel.DEBUG,
+          message: `Re-scanning archived pending bills from NsmLmSts: **${count}** item(s)`,
+        };
+      case 'new-pending-bills':
+      default:
+        return {
+          level: BridgeLogLevel.LOG,
+          message: `Archiving **${count}** pending bill(s) from NsmLmSts`,
         };
     }
   }
@@ -273,7 +300,10 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
    * @returns Successfully archived CachedNotice objects with `proposalReason`
    *   populated, ready for AI summary generation by the caller.
    */
-  async archiveNsmBillItems(items: INsmBillItem[]): Promise<CachedNotice[]> {
+  async archiveNsmBillItems(
+    items: INsmBillItem[],
+    options?: NsmPendingArchiveOptions,
+  ): Promise<CachedNotice[]> {
     if (items.length === 0) {
       return [];
     }
@@ -281,11 +311,13 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     this.noticeArchiveService.beginChangeNotificationCollection();
 
     try {
+      const reason = options?.reason ?? 'new-pending-bills';
+      const startLog = this.getNsmPendingArchiveStartLog(items.length, reason);
       void this.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
+        startLog.level,
         ArchiveOrchestratorService.name,
-        `Archiving **${items.length}** pending bill(s) from NsmLmSts`,
-        { count: items.length },
+        startLog.message,
+        { count: items.length, reason },
       );
 
       const allArchived: CachedNotice[] = [];

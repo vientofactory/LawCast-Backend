@@ -6,6 +6,7 @@ import { CacheService } from '../cache/cache.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { type CachedNotice } from '../../types/cache.types';
+import { type INsmBillItem } from 'pal-crawl';
 
 // fetch를 모킹
 declare const global: any;
@@ -41,6 +42,15 @@ describe('ArchiveOrchestratorService', () => {
     aiSummary: null,
     aiSummaryStatus: 'not_supported',
   };
+
+  const mockNsmBillItem = {
+    billNo: '2219776',
+    billName: '테스트 NSM 법률안',
+    proposer: '홍길동의원',
+    committee: '',
+    ministry: '법무부',
+    link: 'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219776/detailRP',
+  } as INsmBillItem;
 
   beforeEach(async () => {
     const objectStore = new Map<string, unknown>();
@@ -589,6 +599,80 @@ describe('ArchiveOrchestratorService', () => {
           html: '',
           sha256: '',
           httpMetadata: null,
+        }),
+      );
+    });
+  });
+
+  describe('archiveNsmBillItems', () => {
+    it('logs default message for new pending bills', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '<html>nsm detail</html>',
+          screenshot: null,
+          detail: {
+            proposalReason: '사유 본문',
+            proposalInfo: '테스트 NSM 법률안',
+            billNo: '2219776',
+            proposer: '홍길동의원',
+            proposalDate: '2026-07-01',
+            session: '제418회',
+          },
+          responseUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219776/detailRP',
+          statusCode: 200,
+        },
+      );
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+
+      await service.archiveNsmBillItems([mockNsmBillItem]);
+
+      expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
+        BridgeLogLevel.LOG,
+        'ArchiveOrchestratorService',
+        'Archiving **1** pending bill(s) from NsmLmSts',
+        expect.objectContaining({
+          count: 1,
+          reason: 'new-pending-bills',
+        }),
+      );
+    });
+
+    it('logs recompare message for existing pending bills refresh', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '<html>nsm detail</html>',
+          screenshot: null,
+          detail: {
+            proposalReason: '사유 본문',
+            proposalInfo: '테스트 NSM 법률안',
+            billNo: '2219776',
+            proposer: '홍길동의원',
+            proposalDate: '2026-07-01',
+            session: '제418회',
+          },
+          responseUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219776/detailRP',
+          statusCode: 200,
+        },
+      );
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+
+      await service.archiveNsmBillItems([mockNsmBillItem], {
+        reason: 'existing-pending-recompare',
+      });
+
+      expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
+        BridgeLogLevel.DEBUG,
+        'ArchiveOrchestratorService',
+        'Re-scanning archived pending bills from NsmLmSts: **1** item(s)',
+        expect.objectContaining({
+          count: 1,
+          reason: 'existing-pending-recompare',
         }),
       );
     });

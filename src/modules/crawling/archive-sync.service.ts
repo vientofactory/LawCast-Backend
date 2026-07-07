@@ -580,6 +580,7 @@ export class ArchiveSyncService implements OnModuleInit {
         const archived =
           await this.archiveOrchestratorService.archiveNsmBillItems(
             newPendingItems,
+            { reason: 'new-pending-bills' },
           );
         newlyArchivedCount = archived.length;
       }
