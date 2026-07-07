@@ -641,14 +641,10 @@ export class NoticeArchiveService {
         });
 
         if (previousSummaryState) {
-          await this.summaryStateRepository.upsert(
-            {
-              noticeNum: notice.num,
-              aiSummary: previousSummaryState.aiSummary ?? null,
-              aiSummaryStatus: previousSummaryState.aiSummaryStatus,
-            },
-            ['noticeNum'],
-          );
+          await this.persistSummaryState(notice.num, {
+            aiSummary: previousSummaryState.aiSummary ?? null,
+            aiSummaryStatus: previousSummaryState.aiSummaryStatus,
+          });
 
           await this.summaryStateRepository.delete({
             noticeNum: previousNoticeNum,
@@ -657,13 +653,7 @@ export class NoticeArchiveService {
       }
 
       if (hasExplicitSummary) {
-        await this.summaryStateRepository.upsert(
-          {
-            noticeNum: notice.num,
-            ...summaryPayload,
-          },
-          ['noticeNum'],
-        );
+        await this.persistSummaryState(notice.num, summaryPayload);
       } else {
         await this.summaryStateRepository
           .createQueryBuilder()
@@ -1843,6 +1833,40 @@ export class NoticeArchiveService {
       );
       throw error;
     }
+  }
+
+  private async persistSummaryState(
+    noticeNum: number,
+    payload: {
+      aiSummary: string | null;
+      aiSummaryStatus: string;
+    },
+  ): Promise<void> {
+    if (!this.summaryStateRepository) {
+      return;
+    }
+
+    const existing = await this.summaryStateRepository.findOne({
+      where: { noticeNum },
+      select: { id: true },
+    });
+
+    if (existing?.id) {
+      await this.summaryStateRepository.update(
+        { id: existing.id },
+        {
+          aiSummary: payload.aiSummary,
+          aiSummaryStatus: payload.aiSummaryStatus,
+        },
+      );
+      return;
+    }
+
+    await this.summaryStateRepository.insert({
+      noticeNum,
+      aiSummary: payload.aiSummary,
+      aiSummaryStatus: payload.aiSummaryStatus,
+    });
   }
 
   private async buildDiffBaselineSnapshot(
