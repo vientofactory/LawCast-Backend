@@ -55,10 +55,6 @@ export class NoticesQueryService {
         )
       : cachedNotices;
 
-    const cachedNoticeMap = new Map(
-      searchedCached.map((notice) => [notice.num, notice]),
-    );
-
     // When filtering by isDone=true, cache items (active notices) never qualify
     const cacheCandidates: CachedNotice[] =
       hasDateFilter || isDone === true ? [] : searchedCached;
@@ -136,20 +132,9 @@ export class NoticesQueryService {
         ? await this.noticeArchiveService.getArchiveCount()
         : archivePageResult.total;
 
-    const archiveItems = archivePageResult.items.map((item) => {
-      const cached = cachedNoticeMap.get(item.num);
-
-      if (!cached) {
-        return item;
-      }
-
-      return {
-        ...item,
-        aiSummary: cached.aiSummary ?? item.aiSummary,
-        aiSummaryStatus:
-          cached.aiSummaryStatus ?? item.aiSummaryStatus ?? 'not_requested',
-      };
-    });
+    // DB is the source of truth for archived rows.
+    // Keep archive items as-is to guarantee one-way DB -> cache semantics.
+    const archiveItems = archivePageResult.items;
 
     const items = this.mergePageItems({
       startIndex: clampedStart,

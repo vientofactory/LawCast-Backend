@@ -8,6 +8,8 @@ import { BatchProcessingService } from './modules/shared/batch-processing.servic
 import { WebhookValidationUtils } from './utils/webhook-validation.utils';
 import { DiscordBridgeService } from './modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from './modules/discord-bridge/discord-bridge.types';
+import { CrawlingSchedulerService } from './modules/crawling/crawling-scheduler.service';
+import { ArchiveSyncService } from './modules/crawling/archive-sync.service';
 import { LoggerUtils } from './utils/logger.utils';
 
 if (!process.env.TZ) {
@@ -20,6 +22,8 @@ async function bootstrap() {
   const dataSource = app.get(DataSource);
   const batchProcessingService = app.get(BatchProcessingService);
   const discordBridge = app.get(DiscordBridgeService);
+  const crawlingSchedulerService = app.get(CrawlingSchedulerService);
+  const archiveSyncService = app.get(ArchiveSyncService);
   const loggerContext = 'Bootstrap';
   const frontendUrls = configService.get<string[]>('frontend.urls');
   const { getValidationPipeOptions } = WebhookValidationUtils;
@@ -29,9 +33,13 @@ async function bootstrap() {
   initShutdownHandlers(
     app,
     batchProcessingService,
+    crawlingSchedulerService,
+    archiveSyncService,
     loggerContext,
     discordBridge,
   );
+
+  logDatabasePath(dataSource, loggerContext);
 
   // Ensure database migrations are applied before starting the application
   await ensureDatabaseMigrations(dataSource, loggerContext);
@@ -99,6 +107,8 @@ async function ensureDatabaseMigrations(
 async function gracefulShutdown(
   app: NestExpressApplication,
   batchProcessingService: BatchProcessingService,
+  crawlingSchedulerService: CrawlingSchedulerService,
+  archiveSyncService: ArchiveSyncService,
   loggerContext: string,
   exitCode = 0,
 ): Promise<void> {
@@ -119,6 +129,25 @@ async function gracefulShutdown(
       loggerContext,
       'Waiting for ongoing batch jobs to complete...',
     );
+
+    const [archiveIdle, crawlingIdle] = await Promise.allSettled([
+      archiveSyncService.waitForIdle(10000),
+      crawlingSchedulerService.waitForIdle(10000),
+    ]);
+
+    if (archiveIdle.status === 'rejected') {
+      LoggerUtils.warn(
+        loggerContext,
+        `Archive sync did not become idle before shutdown: ${String(archiveIdle.reason)}`,
+      );
+    }
+
+    if (crawlingIdle.status === 'rejected') {
+      LoggerUtils.warn(
+        loggerContext,
+        `Crawling scheduler did not become idle before shutdown: ${String(crawlingIdle.reason)}`,
+      );
+    }
 
     // Batch jobs graceful shutdown
     await batchProcessingService.gracefulShutdown();
@@ -154,6 +183,8 @@ async function gracefulShutdown(
 function initShutdownHandlers(
   app: NestExpressApplication,
   batchProcessingService: BatchProcessingService,
+  crawlingSchedulerService: CrawlingSchedulerService,
+  archiveSyncService: ArchiveSyncService,
   loggerContext: string,
   discordBridge: DiscordBridgeService,
 ): void {
@@ -162,7 +193,13 @@ function initShutdownHandlers(
       loggerContext,
       'SIGTERM received, starting graceful shutdown...',
     );
-    await gracefulShutdown(app, batchProcessingService, loggerContext);
+    await gracefulShutdown(
+      app,
+      batchProcessingService,
+      crawlingSchedulerService,
+      archiveSyncService,
+      loggerContext,
+    );
   });
 
   process.on('SIGINT', async () => {
@@ -170,7 +207,13 @@ function initShutdownHandlers(
       loggerContext,
       'SIGINT received, starting graceful shutdown...',
     );
-    await gracefulShutdown(app, batchProcessingService, loggerContext);
+    await gracefulShutdown(
+      app,
+      batchProcessingService,
+      crawlingSchedulerService,
+      archiveSyncService,
+      loggerContext,
+    );
   });
 
   // Node.js runtime warnings (e.g. MaxListenersExceeded, DeprecationWarning)
@@ -195,7 +238,14 @@ function initShutdownHandlers(
       error.message,
       error,
     );
-    await gracefulShutdown(app, batchProcessingService, loggerContext, 1);
+    await gracefulShutdown(
+      app,
+      batchProcessingService,
+      crawlingSchedulerService,
+      archiveSyncService,
+      loggerContext,
+      1,
+    );
   });
 
   process.on('unhandledRejection', async (reason, promise) => {
@@ -215,8 +265,28 @@ function initShutdownHandlers(
       message,
       reason,
     );
-    await gracefulShutdown(app, batchProcessingService, loggerContext, 1);
+    await gracefulShutdown(
+      app,
+      batchProcessingService,
+      crawlingSchedulerService,
+      archiveSyncService,
+      loggerContext,
+      1,
+    );
   });
+}
+
+function logDatabasePath(dataSource: DataSource, loggerContext: string): void {
+  const options = dataSource.options as { database?: unknown; type?: unknown };
+  const dbType = String(options.type ?? 'unknown');
+  const dbPath = typeof options.database === 'string' ? options.database : '';
+
+  if (dbType === 'sqlite') {
+    LoggerUtils.log(
+      loggerContext,
+      `SQLite database path: ${dbPath || '(not resolved)'}`,
+    );
+  }
 }
 
 bootstrap().catch((error) => {

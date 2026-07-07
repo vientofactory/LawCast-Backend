@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 export interface AppConfig {
   port: number;
   nodeEnv: string;
@@ -217,7 +219,7 @@ export default (): AppConfig => ({
   nodeEnv: process.env.NODE_ENV || 'development',
   database: {
     type: 'sqlite',
-    path: process.env.DATABASE_PATH || 'lawcast.db',
+    path: resolveDatabasePath(process.env.DATABASE_PATH),
   },
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',
@@ -260,6 +262,16 @@ export default (): AppConfig => ({
       : [],
   },
 });
+
+function resolveDatabasePath(configuredPath: string | undefined): string {
+  const normalizedPath = configuredPath?.trim() || 'lawcast.db';
+  if (path.isAbsolute(normalizedPath)) {
+    return normalizedPath;
+  }
+
+  // Resolve relative SQLite paths against backend project root, not process.cwd.
+  return path.resolve(__dirname, '..', '..', normalizedPath);
+}
 
 function parseBridgeLogLevel(value: string | undefined): number {
   const map: Record<string, number> = {

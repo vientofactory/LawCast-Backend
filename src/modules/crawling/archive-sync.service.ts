@@ -257,6 +257,26 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   /**
+   * Waits until all archive-sync phases are idle.
+   * Throws when timeout is exceeded.
+   */
+  async waitForIdle(timeoutMs = 10000, pollMs = 200): Promise<void> {
+    const startedAt = Date.now();
+
+    while (this.isAnyPhaseRunning()) {
+      if (Date.now() - startedAt >= timeoutMs) {
+        const running =
+          this.getExecutionState().runningPhases.join(', ') || '-';
+        throw new Error(
+          `archive sync still running after ${timeoutMs}ms (runningPhases=${running})`,
+        );
+      }
+
+      await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+    }
+  }
+
+  /**
    * Returns a full execution snapshot for lock/phase debugging.
    */
   getExecutionState(): ArchiveSyncExecutionState {

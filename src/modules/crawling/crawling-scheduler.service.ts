@@ -207,6 +207,24 @@ export class CrawlingSchedulerService implements OnModuleInit {
     return false;
   }
 
+  /**
+   * Waits until scheduler fast-path and background tasks are fully idle.
+   * Throws when timeout is exceeded.
+   */
+  async waitForIdle(timeoutMs = 10000, pollMs = 200): Promise<void> {
+    const startedAt = Date.now();
+
+    while (this.isBusy({ includeBackground: true })) {
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error(
+          `crawling scheduler still busy after ${timeoutMs}ms (activeBackgroundTasks=${this.activeBackgroundTasks.size}, isProcessing=${this.isProcessing})`,
+        );
+      }
+
+      await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+    }
+  }
+
   /** Snapshot for diagnostics (API/Discord/debug logs). */
   getExecutionState(): {
     isInitialized: boolean;
