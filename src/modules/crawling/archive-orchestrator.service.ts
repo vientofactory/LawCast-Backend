@@ -15,6 +15,16 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { normalizeNoticeNum } from '../../utils/notice-num.utils';
 import { ArchiveOrchestratorScreenshotCoordinator } from './utils/archive-orchestrator-screenshot-coordinator';
 
+type ArchiveRunReason =
+  | 'new-notices'
+  | 'full-sync-new-notices'
+  | 'nsm-pal-upgrade'
+  | 'pal-recompare';
+
+interface ArchiveRunOptions {
+  reason?: ArchiveRunReason;
+}
+
 @Injectable()
 export class ArchiveOrchestratorService implements OnApplicationShutdown {
   private readonly logger = LoggerUtils.getContextLogger(
@@ -44,6 +54,35 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     });
   }
 
+  private getArchiveStartLog(
+    count: number,
+    reason: ArchiveRunReason,
+  ): { level: BridgeLogLevel; message: string } {
+    switch (reason) {
+      case 'full-sync-new-notices':
+        return {
+          level: BridgeLogLevel.DEBUG,
+          message: `Full sync archiving new notices: **${count}** item(s)`,
+        };
+      case 'nsm-pal-upgrade':
+        return {
+          level: BridgeLogLevel.DEBUG,
+          message: `Refreshing archived notices (NSM->PAL upgrade): **${count}** item(s)`,
+        };
+      case 'pal-recompare':
+        return {
+          level: BridgeLogLevel.DEBUG,
+          message: `Re-comparing archived notices for drift: **${count}** item(s)`,
+        };
+      case 'new-notices':
+      default:
+        return {
+          level: BridgeLogLevel.LOG,
+          message: `Archiving **${count}** notice(s)`,
+        };
+    }
+  }
+
   /**
    * Startup screenshot pipeline.
    *
@@ -71,7 +110,10 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
    * @param notices An array of notices to be archived.
    * @returns The number of notices successfully saved to the archive.
    */
-  async archiveNotices(notices: CachedNotice[]): Promise<number> {
+  async archiveNotices(
+    notices: CachedNotice[],
+    options?: ArchiveRunOptions,
+  ): Promise<number> {
     if (notices.length === 0) {
       return 0;
     }
@@ -79,11 +121,13 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     this.noticeArchiveService.beginChangeNotificationCollection();
 
     try {
+      const reason = options?.reason ?? 'new-notices';
+      const startLog = this.getArchiveStartLog(notices.length, reason);
       void this.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
+        startLog.level,
         ArchiveOrchestratorService.name,
-        `Archiving **${notices.length}** notice(s)`,
-        { count: notices.length },
+        startLog.message,
+        { count: notices.length, reason },
       );
 
       const concurrency =

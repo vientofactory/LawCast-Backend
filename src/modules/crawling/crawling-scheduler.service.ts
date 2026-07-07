@@ -837,21 +837,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       return;
     }
 
-    let summaryStates: Map<number, ArchiveSummaryState>;
-    try {
-      summaryStates =
-        await this.noticeArchiveService.getSummaryStateByNoticeNums(
-          [...toUpgrade, ...toRecompare].map((item) => item.num),
-        );
-    } catch (error) {
-      this.logger.warn(
-        `Failed to load summary states for periodic PAL re-compare, using defaults: ${(error as Error).message}`,
-      );
-      summaryStates = new Map();
-    }
-
     const toCachedNotice = (item: ITableData): CachedNotice => {
-      const summary = summaryStates.get(item.num);
       return {
         num: item.num,
         subject: item.subject,
@@ -863,8 +849,6 @@ export class CrawlingSchedulerService implements OnModuleInit {
           pdfFile: null,
           hwpFile: null,
         },
-        aiSummary: summary?.aiSummary ?? null,
-        aiSummaryStatus: summary?.aiSummaryStatus ?? 'not_requested',
       };
     };
 
@@ -872,6 +856,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       toUpgrade.length > 0
         ? await this.archiveOrchestratorService.archiveNotices(
             toUpgrade.map(toCachedNotice),
+            { reason: 'nsm-pal-upgrade' },
           )
         : 0;
 
@@ -894,6 +879,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     if (toRecompare.length > 0) {
       await this.archiveOrchestratorService.archiveNotices(
         toRecompare.map(toCachedNotice),
+        { reason: 'pal-recompare' },
       );
       this.logger.log(
         `Periodic PAL re-compare scanned ${toRecompare.length} archived notice(s)`,

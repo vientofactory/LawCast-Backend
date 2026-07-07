@@ -3,6 +3,8 @@ import { ArchiveOrchestratorService } from './archive-orchestrator.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { CrawlingCoreService } from './crawling-core.service';
 import { CacheService } from '../cache/cache.service';
+import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
+import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { type CachedNotice } from '../../types/cache.types';
 
 // fetch를 모킹
@@ -14,6 +16,7 @@ describe('ArchiveOrchestratorService', () => {
   let service: ArchiveOrchestratorService;
   let noticeArchiveService: NoticeArchiveService;
   let crawlingCoreService: CrawlingCoreService;
+  let discordBridgeService: DiscordBridgeService;
 
   const mockNotice: CachedNotice = {
     num: 1,
@@ -98,6 +101,12 @@ describe('ArchiveOrchestratorService', () => {
             captureContentScreenshot: jest.fn().mockResolvedValue(null),
           },
         },
+        {
+          provide: DiscordBridgeService,
+          useValue: {
+            logEvent: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
@@ -107,6 +116,8 @@ describe('ArchiveOrchestratorService', () => {
     noticeArchiveService =
       module.get<NoticeArchiveService>(NoticeArchiveService);
     crawlingCoreService = module.get<CrawlingCoreService>(CrawlingCoreService);
+    discordBridgeService =
+      module.get<DiscordBridgeService>(DiscordBridgeService);
   });
 
   afterEach(() => {
@@ -358,6 +369,72 @@ describe('ArchiveOrchestratorService', () => {
 
       expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalledTimes(
         12,
+      );
+    });
+
+    it('should log default archiving reason for new notices', async () => {
+      const mockResponse = {
+        ok: true,
+        text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
+        url: 'https://example.com/notice/1',
+        status: 200,
+        headers: {
+          get: jest.fn(() => null),
+        },
+      };
+
+      (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
+        title: 'Test Title',
+        proposalReason: 'Test Proposal Reason',
+      });
+      mockFetch.mockResolvedValue(mockResponse);
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+
+      await service.archiveNotices([mockNotice]);
+
+      expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
+        BridgeLogLevel.LOG,
+        'ArchiveOrchestratorService',
+        'Archiving **1** notice(s)',
+        expect.objectContaining({
+          count: 1,
+          reason: 'new-notices',
+        }),
+      );
+    });
+
+    it('should log recompare reason with DEBUG level', async () => {
+      const mockResponse = {
+        ok: true,
+        text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
+        url: 'https://example.com/notice/1',
+        status: 200,
+        headers: {
+          get: jest.fn(() => null),
+        },
+      };
+
+      (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
+        title: 'Test Title',
+        proposalReason: 'Test Proposal Reason',
+      });
+      mockFetch.mockResolvedValue(mockResponse);
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+
+      await service.archiveNotices([mockNotice], { reason: 'pal-recompare' });
+
+      expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
+        BridgeLogLevel.DEBUG,
+        'ArchiveOrchestratorService',
+        'Re-comparing archived notices for drift: **1** item(s)',
+        expect.objectContaining({
+          count: 1,
+          reason: 'pal-recompare',
+        }),
       );
     });
   });

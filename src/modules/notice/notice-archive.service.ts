@@ -666,7 +666,37 @@ export class NoticeArchiveService {
       }
 
       if (hasExplicitSummary) {
-        await this.persistSummaryState(notice.num, summaryPayload);
+        const shouldPreventSummaryDowngrade =
+          existing &&
+          summaryPayload.aiSummaryStatus === AI_SUMMARY_STATUS.NOT_REQUESTED &&
+          !summaryPayload.aiSummary?.trim();
+
+        if (shouldPreventSummaryDowngrade) {
+          const currentState = await this.summaryStateRepository.findOne({
+            where: { noticeNum: notice.num },
+            select: {
+              isDone: true,
+              aiSummary: true,
+              aiSummaryStatus: true,
+            },
+          });
+
+          const hasDurableSummary =
+            !!currentState?.aiSummary?.trim() ||
+            currentState?.aiSummaryStatus !== AI_SUMMARY_STATUS.NOT_REQUESTED;
+
+          if (currentState && hasDurableSummary) {
+            await this.persistSummaryState(notice.num, {
+              isDone: summaryPayload.isDone,
+              aiSummary: currentState.aiSummary ?? null,
+              aiSummaryStatus: currentState.aiSummaryStatus,
+            });
+          } else {
+            await this.persistSummaryState(notice.num, summaryPayload);
+          }
+        } else {
+          await this.persistSummaryState(notice.num, summaryPayload);
+        }
       } else {
         await this.summaryStateRepository
           .createQueryBuilder()

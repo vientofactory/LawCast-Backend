@@ -419,6 +419,7 @@ export class ArchiveSyncService implements OnModuleInit {
               aiSummary: null,
               aiSummaryStatus: 'not_requested' as const,
             })),
+            { reason: 'full-sync-new-notices' },
           );
           newlyArchivedCount += saved;
         }
@@ -438,33 +439,26 @@ export class ArchiveSyncService implements OnModuleInit {
             const toUpgrade = alreadyArchivedWithContentId.filter((item) =>
               nullContentIdNums.has(item.num),
             );
-            const summaryStates =
-              await this.noticeArchiveService.getSummaryStateByNoticeNums(
-                toUpgrade.map((item) => item.num),
-              );
 
             // Re-archive with PAL source/detail so NSM-first rows are naturally
             // refreshed (proposal metadata/source HTML/etc.) once PAL publishes.
+            // Do not pass aiSummary/aiSummaryStatus here: this path updates
+            // archive metadata only and must not mutate existing summary states.
             const upgraded =
               await this.archiveOrchestratorService.archiveNotices(
-                toUpgrade.map((item) => {
-                  const summary = summaryStates.get(item.num);
-                  return {
-                    num: item.num,
-                    subject: item.subject,
-                    proposerCategory: item.proposerCategory,
-                    committee: item.committee,
-                    link: item.link,
-                    contentId: item.contentId,
-                    attachments: item.attachments ?? {
-                      pdfFile: null,
-                      hwpFile: null,
-                    },
-                    aiSummary: summary?.aiSummary ?? null,
-                    aiSummaryStatus:
-                      summary?.aiSummaryStatus ?? 'not_requested',
-                  };
-                }),
+                toUpgrade.map((item) => ({
+                  num: item.num,
+                  subject: item.subject,
+                  proposerCategory: item.proposerCategory,
+                  committee: item.committee,
+                  link: item.link,
+                  contentId: item.contentId,
+                  attachments: item.attachments ?? {
+                    pdfFile: null,
+                    hwpFile: null,
+                  },
+                })),
+                { reason: 'nsm-pal-upgrade' },
               );
             if (upgraded > 0) {
               LoggerUtils.logDev(
