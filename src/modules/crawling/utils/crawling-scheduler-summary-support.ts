@@ -86,6 +86,13 @@ export class CrawlingSchedulerSummarySupport {
       }),
     );
 
+    const persistedNoticeNums = new Set<number>();
+    persistResults.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        persistedNoticeNums.add(changedRetriedNotices[index].num);
+      }
+    });
+
     const persistFailed = persistResults.filter(
       (result) => result.status === 'rejected',
     ).length;
@@ -212,6 +219,13 @@ export class CrawlingSchedulerSummarySupport {
       }),
     );
 
+    const persistedNoticeNums = new Set<number>();
+    persistResults.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
+        persistedNoticeNums.add(changedRetriedNotices[index].num);
+      }
+    });
+
     const persistFailed = persistResults.filter(
       (result) => result.status === 'rejected',
     ).length;
@@ -222,9 +236,11 @@ export class CrawlingSchedulerSummarySupport {
     }
 
     this.options.logger.log(
-      `Persisted cron retried summary state for ${changedRetriedNotices.length - persistFailed} notices`,
+      `Persisted cron retried summary state for ${persistedNoticeNums.size} notices`,
     );
 
-    return mergedNotices;
+    return mergedNotices.filter((notice) =>
+      persistedNoticeNums.has(notice.num),
+    );
   }
 }
