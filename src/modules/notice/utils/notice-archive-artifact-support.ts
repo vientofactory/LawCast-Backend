@@ -265,10 +265,7 @@ export class NoticeArchiveArtifactSupport {
     };
   }
 
-  async runIntegrityScan(
-    batchSize = 200,
-    forceUpdate = false,
-  ): Promise<{
+  async runIntegrityScan(batchSize = 200): Promise<{
     scanned: number;
     passed: number;
     failed: number;
@@ -296,13 +293,6 @@ export class NoticeArchiveArtifactSupport {
 
       if (rows.length === 0) break;
 
-      const checkedAt = new Date();
-      const updates: Array<{
-        id: number;
-        integrityCheckPassed: boolean;
-        integrityVerifiedAt: Date;
-      }> = [];
-
       for (const row of rows) {
         scanned++;
         if (!row.sourceHtml || !row.sourceHtmlSha256) {
@@ -313,30 +303,6 @@ export class NoticeArchiveArtifactSupport {
         const ok = computed === row.sourceHtmlSha256;
         if (ok) passed++;
         else failed++;
-
-        const resultChanged = row.integrityCheckPassed !== ok;
-        const neverChecked = !row.integrityVerifiedAt;
-        if (forceUpdate || resultChanged || neverChecked) {
-          updates.push({
-            id: row.id,
-            integrityCheckPassed: ok,
-            integrityVerifiedAt: checkedAt,
-          });
-        }
-      }
-
-      if (updates.length > 0) {
-        await Promise.all(
-          updates.map((update) =>
-            this.archiveRepository.update(
-              { id: update.id },
-              {
-                integrityCheckPassed: update.integrityCheckPassed,
-                integrityVerifiedAt: update.integrityVerifiedAt,
-              },
-            ),
-          ),
-        );
       }
 
       lastSeenId = rows[rows.length - 1].id;
@@ -381,20 +347,8 @@ export class NoticeArchiveArtifactSupport {
     const passed = calculatedSha256 === row.sourceHtmlSha256;
     const checkedAt = new Date();
 
-    if (row.integrityCheckPassed !== passed || !row.integrityVerifiedAt) {
-      await this.archiveRepository.update(
-        { id: row.id },
-        {
-          integrityCheckPassed: passed,
-          integrityVerifiedAt: checkedAt,
-        },
-      );
-      row.integrityCheckPassed = passed;
-      row.integrityVerifiedAt = checkedAt;
-    }
-
     return {
-      checkedAt: row.integrityVerifiedAt,
+      checkedAt,
       passed,
       calculatedSha256,
     };

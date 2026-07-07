@@ -728,11 +728,7 @@ export class ArchiveSyncService implements OnModuleInit {
       'Integrity rescan',
       this.integrityCheck,
       trigger,
-      () =>
-        this.noticeArchiveService.runIntegrityScan(
-          INTEGRITY_BATCH_SIZE,
-          /* forceUpdate */ true,
-        ),
+      () => this.noticeArchiveService.runIntegrityScan(INTEGRITY_BATCH_SIZE),
       (r) =>
         `scanned=${r.scanned} passed=${r.passed} failed=${r.failed} skipped=${r.skipped}`,
       /* crossPhaseGuard */ true,

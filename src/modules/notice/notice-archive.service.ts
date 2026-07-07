@@ -2665,16 +2665,13 @@ export class NoticeArchiveService {
    *   when the result is unchanged. Use for scheduled re-validation passes so
    *   the timestamp always reflects the most recent check time.
    */
-  async runIntegrityScan(
-    batchSize = 200,
-    forceUpdate = false,
-  ): Promise<{
+  async runIntegrityScan(batchSize = 200): Promise<{
     scanned: number;
     passed: number;
     failed: number;
     skipped: number;
   }> {
-    return this.artifactSupport.runIntegrityScan(batchSize, forceUpdate);
+    return this.artifactSupport.runIntegrityScan(batchSize);
   }
 
   async getArchiveStartedAtByNoticeNums(
