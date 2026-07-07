@@ -199,6 +199,11 @@ export class ApiController {
     @Query('eventType') eventTypeRaw?: string,
     @Query('excludeLegacyGenesisSource') excludeLegacyGenesisSourceRaw?: string,
     @Query('comparableOnly') comparableOnlyRaw?: string,
+    @Query('fromEventId') fromEventIdRaw?: string,
+    @Query('toEventId') toEventIdRaw?: string,
+    @Query('fromDetectedAt') fromDetectedAtRaw?: string,
+    @Query('toDetectedAt') toDetectedAtRaw?: string,
+    @Query('anchorEventId') anchorEventIdRaw?: string,
   ) {
     const allowedEventTypes: ChangeEventType[] = ['updated', 'invalidated'];
 
@@ -210,6 +215,11 @@ export class ApiController {
 
     const excludeLegacyGenesisSource = excludeLegacyGenesisSourceRaw === 'true';
     const comparableOnly = comparableOnlyRaw === 'true';
+    const fromEventId = this.parsePositiveIntegerQuery(fromEventIdRaw);
+    const toEventId = this.parsePositiveIntegerQuery(toEventIdRaw);
+    const fromDetectedAt = this.parseIsoDateQuery(fromDetectedAtRaw);
+    const toDetectedAt = this.parseIsoDateQuery(toDetectedAtRaw);
+    const anchorEventId = this.parsePositiveIntegerQuery(anchorEventIdRaw);
 
     const result = await this.changeTrackingService.getRecentChanges({
       page,
@@ -217,6 +227,11 @@ export class ApiController {
       eventType,
       excludeLegacyGenesisSource,
       comparableOnly,
+      fromEventId,
+      toEventId,
+      fromDetectedAt,
+      toDetectedAt,
+      anchorEventId,
     });
 
     return ApiResponseUtils.success(result);
@@ -354,5 +369,31 @@ export class ApiController {
   @Get('packages')
   getPackages() {
     return ApiResponseUtils.success(this.packagesService.getPackages());
+  }
+
+  private parsePositiveIntegerQuery(raw?: string): number | undefined {
+    if (!raw || raw.trim().length === 0) {
+      return undefined;
+    }
+
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      return undefined;
+    }
+
+    return parsed;
+  }
+
+  private parseIsoDateQuery(raw?: string): Date | undefined {
+    if (!raw || raw.trim().length === 0) {
+      return undefined;
+    }
+
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) {
+      return undefined;
+    }
+
+    return parsed;
   }
 }

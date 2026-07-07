@@ -92,6 +92,11 @@ interface RecentChangesQuery {
   eventType?: ChangeEventType;
   excludeLegacyGenesisSource?: boolean;
   comparableOnly?: boolean;
+  fromEventId?: number;
+  toEventId?: number;
+  fromDetectedAt?: Date;
+  toDetectedAt?: Date;
+  anchorEventId?: number;
 }
 
 export interface ChangeTimelineItem {
@@ -137,6 +142,7 @@ export interface RecentChangesResult {
   limit: number;
   total: number;
   totalPages: number;
+  anchorPage?: number | null;
 }
 
 export interface ComparableChangeSummary {
@@ -841,6 +847,8 @@ export class ChangeTrackingService {
       changedFields: input.changedFields,
       eventHash: input.event.eventHash,
       eventHeight: input.event.eventHeight,
+      eventId: input.event.id,
+      detectedAt: input.event.detectedAt.toISOString(),
     };
 
     this.queuedChangeNotifications.push(payload);
@@ -1077,31 +1085,32 @@ export class ChangeTrackingService {
   ): Promise<RecentChangesResult> {
     const page = Math.max(query.page, 1);
     const limit = Math.min(Math.max(query.limit, 1), 100);
-    const builder = this.changeEventRepository
-      .createQueryBuilder('event')
-      .orderBy('event.detectedAt', 'DESC')
-      .addOrderBy('event.id', 'DESC');
+    const baseQueryBuilder =
+      this.changeEventRepository.createQueryBuilder('event');
 
     // This API is for post-genesis change browsing only.
-    builder.andWhere('event.eventType != :createdEventType', {
+    baseQueryBuilder.andWhere('event.eventType != :createdEventType', {
       createdEventType: 'created',
     });
 
     if (query.eventType) {
-      builder.andWhere('event.eventType = :eventType', {
+      baseQueryBuilder.andWhere('event.eventType = :eventType', {
         eventType: query.eventType,
       });
     }
 
     if (query.excludeLegacyGenesisSource) {
-      builder.andWhere(
+      baseQueryBuilder.andWhere(
         '(event.source IS NULL OR event.source != :legacyGenesisSource)',
       );
-      builder.setParameter('legacyGenesisSource', this.LEGACY_GENESIS_SOURCE);
+      baseQueryBuilder.setParameter(
+        'legacyGenesisSource',
+        this.LEGACY_GENESIS_SOURCE,
+      );
     }
 
     if (query.comparableOnly) {
-      builder.andWhere('event.eventHeight > :baselineEventHeight', {
+      baseQueryBuilder.andWhere('event.eventHeight > :baselineEventHeight', {
         baselineEventHeight: this.BASELINE_EVENT_HEIGHT,
       });
 
@@ -1113,10 +1122,64 @@ export class ChangeTrackingService {
           '(COUNT(*) - SUM(CASE WHEN ce.eventHeight = :baselineEventHeight THEN 1 ELSE 0 END)) >= 1',
         );
 
-      builder
+      baseQueryBuilder
         .andWhere(`event.noticeNum IN (${comparableNoticeSubQuery.getQuery()})`)
         .setParameter('baselineEventHeight', this.BASELINE_EVENT_HEIGHT);
     }
+
+    if (query.fromEventId) {
+      baseQueryBuilder.andWhere('event.id >= :fromEventId', {
+        fromEventId: query.fromEventId,
+      });
+    }
+
+    if (query.toEventId) {
+      baseQueryBuilder.andWhere('event.id <= :toEventId', {
+        toEventId: query.toEventId,
+      });
+    }
+
+    if (query.fromDetectedAt) {
+      baseQueryBuilder.andWhere('event.detectedAt >= :fromDetectedAt', {
+        fromDetectedAt: query.fromDetectedAt,
+      });
+    }
+
+    if (query.toDetectedAt) {
+      baseQueryBuilder.andWhere('event.detectedAt <= :toDetectedAt', {
+        toDetectedAt: query.toDetectedAt,
+      });
+    }
+
+    let anchorPage: number | null = null;
+    if (query.anchorEventId && query.anchorEventId > 0) {
+      const anchorEvent = await baseQueryBuilder
+        .clone()
+        .andWhere('event.id = :anchorEventId', {
+          anchorEventId: query.anchorEventId,
+        })
+        .getOne();
+
+      if (anchorEvent) {
+        const precedingCount = await baseQueryBuilder
+          .clone()
+          .andWhere(
+            '(event.detectedAt > :anchorDetectedAt OR (event.detectedAt = :anchorDetectedAt AND event.id > :anchorEventId))',
+            {
+              anchorDetectedAt: anchorEvent.detectedAt,
+              anchorEventId: anchorEvent.id,
+            },
+          )
+          .getCount();
+
+        anchorPage = Math.floor(precedingCount / limit) + 1;
+      }
+    }
+
+    const builder = baseQueryBuilder
+      .clone()
+      .orderBy('event.detectedAt', 'DESC')
+      .addOrderBy('event.id', 'DESC');
 
     builder.skip((page - 1) * limit).take(limit);
 
@@ -1154,6 +1217,7 @@ export class ChangeTrackingService {
       limit,
       total,
       totalPages: total > 0 ? Math.ceil(total / limit) : 1,
+      anchorPage,
     };
   }
 

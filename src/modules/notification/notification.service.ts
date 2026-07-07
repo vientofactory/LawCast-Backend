@@ -19,6 +19,8 @@ export interface ChangeNotificationPayload {
   changedFields: string[];
   eventHash: string;
   eventHeight?: number;
+  eventId?: number;
+  detectedAt?: string;
 }
 
 export interface AdminAnnouncementPayload {
@@ -304,13 +306,55 @@ export class NotificationService {
     const uniqueNoticeNums = Array.from(
       new Set(payloads.map((payload) => payload.noticeNum)),
     );
-    const first = payloads[0];
-    const detailUrl = this.buildFrontendNoticeDetailUrlByNoticeNum(
-      first.noticeNum,
-      {
-        timeline: 'true',
-      },
-    );
+    const eventIds = payloads
+      .map((payload) => payload.eventId)
+      .filter(
+        (eventId): eventId is number =>
+          Number.isInteger(eventId) && eventId > 0,
+      );
+    const fromEventId = eventIds.length > 0 ? Math.min(...eventIds) : null;
+    const toEventId = eventIds.length > 0 ? Math.max(...eventIds) : null;
+
+    const detectedEpochs = payloads
+      .map((payload) => payload.detectedAt)
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => Date.parse(value))
+      .filter((epochMs) => Number.isFinite(epochMs));
+
+    const fromDetectedAt =
+      detectedEpochs.length > 0
+        ? new Date(Math.min(...detectedEpochs)).toISOString()
+        : null;
+    const toDetectedAt =
+      detectedEpochs.length > 0
+        ? new Date(Math.max(...detectedEpochs)).toISOString()
+        : null;
+
+    const detailParams: Record<string, string> = {
+      digest: '1',
+      jumpToFirst: '1',
+      comparableOnly: 'true',
+      excludeLegacyGenesisSource: 'true',
+      limit: '50',
+    };
+
+    if (fromEventId !== null) {
+      detailParams.fromEventId = String(fromEventId);
+    }
+
+    if (toEventId !== null) {
+      detailParams.toEventId = String(toEventId);
+    }
+
+    if (fromDetectedAt) {
+      detailParams.fromDetectedAt = fromDetectedAt;
+    }
+
+    if (toDetectedAt) {
+      detailParams.toDetectedAt = toDetectedAt;
+    }
+
+    const detailUrl = this.buildFrontendNoticeChangesUrl(detailParams);
 
     const itemLines: string[] = [];
     for (const payload of payloads.slice(0, 6)) {
@@ -331,13 +375,14 @@ export class NotificationService {
       .setDescription(
         `짧은 시간에 감지된 변경 ${payloads.length}건을 하나로 요약했습니다.`,
       )
-      .addField('변경 건수', String(payloads.length.toLocaleString()), true)
       .addField(
         '영향 법률안 수',
         String(uniqueNoticeNums.length.toLocaleString()),
         true,
       )
-      .addField('대표 상세 보기', `[첫 감지 건 보기](${detailUrl})`, false)
+      .addField('변경 건수', String(payloads.length.toLocaleString()), true)
+      .addField('모아보기 이동', `[변경 내역 모아보기](${detailUrl})`, true)
+      .addField('감지 항목', this.truncateForEmbed(itemLines.join('\n')), false)
       .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
       .setTimestamp()
       .setFooter('LawCast 알림 서비스', '');
@@ -453,6 +498,26 @@ export class NotificationService {
           .join('&')}`
       : '';
     return `${normalizedBaseUrl}/notices/${noticeNum}${queryString}`;
+  }
+
+  private buildFrontendNoticeChangesUrl(
+    params?: Record<string, string>,
+  ): string {
+    const frontendUrls =
+      this.configService.get<string[]>('frontend.urls') || [];
+    const primaryFrontendUrl = frontendUrls.find((url) => !!url?.trim());
+    const normalizedBaseUrl = primaryFrontendUrl.replace(/\/+$/, '');
+
+    const queryString = params
+      ? `?${Object.entries(params)
+          .map(
+            ([key, value]) =>
+              `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+          )
+          .join('&')}`
+      : '';
+
+    return `${normalizedBaseUrl}/notices/changes${queryString}`;
   }
 
   /**

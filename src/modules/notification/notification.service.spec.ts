@@ -476,6 +476,8 @@ describe('NotificationService', () => {
             changedFields: ['subject', 'committee'],
             eventHash: 'hash-a',
             eventHeight: 2,
+            eventId: 101,
+            detectedAt: '2026-07-08T09:00:00.000Z',
           },
           {
             noticeNum: 3310002,
@@ -485,6 +487,8 @@ describe('NotificationService', () => {
             changedFields: ['proposalReason'],
             eventHash: 'hash-b',
             eventHeight: 3,
+            eventId: 104,
+            detectedAt: '2026-07-08T09:00:10.000Z',
           },
         ],
         mockWebhooks,
@@ -498,6 +502,17 @@ describe('NotificationService', () => {
         '2',
         true,
       );
+
+      const digestLinkFieldCall = (
+        mockMessageBuilder.addField as jest.Mock
+      ).mock.calls.find((call) => call[0] === '모아보기 이동');
+
+      expect(digestLinkFieldCall).toBeDefined();
+      expect(digestLinkFieldCall?.[1]).toContain('/notices/changes?');
+      expect(digestLinkFieldCall?.[1]).toContain('fromEventId=101');
+      expect(digestLinkFieldCall?.[1]).toContain('toEventId=104');
+      expect(digestLinkFieldCall?.[1]).toContain('digest=1');
+      expect(digestLinkFieldCall?.[1]).toContain('jumpToFirst=1');
       expect(mockDiscordWebhook.send).toHaveBeenCalledTimes(1);
       expect(results).toHaveLength(1);
       expect(results[0]).toMatchObject({ webhookId: 11, success: true });
