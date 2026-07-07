@@ -223,12 +223,14 @@ export class CrawlingSchedulerProposalRetry {
         );
 
       if (!proposalReason) {
-        item.retryCount++;
+        // Empty proposalReason cannot be recovered by retry-only queueing.
+        // Drop the item immediately to avoid repeated useless retries.
+        queue.splice(idx, 1);
         queueDirty = true;
         this.options.logger.warn(
-          `proposalReason retry: still empty for bill ${item.billNo} ` +
-            `(attempt ${item.retryCount}/${NSM_REASON_RETRY_MAX_ATTEMPTS})`,
+          `proposalReason retry: empty proposalReason for bill ${item.billNo} - dropping from retry queue`,
         );
+        idx--;
         continue;
       }
 
