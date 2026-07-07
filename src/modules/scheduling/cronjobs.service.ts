@@ -1,5 +1,6 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import { DataSource } from 'typeorm';
 import { WebhookCleanupService } from '../webhook/webhook-cleanup.service';
 import { CrawlingService } from '../crawling/crawling.service';
 import appConfig, { APP_CONSTANTS } from '../../config/app.config';
@@ -16,6 +17,7 @@ export class CronJobsService {
   private readonly logger = LoggerUtils.getContextLogger(CronJobsService.name);
 
   constructor(
+    private readonly dataSource: DataSource,
     private readonly webhookCleanupService: WebhookCleanupService,
     private readonly crawlingService: CrawlingService,
     private readonly archiveSyncService: ArchiveSyncService,
@@ -76,6 +78,32 @@ export class CronJobsService {
   }
 
   private shouldSkipArchiveSyncCron(taskName: string): boolean {
+    if (!this.crawlingService.isSchedulerBusy({ includeBackground: true })) {
+      return false;
+    }
+
+    const message = `${taskName} skipped - crawling scheduler is busy`;
+    this.logger.warn(message);
+    void this.discordBridge?.logEvent(
+      BridgeLogLevel.WARN,
+      CronJobsService.name,
+      message,
+    );
+    return true;
+  }
+
+  private shouldSkipDatabaseMaintenanceCron(taskName: string): boolean {
+    if (this.archiveSyncService.isAnyPhaseRunning()) {
+      const message = `${taskName} skipped - archive sync phase is currently running`;
+      this.logger.warn(message);
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.WARN,
+        CronJobsService.name,
+        message,
+      );
+      return true;
+    }
+
     if (!this.crawlingService.isSchedulerBusy({ includeBackground: true })) {
       return false;
     }
@@ -239,5 +267,43 @@ export class CronJobsService {
     await this.execute('quick keyword refresh', () =>
       this.crawlingService.refreshQuickKeywordSuggestions().then(() => {}),
     );
+  }
+
+  /**
+   * Compacts SQLite database pages to reclaim disk space.
+   */
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SQLITE_VACUUM, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleSqliteVacuum(): Promise<void> {
+    if (this.shouldSkipDatabaseMaintenanceCron('sqlite vacuum')) {
+      return;
+    }
+
+    await this.execute('sqlite vacuum', async () => {
+      const pageSizeResult = await this.dataSource.query('PRAGMA page_size;');
+      const beforeFreeResult = await this.dataSource.query(
+        'PRAGMA freelist_count;',
+      );
+
+      const pageSize = Number(pageSizeResult?.[0]?.page_size ?? 0);
+      const beforeFreePages = Number(
+        beforeFreeResult?.[0]?.freelist_count ?? 0,
+      );
+      const beforeEstimatedBytes = beforeFreePages * pageSize;
+
+      await this.dataSource.query('VACUUM;');
+
+      const afterFreeResult = await this.dataSource.query(
+        'PRAGMA freelist_count;',
+      );
+      const afterFreePages = Number(afterFreeResult?.[0]?.freelist_count ?? 0);
+      const reclaimedPages = Math.max(0, beforeFreePages - afterFreePages);
+      const reclaimedBytes = reclaimedPages * pageSize;
+
+      this.logger.log(
+        `SQLite VACUUM completed (pageSize=${pageSize}, freePagesBefore=${beforeFreePages}, freePagesAfter=${afterFreePages}, reclaimedBytes≈${reclaimedBytes}, estimatedBytesBefore≈${beforeEstimatedBytes})`,
+      );
+    });
   }
 }

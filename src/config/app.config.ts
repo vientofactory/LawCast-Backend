@@ -207,6 +207,7 @@ export const APP_CONSTANTS = {
       CHANGE_TRACKING_DAILY_AUDIT: '7 4 * * *', // Daily at 04:07 after integrity rescan
       CHANGE_TRACKING_WEEKLY_AUDIT: '19 4 * * 1', // Every Monday at 04:19
       QUICK_KEYWORDS_REFRESH: '11 * * * *', // Every hour, refresh homepage keyword suggestions
+      SQLITE_VACUUM: '31 5 * * 0', // Every Sunday at 05:31, after nightly maintenance tasks
     },
   },
 } as const;

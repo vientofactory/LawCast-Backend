@@ -137,6 +137,7 @@ DISCORD_BRIDGE_ADMIN_USER_IDS=
 - `7 4 * * *`: change-tracking daily audit (매일 04:07 실행)
 - `19 4 * * 1`: change-tracking weekly audit (매주 월요일 04:19 실행)
 - `11 * * * *`: quick keywords refresh (매시 11분 실행)
+- `31 5 * * 0`: sqlite vacuum (매주 일요일 05:31 실행, DB 파일 공간 회수)
 
 ## 크론/페이즈 락
 
@@ -144,6 +145,7 @@ DISCORD_BRIDGE_ADMIN_USER_IDS=
 
 - crawling/pending 크론은 `ArchiveSyncService.isAnyPhaseRunning()`이 `true`이면 스킵됩니다.
 - archive-sync 계열 크론(isDone/integrity/change-tracking audit)은 `CrawlingService.isSchedulerBusy({ includeBackground: true })`가 `true`이면 스킵됩니다.
+- sqlite vacuum 크론은 archive phase 실행 중이거나 crawling scheduler busy 상태이면 스킵됩니다.
 - proposalReason backfill drain 크론은 crawling fast-path 락과 별개로 background task 중복 가드(`runBackgroundTask`)로 직렬화됩니다.
 
 ### 락 해제(Release) 지점
