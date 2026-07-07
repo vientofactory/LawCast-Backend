@@ -647,6 +647,52 @@ export class CrawlingSchedulerService implements OnModuleInit {
       );
     }
 
+    // Stage: Reconcile generated summaries against persisted summary_state.
+    // Cache/notification payloads must not get ahead of DB durability.
+    let persistedSummaryStates: Map<number, ArchiveSummaryState>;
+    try {
+      persistedSummaryStates =
+        await this.noticeArchiveService.getSummaryStateByNoticeNums(
+          newNoticesWithSummary.map((notice) => notice.num),
+        );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to reload persisted summary states, suppressing in-memory-only summaries: ${(error as Error).message}`,
+      );
+      persistedSummaryStates = new Map();
+    }
+
+    const reconciledNoticesWithSummary = newNoticesWithSummary.map((notice) => {
+      const persisted = persistedSummaryStates.get(notice.num);
+      if (!persisted) {
+        return {
+          ...notice,
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested' as const,
+        };
+      }
+
+      const generatedStatus = notice.aiSummaryStatus ?? 'not_requested';
+      const persistedStatus = persisted.aiSummaryStatus ?? 'not_requested';
+      const generatedSummary = notice.aiSummary?.trim() || null;
+      const persistedSummary = persisted.aiSummary?.trim() || null;
+
+      if (
+        generatedStatus !== persistedStatus ||
+        generatedSummary !== persistedSummary
+      ) {
+        this.logger.warn(
+          `Suppressed non-durable summary from cache for notice ${notice.num}: generated=${generatedStatus}, persisted=${persistedStatus}`,
+        );
+      }
+
+      return {
+        ...notice,
+        aiSummary: persisted.aiSummary ?? null,
+        aiSummaryStatus: persistedStatus,
+      };
+    });
+
     // Stage: Merge summaries into freshest cache snapshot (race-safe re-fetch)
     // Another cron cycle may have updated the cache while this background task was running,
     // so re-fetch the latest cache before merging the newly generated summaries.
@@ -654,7 +700,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       APP_CONSTANTS.CACHE.MAX_SIZE,
     );
     const newNoticeMap = this.summarySupport.buildNoticeMap(
-      newNoticesWithSummary,
+      reconciledNoticesWithSummary,
     );
     const mergedNotices = freshCacheNotices.map((notice) => {
       const withSummary = newNoticeMap.get(notice.num);
@@ -696,7 +742,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
 
     // Stage: Send notifications (already dispatched asynchronously)
     void this.notificationOrchestratorService
-      .sendNotifications(newNoticesWithSummary)
+      .sendNotifications(reconciledNoticesWithSummary)
       .catch((error) => {
         this.logger.error('Background notification dispatch failed:', error);
         void this.discordBridge?.logEvent(

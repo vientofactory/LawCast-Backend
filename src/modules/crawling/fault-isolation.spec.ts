@@ -591,6 +591,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
   let noticeArchiveService: jest.Mocked<NoticeArchiveService>;
   let archiveOrchestratorService: jest.Mocked<ArchiveOrchestratorService>;
   let summaryGenerationService: jest.Mocked<SummaryGenerationService>;
+  let cacheService: jest.Mocked<CacheService>;
 
   const twoPageGen = () =>
     makePageGenerator([
@@ -676,6 +677,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     noticeArchiveService = module.get(NoticeArchiveService);
     archiveOrchestratorService = module.get(ArchiveOrchestratorService);
     summaryGenerationService = module.get(SummaryGenerationService);
+    cacheService = module.get(CacheService);
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -821,6 +823,64 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(result!.generated).toBe(1);
   });
 
+  it('Summary backfill persists unavailable status on DB failure and reflects it in cache update payload', async () => {
+    const batchItems = [
+      { ...makeCachedNotice(22), aiSummaryStatus: 'not_requested' as const },
+    ];
+
+    noticeArchiveService.getPendingSummaryPage
+      .mockResolvedValueOnce(batchItems as any)
+      .mockResolvedValue([]);
+
+    summaryGenerationService.generateSummaryForNotice.mockResolvedValue({
+      aiSummary: '요약',
+      aiSummaryStatus: 'ready',
+    });
+
+    noticeArchiveService.updateSummaryStateByNoticeNum
+      .mockRejectedValueOnce(new Error('DB: busy'))
+      .mockResolvedValueOnce(undefined);
+
+    const result = await service.runSummaryBackfill('fault-test');
+
+    expect(result).not.toBeNull();
+    expect(result!.failed).toBe(1);
+    expect(cacheService.updateCache).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          num: 22,
+          aiSummary: null,
+          aiSummaryStatus: 'unavailable',
+        }),
+      ]),
+    );
+  });
+
+  it('AI summary disabled → summary backfill and unavailable retry both skip without DB/cache access', async () => {
+    summaryGenerationService.isAiSummaryEnabled.mockReturnValue(false);
+
+    const backfill = await service.runSummaryBackfill('fault-test');
+    const retry = await service.runUnavailableRetry('fault-test');
+
+    expect(backfill).toEqual({
+      scanned: 0,
+      generated: 0,
+      skipped: 0,
+      failed: 0,
+    });
+    expect(retry).toEqual({
+      scanned: 0,
+      recovered: 0,
+      skipped: 0,
+      stillFailed: 0,
+    });
+    expect(noticeArchiveService.getPendingSummaryPage).not.toHaveBeenCalled();
+    expect(
+      noticeArchiveService.getUnavailableSummaryPage,
+    ).not.toHaveBeenCalled();
+    expect(cacheService.updateCache).not.toHaveBeenCalled();
+  });
+
   // ── executeUnavailableRetry (Phase 5) ─────────────────────────────────────
 
   it('Ollama throws for unavailable-retry item → item counted as stillFailed, phase completes', async () => {
@@ -865,6 +925,50 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(result).not.toBeNull();
     expect(result!.stillFailed).toBe(1);
     expect(result!.recovered).toBe(0);
+  });
+
+  it('Unavailable retry uses offset pagination and scans subsequent pages', async () => {
+    summaryGenerationService.generateSummaryForNotice.mockResolvedValue({
+      aiSummary: '복구 요약',
+      aiSummaryStatus: 'ready',
+    });
+
+    let capturedTake = 0;
+    noticeArchiveService.getUnavailableSummaryPage.mockImplementation(
+      async (skip: number, take: number) => {
+        capturedTake = take;
+
+        if (skip === 0) {
+          return Array.from({ length: take }, (_, idx) => ({
+            ...makeCachedNotice(1000 + idx),
+            aiSummaryStatus: 'unavailable' as const,
+          })) as any;
+        }
+
+        if (skip === take) {
+          return [
+            {
+              ...makeCachedNotice(2000),
+              aiSummaryStatus: 'unavailable' as const,
+            },
+          ] as any;
+        }
+
+        return [] as any;
+      },
+    );
+
+    const result = await service.runUnavailableRetry('fault-test');
+
+    expect(result).not.toBeNull();
+    expect(result!.scanned).toBe(capturedTake + 1);
+    expect(result!.recovered).toBe(capturedTake + 1);
+    expect(
+      noticeArchiveService.getUnavailableSummaryPage,
+    ).toHaveBeenNthCalledWith(1, 0, capturedTake);
+    expect(
+      noticeArchiveService.getUnavailableSummaryPage,
+    ).toHaveBeenNthCalledWith(2, capturedTake, capturedTake);
   });
 
   // ── Concurrent phase guard ────────────────────────────────────────────────

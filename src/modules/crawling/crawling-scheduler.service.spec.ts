@@ -260,6 +260,69 @@ describe('CrawlingSchedulerService', () => {
       ).toHaveBeenCalled();
     });
 
+    it('should suppress generated summaries when persisted summary state is missing', async () => {
+      const newNotices = [mockTableData[0]];
+      const existingNotices = [mockTableData[1]];
+
+      (crawlingCoreService.crawlAllPages as jest.Mock).mockResolvedValue(
+        mockTableData,
+      );
+      (cacheService.findNewNotices as jest.Mock).mockResolvedValue(newNotices);
+      (
+        archiveOrchestratorService.filterAlreadyArchivedNotices as jest.Mock
+      ).mockResolvedValue(newNotices);
+      (cacheService.getRecentNotices as jest.Mock)
+        .mockResolvedValueOnce(existingNotices)
+        .mockResolvedValueOnce([
+          {
+            ...mockTableData[0],
+            aiSummary: null,
+            aiSummaryStatus: 'not_requested' as const,
+          },
+          ...existingNotices,
+        ]);
+      (noticeArchiveService.getSummaryStateByNoticeNums as jest.Mock)
+        .mockResolvedValueOnce(new Map())
+        .mockResolvedValueOnce(new Map());
+      (
+        summaryGenerationService.enrichNoticesWithSummary as jest.Mock
+      ).mockResolvedValue([
+        {
+          ...mockTableData[0],
+          aiSummary: '생성됐지만 미저장 요약',
+          aiSummaryStatus: 'ready',
+        },
+      ]);
+      (cacheService.updateCache as jest.Mock).mockResolvedValue(undefined);
+      (
+        notificationOrchestratorService.sendNotifications as jest.Mock
+      ).mockResolvedValue(undefined);
+
+      await service.handleCron();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(cacheService.updateCache).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            num: mockTableData[0].num,
+            aiSummary: null,
+            aiSummaryStatus: 'not_requested',
+          }),
+        ]),
+      );
+      expect(
+        notificationOrchestratorService.sendNotifications,
+      ).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            num: mockTableData[0].num,
+            aiSummary: null,
+            aiSummaryStatus: 'not_requested',
+          }),
+        ]),
+      );
+    });
+
     it('should handle no new notices gracefully', async () => {
       (crawlingCoreService.crawlAllPages as jest.Mock).mockResolvedValue(
         mockTableData,
