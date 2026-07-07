@@ -304,6 +304,11 @@ export class CronJobsService {
       this.logger.log(
         `SQLite VACUUM completed (pageSize=${pageSize}, freePagesBefore=${beforeFreePages}, freePagesAfter=${afterFreePages}, reclaimedBytes≈${reclaimedBytes}, estimatedBytesBefore≈${beforeEstimatedBytes})`,
       );
+      void this.discordBridge?.logEvent(
+        BridgeLogLevel.LOG,
+        CronJobsService.name,
+        `SQLite VACUUM completed (pageSize=${pageSize}, freePagesBefore=${beforeFreePages}, freePagesAfter=${afterFreePages}, reclaimedBytes≈${reclaimedBytes}, estimatedBytesBefore≈${beforeEstimatedBytes})`,
+      );
     });
   }
 }
