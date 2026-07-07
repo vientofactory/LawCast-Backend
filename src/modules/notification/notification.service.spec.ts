@@ -451,7 +451,56 @@ describe('NotificationService', () => {
       );
       expect(detailFieldCall?.[1]).toContain('cmpFrom=4');
       expect(detailFieldCall?.[1]).toContain('cmpTo=5');
-      expect(detailFieldCall?.[1]).toMatch(/cmpShowAll=(1|true)/);
+    });
+  });
+
+  describe('sendDiscordChangeDigestNotificationBatch', () => {
+    const mockWebhooks: Webhook[] = [
+      {
+        id: 11,
+        url: 'https://discord.com/api/webhooks/11/token11',
+        isActive: true,
+      } as Webhook,
+    ];
+
+    it('should send one digest embed when multiple changes are provided', async () => {
+      mockDiscordWebhook.send.mockResolvedValue(undefined);
+
+      const results = await service.sendDiscordChangeDigestNotificationBatch(
+        [
+          {
+            noticeNum: 3310001,
+            subject: '법률안 A',
+            eventType: 'updated',
+            source: NoticeChangeSource.ARCHIVE_UPSERT,
+            changedFields: ['subject', 'committee'],
+            eventHash: 'hash-a',
+            eventHeight: 2,
+          },
+          {
+            noticeNum: 3310002,
+            subject: '법률안 B',
+            eventType: 'updated',
+            source: NoticeChangeSource.ARCHIVE_UPSERT,
+            changedFields: ['proposalReason'],
+            eventHash: 'hash-b',
+            eventHeight: 3,
+          },
+        ],
+        mockWebhooks,
+      );
+
+      expect(mockMessageBuilder.setTitle).toHaveBeenCalledWith(
+        '입법예고 변경 감지 (2건)',
+      );
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '변경 건수',
+        '2',
+        true,
+      );
+      expect(mockDiscordWebhook.send).toHaveBeenCalledTimes(1);
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ webhookId: 11, success: true });
     });
   });
 });

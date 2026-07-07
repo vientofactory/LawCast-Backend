@@ -17,6 +17,7 @@ describe('NotificationBatchService (diffchain change batching)', () => {
   };
   let notificationService: {
     sendDiscordChangeNotificationBatch: jest.Mock;
+    sendDiscordChangeDigestNotificationBatch: jest.Mock;
     clearPermanentFailureFlag: jest.Mock;
   };
   let batchProcessingService: {
@@ -51,21 +52,29 @@ describe('NotificationBatchService (diffchain change batching)', () => {
           ) => Promise<Array<{ webhookId: number; success: boolean }>>
         >()
         .mockResolvedValue([{ webhookId: 1, success: true }]),
+      sendDiscordChangeDigestNotificationBatch: jest
+        .fn<
+          (
+            ...args: any[]
+          ) => Promise<Array<{ webhookId: number; success: boolean }>>
+        >()
+        .mockResolvedValue([{ webhookId: 1, success: true }]),
       clearPermanentFailureFlag: jest.fn<(...args: any[]) => void>(),
     };
 
     batchProcessingService = {
-      executeBatch: jest.fn(
-        async (jobs: Array<(signal: AbortSignal) => Promise<any>>) => {
-          const signal = new AbortController().signal;
-          const results = await Promise.all(jobs.map((job) => job(signal)));
-          return results.map((data, index) => ({
-            success: true,
-            jobId: `job-${index + 1}`,
-            data,
-          }));
-        },
-      ),
+      executeBatch: jest.fn(async (...args: any[]) => {
+        const jobs = args[0] as Array<
+          (signal: AbortSignal) => Promise<unknown>
+        >;
+        const signal = new AbortController().signal;
+        const results = await Promise.all(jobs.map((job) => job(signal)));
+        return results.map((data, index) => ({
+          success: true,
+          jobId: `job-${index + 1}`,
+          data,
+        }));
+      }),
       updateRecentJobMetadata: jest.fn(),
     };
 
@@ -81,7 +90,7 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     jest.clearAllMocks();
   });
 
-  it('executes one batch containing multiple change payload jobs', async () => {
+  it('aggregates multiple payloads into one digest notification job', async () => {
     const payloads: ChangeNotificationPayload[] = [
       {
         noticeNum: 101,
@@ -107,16 +116,47 @@ describe('NotificationBatchService (diffchain change batching)', () => {
 
     expect(batchProcessingService.executeBatch).toHaveBeenCalledTimes(1);
     expect(
+      notificationService.sendDiscordChangeDigestNotificationBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
       notificationService.sendDiscordChangeNotificationBatch,
-    ).toHaveBeenCalledTimes(2);
-    expect(results).toHaveLength(2);
+    ).not.toHaveBeenCalled();
+    expect(
+      notificationService.sendDiscordChangeDigestNotificationBatch,
+    ).toHaveBeenCalledWith(payloads, expect.any(Array), expect.any(Object));
+    expect(results).toHaveLength(1);
     expect(results[0].data).toMatchObject({
-      noticeNum: 101,
-      subject: '법률안 101',
+      aggregatedEventCount: 2,
+      aggregatedNoticeCount: 2,
     });
-    expect(results[1].data).toMatchObject({
-      noticeNum: 102,
-      subject: '법률안 102',
+  });
+
+  it('keeps per-event dispatch when payload count is one', async () => {
+    const payloads: ChangeNotificationPayload[] = [
+      {
+        noticeNum: 301,
+        subject: '법률안 301',
+        eventType: 'updated',
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
+        changedFields: ['subject'],
+        eventHash: 'hash-301',
+      },
+    ];
+
+    const results = await service.executeChangeNotificationBatch(payloads, {
+      concurrency: 1,
+    });
+
+    expect(
+      notificationService.sendDiscordChangeNotificationBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordChangeDigestNotificationBatch,
+    ).not.toHaveBeenCalled();
+    expect(results).toHaveLength(1);
+    expect(results[0].data).toMatchObject({
+      noticeNum: 301,
+      subject: '법률안 301',
     });
   });
 

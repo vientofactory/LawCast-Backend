@@ -119,6 +119,31 @@ export class NotificationService {
     });
   }
 
+  async sendDiscordChangeDigestNotificationBatch(
+    payloads: ChangeNotificationPayload[],
+    webhooks: Webhook[],
+    abortSignal?: AbortSignal,
+  ): Promise<NotificationSendResult[]> {
+    if (payloads.length === 0) {
+      return [];
+    }
+
+    if (payloads.length === 1) {
+      return this.sendDiscordChangeNotificationBatch(
+        payloads[0],
+        webhooks,
+        abortSignal,
+      );
+    }
+
+    const embed = this.createChangeDigestNotificationEmbed(payloads);
+    return this.sendDiscordEmbedBatch(embed, webhooks, {
+      username: 'LawCast 변경 추적',
+      context: 'change digest notification',
+      abortSignal,
+    });
+  }
+
   async sendDiscordAdminAnnouncementBatch(
     payload: AdminAnnouncementPayload,
     webhooks: Webhook[],
@@ -271,6 +296,70 @@ export class NotificationService {
       .setFooter('LawCast 알림 서비스', '');
 
     return embed;
+  }
+
+  private createChangeDigestNotificationEmbed(
+    payloads: ChangeNotificationPayload[],
+  ): MessageBuilder {
+    const uniqueNoticeNums = Array.from(
+      new Set(payloads.map((payload) => payload.noticeNum)),
+    );
+    const first = payloads[0];
+    const detailUrl = this.buildFrontendNoticeDetailUrlByNoticeNum(
+      first.noticeNum,
+      {
+        timeline: 'true',
+      },
+    );
+
+    const itemLines: string[] = [];
+    for (const payload of payloads.slice(0, 6)) {
+      const changedFieldsPreview = this.buildChangedFieldsPreview(
+        payload.changedFields,
+      );
+      itemLines.push(
+        `• [${payload.noticeNum}] ${payload.subject} (${changedFieldsPreview})`,
+      );
+    }
+
+    if (payloads.length > 6) {
+      itemLines.push(`... 외 ${payloads.length - 6}건`);
+    }
+
+    const embed = new MessageBuilder()
+      .setTitle(`입법예고 변경 감지 (${payloads.length}건)`)
+      .setDescription(
+        `짧은 시간에 감지된 변경 ${payloads.length}건을 하나로 요약했습니다.`,
+      )
+      .addField('변경 건수', String(payloads.length.toLocaleString()), true)
+      .addField(
+        '영향 법률안 수',
+        String(uniqueNoticeNums.length.toLocaleString()),
+        true,
+      )
+      .addField('대표 상세 보기', `[첫 감지 건 보기](${detailUrl})`, false)
+      .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
+      .setTimestamp()
+      .setFooter('LawCast 알림 서비스', '');
+
+    return embed;
+  }
+
+  private buildChangedFieldsPreview(changedFields: string[]): string {
+    if (changedFields.length === 0) {
+      return '변경 필드 없음';
+    }
+
+    const mapped = changedFields.map((fieldPath) =>
+      this.getChangeFieldDisplayLabel(fieldPath),
+    );
+
+    const preview = mapped.slice(0, 4).join(', ');
+    if (mapped.length <= 4) {
+      return preview;
+    }
+
+    return `${preview} 외 ${mapped.length - 4}`;
   }
 
   private createAdminAnnouncementEmbed(
