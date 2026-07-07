@@ -1082,6 +1082,11 @@ export class ChangeTrackingService {
       .orderBy('event.detectedAt', 'DESC')
       .addOrderBy('event.id', 'DESC');
 
+    // This API is for post-genesis change browsing only.
+    builder.andWhere('event.eventType != :createdEventType', {
+      createdEventType: 'created',
+    });
+
     if (query.eventType) {
       builder.andWhere('event.eventType = :eventType', {
         eventType: query.eventType,

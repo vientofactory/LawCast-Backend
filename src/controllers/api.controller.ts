@@ -200,12 +200,7 @@ export class ApiController {
     @Query('excludeLegacyGenesisSource') excludeLegacyGenesisSourceRaw?: string,
     @Query('comparableOnly') comparableOnlyRaw?: string,
   ) {
-    const allowedEventTypes: ChangeEventType[] = [
-      'created',
-      'updated',
-      'redacted',
-      'invalidated',
-    ];
+    const allowedEventTypes: ChangeEventType[] = ['updated', 'invalidated'];
 
     const eventType = allowedEventTypes.includes(
       eventTypeRaw as ChangeEventType,

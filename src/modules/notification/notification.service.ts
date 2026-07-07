@@ -14,7 +14,7 @@ import { type NoticeChangeSource } from '../change-tracking/notice-change-source
 export interface ChangeNotificationPayload {
   noticeNum: number;
   subject: string;
-  eventType: 'created' | 'updated' | 'redacted' | 'invalidated';
+  eventType: 'created' | 'updated' | 'invalidated';
   source?: NoticeChangeSource | null;
   changedFields: string[];
   eventHash: string;

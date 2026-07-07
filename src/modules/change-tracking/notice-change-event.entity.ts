@@ -8,11 +8,7 @@ import {
 } from 'typeorm';
 import { type NoticeChangeSource } from './notice-change-source.enum';
 
-export type ChangeEventType =
-  | 'created'
-  | 'updated'
-  | 'redacted'
-  | 'invalidated';
+export type ChangeEventType = 'created' | 'updated' | 'invalidated';
 
 @Entity('notice_change_events')
 @Index('idx_notice_change_events_notice_num_detected_at', [
