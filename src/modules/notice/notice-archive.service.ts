@@ -698,17 +698,7 @@ export class NoticeArchiveService {
           await this.persistSummaryState(notice.num, summaryPayload);
         }
       } else {
-        await this.summaryStateRepository
-          .createQueryBuilder()
-          .insert()
-          .values({
-            noticeNum: notice.num,
-            isDone: resolvedIsDone,
-            aiSummary: null,
-            aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
-          })
-          .orIgnore()
-          .execute();
+        await this.ensureDefaultSummaryStateExists(notice.num, resolvedIsDone);
       }
     } else {
       // Strict immutability: keep summary state outside notice_archives.
@@ -2290,6 +2280,81 @@ export class NoticeArchiveService {
       aiSummary: payload.aiSummary,
       aiSummaryStatus: payload.aiSummaryStatus,
     });
+  }
+
+  private async ensureDefaultSummaryStateExists(
+    noticeNum: number,
+    isDone: boolean,
+  ): Promise<void> {
+    if (!this.summaryStateRepository) {
+      return;
+    }
+
+    const existing = await this.summaryStateRepository.findOne({
+      where: { noticeNum },
+      select: { id: true },
+    });
+
+    if (existing?.id) {
+      return;
+    }
+
+    try {
+      await this.summaryStateRepository.insert({
+        noticeNum,
+        isDone,
+        aiSummary: null,
+        aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
+      });
+    } catch (error) {
+      if (this.isSummaryStateUniqueConflict(error)) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private isSummaryStateUniqueConflict(error: unknown): boolean {
+    const extract = (value: unknown) => {
+      const obj = (value as Record<string, unknown> | undefined) ?? {};
+      return {
+        code: String(obj.code ?? '').toLowerCase(),
+        message: String(obj.message ?? '').toLowerCase(),
+        detail: String(obj.detail ?? '').toLowerCase(),
+        constraint: String(obj.constraint ?? '').toLowerCase(),
+      };
+    };
+
+    const candidates = [error];
+    const driverError = (error as { driverError?: unknown } | undefined)
+      ?.driverError;
+    if (driverError) {
+      candidates.push(driverError);
+    }
+
+    for (const candidate of candidates) {
+      const meta = extract(candidate);
+      const text = `${meta.constraint} ${meta.detail} ${meta.message}`;
+
+      const isKnownUniqueCode =
+        meta.code === '23505' ||
+        meta.code === 'sqlite_constraint' ||
+        meta.code === 'sqlite_constraint_unique' ||
+        meta.code === 'er_dup_entry';
+      const hasUniqueText =
+        text.includes('unique constraint') ||
+        text.includes('duplicate key') ||
+        text.includes('idx_notice_archive_snapshot_states_notice_num');
+      const isNoticeNumConstraint =
+        text.includes('notice_archive_snapshot_states.notice_num') ||
+        text.includes('idx_notice_archive_snapshot_states_notice_num');
+
+      if ((isKnownUniqueCode || hasUniqueText) && isNoticeNumConstraint) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private async buildDiffBaselineSnapshot(
