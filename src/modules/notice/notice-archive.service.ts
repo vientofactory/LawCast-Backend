@@ -417,7 +417,7 @@ export class NoticeArchiveService {
     skip: number,
     take: number,
   ): Promise<TrackedArchiveRow[]> {
-    return this.archiveRepository.find({
+    const rows = await this.archiveRepository.find({
       select: {
         noticeNum: true,
         subject: true,
@@ -431,7 +431,6 @@ export class NoticeArchiveService {
         contentReferralDate: true,
         contentNoticePeriod: true,
         contentProposalSession: true,
-        isDone: true,
         lifecycleStatus: true,
         sourceDeletedAt: true,
       },
@@ -439,6 +438,16 @@ export class NoticeArchiveService {
       skip,
       take,
     });
+
+    const states = await this.getSummaryStateByNoticeNums(
+      rows.map((row) => row.noticeNum),
+    );
+
+    for (const row of rows) {
+      row.isDone = states.get(row.noticeNum)?.isDone ?? false;
+    }
+
+    return rows as TrackedArchiveRow[];
   }
 
   async upsertNoticeArchive(
