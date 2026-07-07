@@ -4,6 +4,7 @@ import { Cache } from 'cache-manager';
 import { type ITableData } from 'pal-crawl';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { LoggerUtils } from '../../utils/logger.utils';
+import { normalizeNoticeNum } from '../../utils/notice-num.utils';
 import {
   type CacheInfo,
   type CachedNotice,
@@ -155,12 +156,18 @@ export class CacheService implements OnModuleDestroy {
       }
 
       const existingNums = new Set(
-        normalizedExistingNotices.map((notice) => notice.num),
+        normalizedExistingNotices
+          .map((notice) => normalizeNoticeNum(notice.num))
+          .filter((num): num is number => num !== null),
       );
 
-      const newNotices = crawledData.filter(
-        (item) => !existingNums.has(item.num),
-      );
+      const newNotices = crawledData.filter((item) => {
+        const normalizedNum = normalizeNoticeNum(item.num);
+        if (normalizedNum === null) {
+          return true;
+        }
+        return !existingNums.has(normalizedNum);
+      });
 
       LoggerUtils.logDev(
         CacheService.name,

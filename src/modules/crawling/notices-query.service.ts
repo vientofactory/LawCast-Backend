@@ -4,6 +4,7 @@ import { type CachedNotice } from '../../types/cache.types';
 import { CrawlingService } from './crawling.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
+import { normalizeNoticeNum } from '../../utils/notice-num.utils';
 
 interface ArchivedNoticesQuery {
   page: number;
@@ -59,13 +60,23 @@ export class NoticesQueryService {
     const cacheCandidates: CachedNotice[] =
       hasDateFilter || isDone === true ? [] : searchedCached;
 
+    const normalizedCacheCandidateNums = cacheCandidates
+      .map((notice) => normalizeNoticeNum(notice.num))
+      .filter((num): num is number => num !== null);
+
     const existingArchivedNums =
       await this.noticeArchiveService.getExistingNoticeNumSet(
-        cacheCandidates.map((notice) => notice.num),
+        normalizedCacheCandidateNums,
       );
 
     const cacheOnlyItems = cacheCandidates
-      .filter((notice) => !existingArchivedNums.has(notice.num))
+      .filter((notice) => {
+        const normalizedNum = normalizeNoticeNum(notice.num);
+        if (normalizedNum === null) {
+          return true;
+        }
+        return !existingArchivedNums.has(normalizedNum);
+      })
       .map((notice) => this.mapCachedNoticeToListItem(notice))
       .sort((a, b) =>
         this.compareNoticeNums(a.num, b.num, normalizedSortOrder),

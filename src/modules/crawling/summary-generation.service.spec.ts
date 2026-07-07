@@ -108,7 +108,11 @@ describe('SummaryGenerationService', () => {
       const archiveSummaryStates = new Map([
         [
           1,
-          { aiSummary: '아카이브된 요약', aiSummaryStatus: 'ready' as const },
+          {
+            isDone: false,
+            aiSummary: '아카이브된 요약',
+            aiSummaryStatus: 'ready' as const,
+          },
         ],
       ]);
 
@@ -131,7 +135,14 @@ describe('SummaryGenerationService', () => {
     it('should generate a new summary when archive state is not_requested', async () => {
       // Simulates a notice archived by executeFullSync without a summary
       const archiveSummaryStates = new Map([
-        [1, { aiSummary: null, aiSummaryStatus: 'not_requested' as const }],
+        [
+          1,
+          {
+            isDone: false,
+            aiSummary: null,
+            aiSummaryStatus: 'not_requested' as const,
+          },
+        ],
       ]);
 
       (ollamaClientService.isEnabled as jest.Mock).mockReturnValue(true);
@@ -156,7 +167,14 @@ describe('SummaryGenerationService', () => {
 
     it('should retry unavailable archived summaries when option is enabled', async () => {
       const archiveSummaryStates = new Map([
-        [1, { aiSummary: null, aiSummaryStatus: 'unavailable' as const }],
+        [
+          1,
+          {
+            isDone: false,
+            aiSummary: null,
+            aiSummaryStatus: 'unavailable' as const,
+          },
+        ],
       ]);
 
       (ollamaClientService.isEnabled as jest.Mock).mockReturnValue(true);

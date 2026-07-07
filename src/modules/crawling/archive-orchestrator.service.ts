@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  OnApplicationShutdown,
-  OnModuleInit,
-  Optional,
-} from '@nestjs/common';
+import { Injectable, OnApplicationShutdown, Optional } from '@nestjs/common';
 import { type INsmBillItem } from 'pal-crawl';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type CachedNotice } from '../../types/cache.types';
@@ -17,12 +12,11 @@ import { CrawlingCoreService } from './crawling-core.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
+import { normalizeNoticeNum } from '../../utils/notice-num.utils';
 import { ArchiveOrchestratorScreenshotCoordinator } from './utils/archive-orchestrator-screenshot-coordinator';
 
 @Injectable()
-export class ArchiveOrchestratorService
-  implements OnModuleInit, OnApplicationShutdown
-{
+export class ArchiveOrchestratorService implements OnApplicationShutdown {
   private readonly logger = LoggerUtils.getContextLogger(
     ArchiveOrchestratorService.name,
   );
@@ -49,8 +43,6 @@ export class ArchiveOrchestratorService
       discordBridge: this.discordBridge,
     });
   }
-
-  onModuleInit(): void {}
 
   /**
    * Startup screenshot pipeline.
@@ -97,7 +89,6 @@ export class ArchiveOrchestratorService
       const concurrency =
         this.noticeArchiveService.getRecommendedWriteConcurrency?.(5) ?? 5;
       let savedCount = 0;
-      const archivedNotices: CachedNotice[] = [];
 
       for (let i = 0; i < notices.length; i += concurrency) {
         const chunk = notices.slice(i, i + concurrency);
@@ -212,7 +203,6 @@ export class ArchiveOrchestratorService
 
         const saved = chunkResults.filter((r): r is CachedNotice => r !== null);
         savedCount += saved.length;
-        archivedNotices.push(...saved);
       }
 
       await this.noticeArchiveService.flushQueuedChangeNotifications();
@@ -510,14 +500,24 @@ export class ArchiveOrchestratorService
       return [];
     }
 
-    const existingNoticeNums =
-      await this.noticeArchiveService.getExistingNoticeNumSet(
-        notices.map((notice) => notice.num),
-      );
+    const normalizedNums = notices
+      .map((notice) => normalizeNoticeNum(notice.num))
+      .filter((num): num is number => num !== null);
 
-    const filtered = notices.filter(
-      (notice) => !existingNoticeNums.has(notice.num),
-    );
+    if (normalizedNums.length === 0) {
+      return notices;
+    }
+
+    const existingNoticeNums =
+      await this.noticeArchiveService.getExistingNoticeNumSet(normalizedNums);
+
+    const filtered = notices.filter((notice) => {
+      const normalizedNum = normalizeNoticeNum(notice.num);
+      if (normalizedNum === null) {
+        return true;
+      }
+      return !existingNoticeNums.has(normalizedNum);
+    });
 
     void this.discordBridge?.logEvent(
       BridgeLogLevel.VERBOSE,
