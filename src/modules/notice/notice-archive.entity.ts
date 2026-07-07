@@ -13,7 +13,6 @@ export type NoticeLifecycleStatus = 'active' | 'source_deleted' | 'renumbered';
 @Index('idx_notice_archives_notice_num', ['noticeNum'], { unique: true })
 @Index('idx_notice_archives_subject', ['subject'])
 @Index('idx_notice_archives_archive_started_at', ['archiveStartedAt'])
-@Index('idx_notice_archives_is_done', ['isDone'])
 @Index('idx_notice_archives_lifecycle_status', ['lifecycleStatus'])
 @Index('idx_notice_archives_source_deleted_at', ['sourceDeletedAt'])
 export class NoticeArchive {
@@ -158,7 +157,6 @@ export class NoticeArchive {
   })
   httpLastModified: string | null;
 
-  @Column({ type: 'boolean', name: 'is_done', default: false })
   isDone: boolean;
 
   @Column({

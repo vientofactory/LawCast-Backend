@@ -1,7 +1,7 @@
 import { MoreThan, type Repository } from 'typeorm';
 import JSZip from 'jszip';
 import { NoticeArchive } from '../notice-archive.entity';
-import { NoticeArchiveSummaryState } from '../notice-archive-summary-state.entity';
+import { NoticeArchiveSnapshotState } from '../notice-archive-summary-state.entity';
 import { buildArchiveExportArtifacts } from '../archive-export.builder';
 import {
   computeSha256,
@@ -17,7 +17,7 @@ import type {
 export class NoticeArchiveArtifactSupport {
   constructor(
     private readonly archiveRepository: Repository<NoticeArchive>,
-    private readonly summaryStateRepository?: Repository<NoticeArchiveSummaryState>,
+    private readonly summaryStateRepository?: Repository<NoticeArchiveSnapshotState>,
   ) {}
 
   private async hydrateSummaryState(row: NoticeArchive): Promise<void> {
@@ -28,6 +28,7 @@ export class NoticeArchiveArtifactSupport {
     const summaryState = await this.summaryStateRepository.findOne({
       where: { noticeNum: row.noticeNum },
       select: {
+        isDone: true,
         aiSummary: true,
         aiSummaryStatus: true,
       },
@@ -37,6 +38,7 @@ export class NoticeArchiveArtifactSupport {
       return;
     }
 
+    row.isDone = summaryState.isDone;
     row.aiSummary = summaryState.aiSummary;
     row.aiSummaryStatus = summaryState.aiSummaryStatus;
   }

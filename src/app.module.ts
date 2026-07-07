@@ -7,7 +7,7 @@ import { createKeyv } from '@keyv/redis';
 import { ApiController } from './controllers/api.controller';
 import { Webhook } from './modules/webhook/webhook.entity';
 import { NoticeArchive } from './modules/notice/notice-archive.entity';
-import { NoticeArchiveSummaryState } from './modules/notice/notice-archive-summary-state.entity';
+import { NoticeArchiveSnapshotState } from './modules/notice/notice-archive-summary-state.entity';
 import { NoticeChangeEvent } from './modules/change-tracking/notice-change-event.entity';
 import { NoticeChangeDetail } from './modules/change-tracking/notice-change-detail.entity';
 import { migrations } from './migrations';
@@ -60,7 +60,7 @@ import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.
         entities: [
           Webhook,
           NoticeArchive,
-          NoticeArchiveSummaryState,
+          NoticeArchiveSnapshotState,
           NoticeChangeEvent,
           NoticeChangeDetail,
         ],

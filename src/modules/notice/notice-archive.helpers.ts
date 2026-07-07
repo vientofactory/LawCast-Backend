@@ -25,7 +25,6 @@ export const NOTICE_ITEM_SELECT = {
   committee: true,
   assemblyLink: true,
   contentId: true,
-  isDone: true,
   attachmentPdfFile: true,
   attachmentHwpFile: true,
   lifecycleStatus: true,
@@ -153,10 +152,6 @@ export function buildArchiveWhereConditions(params: {
 
   if (params.noticeNumCondition) {
     baseWhere.noticeNum = params.noticeNumCondition;
-  }
-
-  if (params.isDone !== undefined) {
-    baseWhere.isDone = params.isDone;
   }
 
   if (params.startDate && params.endDate) {

@@ -7,20 +7,27 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-@Entity('notice_archive_summary_states')
-@Index('idx_notice_archive_summary_states_notice_num', ['noticeNum'], {
+@Entity('notice_archive_snapshot_states')
+@Index('idx_notice_archive_snapshot_states_notice_num', ['noticeNum'], {
   unique: true,
 })
-@Index('idx_notice_archive_summary_states_status_notice_num', [
+@Index('idx_notice_archive_snapshot_states_status_notice_num', [
   'aiSummaryStatus',
   'noticeNum',
 ])
-export class NoticeArchiveSummaryState {
+@Index('idx_notice_archive_snapshot_states_is_done_notice_num', [
+  'isDone',
+  'noticeNum',
+])
+export class NoticeArchiveSnapshotState {
   @PrimaryGeneratedColumn()
   id: number;
 
   @Column({ type: 'integer', name: 'notice_num' })
   noticeNum: number;
+
+  @Column({ type: 'boolean', name: 'is_done', default: false })
+  isDone: boolean;
 
   @Column({ type: 'text', name: 'ai_summary', nullable: true })
   aiSummary: string | null;

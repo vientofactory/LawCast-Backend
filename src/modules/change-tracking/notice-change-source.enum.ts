@@ -1,5 +1,6 @@
 export enum NoticeChangeSource {
   ARCHIVE_UPSERT = 'archive:upsert',
+  ARCHIVE_IS_DONE_SYNC = 'archive:isDoneSync',
   ARCHIVE_RENUMBERED = 'archive:renumbered',
   ARCHIVE_SOURCE_MISSING = 'archive:source-missing',
   ARCHIVE_UPDATE_SOURCE_HTML = 'archive:updateSourceHtml',
