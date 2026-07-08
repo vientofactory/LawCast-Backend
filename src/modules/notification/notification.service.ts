@@ -362,7 +362,7 @@ export class NotificationService {
         payload.changedFields,
       );
       itemLines.push(
-        `• [${payload.noticeNum}] ${payload.subject} (${changedFieldsPreview})`,
+        `• **[${payload.noticeNum}]** ${payload.subject} (${changedFieldsPreview})`,
       );
     }
 
@@ -377,11 +377,10 @@ export class NotificationService {
       )
       .addField(
         '영향 법률안 수',
-        String(uniqueNoticeNums.length.toLocaleString()),
+        `${uniqueNoticeNums.length.toLocaleString()}건`,
         true,
       )
-      .addField('변경 건수', String(payloads.length.toLocaleString()), true)
-      .addField('모아보기 이동', `[변경 내역 모아보기](${detailUrl})`, true)
+      .addField('자세히 보기', `[변경 내역 모아보기](${detailUrl})`, true)
       .addField('감지 항목', this.truncateForEmbed(itemLines.join('\n')), false)
       .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
       .setTimestamp()
