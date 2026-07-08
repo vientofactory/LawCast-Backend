@@ -1,7 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ArchiveOrchestratorService } from './archive-orchestrator.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
-import { CrawlingCoreService } from './crawling-core.service';
+import {
+  CrawlingCoreService,
+  NsmBillDeletedError,
+} from './crawling-core.service';
 import { CacheService } from '../cache/cache.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
@@ -85,6 +88,9 @@ describe('ArchiveOrchestratorService', () => {
             upsertNoticeArchive: jest.fn(),
             updateNsmHtmlAndDetail: jest.fn().mockResolvedValue(undefined),
             getLatestProposalReasonForNotice: jest.fn().mockResolvedValue(null),
+            appendSourceDeletedEventByNoticeNum: jest
+              .fn()
+              .mockResolvedValue(undefined),
             getExistingNoticeNumSet: jest.fn(),
             beginChangeNotificationCollection: jest.fn(),
             endChangeNotificationCollection: jest
@@ -108,6 +114,7 @@ describe('ArchiveOrchestratorService', () => {
           useValue: {
             getContent: jest.fn(),
             captureNsmDetailFull: jest.fn(),
+            probeNsmDeletedBillAlert: jest.fn().mockResolvedValue(null),
             captureContentScreenshot: jest.fn().mockResolvedValue(null),
           },
         },
@@ -599,6 +606,102 @@ describe('ArchiveOrchestratorService', () => {
           html: '',
           sha256: '',
           httpMetadata: null,
+        }),
+      );
+    });
+
+    it('marks source as deleted when NSM detail page reports missing bill', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new NsmBillDeletedError('2219717', '안건정보가 없습니다.'),
+      );
+      (
+        crawlingCoreService.probeNsmDeletedBillAlert as jest.Mock
+      ).mockResolvedValue('안건정보가 없습니다.');
+
+      const result = await service.fetchAndUpdateProposalReason(
+        2219717,
+        '2219717',
+      );
+
+      expect(result).toBeNull();
+      expect(
+        noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+      ).toHaveBeenCalledWith(2219717);
+      expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
+        BridgeLogLevel.WARN,
+        'ArchiveOrchestratorService',
+        'proposalReason backfill confirmed deleted NSM bill **2219717**: 안건정보가 없습니다.',
+        expect.objectContaining({
+          noticeNum: 2219717,
+          billNo: '2219717',
+          detectedAs: 'source_deleted',
+          detectionMethod: 'nsm-error-confirmed-via-http-probe',
+        }),
+      );
+    });
+
+    it('does not append source_deleted event when NsmBillDeletedError is not confirmed by HTTP probe', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new NsmBillDeletedError('2219717', '안건정보가 없습니다.'),
+      );
+      (
+        crawlingCoreService.probeNsmDeletedBillAlert as jest.Mock
+      ).mockResolvedValue(null);
+
+      const result = await service.fetchAndUpdateProposalReason(
+        2219717,
+        '2219717',
+      );
+
+      expect(result).toBeNull();
+      expect(crawlingCoreService.probeNsmDeletedBillAlert).toHaveBeenCalledWith(
+        '2219717',
+      );
+      expect(
+        noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+      ).not.toHaveBeenCalled();
+      expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
+        BridgeLogLevel.WARN,
+        'ArchiveOrchestratorService',
+        'proposalReason backfill deletion signal was not confirmed for bill **2219717**; skipped source_deleted event',
+        expect.objectContaining({
+          noticeNum: 2219717,
+          billNo: '2219717',
+          detectedAs: 'unconfirmed',
+          detectionMethod: 'nsm-error-without-http-probe-confirmation',
+        }),
+      );
+    });
+
+    it('marks source as deleted via HTTP probe when capture times out', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new Error('Navigation timeout of 30000 ms exceeded'),
+      );
+      (
+        crawlingCoreService.probeNsmDeletedBillAlert as jest.Mock
+      ).mockResolvedValue('안건정보가 없습니다.');
+
+      const result = await service.fetchAndUpdateProposalReason(
+        2219717,
+        '2219717',
+      );
+
+      expect(result).toBeNull();
+      expect(crawlingCoreService.probeNsmDeletedBillAlert).toHaveBeenCalledWith(
+        '2219717',
+      );
+      expect(
+        noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+      ).toHaveBeenCalledWith(2219717);
+      expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
+        BridgeLogLevel.WARN,
+        'ArchiveOrchestratorService',
+        'proposalReason backfill detected deleted NSM bill **2219717** via HTTP probe: 안건정보가 없습니다.',
+        expect.objectContaining({
+          noticeNum: 2219717,
+          billNo: '2219717',
+          detectedAs: 'source_deleted',
+          detectionMethod: 'http-probe-after-timeout',
         }),
       );
     });

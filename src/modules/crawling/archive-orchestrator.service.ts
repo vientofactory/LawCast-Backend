@@ -8,7 +8,10 @@ import {
   type ArchiveHttpMetadata,
 } from '../notice/notice-archive.service';
 import { computeSha256 as computeSha256Hex } from '../notice/notice-archive.helpers';
-import { CrawlingCoreService } from './crawling-core.service';
+import {
+  CrawlingCoreService,
+  NsmBillDeletedError,
+} from './crawling-core.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
@@ -550,7 +553,84 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       );
       return proposalReason;
     } catch (error) {
+      if (error instanceof NsmBillDeletedError) {
+        const probeAlertMessage =
+          await this.crawlingCoreService.probeNsmDeletedBillAlert(
+            normalizedBillNo,
+          );
+
+        if (!probeAlertMessage) {
+          this.logger.warn(
+            `proposalReason backfill deletion signal not confirmed for bill ${normalizedBillNo}; skipping source_deleted event`,
+          );
+          void this.discordBridge?.logEvent(
+            BridgeLogLevel.WARN,
+            ArchiveOrchestratorService.name,
+            `proposalReason backfill deletion signal was not confirmed for bill **${normalizedBillNo}**; skipped source_deleted event`,
+            {
+              noticeNum: num,
+              billNo: normalizedBillNo,
+              responseUrl: error.responseUrl,
+              detectedAs: 'unconfirmed',
+              detectionMethod: 'nsm-error-without-http-probe-confirmation',
+            },
+          );
+          return null;
+        }
+
+        await this.noticeArchiveService.appendSourceDeletedEventByNoticeNum(
+          num,
+        );
+
+        const message = probeAlertMessage;
+        this.logger.warn(
+          `proposalReason backfill confirmed deleted NSM bill ${normalizedBillNo}: ${message}`,
+        );
+        void this.discordBridge?.logEvent(
+          BridgeLogLevel.WARN,
+          ArchiveOrchestratorService.name,
+          `proposalReason backfill confirmed deleted NSM bill **${normalizedBillNo}**: ${message}`,
+          {
+            noticeNum: num,
+            billNo: normalizedBillNo,
+            responseUrl: error.responseUrl,
+            detectedAs: 'source_deleted',
+            detectionMethod: 'nsm-error-confirmed-via-http-probe',
+          },
+        );
+        return null;
+      }
+
       const message = error instanceof Error ? error.message : String(error);
+      const isTimeoutError = /timeout/i.test(message);
+      if (isTimeoutError) {
+        const deletionAlertMessage =
+          await this.crawlingCoreService.probeNsmDeletedBillAlert(
+            normalizedBillNo,
+          );
+        if (deletionAlertMessage) {
+          await this.noticeArchiveService.appendSourceDeletedEventByNoticeNum(
+            num,
+          );
+
+          this.logger.warn(
+            `proposalReason backfill detected deleted NSM bill ${normalizedBillNo} via HTTP probe: ${deletionAlertMessage}`,
+          );
+          void this.discordBridge?.logEvent(
+            BridgeLogLevel.WARN,
+            ArchiveOrchestratorService.name,
+            `proposalReason backfill detected deleted NSM bill **${normalizedBillNo}** via HTTP probe: ${deletionAlertMessage}`,
+            {
+              noticeNum: num,
+              billNo: normalizedBillNo,
+              detectedAs: 'source_deleted',
+              detectionMethod: 'http-probe-after-timeout',
+            },
+          );
+          return null;
+        }
+      }
+
       this.logger.warn(
         `proposalReason backfill failed for bill ${normalizedBillNo}: ${message}`,
       );

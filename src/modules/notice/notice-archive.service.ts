@@ -854,6 +854,44 @@ export class NoticeArchiveService {
     return 0;
   }
 
+  async appendSourceDeletedEventByNoticeNum(noticeNum: number): Promise<void> {
+    const beforeRow = await this.getTrackedRowByNoticeNum(noticeNum);
+    if (!beforeRow) {
+      return;
+    }
+
+    const beforeSnapshot = await this.buildDiffBaselineSnapshot(
+      noticeNum,
+      beforeRow,
+    );
+    if (!beforeSnapshot) {
+      return;
+    }
+
+    const alreadySourceDeleted =
+      typeof beforeSnapshot.lifecycleStatus === 'string' &&
+      beforeSnapshot.lifecycleStatus === 'source_deleted';
+    if (alreadySourceDeleted) {
+      return;
+    }
+
+    const deletedAt = new Date().toISOString();
+    const afterSnapshot = {
+      ...beforeSnapshot,
+      lifecycleStatus: 'source_deleted',
+      sourceDeletedAt: deletedAt,
+    };
+
+    await this.appendExplicitEventWithDiff({
+      noticeNum,
+      source: NoticeChangeSource.ARCHIVE_SOURCE_MISSING,
+      eventType: 'invalidated',
+      beforeSnapshot,
+      afterSnapshot,
+      subject: beforeRow.subject,
+    });
+  }
+
   /**
    * Returns one page of noticeNums that are currently marked isDone=true,
    * ordered by noticeNum ASC. Used by the revert pass to scan only the

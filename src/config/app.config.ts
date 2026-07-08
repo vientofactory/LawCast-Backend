@@ -128,6 +128,12 @@ export const APP_CONSTANTS = {
     TIMEOUT: 15000, // 15 seconds timeout
     RETRY_COUNT: 3, // 3 retries
     SUMMARY_CONCURRENCY: 3,
+    /** Global max concurrent Chromium sessions across crawling/screenshot paths. */
+    BROWSER_MAX_CONCURRENCY: 1,
+    /** Extra retries when browser launch fails due to process/resource pressure. */
+    BROWSER_LAUNCH_RETRY_COUNT: 2,
+    /** Base delay (ms) between browser-launch retries. */
+    BROWSER_LAUNCH_RETRY_DELAY_MS: 2000,
     HEADERS: {
       'Accept-Language': 'ko-KR,ko;q=0.9',
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -194,7 +200,7 @@ export const APP_CONSTANTS = {
     /** Archive rows per integrity-scan batch. */
     INTEGRITY_BATCH_SIZE: 200,
     /** Archive rows fetched per summary-backfill / retry batch. */
-    SUMMARY_BACKFILL_BATCH_SIZE: 50,
+    SUMMARY_BACKFILL_BATCH_SIZE: 20,
   },
   CRON: {
     EXPRESSIONS: {
