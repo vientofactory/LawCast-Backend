@@ -2725,6 +2725,36 @@ export class NoticeArchiveService {
     return new Set(rows.map((row) => row.noticeNum));
   }
 
+  async getSourceDeletedNoticeNumSet(
+    noticeNums: number[],
+  ): Promise<Set<number>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+    if (uniqueNums.length === 0 || !this.changeTrackingService) {
+      return new Set();
+    }
+
+    const sourceDeletedNums = new Set<number>();
+
+    await Promise.all(
+      uniqueNums.map(async (noticeNum) => {
+        try {
+          const lifecycle =
+            await this.changeTrackingService.getLatestFieldAfterValue(
+              noticeNum,
+              'lifecycleStatus',
+            );
+          if (lifecycle === 'source_deleted') {
+            sourceDeletedNums.add(noticeNum);
+          }
+        } catch {
+          // Ignore lookup failures; retry flow can still proceed for this item.
+        }
+      }),
+    );
+
+    return sourceDeletedNums;
+  }
+
   /**
    * Returns NSM-origin archived notices that still have empty proposalReason.
    * Used by proposalReason backfill cron to periodically re-seed retry queue
@@ -2771,6 +2801,20 @@ export class NoticeArchiveService {
             AND TRIM(d.after_value) != ''
         )`,
         { proposalReasonFieldPath: 'proposalReason' },
+      )
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM notice_change_events e
+          INNER JOIN notice_change_details d ON d.event_id = e.id
+          WHERE e.notice_num = na.noticeNum
+            AND d.field_path = :lifecycleStatusFieldPath
+            AND d.after_value = :sourceDeletedLifecycle
+        )`,
+        {
+          lifecycleStatusFieldPath: 'lifecycleStatus',
+          sourceDeletedLifecycle: 'source_deleted',
+        },
       )
       .orderBy('na.noticeNum', 'ASC')
       .limit(limit)

@@ -541,6 +541,17 @@ describe('NoticeArchiveService', () => {
       expect(notExistsCall?.[1]).toEqual({
         proposalReasonFieldPath: 'proposalReason',
       });
+
+      const lifecycleNotExistsCall = (qb.andWhere as jest.Mock).mock.calls.find(
+        (call) =>
+          typeof call[0] === 'string' &&
+          (call[0] as string).includes('lifecycleStatusFieldPath'),
+      );
+      expect(lifecycleNotExistsCall).toBeDefined();
+      expect(lifecycleNotExistsCall?.[1]).toEqual({
+        lifecycleStatusFieldPath: 'lifecycleStatus',
+        sourceDeletedLifecycle: 'source_deleted',
+      });
       expect(result).toHaveLength(1);
       expect(result[0]).toMatchObject({
         billNo: '2219775',

@@ -159,6 +159,30 @@ export class CrawlingSchedulerProposalRetry {
     const now = Date.now();
     let queueDirty = await this.normalizeQueueBillNos(queue);
 
+    const sourceDeletedNums =
+      await this.options.noticeArchiveService.getSourceDeletedNoticeNumSet(
+        queue.map((item) => item.notice.num),
+      );
+
+    if (sourceDeletedNums.size > 0) {
+      let removed = 0;
+      let index = queue.length;
+      while (index--) {
+        const item = queue[index];
+        if (sourceDeletedNums.has(item.notice.num)) {
+          queue.splice(index, 1);
+          removed += 1;
+          queueDirty = true;
+        }
+      }
+
+      if (removed > 0) {
+        this.options.logger.log(
+          `proposalReason retry: pruned ${removed} source_deleted bill(s) from queue`,
+        );
+      }
+    }
+
     const evicted: ProposalReasonRetryItem[] = [];
     let index = queue.length;
     while (index--) {
