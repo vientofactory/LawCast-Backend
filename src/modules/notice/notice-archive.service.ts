@@ -615,6 +615,7 @@ export class NoticeArchiveService {
       if (beforeSnapshot) {
         const invalidatedSnapshot = {
           ...beforeSnapshot,
+          isDone: true,
           lifecycleStatus: 'renumbered',
         };
         await this.appendExplicitEventWithDiff({
@@ -878,6 +879,7 @@ export class NoticeArchiveService {
     const deletedAt = new Date().toISOString();
     const afterSnapshot = {
       ...beforeSnapshot,
+      isDone: true,
       lifecycleStatus: 'source_deleted',
       sourceDeletedAt: deletedAt,
     };
@@ -890,6 +892,31 @@ export class NoticeArchiveService {
       afterSnapshot,
       subject: beforeRow.subject,
     });
+
+    if (this.summaryStateRepository) {
+      const currentState = await this.summaryStateRepository.findOne({
+        where: { noticeNum },
+        select: {
+          isDone: true,
+          aiSummary: true,
+          aiSummaryStatus: true,
+        },
+      });
+
+      if (!currentState) {
+        await this.persistSummaryState(noticeNum, {
+          isDone: true,
+          aiSummary: null,
+          aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
+        });
+      } else if (!currentState.isDone) {
+        await this.persistSummaryState(noticeNum, {
+          isDone: true,
+          aiSummary: currentState.aiSummary ?? null,
+          aiSummaryStatus: currentState.aiSummaryStatus,
+        });
+      }
+    }
   }
 
   /**
@@ -1264,6 +1291,45 @@ export class NoticeArchiveService {
     return map;
   }
 
+  private async applyLifecycleOverlayFromDiffchain(
+    rows: NoticeArchive[],
+  ): Promise<void> {
+    if (!this.changeTrackingService || rows.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      rows.map(async (row) => {
+        const [latestLifecycleStatus, latestSourceDeletedAt] =
+          await Promise.all([
+            this.changeTrackingService.getLatestFieldAfterValue(
+              row.noticeNum,
+              'lifecycleStatus',
+            ),
+            this.changeTrackingService.getLatestFieldAfterValue(
+              row.noticeNum,
+              'sourceDeletedAt',
+            ),
+          ]);
+
+        if (
+          latestLifecycleStatus === 'active' ||
+          latestLifecycleStatus === 'source_deleted' ||
+          latestLifecycleStatus === 'renumbered'
+        ) {
+          row.lifecycleStatus = latestLifecycleStatus;
+        }
+
+        if (latestSourceDeletedAt) {
+          const parsed = new Date(latestSourceDeletedAt);
+          if (!Number.isNaN(parsed.getTime())) {
+            row.sourceDeletedAt = parsed;
+          }
+        }
+      }),
+    );
+  }
+
   async getArchiveNotices(query: ArchiveListQuery): Promise<{
     items: ArchiveNoticeItem[];
     page: number;
@@ -1341,6 +1407,8 @@ export class NoticeArchiveService {
       }
     }
 
+    await this.applyLifecycleOverlayFromDiffchain(rows);
+
     return {
       items: rows.map((row) => mapArchiveEntityToNoticeItem(row)),
       page,
@@ -1379,6 +1447,8 @@ export class NoticeArchiveService {
         row.aiSummaryStatus = summaryState.aiSummaryStatus;
       }
     }
+
+    await this.applyLifecycleOverlayFromDiffchain(rows);
 
     return rows.map((row) => mapArchiveEntityToNoticeItem(row));
   }
@@ -1480,6 +1550,8 @@ export class NoticeArchiveService {
         row.aiSummaryStatus = summaryState.aiSummaryStatus;
       }
     }
+
+    await this.applyLifecycleOverlayFromDiffchain(rows);
 
     return {
       items: rows.map((row) => mapArchiveEntityToNoticeItem(row)),
@@ -2027,6 +2099,13 @@ export class NoticeArchiveService {
       html: string;
       sha256: string;
       proposalReason: string;
+      billNumber?: string | null;
+      proposer?: string | null;
+      proposalDate?: string | null;
+      committee?: string | null;
+      referralDate?: string | null;
+      noticePeriod?: string | null;
+      proposalSession?: string | null;
       httpMetadata: ArchiveHttpMetadata | null;
       screenshotBlob?: Buffer;
       screenshotFormat?: string;
@@ -2037,7 +2116,10 @@ export class NoticeArchiveService {
       return;
     }
 
-    const beforeSnapshot = this.buildTrackedSnapshot(beforeRow);
+    const beforeSnapshot = await this.buildDiffBaselineSnapshot(
+      noticeNum,
+      beforeRow,
+    );
     if (!beforeSnapshot) {
       return;
     }
@@ -2046,43 +2128,107 @@ export class NoticeArchiveService {
       await this.getLatestProposalReasonForNotice(noticeNum);
     const normalizedLatestProposalReason =
       this.normalizeProposalReasonText(latestProposalReason);
-    const normalizedProposalReason = this.normalizeProposalReasonText(
-      payload.proposalReason,
-    );
 
-    if (!normalizedProposalReason) {
-      return;
+    // Keep chain-head proposalReason as baseline to avoid stale-row re-emission
+    // when repair callers only mock latest-field reads.
+    if (normalizedLatestProposalReason !== null) {
+      beforeSnapshot.proposalReason = normalizedLatestProposalReason;
     }
 
-    // Use chain-head value as the effective baseline to avoid re-appending
-    // semantically identical proposalReason changes from immutable archive rows.
-    const effectiveBeforeSnapshot = {
-      ...beforeSnapshot,
-      proposalReason:
-        normalizedLatestProposalReason ??
-        this.normalizeProposalReasonText(
-          typeof beforeSnapshot.proposalReason === 'string'
-            ? beforeSnapshot.proposalReason
-            : null,
-        ) ??
-        '',
+    const beforeText = (key: string): string | null => {
+      const value = beforeSnapshot[key];
+      return typeof value === 'string' ? value : null;
     };
 
-    if (normalizedProposalReason !== effectiveBeforeSnapshot.proposalReason) {
-      const afterSnapshot = {
-        ...beforeSnapshot,
-        proposalReason: normalizedProposalReason,
-      };
+    const resolvedProposalReason = this.preferIncomingTrackedValue(
+      payload.proposalReason,
+      beforeText('proposalReason'),
+      {
+        preserveExistingWhenIncomingNull: true,
+        normalizeText: true,
+      },
+    );
 
-      await this.appendExplicitEventWithDiff({
-        noticeNum,
-        source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
-        eventType: 'updated',
-        beforeSnapshot: effectiveBeforeSnapshot,
-        afterSnapshot,
-        subject: beforeRow.subject,
-      });
-    }
+    const resolvedBillNumber = this.preferIncomingTrackedValue(
+      this.normalizeStableId(payload.billNumber),
+      this.normalizeStableId(beforeText('billNumber')),
+      { preserveExistingWhenIncomingNull: true },
+    );
+
+    const resolvedProposer = this.preferIncomingTrackedValue(
+      payload.proposer?.trim() || null,
+      beforeText('proposer'),
+      {
+        preserveExistingWhenIncomingNull: true,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedProposalDate = this.preferIncomingTrackedValue(
+      payload.proposalDate?.trim() || null,
+      beforeText('proposalDate'),
+      {
+        preserveExistingWhenIncomingNull: true,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedCommittee = this.preferIncomingTrackedValue(
+      payload.committee?.trim() || null,
+      beforeText('contentCommittee'),
+      {
+        preserveExistingWhenIncomingNull: true,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedReferralDate = this.preferIncomingTrackedValue(
+      payload.referralDate?.trim() || null,
+      beforeText('referralDate'),
+      {
+        preserveExistingWhenIncomingNull: true,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedNoticePeriod = this.preferIncomingTrackedValue(
+      payload.noticePeriod?.trim() || null,
+      beforeText('noticePeriod'),
+      {
+        preserveExistingWhenIncomingNull: true,
+        normalizeText: true,
+      },
+    );
+
+    const resolvedProposalSession = this.preferIncomingTrackedValue(
+      payload.proposalSession?.trim() || null,
+      beforeText('proposalSession'),
+      {
+        preserveExistingWhenIncomingNull: true,
+        normalizeText: true,
+      },
+    );
+
+    const afterSnapshot = {
+      ...beforeSnapshot,
+      proposalReason: resolvedProposalReason ?? '',
+      billNumber: resolvedBillNumber,
+      proposer: resolvedProposer,
+      proposalDate: resolvedProposalDate,
+      contentCommittee: resolvedCommittee,
+      referralDate: resolvedReferralDate,
+      noticePeriod: resolvedNoticePeriod,
+      proposalSession: resolvedProposalSession,
+    };
+
+    await this.appendExplicitEventWithDiff({
+      noticeNum,
+      source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+      eventType: 'updated',
+      beforeSnapshot,
+      afterSnapshot,
+      subject: beforeRow.subject,
+    });
   }
 
   private async getTrackedRowByNoticeNum(

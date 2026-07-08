@@ -57,6 +57,20 @@ describe('NoticeArchiveService', () => {
       .mockResolvedValue(undefined),
   });
 
+  const createSummaryStateRepositoryMock = () => ({
+    find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([]),
+    findOne: jest.fn<(...args: any[]) => Promise<any>>(),
+    update: jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue(undefined),
+    insert: jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue(undefined),
+    delete: jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue(undefined),
+  });
+
   const buildRow = (overrides: Partial<NoticeArchive> = {}): NoticeArchive => {
     const sourceHtml = '<html><body>LawCast Integrity Test</body></html>';
     const sourceHtmlSha256 = computeSha256(sourceHtml);
@@ -733,6 +747,95 @@ describe('NoticeArchiveService', () => {
       expect(proposalReasonDetail?.changeType).toBe('added');
       expect(proposalReasonDetail?.beforeValue).toBeNull();
       expect(proposalReasonDetail?.afterValue).toBe('정상 제안이유 복구값');
+    });
+  });
+
+  describe('invalidated isDone promotion', () => {
+    it('promotes source_deleted invalidation to isDone=true in summary state', async () => {
+      const repositoryMock = createRepositoryMock();
+      const summaryStateRepositoryMock = createSummaryStateRepositoryMock();
+      const changeTrackingService = createChangeTrackingServiceMock();
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        summaryStateRepositoryMock as any,
+        changeTrackingService as any,
+      );
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219901,
+          subject: '삭제 감지 테스트 법률안',
+          isDone: false,
+          lifecycleStatus: 'active',
+          sourceDeletedAt: null,
+        }),
+      );
+      summaryStateRepositoryMock.find.mockResolvedValue([
+        { noticeNum: 2219901, isDone: false },
+      ]);
+      summaryStateRepositoryMock.findOne
+        .mockResolvedValueOnce({
+          isDone: false,
+          aiSummary: '기존 요약',
+          aiSummaryStatus: 'ready',
+        })
+        .mockResolvedValueOnce({ id: 7 });
+
+      await service.appendSourceDeletedEventByNoticeNum(2219901);
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          noticeNum: 2219901,
+          eventType: 'invalidated',
+        }),
+      );
+      expect(summaryStateRepositoryMock.update).toHaveBeenCalledWith(
+        { id: 7 },
+        expect.objectContaining({
+          isDone: true,
+          aiSummary: '기존 요약',
+          aiSummaryStatus: 'ready',
+        }),
+      );
+    });
+
+    it('creates default done summary state when source_deleted invalidation has no summary row', async () => {
+      const repositoryMock = createRepositoryMock();
+      const summaryStateRepositoryMock = createSummaryStateRepositoryMock();
+      const changeTrackingService = createChangeTrackingServiceMock();
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        summaryStateRepositoryMock as any,
+        changeTrackingService as any,
+      );
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219902,
+          subject: '삭제 감지 기본 상태 테스트',
+          isDone: false,
+          lifecycleStatus: 'active',
+        }),
+      );
+      summaryStateRepositoryMock.find.mockResolvedValue([
+        { noticeNum: 2219902, isDone: false },
+      ]);
+      summaryStateRepositoryMock.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+
+      await service.appendSourceDeletedEventByNoticeNum(2219902);
+
+      expect(summaryStateRepositoryMock.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          noticeNum: 2219902,
+          isDone: true,
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested',
+        }),
+      );
     });
   });
 });

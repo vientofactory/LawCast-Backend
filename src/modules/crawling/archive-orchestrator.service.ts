@@ -358,6 +358,9 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
             let contentBillNumber: string | null = null;
             let contentProposer: string | null = null;
             let contentProposalDate: string | null = null;
+            let contentCommittee: string | null = null;
+            let contentReferralDate: string | null = null;
+            let contentNoticePeriod: string | null = null;
             let contentProposalSession: string | null = null;
             let sourceHtml: string | null = null;
             let sourceHtmlSha256: string | null = null;
@@ -381,11 +384,21 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
 
               // Detail fields parsed from the same page HTML
               if (full.detail) {
+                const detail = full.detail as typeof full.detail & {
+                  committee?: string;
+                  referralDate?: string;
+                  noticePeriod?: string;
+                };
+
                 proposalReason = full.detail.proposalReason?.trim() ?? '';
                 sourceTitle = full.detail.proposalInfo?.trim() || item.billName;
                 contentBillNumber = full.detail.billNo?.trim() || null;
                 contentProposer = full.detail.proposer?.trim() || null;
                 contentProposalDate = full.detail.proposalDate?.trim() || null;
+                contentCommittee =
+                  detail.committee?.trim() || notice.committee || null;
+                contentReferralDate = detail.referralDate?.trim() || null;
+                contentNoticePeriod = detail.noticePeriod?.trim() || null;
                 contentProposalSession = full.detail.session?.trim() || null;
               }
 
@@ -412,6 +425,9 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
                 billNumber: contentBillNumber,
                 proposer: contentProposer,
                 proposalDate: contentProposalDate,
+                committee: contentCommittee,
+                referralDate: contentReferralDate,
+                noticePeriod: contentNoticePeriod,
                 proposalSession: contentProposalSession,
                 sourceHtml,
                 htmlSha256: sourceHtmlSha256,
@@ -516,13 +532,31 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     try {
       const full =
         await this.crawlingCoreService.captureNsmDetailFull(normalizedBillNo);
+      const detail = full.detail as typeof full.detail & {
+        committee?: string;
+        referralDate?: string;
+        noticePeriod?: string;
+      };
       const proposalReason = full.detail?.proposalReason?.trim() ?? '';
       const proposalSession = full.detail?.session?.trim() || null;
+      const billNumber = full.detail?.billNo?.trim() || null;
+      const proposer = full.detail?.proposer?.trim() || null;
+      const proposalDate = full.detail?.proposalDate?.trim() || null;
+      const committee = detail?.committee?.trim() || null;
+      const referralDate = detail?.referralDate?.trim() || null;
+      const noticePeriod = detail?.noticePeriod?.trim() || null;
 
       await this.noticeArchiveService.updateNsmHtmlAndDetail(num, {
         html: '',
         sha256: '',
         proposalReason,
+        billNumber,
+        proposer,
+        proposalDate,
+        committee,
+        referralDate,
+        noticePeriod,
+        proposalSession,
         httpMetadata: null,
       });
 
