@@ -1,5 +1,5 @@
 import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
-import { type ITableData, type INsmBillItem } from 'pal-crawl';
+import { type ITableData } from 'pal-crawl';
 import { type CachedNotice } from '../../types/cache.types';
 import { CacheService } from '../cache/cache.service';
 import { CrawlingCoreService } from './crawling-core.service';
@@ -13,10 +13,10 @@ import {
 import { APP_CONSTANTS } from '../../config/app.config';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
-import { mapConcurrently } from '../../utils/concurrency.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { CrawlingSchedulerSummarySupport } from './utils/crawling-scheduler-summary-support';
 import { CrawlingSchedulerProposalRetry } from './utils/crawling-scheduler-proposal-retry';
+import { handlePendingCronInternal } from './utils/crawling-scheduler-pending-support';
 
 const { PENDING_CRAWL_MAX_RETRIES, PENDING_CRAWL_RETRY_BASE_MS } =
   APP_CONSTANTS.ARCHIVE_SYNC;
@@ -79,6 +79,24 @@ export class CrawlingSchedulerService implements OnModuleInit {
       logger: this.logger,
       discordBridge: this.discordBridge,
     });
+  }
+
+  private getPendingWorkflowDeps() {
+    return {
+      isInitialized: this.isInitialized,
+      logger: this.logger,
+      discordBridge: this.discordBridge,
+      crawlingCoreService: this.crawlingCoreService,
+      archiveOrchestratorService: this.archiveOrchestratorService,
+      notificationOrchestratorService: this.notificationOrchestratorService,
+      summaryGenerationService: this.summaryGenerationService,
+      noticeArchiveService: this.noticeArchiveService,
+      cacheService: this.cacheService,
+      proposalRetrySupport: this.proposalRetrySupport,
+      runBackgroundTask: (taskName: string, task: () => Promise<void>) =>
+        this.runBackgroundTask(taskName, task),
+      isRetryableNetworkError,
+    };
   }
 
   /**
@@ -897,324 +915,10 @@ export class CrawlingSchedulerService implements OnModuleInit {
    * a slow NsmLmSts response never delays pal.assembly.go.kr processing.
    */
   async handlePendingCron(): Promise<void> {
-    if (!this.isInitialized) {
-      return;
-    }
-
-    try {
-      let lastError: unknown;
-      for (let attempt = 0; attempt <= PENDING_CRAWL_MAX_RETRIES; attempt++) {
-        try {
-          await this.performPendingBillsCrawl();
-          return;
-        } catch (error) {
-          lastError = error;
-          const canRetry =
-            attempt < PENDING_CRAWL_MAX_RETRIES &&
-            isRetryableNetworkError(error);
-
-          if (!canRetry) {
-            break;
-          }
-
-          const backoffMs = PENDING_CRAWL_RETRY_BASE_MS * 2 ** attempt;
-          await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
-        }
-      }
-
-      this.logger.error('Error during pending bills crawl', lastError);
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        CrawlingSchedulerService.name,
-        `Pending bills crawl failed: ${(lastError as Error).message}`,
-      );
-    } finally {
-      /* empty */
-    }
-  }
-
-  private async performPendingBillsCrawl(): Promise<void> {
-    const rawItemMap = new Map<number, INsmBillItem>();
-    const pendingNotices: CachedNotice[] = [];
-
-    for await (const page of this.crawlingCoreService.getAllNsmPendingPages(
-      {},
-      { delayMs: APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS },
-    )) {
-      for (const item of page.items ?? []) {
-        const notice = CrawlingCoreService.nsmBillToCachedNotice(item);
-        if (!rawItemMap.has(notice.num)) {
-          rawItemMap.set(notice.num, item);
-          pendingNotices.push(notice);
-        }
-      }
-    }
-
-    if (pendingNotices.length === 0) return;
-
-    const newPendingNotices =
-      await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
-        pendingNotices,
-      );
-
-    const newPendingNumSet = new Set(newPendingNotices.map((n) => n.num));
-    const existingPendingItems = pendingNotices
-      .filter((notice) => !newPendingNumSet.has(notice.num))
-      .map((notice) => rawItemMap.get(notice.num))
-      .filter((item): item is INsmBillItem => item !== undefined)
-      .slice(0, APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_BATCH_SIZE);
-
-    if (existingPendingItems.length > 0) {
-      this.runBackgroundTask('refresh-existing-pending-bills', async () => {
-        await this.refreshExistingPendingBillsInBackground(
-          existingPendingItems,
-        );
-      });
-    }
-
-    if (newPendingNotices.length === 0) return;
-
-    this.logger.log(
-      `Found ${newPendingNotices.length} new pending bill(s) from NsmLmSts`,
+    await handlePendingCronInternal(
+      this.getPendingWorkflowDeps(),
+      PENDING_CRAWL_MAX_RETRIES,
+      PENDING_CRAWL_RETRY_BASE_MS,
     );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      CrawlingSchedulerService.name,
-      `Found **${newPendingNotices.length}** new pending bill(s) from NsmLmSts`,
-      {
-        subjects: newPendingNotices.slice(0, 5).map((n) => n.subject),
-        total: newPendingNotices.length,
-      },
-    );
-
-    const newPendingItems = newPendingNotices
-      .map((n) => rawItemMap.get(n.num))
-      .filter((item): item is INsmBillItem => item !== undefined);
-
-    // Archive and notify in the background so the cron lock is not held.
-    this.runBackgroundTask('process-pending-bills', async () => {
-      try {
-        await this.processPendingBillsInBackground(
-          newPendingItems,
-          newPendingNotices,
-        );
-      } catch (error) {
-        this.logger.error(
-          'Background processing for pending bills failed:',
-          error,
-        );
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.ERROR,
-          CrawlingSchedulerService.name,
-          `Pending bills background processing failed: ${(error as Error).message}`,
-        );
-      }
-    });
-  }
-
-  private async refreshExistingPendingBillsInBackground(
-    items: INsmBillItem[],
-  ): Promise<void> {
-    const refreshed = await this.archiveOrchestratorService.archiveNsmBillItems(
-      items,
-      { reason: 'existing-pending-recompare' },
-    );
-
-    if (refreshed.length > 0) {
-      this.logger.log(
-        `Periodic NSM re-compare scanned ${refreshed.length} archived pending bill(s)`,
-      );
-    }
-  }
-
-  private async processPendingBillsInBackground(
-    newPendingItems: INsmBillItem[],
-    newPendingNotices: CachedNotice[],
-  ): Promise<void> {
-    // Stage 1: Archive with full NsmLmSts detail (proposalReason, 발의정보 원문).
-    // Returns archived CachedNotice[] with proposalReason populated - no extra
-    // DB round-trip needed for the AI summary stage below.
-    // Screenshots are scheduled as fire-and-forget inside archiveNsmBillItems,
-    // matching the behaviour of archiveNotices for pal.assembly.go.kr bills.
-    let archivedNotices: CachedNotice[] = [];
-    try {
-      archivedNotices =
-        await this.archiveOrchestratorService.archiveNsmBillItems(
-          newPendingItems,
-          { reason: 'new-pending-bills' },
-        );
-    } catch (error) {
-      this.logger.error(
-        `Archive stage failed for pending bills, proceeding with cache and notifications: ${(error as Error).message}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        CrawlingSchedulerService.name,
-        `Pending bills archive stage failed: ${(error as Error).message}`,
-      );
-    }
-
-    // Split archived notices by whether proposalReason was successfully obtained.
-    // NSM bills without proposalReason cannot be summarised by Ollama.
-    // They are still notified immediately, with guidance rendered by the
-    // notification embed utility, and retried in the background.
-    const noticesWithReason = archivedNotices.filter((n) =>
-      n.proposalReason?.trim(),
-    );
-    const noticesWithoutReason = archivedNotices.filter(
-      (n) => !n.proposalReason?.trim(),
-    );
-
-    const noticesWithoutReasonForNotification: CachedNotice[] =
-      noticesWithoutReason.map((notice) => ({
-        ...notice,
-        aiSummary: null,
-        aiSummaryStatus: 'not_supported' as const,
-      }));
-
-    // Notify immediately even when proposalReason is missing.
-    // Snapshot is immutable; recovery writes only append-only change events.
-    if (noticesWithoutReasonForNotification.length > 0) {
-      void this.notificationOrchestratorService
-        .sendNotifications(noticesWithoutReasonForNotification)
-        .catch((error) => {
-          this.logger.error(
-            'Notification dispatch for pending bills without proposalReason failed:',
-            error,
-          );
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.ERROR,
-            CrawlingSchedulerService.name,
-            'Notification dispatch failed for pending bills without proposalReason',
-            {
-              count: noticesWithoutReasonForNotification.length,
-              billNos: noticesWithoutReasonForNotification.map(
-                (notice) => notice.num,
-              ),
-              proposalReasonState: 'missing',
-              notificationMode: 'immediate',
-              guidanceIncluded: true,
-            },
-          );
-        });
-    }
-
-    if (noticesWithoutReason.length > 0) {
-      this.logger.log(
-        `${noticesWithoutReason.length} pending bill(s) archived without proposalReason`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        CrawlingSchedulerService.name,
-        `**${noticesWithoutReason.length}** pending bill(s) missing proposalReason`,
-        {
-          nums: noticesWithoutReason.map((n) => n.num),
-          immutableSnapshot: true,
-        },
-      );
-
-      const billNoByNum = new Map<number, string>();
-      for (const item of newPendingItems) {
-        const parsed = Number.parseInt(item.billNo, 10);
-        if (!Number.isNaN(parsed) && item.billNo?.trim()) {
-          billNoByNum.set(parsed, item.billNo.trim());
-        }
-      }
-
-      for (const notice of noticesWithoutReason) {
-        await this.proposalRetrySupport.enqueue(notice, {
-          billNo: billNoByNum.get(notice.num) ?? null,
-        });
-      }
-
-      this.proposalRetrySupport.drainInBackground();
-    }
-
-    // Stage 2: AI summary generation - only for bills that have proposalReason.
-    // Use archivedNotices (with proposalReason) where available; fall back to
-    // raw pending notices only when archiving failed for every bill so the cache
-    // is not left entirely empty (no notification is sent in the fallback case).
-    const summaryBase =
-      noticesWithReason.length > 0
-        ? noticesWithReason
-        : archivedNotices.length === 0
-          ? newPendingNotices
-          : [];
-
-    const concurrency = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
-    const noticesWithSummary =
-      summaryBase.length > 0
-        ? await mapConcurrently(summaryBase, concurrency, async (notice) => {
-            try {
-              const result =
-                await this.summaryGenerationService.generateSummaryForNotice(
-                  notice,
-                );
-              return { ...notice, ...result };
-            } catch {
-              return {
-                ...notice,
-                aiSummary: null,
-                aiSummaryStatus: 'not_requested' as const,
-              };
-            }
-          })
-        : [];
-
-    // Stage 3: Persist generated summaries to DB so backfill phases skip them.
-    if (noticesWithReason.length > 0 && noticesWithSummary.length > 0) {
-      await Promise.allSettled(
-        noticesWithSummary
-          .filter(
-            (n) => (n.aiSummaryStatus ?? 'not_requested') !== 'not_requested',
-          )
-          .map((n) =>
-            this.noticeArchiveService.updateSummaryStateByNoticeNum(
-              n.num,
-              n.aiSummary ?? null,
-              n.aiSummaryStatus ?? 'not_requested',
-            ),
-          ),
-      );
-    }
-
-    // Stage 4: Merge into the freshest cache snapshot (race-safe re-fetch).
-    // Include BOTH summarised notices and queued-for-retry notices (without
-    // summary) so all new bills become visible in the UI immediately.
-    const allForCache: CachedNotice[] = [
-      ...noticesWithSummary,
-      ...noticesWithoutReasonForNotification,
-    ];
-
-    if (allForCache.length > 0) {
-      try {
-        const freshCache = await this.cacheService.getRecentNotices(
-          APP_CONSTANTS.CACHE.MAX_SIZE,
-        );
-        const newNums = new Set(allForCache.map((n) => n.num));
-        const merged = [
-          ...allForCache,
-          ...freshCache.filter((n) => !newNums.has(n.num)),
-        ];
-        await this.cacheService.updateCache(merged);
-      } catch (error) {
-        this.logger.warn(
-          `Cache update for pending bills failed: ${(error as Error).message}`,
-        );
-      }
-    }
-
-    // Stage 5: Send notifications only for bills that have proposalReason.
-    // Bills in the retry queue will be notified once their reason is resolved.
-    if (noticesWithSummary.length > 0 && noticesWithReason.length > 0) {
-      void this.notificationOrchestratorService
-        .sendNotifications(noticesWithSummary)
-        .catch((error) => {
-          this.logger.error(
-            'Notification dispatch for pending bills failed:',
-            error,
-          );
-        });
-    }
   }
 }

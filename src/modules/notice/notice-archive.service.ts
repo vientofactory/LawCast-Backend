@@ -8,8 +8,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import {
   In,
   IsNull,
-  LessThan,
-  MoreThan,
   Not,
   SelectQueryBuilder,
   type FindOptionsWhere,
@@ -35,14 +33,20 @@ import {
   parseOptionalDate,
 } from './notice-archive.helpers';
 import { NoticeArchiveArtifactSupport } from './utils/notice-archive-artifact-support';
+import {
+  countByNoticeNumComparisonInternal,
+  getArchiveCountInternal,
+  getArchiveStartedAtByNoticeNumsInternal,
+  getLatestProposalReasonForNoticeInternal,
+  getNsmProposalReasonRetryCandidatesInternal,
+  getRecentNoticesForCacheInternal,
+  getSummaryStateByNoticeNumsInternal,
+  runIntegrityScanInternal,
+  updateSummaryStateByNoticeNumInternal,
+} from './utils/notice-archive-maintenance-support';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 import { type ChangeEventType } from '../change-tracking/notice-change-event.entity';
-import {
-  canonicalStringify,
-  computeDiff,
-  DEFAULT_TRACKED_FIELDS,
-  sha256Hex,
-} from '../change-tracking/change-tracking-diff.utils';
+import { DEFAULT_TRACKED_FIELDS } from '../change-tracking/change-tracking-diff.utils';
 import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
@@ -244,6 +248,16 @@ export class NoticeArchiveService {
     return this.isSqliteDriver() ? 1 : defaultConcurrency;
   }
 
+  private getMaintenanceDeps() {
+    return {
+      archiveRepository: this.archiveRepository,
+      summaryStateRepository: this.summaryStateRepository,
+      changeTrackingService: this.changeTrackingService,
+      artifactSupport: this.artifactSupport,
+      logger: this.logger,
+    };
+  }
+
   private isSqliteDriver(): boolean {
     const manager = this.archiveRepository.manager as {
       connection?: { options?: { type?: unknown } };
@@ -356,34 +370,27 @@ export class NoticeArchiveService {
           continue;
         }
 
-        const diff = computeDiff(null, afterSnapshot);
-
-        const eventHash = sha256Hex(
-          canonicalStringify({
-            noticeNum: row.noticeNum,
-            detectedAt: boundaryAt.toISOString(),
-            eventType: 'created',
-            source: LEGACY_GENESIS_SOURCE,
-            hashAlgo: 'sha256',
-            canonVersion: 1,
-            before: diff.normalizedBefore,
-            after: diff.normalizedAfter,
-            details: diff.details,
-          }),
-        );
+        const built = this.changeTrackingService.buildDiffEvent({
+          noticeNum: row.noticeNum,
+          beforeSnapshot: null,
+          afterSnapshot,
+          detectedAt: boundaryAt,
+          source: LEGACY_GENESIS_SOURCE,
+          preferredEventType: 'created',
+        });
 
         const event =
           await this.changeTrackingService.appendChangeEventWithDetails({
             noticeNum: row.noticeNum,
-            eventType: 'created',
-            eventHash,
-            detectedAt: boundaryAt,
+            eventType: built.eventType,
+            eventHash: built.eventHash,
+            detectedAt: built.detectedAt,
             source: LEGACY_GENESIS_SOURCE,
-            changedFieldCount: diff.changedFieldCount,
-            diffSummaryJson: diff.diffSummaryJson,
-            hashAlgo: 'sha256',
-            canonVersion: 1,
-            details: diff.details.map((detail) => ({
+            changedFieldCount: built.diff.changedFieldCount,
+            diffSummaryJson: built.diff.diffSummaryJson,
+            hashAlgo: built.hashAlgo,
+            canonVersion: built.canonVersion,
+            details: built.diff.details.map((detail) => ({
               fieldPath: detail.fieldPath,
               changeType: detail.changeType,
               beforeValue: detail.beforeValue,
@@ -2639,7 +2646,10 @@ export class NoticeArchiveService {
         if (!latestByField.has(fieldPath)) {
           continue;
         }
-        merged[fieldPath] = latestByField.get(fieldPath) ?? null;
+        merged[fieldPath] = this.coerceTrackedFieldValueForSnapshot(
+          fieldPath,
+          latestByField.get(fieldPath) ?? null,
+        );
       }
 
       return merged;
@@ -2663,41 +2673,31 @@ export class NoticeArchiveService {
       return;
     }
 
-    const hashAlgo = 'sha256';
-    const canonVersion = 1;
-    const detectedAt = new Date();
-    const diff = computeDiff(input.beforeSnapshot, input.afterSnapshot);
+    const built = this.changeTrackingService.buildDiffEvent({
+      noticeNum: input.noticeNum,
+      beforeSnapshot: input.beforeSnapshot,
+      afterSnapshot: input.afterSnapshot,
+      source: input.source,
+      detectedAt: new Date(),
+      preferredEventType: input.eventType,
+    });
 
-    if (!diff.changed) {
+    if (!built.shouldAppend) {
       return;
     }
-
-    const eventHash = sha256Hex(
-      canonicalStringify({
-        noticeNum: input.noticeNum,
-        detectedAt: detectedAt.toISOString(),
-        eventType: input.eventType,
-        source: input.source,
-        hashAlgo,
-        canonVersion,
-        before: diff.normalizedBefore,
-        after: diff.normalizedAfter,
-        details: diff.details,
-      }),
-    );
 
     const event = await this.changeTrackingService.appendChangeEventWithDetails(
       {
         noticeNum: input.noticeNum,
-        eventType: input.eventType,
-        eventHash,
-        detectedAt,
+        eventType: built.eventType,
+        eventHash: built.eventHash,
+        detectedAt: built.detectedAt,
         source: input.source,
-        changedFieldCount: diff.changedFieldCount,
-        diffSummaryJson: diff.diffSummaryJson,
-        hashAlgo,
-        canonVersion,
-        details: diff.details.map((detail) => ({
+        changedFieldCount: built.diff.changedFieldCount,
+        diffSummaryJson: built.diff.diffSummaryJson,
+        hashAlgo: built.hashAlgo,
+        canonVersion: built.canonVersion,
+        details: built.diff.details.map((detail) => ({
           fieldPath: detail.fieldPath,
           changeType: detail.changeType,
           beforeValue: detail.beforeValue,
@@ -2712,13 +2712,34 @@ export class NoticeArchiveService {
       .dispatchChangeNotification({
         event,
         subject: input.subject,
-        changedFields: diff.details.map((detail) => detail.fieldPath),
+        changedFields: built.diff.details.map((detail) => detail.fieldPath),
       })
       .catch((dispatchError) => {
         this.logger.warn(
           `Failed to dispatch explicit ${input.eventType} notification for notice ${input.noticeNum}: ${(dispatchError as Error).message}`,
         );
       });
+  }
+
+  private coerceTrackedFieldValueForSnapshot(
+    fieldPath: string,
+    value: string | null,
+  ): unknown {
+    if (value === null) {
+      return null;
+    }
+
+    if (fieldPath === 'num') {
+      const parsed = Number.parseInt(value, 10);
+      return Number.isFinite(parsed) ? parsed : value;
+    }
+
+    if (fieldPath === 'isDone') {
+      if (value === 'true') return true;
+      if (value === 'false') return false;
+    }
+
+    return value;
   }
 
   async getExistingNoticeNumSet(noticeNums: number[]): Promise<Set<number>> {
@@ -2826,87 +2847,10 @@ export class NoticeArchiveService {
       billNo: string | null;
     }>
   > {
-    const rows = await this.archiveRepository
-      .createQueryBuilder('na')
-      .select([
-        'na.noticeNum AS noticeNum',
-        'na.subject AS subject',
-        'na.proposerCategory AS proposerCategory',
-        'na.committee AS committee',
-        'na.assemblyLink AS assemblyLink',
-        'na.content_bill_number AS contentBillNumber',
-        'na.attachmentPdfFile AS attachmentPdfFile',
-        'na.attachmentHwpFile AS attachmentHwpFile',
-      ])
-      .where('na.contentId IS NULL')
-      .andWhere(
-        `COALESCE((
-          SELECT s.is_done
-          FROM notice_archive_snapshot_states s
-          WHERE s.notice_num = na.noticeNum
-          LIMIT 1
-        ), 0) = :isDone`,
-        { isDone: 0 },
-      )
-      .andWhere('na.lifecycle_status = :status', { status: 'active' })
-      .andWhere("(na.proposalReason IS NULL OR TRIM(na.proposalReason) = '')")
-      .andWhere(
-        `NOT EXISTS (
-          SELECT 1
-          FROM notice_change_events e
-          INNER JOIN notice_change_details d ON d.event_id = e.id
-          WHERE e.notice_num = na.noticeNum
-            AND d.field_path = :proposalReasonFieldPath
-            AND d.after_value IS NOT NULL
-            AND TRIM(d.after_value) != ''
-        )`,
-        { proposalReasonFieldPath: 'proposalReason' },
-      )
-      .andWhere(
-        `NOT EXISTS (
-          SELECT 1
-          FROM notice_change_events e
-          INNER JOIN notice_change_details d ON d.event_id = e.id
-          WHERE e.notice_num = na.noticeNum
-            AND d.field_path = :lifecycleStatusFieldPath
-            AND d.after_value = :sourceDeletedLifecycle
-        )`,
-        {
-          lifecycleStatusFieldPath: 'lifecycleStatus',
-          sourceDeletedLifecycle: 'source_deleted',
-        },
-      )
-      .orderBy('na.noticeNum', 'ASC')
-      .limit(limit)
-      .getRawMany<{
-        noticeNum: number;
-        subject: string;
-        proposerCategory: string;
-        committee: string;
-        assemblyLink: string;
-        contentBillNumber: string | null;
-        attachmentPdfFile: string | null;
-        attachmentHwpFile: string | null;
-      }>();
-
-    return rows.map((row) => ({
-      notice: {
-        num: row.noticeNum,
-        subject: row.subject,
-        proposerCategory: row.proposerCategory,
-        committee: row.committee,
-        link: row.assemblyLink,
-        contentId: null,
-        proposalReason: null,
-        attachments: {
-          pdfFile: row.attachmentPdfFile ?? '',
-          hwpFile: row.attachmentHwpFile ?? '',
-        },
-        aiSummary: null,
-        aiSummaryStatus: 'not_supported',
-      },
-      billNo: row.contentBillNumber?.trim() || null,
-    }));
+    return getNsmProposalReasonRetryCandidatesInternal(
+      this.getMaintenanceDeps(),
+      limit,
+    );
   }
 
   /**
@@ -2932,7 +2876,7 @@ export class NoticeArchiveService {
   }
 
   async getArchiveCount(): Promise<number> {
-    return this.archiveRepository.count();
+    return getArchiveCountInternal(this.getMaintenanceDeps());
   }
 
   /**
@@ -2945,94 +2889,16 @@ export class NoticeArchiveService {
    * any Ollama calls.
    */
   async getRecentNoticesForCache(limit: number): Promise<CachedNotice[]> {
-    if (!this.summaryStateRepository) {
-      return [];
-    }
-
-    const activeRows = await this.archiveRepository
-      .createQueryBuilder('archive')
-      .innerJoin(
-        NoticeArchiveSnapshotState,
-        'summary',
-        'summary.notice_num = archive.noticeNum',
-      )
-      .select([
-        'archive.noticeNum AS noticeNum',
-        'archive.subject AS subject',
-        'archive.proposerCategory AS proposerCategory',
-        'archive.committee AS committee',
-        'archive.assemblyLink AS assemblyLink',
-        'archive.contentId AS contentId',
-        'archive.proposalReason AS proposalReason',
-        'archive.attachmentPdfFile AS attachmentPdfFile',
-        'archive.attachmentHwpFile AS attachmentHwpFile',
-      ])
-      .where('summary.is_done = :isDone', { isDone: 0 })
-      .orderBy('archive.noticeNum', 'DESC')
-      .take(limit)
-      .getRawMany<{
-        noticeNum: number;
-        subject: string;
-        proposerCategory: string;
-        committee: string;
-        assemblyLink: string;
-        contentId: string | null;
-        proposalReason: string | null;
-        attachmentPdfFile: string | null;
-        attachmentHwpFile: string | null;
-      }>();
-
-    const rows = activeRows.map((row) =>
-      this.archiveRepository.create({
-        noticeNum: Number(row.noticeNum),
-        subject: row.subject,
-        proposerCategory: row.proposerCategory,
-        committee: row.committee,
-        assemblyLink: row.assemblyLink,
-        contentId: row.contentId,
-        proposalReason: row.proposalReason ?? '',
-        attachmentPdfFile: row.attachmentPdfFile ?? '',
-        attachmentHwpFile: row.attachmentHwpFile ?? '',
-      }),
-    );
-
-    if (this.summaryStateRepository && rows.length > 0) {
-      const summaryStates = await this.getSummaryStateByNoticeNums(
-        rows.map((row) => row.noticeNum),
-      );
-
-      for (const row of rows) {
-        const summaryState = summaryStates.get(row.noticeNum);
-        if (!summaryState) continue;
-        row.isDone = summaryState.isDone;
-        row.aiSummary = summaryState.aiSummary;
-        row.aiSummaryStatus = summaryState.aiSummaryStatus;
-      }
-    }
-
-    return rows.map((row) =>
-      mapArchiveEntityToCachedNotice(row, 'not_requested'),
-    );
+    return getRecentNoticesForCacheInternal(this.getMaintenanceDeps(), limit);
   }
 
   async getLatestProposalReasonForNotice(
     noticeNum: number,
   ): Promise<string | null> {
-    if (!this.changeTrackingService) {
-      return null;
-    }
-
-    try {
-      return this.changeTrackingService.getLatestFieldAfterValue(
-        noticeNum,
-        'proposalReason',
-      );
-    } catch (error) {
-      this.logger.warn(
-        `Failed to load latest proposalReason from change chain for notice ${noticeNum}: ${(error as Error).message}`,
-      );
-      return null;
-    }
+    return getLatestProposalReasonForNoticeInternal(
+      this.getMaintenanceDeps(),
+      noticeNum,
+    );
   }
 
   /**
@@ -3054,78 +2920,30 @@ export class NoticeArchiveService {
     failed: number;
     skipped: number;
   }> {
-    return this.artifactSupport.runIntegrityScan(batchSize);
+    return runIntegrityScanInternal(this.getMaintenanceDeps(), batchSize);
   }
 
   async getArchiveStartedAtByNoticeNums(
     noticeNums: number[],
   ): Promise<Map<number, Date>> {
-    const uniqueNums = Array.from(new Set(noticeNums));
-
-    if (uniqueNums.length === 0) {
-      return new Map();
-    }
-
-    const rows = await this.archiveRepository.find({
-      where: {
-        noticeNum: In(uniqueNums),
-      },
-      select: {
-        noticeNum: true,
-        archiveStartedAt: true,
-      },
-    });
-
-    return new Map(rows.map((row) => [row.noticeNum, row.archiveStartedAt]));
+    return getArchiveStartedAtByNoticeNumsInternal(
+      this.getMaintenanceDeps(),
+      noticeNums,
+    );
   }
 
   async countByNoticeNumComparison(
     query: ArchiveNumCompareCountQuery,
   ): Promise<number> {
-    const where = buildArchiveWhereConditions({
-      search: query.search,
-      startDate: query.startDate,
-      endDate: query.endDate,
-      noticeNumCondition:
-        query.operator === 'gt' ? MoreThan(query.num) : LessThan(query.num),
-    });
-
-    return this.archiveRepository.count({ where });
+    return countByNoticeNumComparisonInternal(this.getMaintenanceDeps(), query);
   }
 
   async getSummaryStateByNoticeNums(
     noticeNums: number[],
   ): Promise<Map<number, ArchiveSummaryState>> {
-    const uniqueNums = Array.from(new Set(noticeNums));
-
-    if (uniqueNums.length === 0) {
-      return new Map();
-    }
-
-    if (!this.summaryStateRepository) {
-      return new Map();
-    }
-
-    const rows = await this.summaryStateRepository.find({
-      where: { noticeNum: In(uniqueNums) },
-      select: {
-        noticeNum: true,
-        isDone: true,
-        aiSummary: true,
-        aiSummaryStatus: true,
-      },
-    });
-
-    return new Map<number, ArchiveSummaryState>(
-      rows.map((row): [number, ArchiveSummaryState] => [
-        row.noticeNum,
-        {
-          isDone: row.isDone ?? false,
-          aiSummary: row.aiSummary ?? null,
-          aiSummaryStatus: (row.aiSummaryStatus ||
-            'not_requested') as AISummaryStatus,
-        },
-      ]),
+    return getSummaryStateByNoticeNumsInternal(
+      this.getMaintenanceDeps(),
+      noticeNums,
     );
   }
 
@@ -3134,38 +2952,11 @@ export class NoticeArchiveService {
     summary: string | null,
     status: AISummaryStatus,
   ): Promise<void> {
-    const normalizedSummary = summary?.trim() ? summary : null;
-
-    if (this.summaryStateRepository) {
-      const updateResult = await this.summaryStateRepository.update(
-        { noticeNum },
-        {
-          aiSummary: normalizedSummary,
-          aiSummaryStatus: status,
-        },
-      );
-
-      if ((updateResult.affected ?? 0) === 0) {
-        try {
-          await this.summaryStateRepository.insert({
-            noticeNum,
-            isDone: false,
-            aiSummary: normalizedSummary,
-            aiSummaryStatus: status,
-          });
-        } catch {
-          // Another worker may have inserted the row concurrently.
-          // Retry as UPDATE to converge state without relying on primary-key id.
-          await this.summaryStateRepository.update(
-            { noticeNum },
-            {
-              aiSummary: normalizedSummary,
-              aiSummaryStatus: status,
-            },
-          );
-        }
-      }
-      return;
-    }
+    await updateSummaryStateByNoticeNumInternal(
+      this.getMaintenanceDeps(),
+      noticeNum,
+      summary,
+      status,
+    );
   }
 }

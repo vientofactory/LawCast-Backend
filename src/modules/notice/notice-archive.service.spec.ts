@@ -39,9 +39,29 @@ describe('NoticeArchiveService', () => {
       .mockResolvedValue(null),
     buildDiffEvent: jest.fn((input: any) => {
       const diff = computeDiff(input.beforeSnapshot, input.afterSnapshot);
+      const lifecycleStatus =
+        typeof input.afterSnapshot?.lifecycleStatus === 'string'
+          ? input.afterSnapshot.lifecycleStatus.trim().toLowerCase()
+          : '';
+      const sourceDeletedAt = input.afterSnapshot?.sourceDeletedAt;
+      const hasSourceDeletedAt =
+        sourceDeletedAt !== null &&
+        sourceDeletedAt !== undefined &&
+        String(sourceDeletedAt).trim().length > 0;
+      const eventType =
+        input.beforeSnapshot === null
+          ? 'created'
+          : (input.preferredEventType ??
+            (lifecycleStatus === 'source_deleted' ||
+            lifecycleStatus === 'renumbered' ||
+            lifecycleStatus === 'invalidated' ||
+            hasSourceDeletedAt
+              ? 'invalidated'
+              : 'updated'));
+
       return {
         shouldAppend: input.beforeSnapshot === null || diff.changed,
-        eventType: input.beforeSnapshot === null ? 'created' : 'updated',
+        eventType,
         diff,
         eventHash: 'test-event-hash',
         detectedAt: new Date('2026-01-01T00:00:00.000Z'),

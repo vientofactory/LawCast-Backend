@@ -626,7 +626,7 @@ describe('NotificationService', () => {
 
       expect(digestLinkFieldCall).toBeDefined();
       const linkText = String(digestLinkFieldCall?.[1] ?? '');
-      const match = linkText.match(/noticeNums=([^&\)]*)/);
+      const match = linkText.match(/noticeNums=([^&)]*)/);
       expect(match).toBeTruthy();
       const encodedNums = match?.[1] ?? '';
       const decodedNums = decodeURIComponent(encodedNums).split(',');

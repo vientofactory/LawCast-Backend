@@ -15,6 +15,8 @@ const CRON_TIMEZONE = appConfig().cron.timezone;
 @Injectable()
 export class CronJobsService {
   private readonly logger = LoggerUtils.getContextLogger(CronJobsService.name);
+  private readonly changeTrackingAuditQueue: Array<'daily' | 'weekly'> = [];
+  private isDrainingChangeTrackingAuditQueue = false;
 
   constructor(
     private readonly dataSource: DataSource,
@@ -24,6 +26,8 @@ export class CronJobsService {
     private readonly changeTrackingService: ChangeTrackingService,
     @Optional() private readonly discordBridge: DiscordBridgeService,
   ) {}
+
+  // Helper method to wrap cron job execution with logging and error handling
 
   /**
    * Wraps the execution of a scheduled task with standardized logging and error handling.
@@ -64,6 +68,11 @@ export class CronJobsService {
     }
   }
 
+  /**
+   * Determines whether a crawling-related cron job should be skipped based on the current state of the archive sync service.
+   * @param taskName A descriptive name of the task for logging purposes.
+   * @returns A boolean indicating whether the cron job should be skipped.
+   */
   private shouldSkipCrawlingCron(taskName: string): boolean {
     if (!this.archiveSyncService.isAnyPhaseRunning()) return false;
 
@@ -77,6 +86,11 @@ export class CronJobsService {
     return true;
   }
 
+  /**
+   * Determines whether an archive sync-related cron job should be skipped based on the current state of the crawling service.
+   * @param taskName A descriptive name of the task for logging purposes.
+   * @returns A boolean indicating whether the cron job should be skipped.
+   */
   private shouldSkipArchiveSyncCron(taskName: string): boolean {
     if (!this.crawlingService.isSchedulerBusy({ includeBackground: true })) {
       return false;
@@ -92,6 +106,11 @@ export class CronJobsService {
     return true;
   }
 
+  /**
+   * Determines whether a database maintenance cron job should be skipped based on the current state of the archive sync and crawling services.
+   * @param taskName A descriptive name of the task for logging purposes.
+   * @returns A boolean indicating whether the cron job should be skipped.
+   */
   private shouldSkipDatabaseMaintenanceCron(taskName: string): boolean {
     if (this.archiveSyncService.isAnyPhaseRunning()) {
       const message = `${taskName} skipped - archive sync phase is currently running`;
@@ -117,6 +136,75 @@ export class CronJobsService {
     );
     return true;
   }
+
+  /**
+   * Enqueues a change tracking audit task for the specified scope.
+   * @param scope The scope of the audit ('daily' or 'weekly').
+   * @returns A promise that resolves when the task has been enqueued.
+   */
+  private async enqueueChangeTrackingAudit(
+    scope: 'daily' | 'weekly',
+  ): Promise<void> {
+    if (!this.changeTrackingAuditQueue.includes(scope)) {
+      this.changeTrackingAuditQueue.push(scope);
+    } else {
+      LoggerUtils.debugDev(
+        CronJobsService.name,
+        `change-tracking ${scope} audit already queued; skipping duplicate enqueue`,
+      );
+    }
+
+    if (this.isDrainingChangeTrackingAuditQueue) {
+      return;
+    }
+
+    this.isDrainingChangeTrackingAuditQueue = true;
+    try {
+      while (this.changeTrackingAuditQueue.length > 0) {
+        const nextScope = this.changeTrackingAuditQueue.shift();
+        if (!nextScope) {
+          continue;
+        }
+
+        const taskName = `change-tracking ${nextScope} audit`;
+
+        // Chain audits are read-only verification jobs; run even when phase locks are busy.
+        if (this.crawlingService.isSchedulerBusy({ includeBackground: true })) {
+          const message =
+            `${taskName} running despite crawling scheduler lock ` +
+            '(critical scheduled audit)';
+          this.logger.warn(message);
+          void this.discordBridge?.logEvent(
+            BridgeLogLevel.WARN,
+            CronJobsService.name,
+            message,
+          );
+        }
+
+        if (this.archiveSyncService.isAnyPhaseRunning()) {
+          const message =
+            `${taskName} running despite archive-sync phase lock ` +
+            '(critical scheduled audit)';
+          this.logger.warn(message);
+          void this.discordBridge?.logEvent(
+            BridgeLogLevel.WARN,
+            CronJobsService.name,
+            message,
+          );
+        }
+
+        await this.execute(taskName, () =>
+          this.changeTrackingService
+            .runScheduledChainAudit(nextScope)
+            .then(() => {}),
+        );
+      }
+    } finally {
+      this.isDrainingChangeTrackingAuditQueue = false;
+    }
+  }
+
+  // Cron job handlers
 
   /**
    * Crawls for new legislative notices and dispatches notifications.
@@ -238,26 +326,14 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handleChangeTrackingDailyAudit(): Promise<void> {
-    if (this.shouldSkipArchiveSyncCron('change-tracking daily audit')) {
-      return;
-    }
-    await this.execute('change-tracking daily audit', () =>
-      this.changeTrackingService.runScheduledChainAudit('daily').then(() => {}),
-    );
+    await this.enqueueChangeTrackingAudit('daily');
   }
 
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CHANGE_TRACKING_WEEKLY_AUDIT, {
     timeZone: CRON_TIMEZONE,
   })
   async handleChangeTrackingWeeklyAudit(): Promise<void> {
-    if (this.shouldSkipArchiveSyncCron('change-tracking weekly audit')) {
-      return;
-    }
-    await this.execute('change-tracking weekly audit', () =>
-      this.changeTrackingService
-        .runScheduledChainAudit('weekly')
-        .then(() => {}),
-    );
+    await this.enqueueChangeTrackingAudit('weekly');
   }
 
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.QUICK_KEYWORDS_REFRESH, {

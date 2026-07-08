@@ -51,6 +51,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       event: {
         id: 1,
         noticeNum: 1001,
+        detectedAt: new Date('2026-01-01T00:00:00.000Z'),
         eventType: 'updated',
         source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-1',
@@ -63,6 +64,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       event: {
         id: 2,
         noticeNum: 1002,
+        detectedAt: new Date('2026-01-01T00:01:00.000Z'),
         eventType: 'updated',
         source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-2',
@@ -101,6 +103,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       event: {
         id: 3,
         noticeNum: 2001,
+        detectedAt: new Date('2026-01-01T00:02:00.000Z'),
         eventType: 'updated',
         source: NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
         eventHash: 'hash-nested',
@@ -127,6 +130,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       event: {
         id: 4,
         noticeNum: 3001,
+        detectedAt: new Date('2026-01-01T00:03:00.000Z'),
         eventType: 'updated',
         source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
         eventHash: 'hash-auto',
@@ -564,7 +568,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const createdDetectedAt = new Date('2026-07-03T00:00:00.000Z');
     const updatedDetectedAt = new Date('2026-07-03T01:00:00.000Z');
     const createdSnapshot = {
-      num: '5001',
+      num: 5001,
       subject: '초기 법률안',
       proposerCategory: null,
       committee: null,

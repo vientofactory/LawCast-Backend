@@ -1,9 +1,4 @@
 import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
-import {
-  type ITableData,
-  type INsmBillItem,
-  type ISearchResult,
-} from 'pal-crawl';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { CrawlingCoreService } from './crawling-core.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
@@ -13,10 +8,8 @@ import { CacheService } from '../cache/cache.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
-import { mapConcurrently } from '../../utils/concurrency.utils';
-import { type CachedNotice } from '../../types/cache.types';
-import { AI_SUMMARY_STATUS } from './utils/ai-summary-status.utils';
 import { type LegacyGenesisSeedResult } from '../notice/notice-archive.service';
+import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 import {
   ArchiveSyncPhaseRunner,
   type ArchiveSyncPhaseState,
@@ -25,6 +18,16 @@ import {
   type PhaseEntry,
   type PhaseTracker,
 } from './utils/archive-sync-phase-runner';
+import {
+  executeFullSyncPhase,
+  executePendingSyncPhase,
+  executeSummaryBackfillPhase,
+  executeUnavailableRetryPhase,
+  executeChainIntegrityAuditPhase,
+  reconcileIsDonePhase,
+  type ArchiveSyncExecutorDeps,
+  type ArchiveSyncExecutorOptions,
+} from './utils/archive-sync-phase-executors';
 
 // ─── Tuning constants (sourced from APP_CONSTANTS.ARCHIVE_SYNC) ───────────────
 
@@ -95,6 +98,16 @@ export interface SummaryUnavailableRetryResult {
   stillFailed: number;
 }
 
+export interface ChainIntegrityAuditResult {
+  checkedAt: string;
+  scope: 'daily' | 'weekly';
+  noticeCount: number;
+  eventCount: number;
+  failureCount: number;
+  checkpointRootHash: string | null;
+  skipped: boolean;
+}
+
 /** Result of a single NsmLmSts pending-bills sync pass. */
 export interface PendingSyncResult {
   totalScanned: number;
@@ -107,6 +120,7 @@ export type IntegrityCheckStatus = PhaseStatus<IntegrityCheckResult>;
 export type SummaryBackfillStatus = PhaseStatus<SummaryBackfillResult>;
 export type SummaryUnavailableRetryStatus =
   PhaseStatus<SummaryUnavailableRetryResult>;
+export type ChainIntegrityAuditStatus = PhaseStatus<ChainIntegrityAuditResult>;
 export type PendingSyncStatus = PhaseStatus<PendingSyncResult>;
 export type LegacyGenesisSeedStatus = PhaseStatus<LegacyGenesisSeedResult>;
 
@@ -155,9 +169,32 @@ export class ArchiveSyncService implements OnModuleInit {
   private readonly summaryBackfill = makePhaseTracker<SummaryBackfillResult>();
   private readonly unavailableRetry =
     makePhaseTracker<SummaryUnavailableRetryResult>();
+  private readonly chainIntegrityAudit =
+    makePhaseTracker<ChainIntegrityAuditResult>();
   private readonly pendingSync = makePhaseTracker<PendingSyncResult>();
   private readonly legacyGenesisSeed =
     makePhaseTracker<LegacyGenesisSeedResult>();
+
+  private readonly executorOptions: ArchiveSyncExecutorOptions = {
+    crawlerPageUnit: CRAWLER_PAGE_UNIT,
+    crawlerDelayMs: CRAWLER_DELAY_MS,
+    summaryBackfillBatchSize: SUMMARY_BACKFILL_BATCH_SIZE,
+    summaryBackfillConcurrency: SUMMARY_BACKFILL_CONCURRENCY,
+    donePageMaxRetries: DONE_PAGE_MAX_RETRIES,
+    donePageRetryBaseMs: DONE_PAGE_RETRY_BASE_MS,
+  };
+
+  private getExecutorDeps(): ArchiveSyncExecutorDeps {
+    return {
+      crawlingCoreService: this.crawlingCoreService,
+      noticeArchiveService: this.noticeArchiveService,
+      archiveOrchestratorService: this.archiveOrchestratorService,
+      summaryGenerationService: this.summaryGenerationService,
+      cacheService: this.cacheService,
+      changeTrackingService: this.changeTrackingService,
+      discordBridge: this.discordBridge,
+    };
+  }
 
   constructor(
     private readonly crawlingCoreService: CrawlingCoreService,
@@ -165,7 +202,8 @@ export class ArchiveSyncService implements OnModuleInit {
     private readonly archiveOrchestratorService: ArchiveOrchestratorService,
     private readonly summaryGenerationService: SummaryGenerationService,
     private readonly cacheService: CacheService,
-    @Optional() private readonly discordBridge: DiscordBridgeService,
+    @Optional() private readonly changeTrackingService?: ChangeTrackingService,
+    @Optional() private readonly discordBridge?: DiscordBridgeService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -209,10 +247,13 @@ export class ArchiveSyncService implements OnModuleInit {
       await this.safeRun('unavailable retry', () =>
         this.runUnavailableRetry('bootstrap'),
       );
-      await this.safeRun('isDone sync', () => this.runIsDoneSync('bootstrap'));
       await this.safeRun('integrity check', () =>
         this.runIntegrityCheck('bootstrap'),
       );
+      await this.safeRun('chain integrity audit', () =>
+        this.runChainIntegrityAudit('bootstrap'),
+      );
+      await this.safeRun('isDone sync', () => this.runIsDoneSync('bootstrap'));
 
       LoggerUtils.log(
         ArchiveSyncService.name,
@@ -339,6 +380,7 @@ export class ArchiveSyncService implements OnModuleInit {
       { name: 'full sync', tracker: this.fullSync },
       { name: 'isDone sync', tracker: this.isDoneSync },
       { name: 'integrity check', tracker: this.integrityCheck },
+      { name: 'chain integrity audit', tracker: this.chainIntegrityAudit },
       { name: 'summary backfill', tracker: this.summaryBackfill },
       { name: 'unavailable retry', tracker: this.unavailableRetry },
       { name: 'pending sync', tracker: this.pendingSync },
@@ -356,7 +398,7 @@ export class ArchiveSyncService implements OnModuleInit {
       trigger,
       () => this.noticeArchiveService.seedLegacyGenesisEvents(boundaryAt),
       (r) =>
-        `boundary=${r.boundaryAt} scanned=${r.scanned} seeded=${r.seeded} skipped=${r.skipped}`,
+        `boundaryAt=${r.boundaryAt} scanned=${r.scanned} seeded=${r.seeded} skipped=${r.skipped}`,
       /* crossPhaseGuard */ true,
     );
   }
@@ -364,10 +406,6 @@ export class ArchiveSyncService implements OnModuleInit {
   getLegacyGenesisSeedStatus(): LegacyGenesisSeedStatus {
     return this.toStatus(this.legacyGenesisSeed);
   }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Phase 1 - Full archive sync
-  // ─────────────────────────────────────────────────────────────────────────
 
   async runFullSync(trigger: string): Promise<FullSyncResult | null> {
     return this.runPhase(
@@ -385,124 +423,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   private async executeFullSync(): Promise<FullSyncResult> {
-    LoggerUtils.log(ArchiveSyncService.name, 'Full archive sync started');
-
-    let totalPagesScanned = 0;
-    let totalNoticesScanned = 0;
-    let newlyArchivedCount = 0;
-    const seenPalActiveNums = new Set<number>();
-
-    this.noticeArchiveService.beginChangeNotificationCollection();
-
-    try {
-      for await (const page of this.crawlingCoreService.getAllPages(
-        { pageUnit: CRAWLER_PAGE_UNIT },
-        { delayMs: CRAWLER_DELAY_MS, concurrency: 1 },
-      )) {
-        totalPagesScanned++;
-        // Guard against unexpected null/undefined items from the crawler
-        const pageItems: ITableData[] = page.items ?? [];
-        for (const item of pageItems) {
-          seenPalActiveNums.add(item.num);
-        }
-        totalNoticesScanned += pageItems.length;
-
-        const newNotices =
-          await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
-            pageItems,
-          );
-
-        if (newNotices.length > 0) {
-          const saved = await this.archiveOrchestratorService.archiveNotices(
-            newNotices.map((n) => ({
-              ...n,
-              aiSummary: null,
-              aiSummaryStatus: 'not_requested' as const,
-            })),
-            { reason: 'full-sync-new-notices' },
-          );
-          newlyArchivedCount += saved;
-        }
-
-        // Upgrade pending bills: bills previously archived from NsmLmSts with
-        // contentId=NULL that now appear in pal.assembly.go.kr with a contentId.
-        const newNums = new Set(newNotices.map((n) => n.num));
-        const alreadyArchivedWithContentId = pageItems.filter(
-          (item) => !newNums.has(item.num) && item.contentId !== null,
-        );
-        if (alreadyArchivedWithContentId.length > 0) {
-          const nullContentIdNums =
-            await this.noticeArchiveService.getArchivedNullContentIdNums(
-              alreadyArchivedWithContentId.map((i) => i.num),
-            );
-          if (nullContentIdNums.size > 0) {
-            const toUpgrade = alreadyArchivedWithContentId.filter((item) =>
-              nullContentIdNums.has(item.num),
-            );
-
-            // Re-archive with PAL source/detail so NSM-first rows are naturally
-            // refreshed (proposal metadata/source HTML/etc.) once PAL publishes.
-            // Do not pass aiSummary/aiSummaryStatus here: this path updates
-            // archive metadata only and must not mutate existing summary states.
-            const upgraded =
-              await this.archiveOrchestratorService.archiveNotices(
-                toUpgrade.map((item) => ({
-                  num: item.num,
-                  subject: item.subject,
-                  proposerCategory: item.proposerCategory,
-                  committee: item.committee,
-                  link: item.link,
-                  contentId: item.contentId,
-                  attachments: item.attachments ?? {
-                    pdfFile: null,
-                    hwpFile: null,
-                  },
-                })),
-                { reason: 'nsm-pal-upgrade' },
-              );
-            if (upgraded > 0) {
-              LoggerUtils.logDev(
-                ArchiveSyncService.name,
-                `Upgraded ${upgraded} pending bill(s) from NSM to PAL with full archive refresh`,
-              );
-              void this.discordBridge?.logEvent(
-                BridgeLogLevel.DEBUG,
-                ArchiveSyncService.name,
-                `NSM->PAL archive refresh applied: upgraded **${upgraded}** bill(s) on full sync`,
-                {
-                  upgraded,
-                  detected: toUpgrade.length,
-                  sampleNoticeNums: toUpgrade
-                    .slice(0, 10)
-                    .map((item) => item.num),
-                },
-              );
-            }
-          }
-        }
-
-        LoggerUtils.debugDev(
-          ArchiveSyncService.name,
-          `Page ${page.currentPage}/${page.totalPages}: ` +
-            `total=${pageItems.length} new=${newNotices.length}`,
-        );
-      }
-
-      const sourceDeletedCount =
-        await this.noticeArchiveService.markSourceDeletedByMissingPalNums(
-          seenPalActiveNums,
-        );
-      if (sourceDeletedCount > 0) {
-        LoggerUtils.log(
-          ArchiveSyncService.name,
-          `Marked ${sourceDeletedCount} notice(s) as source_deleted after PAL full sync reconciliation`,
-        );
-      }
-
-      return { totalPagesScanned, totalNoticesScanned, newlyArchivedCount };
-    } finally {
-      await this.noticeArchiveService.endChangeNotificationCollection();
-    }
+    return executeFullSyncPhase(this.getExecutorDeps(), this.executorOptions);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -531,74 +452,10 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   private async executePendingSync(): Promise<PendingSyncResult> {
-    LoggerUtils.logDev(
-      ArchiveSyncService.name,
-      'Pending bills sync (NsmLmSts) started',
+    return executePendingSyncPhase(
+      this.getExecutorDeps(),
+      this.executorOptions,
     );
-
-    this.noticeArchiveService.beginChangeNotificationCollection();
-
-    try {
-      const rawItemMap = new Map<number, INsmBillItem>();
-      const pendingNotices: ReturnType<
-        typeof CrawlingCoreService.nsmBillToCachedNotice
-      >[] = [];
-
-      for await (const page of this.crawlingCoreService.getAllNsmPendingPages(
-        {},
-        { delayMs: CRAWLER_DELAY_MS, concurrency: 1 },
-      )) {
-        for (const item of page.items ?? []) {
-          const notice = CrawlingCoreService.nsmBillToCachedNotice(item);
-          if (!rawItemMap.has(notice.num)) {
-            rawItemMap.set(notice.num, item);
-            pendingNotices.push(notice);
-          }
-        }
-      }
-
-      const totalScanned = pendingNotices.length;
-
-      if (totalScanned === 0) {
-        LoggerUtils.logDev(
-          ArchiveSyncService.name,
-          'No pending bills found in NsmLmSts',
-        );
-        return { totalScanned: 0, newlyArchivedCount: 0 };
-      }
-
-      const newPendingNotices =
-        await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
-          pendingNotices,
-        );
-
-      let newlyArchivedCount = 0;
-      if (newPendingNotices.length > 0) {
-        const newPendingItems = newPendingNotices
-          .map((n) => rawItemMap.get(n.num))
-          .filter((item): item is INsmBillItem => item !== undefined);
-        const archived =
-          await this.archiveOrchestratorService.archiveNsmBillItems(
-            newPendingItems,
-            { reason: 'new-pending-bills' },
-          );
-        newlyArchivedCount = archived.length;
-      }
-
-      LoggerUtils.log(
-        ArchiveSyncService.name,
-        `Pending sync done - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
-        ArchiveSyncService.name,
-        `Pending sync complete - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
-      );
-
-      return { totalScanned, newlyArchivedCount };
-    } finally {
-      await this.noticeArchiveService.endChangeNotificationCollection();
-    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -621,44 +478,6 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   /**
-   * Fetches a single page of done notices, retrying up to
-   * {@link DONE_PAGE_MAX_RETRIES} times with linear backoff so a transient
-   * HTTP timeout on page N does not abort the entire isDone sync.
-   */
-  private async fetchDonePageWithRetry(
-    pageIndex: number,
-  ): Promise<ISearchResult> {
-    let lastError: unknown;
-    for (let attempt = 0; attempt <= DONE_PAGE_MAX_RETRIES; attempt++) {
-      try {
-        return await this.crawlingCoreService.searchDone({
-          pageIndex,
-          pageUnit: CRAWLER_PAGE_UNIT,
-        });
-      } catch (error) {
-        lastError = error;
-        if (attempt < DONE_PAGE_MAX_RETRIES) {
-          const backoff = DONE_PAGE_RETRY_BASE_MS * (attempt + 1);
-          LoggerUtils.warn(
-            ArchiveSyncService.name,
-            `isDone page ${pageIndex} failed ` +
-              `(attempt ${attempt + 1}/${DONE_PAGE_MAX_RETRIES + 1}): ` +
-              `${(error as Error).message} - retrying in ${backoff}ms`,
-          );
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.WARN,
-            ArchiveSyncService.name,
-            `isDone page **${pageIndex}** failed (attempt ${attempt + 1}/${DONE_PAGE_MAX_RETRIES + 1}): ` +
-              `${(error as Error).message} - retrying in ${backoff}ms`,
-          );
-          await new Promise<void>((resolve) => setTimeout(resolve, backoff));
-        }
-      }
-    }
-    throw lastError;
-  }
-
-  /**
    * Phase A - fetches all done pages with per-page retry, populates
    *            `doneNumSet`, eagerly marks matching archive rows as
    *            `isDone=true`.
@@ -666,52 +485,7 @@ export class ArchiveSyncService implements OnModuleInit {
    *            noticeNum is absent from the fetched done-set.
    */
   private async reconcileIsDone(): Promise<IsDoneSyncResult> {
-    LoggerUtils.log(ArchiveSyncService.name, 'isDone reconciliation started');
-
-    // Iterates all done-notice pages and marks matching archive rows as
-    // isDone=true. Marks are never reverted - once done, always done.
-    let markedDoneCount = 0;
-    let fetchedDoneCount = 0;
-
-    // Fetch page 1 first to learn totalPages, then iterate the rest.
-    const firstPage = await this.fetchDonePageWithRetry(1);
-    const totalPages = firstPage.totalPages;
-
-    let pageNums = (firstPage.items ?? []).map((item) => item.num);
-    fetchedDoneCount += pageNums.length;
-    markedDoneCount +=
-      await this.noticeArchiveService.markNoticesDoneByNums(pageNums);
-    LoggerUtils.debugDev(
-      ArchiveSyncService.name,
-      `isDone page 1/${totalPages}: +${pageNums.length} nums, ${markedDoneCount} total marked`,
-    );
-
-    for (let pageIndex = 2; pageIndex <= totalPages; pageIndex++) {
-      await new Promise<void>((resolve) =>
-        setTimeout(resolve, CRAWLER_DELAY_MS),
-      );
-      const page = await this.fetchDonePageWithRetry(pageIndex);
-      pageNums = (page.items ?? []).map((item) => item.num);
-      fetchedDoneCount += pageNums.length;
-      markedDoneCount +=
-        await this.noticeArchiveService.markNoticesDoneByNums(pageNums);
-      LoggerUtils.debugDev(
-        ArchiveSyncService.name,
-        `isDone page ${pageIndex}/${totalPages}: +${pageNums.length} nums, ${markedDoneCount} total marked`,
-      );
-    }
-
-    LoggerUtils.log(
-      ArchiveSyncService.name,
-      `isDone reconciliation done - fetched=${fetchedDoneCount} marked=${markedDoneCount}`,
-    );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      ArchiveSyncService.name,
-      `isDone sync complete - fetched=${fetchedDoneCount} marked=${markedDoneCount}`,
-    );
-
-    return { fetchedDoneCount, markedDoneCount };
+    return reconcileIsDonePhase(this.getExecutorDeps(), this.executorOptions);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -762,6 +536,28 @@ export class ArchiveSyncService implements OnModuleInit {
 
   getIntegrityCheckStatus(): IntegrityCheckStatus {
     return this.toStatus(this.integrityCheck);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 3b - Change-chain integrity audit
+  // ─────────────────────────────────────────────────────────────────────────
+
+  async runChainIntegrityAudit(
+    trigger: string,
+  ): Promise<ChainIntegrityAuditResult | null> {
+    return this.runPhase(
+      'Chain integrity audit',
+      this.chainIntegrityAudit,
+      trigger,
+      () => this.executeChainIntegrityAudit(),
+      (r) =>
+        `scope=${r.scope} notice=${r.noticeCount} event=${r.eventCount} failures=${r.failureCount} skipped=${r.skipped}`,
+      /* crossPhaseGuard */ true,
+    );
+  }
+
+  getChainIntegrityAuditStatus(): ChainIntegrityAuditStatus {
+    return this.toStatus(this.chainIntegrityAudit);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -829,117 +625,10 @@ export class ArchiveSyncService implements OnModuleInit {
    * prevent an infinite loop of no-op updates.
    */
   private async executeSummaryBackfill(): Promise<SummaryBackfillResult> {
-    if (!this.summaryGenerationService.isAiSummaryEnabled()) {
-      LoggerUtils.logDev(
-        ArchiveSyncService.name,
-        'Summary backfill skipped - AI summary disabled',
-      );
-      return { scanned: 0, generated: 0, skipped: 0, failed: 0 };
-    }
-
-    let scanned = 0;
-    let generated = 0;
-    let skipped = 0;
-    let failed = 0;
-
-    for (;;) {
-      // Drain pattern: always fetch from offset 0.
-      // Processed rows transition away from 'not_requested' and naturally
-      // drop out of subsequent queries until the set is empty.
-      const batch = await this.noticeArchiveService.getPendingSummaryPage(
-        SUMMARY_BACKFILL_BATCH_SIZE,
-      );
-      if (batch.length === 0) break;
-
-      const batchCacheUpdates: CachedNotice[] = [];
-      const batchStatuses = await mapConcurrently(
-        batch,
-        SUMMARY_BACKFILL_CONCURRENCY,
-        async (notice) => {
-          try {
-            const result =
-              await this.summaryGenerationService.generateSummaryForNotice(
-                notice,
-                { phase: 'summary-backfill' },
-              );
-            await this.noticeArchiveService.updateSummaryStateByNoticeNum(
-              notice.num,
-              result.aiSummary,
-              result.aiSummaryStatus,
-            );
-            batchCacheUpdates.push({
-              ...notice,
-              aiSummary: result.aiSummary,
-              aiSummaryStatus: result.aiSummaryStatus,
-            });
-            return result.aiSummaryStatus;
-          } catch (error) {
-            LoggerUtils.error(
-              ArchiveSyncService.name,
-              `Summary backfill failed for notice ${notice.num}: ${(error as Error).message}`,
-            );
-
-            await this.noticeArchiveService
-              .updateSummaryStateByNoticeNum(
-                notice.num,
-                null,
-                AI_SUMMARY_STATUS.UNAVAILABLE,
-              )
-              .catch((persistError) => {
-                LoggerUtils.warn(
-                  ArchiveSyncService.name,
-                  `Failed to persist unavailable summary state for notice ${notice.num}: ${(persistError as Error).message}`,
-                );
-              });
-
-            batchCacheUpdates.push({
-              ...notice,
-              aiSummary: null,
-              aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
-            });
-
-            return AI_SUMMARY_STATUS.UNAVAILABLE;
-          }
-        },
-      );
-
-      // Reflect the backfill results in the Redis cache immediately so the
-      // API response shows the freshly-generated summaries without waiting
-      // for the next crawl cycle or a backend restart.
-      if (batchCacheUpdates.length > 0) {
-        await this.cacheService.updateCache(batchCacheUpdates);
-      }
-
-      for (const status of batchStatuses) {
-        if (status === 'ready') generated++;
-        else if (status === 'not_supported') skipped++;
-        else failed++; // 'unavailable'
-      }
-
-      scanned += batch.length;
-
-      LoggerUtils.debugDev(
-        ArchiveSyncService.name,
-        `Summary backfill batch [${scanned - batch.length}-${scanned - 1}]: ` +
-          `generated=${generated} skipped=${skipped} failed=${failed}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.VERBOSE,
-        ArchiveSyncService.name,
-        `Summary backfill batch: scanned=${scanned} generated=${generated} skipped=${skipped} failed=${failed}`,
-        { scanned, generated, skipped, failed },
-      );
-
-      if (batch.length < SUMMARY_BACKFILL_BATCH_SIZE) break;
-    }
-
-    LoggerUtils.log(
-      ArchiveSyncService.name,
-      `Summary backfill done - scanned=${scanned} generated=${generated} ` +
-        `skipped=${skipped} failed=${failed}`,
+    return executeSummaryBackfillPhase(
+      this.getExecutorDeps(),
+      this.executorOptions,
     );
-
-    return { scanned, generated, skipped, failed };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -947,99 +636,13 @@ export class ArchiveSyncService implements OnModuleInit {
   // ─────────────────────────────────────────────────────────────────────────
 
   private async executeUnavailableRetry(): Promise<SummaryUnavailableRetryResult> {
-    if (!this.summaryGenerationService.isAiSummaryEnabled()) {
-      LoggerUtils.logDev(
-        ArchiveSyncService.name,
-        'Unavailable summary retry skipped - AI summary disabled',
-      );
-      return { scanned: 0, recovered: 0, skipped: 0, stillFailed: 0 };
-    }
-
-    let scanned = 0;
-    let recovered = 0;
-    let skipped = 0;
-    let stillFailed = 0;
-    let skip = 0;
-
-    for (;;) {
-      // Offset-based pagination (NOT a drain loop).
-      // Rows that remain 'unavailable' after retry stay in the set, so we
-      // must advance skip to avoid an infinite loop.
-      const batch = await this.noticeArchiveService.getUnavailableSummaryPage(
-        skip,
-        SUMMARY_BACKFILL_BATCH_SIZE,
-      );
-      if (batch.length === 0) break;
-
-      const batchCacheUpdates: CachedNotice[] = [];
-      const batchStatuses = await mapConcurrently(
-        batch,
-        SUMMARY_BACKFILL_CONCURRENCY,
-        async (notice) => {
-          try {
-            const result =
-              await this.summaryGenerationService.generateSummaryForNotice(
-                notice,
-                { phase: 'unavailable-retry' },
-              );
-            await this.noticeArchiveService.updateSummaryStateByNoticeNum(
-              notice.num,
-              result.aiSummary,
-              result.aiSummaryStatus,
-            );
-            batchCacheUpdates.push({
-              ...notice,
-              aiSummary: result.aiSummary,
-              aiSummaryStatus: result.aiSummaryStatus,
-            });
-            return result.aiSummaryStatus;
-          } catch (error) {
-            LoggerUtils.error(
-              ArchiveSyncService.name,
-              `Unavailable retry failed for notice ${notice.num}: ${(error as Error).message}`,
-            );
-            return 'unavailable' as const;
-          }
-        },
-      );
-
-      // Reflect the retry results in the Redis cache immediately so the
-      // API response shows recovered summaries without waiting for the
-      // next crawl cycle or a backend restart.
-      if (batchCacheUpdates.length > 0) {
-        await this.cacheService.updateCache(batchCacheUpdates);
-      }
-
-      for (const status of batchStatuses) {
-        if (status === 'ready') recovered++;
-        else if (status === 'not_supported') skipped++;
-        else stillFailed++; // 'unavailable'
-      }
-
-      scanned += batch.length;
-
-      LoggerUtils.debugDev(
-        ArchiveSyncService.name,
-        `Unavailable retry batch [${skip}-${skip + batch.length - 1}]: ` +
-          `recovered=${recovered} skipped=${skipped} stillFailed=${stillFailed}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.VERBOSE,
-        ArchiveSyncService.name,
-        `Unavailable retry batch: scanned=${scanned} recovered=${recovered} skipped=${skipped} stillFailed=${stillFailed}`,
-        { scanned, recovered, skipped, stillFailed },
-      );
-
-      if (batch.length < SUMMARY_BACKFILL_BATCH_SIZE) break;
-      skip += SUMMARY_BACKFILL_BATCH_SIZE;
-    }
-
-    LoggerUtils.log(
-      ArchiveSyncService.name,
-      `Unavailable summary retry done - scanned=${scanned} recovered=${recovered} ` +
-        `skipped=${skipped} stillFailed=${stillFailed}`,
+    return executeUnavailableRetryPhase(
+      this.getExecutorDeps(),
+      this.executorOptions,
     );
+  }
 
-    return { scanned, recovered, skipped, stillFailed };
+  private async executeChainIntegrityAudit(): Promise<ChainIntegrityAuditResult> {
+    return executeChainIntegrityAuditPhase(this.getExecutorDeps());
   }
 }
