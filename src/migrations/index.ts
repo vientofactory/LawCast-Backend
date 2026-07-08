@@ -13,6 +13,7 @@ import { AddNoticeArchiveSummaryStates1751760002000 } from './202607060002-add-n
 import { RemoveArchiveSummaryColumns1751760003000 } from './202607060003-remove-archive-summary-columns.migration';
 import { RemoveNoticeArchiveImmutabilityTriggers1751760004000 } from './202607060004-remove-notice-archive-immutability-triggers.migration';
 import { RefactorArchiveSnapshotStatesAndImmutability1751846401000 } from './202607070001-refactor-archive-snapshot-states-and-immutability.migration';
+import { RemoveArchiveLastUpdatedAt1751932801000 } from './202607080001-remove-archive-last-updated-at.migration';
 
 export const migrations: (new () => MigrationInterface)[] = [
   InitialSchemaMigration1744953900000,
@@ -29,4 +30,5 @@ export const migrations: (new () => MigrationInterface)[] = [
   RemoveArchiveSummaryColumns1751760003000,
   RemoveNoticeArchiveImmutabilityTriggers1751760004000,
   RefactorArchiveSnapshotStatesAndImmutability1751846401000,
+  RemoveArchiveLastUpdatedAt1751932801000,
 ];

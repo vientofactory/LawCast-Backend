@@ -4,7 +4,6 @@ import {
   Entity,
   Index,
   PrimaryGeneratedColumn,
-  UpdateDateColumn,
 } from 'typeorm';
 
 export type NoticeLifecycleStatus = 'active' | 'source_deleted' | 'renumbered';
@@ -183,7 +182,4 @@ export class NoticeArchive {
 
   @CreateDateColumn({ name: 'archive_started_at' })
   archiveStartedAt: Date;
-
-  @UpdateDateColumn({ name: 'last_updated_at' })
-  lastUpdatedAt: Date;
 }

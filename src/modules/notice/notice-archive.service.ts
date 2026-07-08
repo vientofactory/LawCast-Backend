@@ -100,7 +100,6 @@ export interface ArchiveNoticeItem {
   sourceDeletedAt: Date | null;
   changeEventCount?: number;
   archiveStartedAt: Date;
-  lastUpdatedAt: Date;
 }
 
 export interface ArchiveDetailResult {

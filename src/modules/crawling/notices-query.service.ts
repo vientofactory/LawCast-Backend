@@ -199,7 +199,6 @@ export class NoticesQueryService {
         hwpFile: notice.attachments?.hwpFile ?? '',
       },
       archiveStartedAt: null,
-      lastUpdatedAt: null,
     };
   }
 

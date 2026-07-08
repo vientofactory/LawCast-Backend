@@ -27,7 +27,6 @@ export interface SearchNoticesItem {
   aiSummaryStatus: AISummaryStatus;
   attachments: { pdfFile: string; hwpFile: string };
   archiveStartedAt: Date | null;
-  lastUpdatedAt: Date | null;
 }
 
 export interface SearchNoticesResult {
@@ -115,7 +114,6 @@ export class NoticeSearchService {
           aiSummaryStatus: item.aiSummaryStatus,
           attachments: item.attachments,
           archiveStartedAt: item.archiveStartedAt,
-          lastUpdatedAt: item.lastUpdatedAt,
         });
       }
     } else {
@@ -144,7 +142,6 @@ export class NoticeSearchService {
               hwpFile: crawlerItem.attachments.hwpFile ?? '',
             },
             archiveStartedAt: null,
-            lastUpdatedAt: null,
           });
         }
       }
@@ -174,7 +171,6 @@ export class NoticeSearchService {
               hwpFile: crawlerItem.attachments.hwpFile ?? '',
             },
             archiveStartedAt: null,
-            lastUpdatedAt: null,
           });
         }
       }

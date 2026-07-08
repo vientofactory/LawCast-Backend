@@ -30,7 +30,6 @@ export const NOTICE_ITEM_SELECT = {
   lifecycleStatus: true,
   sourceDeletedAt: true,
   archiveStartedAt: true,
-  lastUpdatedAt: true,
 } as const;
 
 export function mapArchiveEntityToNoticeItem(
@@ -54,7 +53,6 @@ export function mapArchiveEntityToNoticeItem(
     lifecycleStatus: row.lifecycleStatus ?? 'active',
     sourceDeletedAt: row.sourceDeletedAt ?? null,
     archiveStartedAt: row.archiveStartedAt,
-    lastUpdatedAt: row.lastUpdatedAt,
   };
 }
 
@@ -94,7 +92,6 @@ export function mapArchiveEntityToRawRecord(row: NoticeArchive) {
     lifecycleStatus: row.lifecycleStatus,
     sourceDeletedAt: row.sourceDeletedAt,
     archiveStartedAt: row.archiveStartedAt,
-    lastUpdatedAt: row.lastUpdatedAt,
   };
 }
 
