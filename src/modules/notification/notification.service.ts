@@ -103,6 +103,31 @@ export class NotificationService {
     });
   }
 
+  async sendDiscordNotificationDigestBatch(
+    notices: CachedNotice[],
+    webhooks: Webhook[],
+    abortSignal?: AbortSignal,
+  ): Promise<NotificationSendResult[]> {
+    if (notices.length === 0) {
+      return [];
+    }
+
+    if (notices.length === 1) {
+      return this.sendDiscordNotificationBatch(
+        notices[0],
+        webhooks,
+        abortSignal,
+      );
+    }
+
+    const embed = this.createNotificationDigestEmbed(notices);
+    return this.sendDiscordEmbedBatch(embed, webhooks, {
+      username: 'LawCast 알리미',
+      context: 'notice digest notification',
+      abortSignal,
+    });
+  }
+
   /**
    * Sends change-tracking notifications to multiple webhooks.
    * Reuses the same rate-limit controls and permanent-failure handling
@@ -389,6 +414,46 @@ export class NotificationService {
     return embed;
   }
 
+  private createNotificationDigestEmbed(
+    notices: CachedNotice[],
+  ): MessageBuilder {
+    const uniqueNoticeNums = Array.from(
+      new Set(notices.map((notice) => notice.num)),
+    );
+    const detailUrl = this.buildFrontendNoticesUrl({
+      digest: '1',
+      noticeNums: uniqueNoticeNums.join(','),
+      sortOrder: 'desc',
+      page: '1',
+      limit: '20',
+    });
+
+    const itemLines: string[] = [];
+    for (const notice of notices.slice(0, 8)) {
+      itemLines.push(`• **[${notice.num}]** ${notice.subject}`);
+    }
+
+    if (notices.length > 8) {
+      itemLines.push(`... 외 ${notices.length - 8}건`);
+    }
+
+    return new MessageBuilder()
+      .setTitle(`입법예고 신규 감지 (${notices.length}건)`)
+      .setDescription(
+        `최근에 ${notices.length.toLocaleString()}개 법률안이 신규 감지되었습니다.`,
+      )
+      .addField(
+        '영향 법률안 수',
+        `${uniqueNoticeNums.length.toLocaleString()}건`,
+        true,
+      )
+      .addField('자세히 보기', `[신규 항목 모아보기](${detailUrl})`, true)
+      .addField('감지 항목', this.truncateForEmbed(itemLines.join('\n')), false)
+      .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
+      .setTimestamp()
+      .setFooter('LawCast 알림 서비스', '');
+  }
+
   private buildChangedFieldsPreview(changedFields: string[]): string {
     if (changedFields.length === 0) {
       return '변경 필드 없음';
@@ -517,6 +582,28 @@ export class NotificationService {
       : '';
 
     return `${normalizedBaseUrl}/notices/changes${queryString}`;
+  }
+
+  private buildFrontendNoticesUrl(params?: Record<string, string>): string {
+    const frontendUrls =
+      this.configService.get<string[]>('frontend.urls') || [];
+    const primaryFrontendUrl = frontendUrls.find((url) => !!url?.trim());
+
+    if (!primaryFrontendUrl) {
+      return `https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOpn/list.do`;
+    }
+
+    const normalizedBaseUrl = primaryFrontendUrl.replace(/\/+$/, '');
+    const queryString = params
+      ? `?${Object.entries(params)
+          .map(
+            ([key, value]) =>
+              `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+          )
+          .join('&')}`
+      : '';
+
+    return `${normalizedBaseUrl}/notices${queryString}`;
   }
 
   /**

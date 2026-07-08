@@ -21,6 +21,7 @@ interface NotificationJobResult {
   failedCount: number;
   deactivated: number;
   temporaryFailures: number;
+  aggregatedNoticeCount?: number;
 }
 
 interface ChangeNotificationJobResult {
@@ -257,33 +258,69 @@ export class NotificationBatchService {
       );
     }
 
-    const notificationJobs = notices.map(
-      (notice) => async (abortSignal: AbortSignal) => {
-        const { successCount, failedCount, deactivated, temporaryFailures } =
-          await this.dispatchToWebhooks(
-            activeWebhooks,
-            (webhooks) =>
-              this.notificationService.sendDiscordNotificationBatch(
-                notice,
-                webhooks,
-                abortSignal,
-              ),
-            {
-              itemLabel: notice.subject,
-              itemType: 'notice',
-            },
-          );
+    const notificationJobs =
+      notices.length > 1
+        ? [
+            async (abortSignal: AbortSignal) => {
+              const {
+                successCount,
+                failedCount,
+                deactivated,
+                temporaryFailures,
+              } = await this.dispatchToWebhooks(
+                activeWebhooks,
+                (webhooks) =>
+                  this.notificationService.sendDiscordNotificationDigestBatch(
+                    notices,
+                    webhooks,
+                    abortSignal,
+                  ),
+                {
+                  itemLabel: `${notices.length} notices`,
+                  itemType: 'notice',
+                },
+              );
 
-        return {
-          notice: notice.subject,
-          totalWebhooks: activeWebhooks.length,
-          successCount,
-          failedCount,
-          deactivated,
-          temporaryFailures,
-        };
-      },
-    );
+              return {
+                notice: `신규 ${notices.length}건 요약`,
+                totalWebhooks: activeWebhooks.length,
+                successCount,
+                failedCount,
+                deactivated,
+                temporaryFailures,
+                aggregatedNoticeCount: notices.length,
+              };
+            },
+          ]
+        : notices.map((notice) => async (abortSignal: AbortSignal) => {
+            const {
+              successCount,
+              failedCount,
+              deactivated,
+              temporaryFailures,
+            } = await this.dispatchToWebhooks(
+              activeWebhooks,
+              (webhooks) =>
+                this.notificationService.sendDiscordNotificationBatch(
+                  notice,
+                  webhooks,
+                  abortSignal,
+                ),
+              {
+                itemLabel: notice.subject,
+                itemType: 'notice',
+              },
+            );
+
+            return {
+              notice: notice.subject,
+              totalWebhooks: activeWebhooks.length,
+              successCount,
+              failedCount,
+              deactivated,
+              temporaryFailures,
+            };
+          });
 
     return this.batchProcessingService.executeBatch<NotificationJobResult>(
       notificationJobs,

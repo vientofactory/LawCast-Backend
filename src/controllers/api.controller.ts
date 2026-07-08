@@ -100,6 +100,7 @@ export class ApiController {
     @Query('sortOrder') sortOrder?: string,
     @Query('isDone') isDoneRaw?: string,
     @Query('fullText') fullTextRaw?: string,
+    @Query('noticeNums') noticeNums?: string,
   ) {
     const isDone =
       isDoneRaw === 'true' ? true : isDoneRaw === 'false' ? false : undefined;
@@ -113,6 +114,7 @@ export class ApiController {
       sortOrder: sortOrder === 'asc' ? 'asc' : 'desc',
       isDone,
       fullText,
+      noticeNums,
     });
     return ApiResponseUtils.success(archiveResult);
   }

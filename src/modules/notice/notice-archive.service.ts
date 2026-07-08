@@ -1452,6 +1452,50 @@ export class NoticeArchiveService {
     return rows.map((row) => mapArchiveEntityToNoticeItem(row));
   }
 
+  async getArchiveNoticesByNoticeNums(
+    noticeNums: number[],
+  ): Promise<ArchiveNoticeItem[]> {
+    const uniqueNums = Array.from(new Set(noticeNums)).filter(
+      (num) => Number.isInteger(num) && num > 0,
+    );
+
+    if (uniqueNums.length === 0) {
+      return [];
+    }
+
+    const rows = await this.archiveRepository.find({
+      where: { noticeNum: In(uniqueNums) },
+      select: NOTICE_ITEM_SELECT,
+    });
+
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const rank = new Map(uniqueNums.map((num, idx) => [num, idx] as const));
+    rows.sort(
+      (a, b) => (rank.get(a.noticeNum) ?? 0) - (rank.get(b.noticeNum) ?? 0),
+    );
+
+    if (this.summaryStateRepository) {
+      const summaryStates = await this.getSummaryStateByNoticeNums(
+        rows.map((row) => row.noticeNum),
+      );
+
+      for (const row of rows) {
+        const summaryState = summaryStates.get(row.noticeNum);
+        if (!summaryState) continue;
+        row.isDone = summaryState.isDone;
+        row.aiSummary = summaryState.aiSummary;
+        row.aiSummaryStatus = summaryState.aiSummaryStatus;
+      }
+    }
+
+    await this.applyLifecycleOverlayFromDiffchain(rows);
+
+    return rows.map((row) => mapArchiveEntityToNoticeItem(row));
+  }
+
   async getArchiveNoticesByOffset(query: ArchiveOffsetQuery): Promise<{
     items: ArchiveNoticeItem[];
     total: number;

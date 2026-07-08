@@ -498,14 +498,14 @@ describe('NotificationService', () => {
         '입법예고 변경 감지 (2건)',
       );
       expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
-        '변경 건수',
-        '2',
+        '영향 법률안 수',
+        '2건',
         true,
       );
 
       const digestLinkFieldCall = (
         mockMessageBuilder.addField as jest.Mock
-      ).mock.calls.find((call) => call[0] === '모아보기 이동');
+      ).mock.calls.find((call) => call[0] === '자세히 보기');
 
       expect(digestLinkFieldCall).toBeDefined();
       expect(digestLinkFieldCall?.[1]).toContain('/notices/changes?');
@@ -516,6 +516,90 @@ describe('NotificationService', () => {
       expect(mockDiscordWebhook.send).toHaveBeenCalledTimes(1);
       expect(results).toHaveLength(1);
       expect(results[0]).toMatchObject({ webhookId: 11, success: true });
+    });
+  });
+
+  describe('sendDiscordNotificationDigestBatch', () => {
+    const mockWebhooks: Webhook[] = [
+      {
+        id: 12,
+        url: 'https://discord.com/api/webhooks/12/token12',
+        isActive: true,
+      } as Webhook,
+    ];
+
+    it('should send one digest embed when multiple notices are provided', async () => {
+      mockDiscordWebhook.send.mockResolvedValue(undefined);
+
+      const results = await service.sendDiscordNotificationDigestBatch(
+        [
+          {
+            num: 4410001,
+            subject: '신규 법률안 A',
+            proposerCategory: '정부',
+            committee: '법제사법위원회',
+            link: 'https://example.com/notices/4410001',
+            contentId: 'content-a',
+            attachments: { pdfFile: '', hwpFile: '' },
+          },
+          {
+            num: 4410002,
+            subject: '신규 법률안 B',
+            proposerCategory: '의원',
+            committee: '정무위원회',
+            link: 'https://example.com/notices/4410002',
+            contentId: 'content-b',
+            attachments: { pdfFile: '', hwpFile: '' },
+          },
+        ],
+        mockWebhooks,
+      );
+
+      expect(mockMessageBuilder.setTitle).toHaveBeenCalledWith(
+        '입법예고 신규 감지 (2건)',
+      );
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '영향 법률안 수',
+        '2건',
+        true,
+      );
+
+      const digestLinkFieldCall = (
+        mockMessageBuilder.addField as jest.Mock
+      ).mock.calls.find((call) => call[0] === '자세히 보기');
+
+      expect(digestLinkFieldCall).toBeDefined();
+      expect(digestLinkFieldCall?.[1]).toContain('/notices?');
+      expect(digestLinkFieldCall?.[1]).toContain('digest=1');
+      expect(digestLinkFieldCall?.[1]).toContain(
+        'noticeNums=4410001%2C4410002',
+      );
+      expect(mockDiscordWebhook.send).toHaveBeenCalledTimes(1);
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ webhookId: 12, success: true });
+    });
+
+    it('should fall back to per-notice notification when one notice is provided', async () => {
+      mockDiscordWebhook.send.mockResolvedValue(undefined);
+
+      await service.sendDiscordNotificationDigestBatch(
+        [
+          {
+            num: 5510001,
+            subject: '신규 법률안 단건',
+            proposerCategory: '정부',
+            committee: '법제사법위원회',
+            link: 'https://example.com/notices/5510001',
+            contentId: 'content-single',
+            attachments: { pdfFile: '', hwpFile: '' },
+          },
+        ],
+        mockWebhooks,
+      );
+
+      expect(mockMessageBuilder.setTitle).toHaveBeenCalledWith(
+        '새로운 국회 입법예고',
+      );
     });
   });
 });

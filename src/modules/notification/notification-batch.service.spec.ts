@@ -16,6 +16,8 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     remove: jest.Mock;
   };
   let notificationService: {
+    sendDiscordNotificationBatch: jest.Mock;
+    sendDiscordNotificationDigestBatch: jest.Mock;
     sendDiscordChangeNotificationBatch: jest.Mock;
     sendDiscordChangeDigestNotificationBatch: jest.Mock;
     clearPermanentFailureFlag: jest.Mock;
@@ -45,6 +47,20 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     };
 
     notificationService = {
+      sendDiscordNotificationBatch: jest
+        .fn<
+          (
+            ...args: any[]
+          ) => Promise<Array<{ webhookId: number; success: boolean }>>
+        >()
+        .mockResolvedValue([{ webhookId: 1, success: true }]),
+      sendDiscordNotificationDigestBatch: jest
+        .fn<
+          (
+            ...args: any[]
+          ) => Promise<Array<{ webhookId: number; success: boolean }>>
+        >()
+        .mockResolvedValue([{ webhookId: 1, success: true }]),
       sendDiscordChangeNotificationBatch: jest
         .fn<
           (
@@ -88,6 +104,77 @@ describe('NotificationBatchService (diffchain change batching)', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+  });
+
+  it('aggregates multiple notices into one digest notification job', async () => {
+    const notices = [
+      {
+        num: 101,
+        subject: '법률안 101',
+        proposerCategory: '정부',
+        committee: '법제사법위원회',
+        link: 'https://example.com/notices/101',
+        contentId: 'content-101',
+        attachments: { pdfFile: '', hwpFile: '' },
+      },
+      {
+        num: 102,
+        subject: '법률안 102',
+        proposerCategory: '의원',
+        committee: '정무위원회',
+        link: 'https://example.com/notices/102',
+        contentId: 'content-102',
+        attachments: { pdfFile: '', hwpFile: '' },
+      },
+    ];
+
+    const results = await service.executeNotificationBatch(notices as any, {
+      concurrency: 1,
+    });
+
+    expect(batchProcessingService.executeBatch).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordNotificationDigestBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordNotificationBatch,
+    ).not.toHaveBeenCalled();
+    expect(
+      notificationService.sendDiscordNotificationDigestBatch,
+    ).toHaveBeenCalledWith(notices, expect.any(Array), expect.any(Object));
+    expect(results).toHaveLength(1);
+    expect(results[0].data).toMatchObject({
+      aggregatedNoticeCount: 2,
+    });
+  });
+
+  it('keeps per-notice dispatch when notice count is one', async () => {
+    const notices = [
+      {
+        num: 301,
+        subject: '법률안 301',
+        proposerCategory: '정부',
+        committee: '법제사법위원회',
+        link: 'https://example.com/notices/301',
+        contentId: 'content-301',
+        attachments: { pdfFile: '', hwpFile: '' },
+      },
+    ];
+
+    const results = await service.executeNotificationBatch(notices as any, {
+      concurrency: 1,
+    });
+
+    expect(
+      notificationService.sendDiscordNotificationBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordNotificationDigestBatch,
+    ).not.toHaveBeenCalled();
+    expect(results).toHaveLength(1);
+    expect(results[0].data).toMatchObject({
+      notice: '법률안 301',
+    });
   });
 
   it('aggregates multiple payloads into one digest notification job', async () => {

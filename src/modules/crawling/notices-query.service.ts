@@ -15,6 +15,7 @@ interface ArchivedNoticesQuery {
   sortOrder?: 'asc' | 'desc';
   isDone?: boolean;
   fullText?: boolean;
+  noticeNums?: string;
 }
 
 @Injectable()
@@ -34,6 +35,7 @@ export class NoticesQueryService {
     sortOrder,
     isDone,
     fullText,
+    noticeNums,
   }: ArchivedNoticesQuery) {
     const safePage = Math.max(APP_CONSTANTS.API.PAGINATION.MIN_PAGE, page);
     const safeLimit = Math.min(
@@ -42,6 +44,7 @@ export class NoticesQueryService {
     );
     const normalizedSearch = (search || '').trim();
     const normalizedSortOrder = this.normalizeSortOrder(sortOrder);
+    const parsedNoticeNums = this.parseNoticeNums(noticeNums);
     const parsedDateRange = this.parseDateRange(startDate, endDate);
     const hasDateFilter =
       !!parsedDateRange.startDate || !!parsedDateRange.endDate;
@@ -49,6 +52,24 @@ export class NoticesQueryService {
     const cachedNotices = await this.crawlingService.getRecentNotices(
       APP_CONSTANTS.CACHE.MAX_SIZE,
     );
+
+    if (parsedNoticeNums.length > 0) {
+      const scopedItems = await this.getArchivedNoticesByNoticeNums({
+        page: safePage,
+        limit: safeLimit,
+        sortOrder: normalizedSortOrder,
+        noticeNums: parsedNoticeNums,
+        cachedNotices,
+      });
+
+      return {
+        ...scopedItems,
+        search: normalizedSearch,
+        startDate: parsedDateRange.startDateRaw,
+        endDate: parsedDateRange.endDateRaw,
+        sortOrder: normalizedSortOrder,
+      };
+    }
 
     const searchedCached = normalizedSearch
       ? cachedNotices.filter((notice) =>
@@ -257,6 +278,100 @@ export class NoticesQueryService {
     const timeSuffix = endOfDay ? 'T23:59:59.999+09:00' : 'T00:00:00.000+09:00';
     const parsed = new Date(`${raw}${timeSuffix}`);
     return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  }
+
+  private parseNoticeNums(raw?: string): number[] {
+    if (!raw || raw.trim().length === 0) {
+      return [];
+    }
+
+    const unique = new Set<number>();
+    for (const token of raw.split(',')) {
+      const normalized = normalizeNoticeNum(token);
+      if (normalized !== null) {
+        unique.add(normalized);
+      }
+    }
+
+    return Array.from(unique);
+  }
+
+  private async getArchivedNoticesByNoticeNums(params: {
+    page: number;
+    limit: number;
+    sortOrder: 'asc' | 'desc';
+    noticeNums: number[];
+    cachedNotices: CachedNotice[];
+  }): Promise<{
+    items: ReturnType<NoticesQueryService['mapCachedNoticeToListItem']>[];
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    stats: {
+      cacheCount: number;
+      matchedCacheCount: number;
+      archiveCount: number;
+      totalArchiveCount: number;
+      mergedCount: number;
+    };
+  }> {
+    const orderedNoticeNums = [...params.noticeNums].sort((a, b) =>
+      params.sortOrder === 'asc' ? a - b : b - a,
+    );
+
+    const archiveItems =
+      await this.noticeArchiveService.getArchiveNoticesByNoticeNums(
+        orderedNoticeNums,
+      );
+    const archiveItemMap = new Map(
+      archiveItems.map((item) => [item.num, item]),
+    );
+
+    const cachedNoticeMap = new Map(
+      params.cachedNotices.map((notice) => [notice.num, notice]),
+    );
+
+    const mergedItems = orderedNoticeNums
+      .map((noticeNum) => {
+        const archived = archiveItemMap.get(noticeNum);
+        if (archived) {
+          return archived;
+        }
+
+        const cached = cachedNoticeMap.get(noticeNum);
+        if (cached) {
+          return this.mapCachedNoticeToListItem(cached);
+        }
+
+        return null;
+      })
+      .filter(
+        (
+          item,
+        ): item is ReturnType<
+          NoticesQueryService['mapCachedNoticeToListItem']
+        > => item !== null,
+      );
+
+    const total = mergedItems.length;
+    const skip = (params.page - 1) * params.limit;
+    const items = mergedItems.slice(skip, skip + params.limit);
+
+    return {
+      items,
+      page: params.page,
+      limit: params.limit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / params.limit)),
+      stats: {
+        cacheCount: params.cachedNotices.length,
+        matchedCacheCount: mergedItems.length,
+        archiveCount: archiveItems.length,
+        totalArchiveCount: archiveItems.length,
+        mergedCount: total,
+      },
+    };
   }
 
   private compareNoticeNums(
