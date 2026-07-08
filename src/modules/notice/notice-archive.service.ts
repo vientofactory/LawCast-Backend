@@ -1652,10 +1652,15 @@ export class NoticeArchiveService {
     }
 
     const resolvedRev = requestedRev ?? headRev;
+    const excludedOverlayFields =
+      requestedRev === null ? new Set<string>(['isDone']) : undefined;
     const detailWithRevision = this.applyRevisionOverlay(
       detail,
       eventsAsc,
       resolvedRev,
+      {
+        excludedFieldPaths: excludedOverlayFields,
+      },
     );
     const legacyGenesisEvent = eventsAsc.find(
       (event) => event.source === NoticeChangeSource.BOOTSTRAP_LEGACY_SEED,
@@ -1695,6 +1700,9 @@ export class NoticeArchiveService {
       ReturnType<ChangeTrackingService['getNoticeChangeTimeline']>
     >,
     targetRev: number | null,
+    options?: {
+      excludedFieldPaths?: ReadonlySet<string>;
+    },
   ): ArchiveDetailResult {
     const copied: ArchiveDetailResult = {
       ...base,
@@ -1715,10 +1723,15 @@ export class NoticeArchiveService {
       this.revisionTrackedFieldPaths.map((fieldPath) => [fieldPath, null]),
     );
     const firstSeenEventHeight = new Map<string, number>();
+    const excludedFieldPaths = options?.excludedFieldPaths;
 
     for (const event of eventsAsc) {
       for (const detail of event.details) {
         if (!timelineState.has(detail.fieldPath)) {
+          continue;
+        }
+
+        if (excludedFieldPaths?.has(detail.fieldPath)) {
           continue;
         }
 
@@ -1737,6 +1750,10 @@ export class NoticeArchiveService {
     }
 
     for (const fieldPath of this.revisionTrackedFieldPaths) {
+      if (excludedFieldPaths?.has(fieldPath)) {
+        continue;
+      }
+
       const seenAt = firstSeenEventHeight.get(fieldPath);
 
       // Legacy chains may not include some fields at all. Keep base values for
