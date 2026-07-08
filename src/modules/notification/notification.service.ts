@@ -43,6 +43,7 @@ export class NotificationService {
   private readonly logger = LoggerUtils.getContextLogger(
     NotificationService.name,
   );
+  private readonly MAX_NOTICE_NUMS_IN_DIGEST_URL = 40;
   private readonly PROPOSAL_REASON_MISSING_GUIDANCE =
     '법률안 제안이유를 아직 수집하지 못했습니다. 자세히 보기 링크를 통해 국회 페이지에서 직접 확인해 주세요.';
   // Mapping of change-tracking field paths to user-friendly labels for Discord embeds
@@ -340,21 +341,6 @@ export class NotificationService {
     const fromEventId = eventIds.length > 0 ? Math.min(...eventIds) : null;
     const toEventId = eventIds.length > 0 ? Math.max(...eventIds) : null;
 
-    const detectedEpochs = payloads
-      .map((payload) => payload.detectedAt)
-      .filter((value): value is string => typeof value === 'string')
-      .map((value) => Date.parse(value))
-      .filter((epochMs) => Number.isFinite(epochMs));
-
-    const fromDetectedAt =
-      detectedEpochs.length > 0
-        ? new Date(Math.min(...detectedEpochs)).toISOString()
-        : null;
-    const toDetectedAt =
-      detectedEpochs.length > 0
-        ? new Date(Math.max(...detectedEpochs)).toISOString()
-        : null;
-
     const detailParams: Record<string, string> = {
       digest: '1',
       jumpToFirst: '1',
@@ -369,14 +355,6 @@ export class NotificationService {
 
     if (toEventId !== null) {
       detailParams.toEventId = String(toEventId);
-    }
-
-    if (fromDetectedAt) {
-      detailParams.fromDetectedAt = fromDetectedAt;
-    }
-
-    if (toDetectedAt) {
-      detailParams.toDetectedAt = toDetectedAt;
     }
 
     const detailUrl = this.buildFrontendNoticeChangesUrl(detailParams);
@@ -420,9 +398,13 @@ export class NotificationService {
     const uniqueNoticeNums = Array.from(
       new Set(notices.map((notice) => notice.num)),
     );
+    const noticeNumsForUrl = uniqueNoticeNums.slice(
+      0,
+      this.MAX_NOTICE_NUMS_IN_DIGEST_URL,
+    );
     const detailUrl = this.buildFrontendNoticesUrl({
       digest: '1',
-      noticeNums: uniqueNoticeNums.join(','),
+      noticeNums: noticeNumsForUrl.join(','),
       sortOrder: 'desc',
       page: '1',
       limit: '20',

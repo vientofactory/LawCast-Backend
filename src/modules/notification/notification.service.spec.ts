@@ -601,5 +601,38 @@ describe('NotificationService', () => {
         '새로운 국회 입법예고',
       );
     });
+
+    it('should cap noticeNums query length for digest links', async () => {
+      mockDiscordWebhook.send.mockResolvedValue(undefined);
+
+      const notices = Array.from({ length: 60 }, (_, idx) => ({
+        num: 7000000 + idx,
+        subject: `신규 법률안 ${idx + 1}`,
+        proposerCategory: '정부',
+        committee: '법제사법위원회',
+        link: `https://example.com/notices/${7000000 + idx}`,
+        contentId: `content-${idx + 1}`,
+        attachments: { pdfFile: '', hwpFile: '' },
+      }));
+
+      await service.sendDiscordNotificationDigestBatch(
+        notices as any,
+        mockWebhooks,
+      );
+
+      const digestLinkFieldCall = (
+        mockMessageBuilder.addField as jest.Mock
+      ).mock.calls.find((call) => call[0] === '자세히 보기');
+
+      expect(digestLinkFieldCall).toBeDefined();
+      const linkText = String(digestLinkFieldCall?.[1] ?? '');
+      const match = linkText.match(/noticeNums=([^&\)]*)/);
+      expect(match).toBeTruthy();
+      const encodedNums = match?.[1] ?? '';
+      const decodedNums = decodeURIComponent(encodedNums).split(',');
+      expect(decodedNums.length).toBe(40);
+      expect(decodedNums[0]).toBe('7000000');
+      expect(decodedNums[39]).toBe('7000039');
+    });
   });
 });
