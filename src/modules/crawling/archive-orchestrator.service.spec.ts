@@ -627,6 +627,16 @@ describe('ArchiveOrchestratorService', () => {
       expect(
         noticeArchiveService.appendSourceDeletedEventByNoticeNum,
       ).toHaveBeenCalledWith(2219717);
+      expect(
+        noticeArchiveService.flushQueuedChangeNotifications,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        (noticeArchiveService.appendSourceDeletedEventByNoticeNum as jest.Mock)
+          .mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        (noticeArchiveService.flushQueuedChangeNotifications as jest.Mock).mock
+          .invocationCallOrder[0],
+      );
       expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
         BridgeLogLevel.WARN,
         'ArchiveOrchestratorService',
@@ -659,6 +669,9 @@ describe('ArchiveOrchestratorService', () => {
       );
       expect(
         noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+      ).not.toHaveBeenCalled();
+      expect(
+        noticeArchiveService.flushQueuedChangeNotifications,
       ).not.toHaveBeenCalled();
       expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
         BridgeLogLevel.WARN,
@@ -693,6 +706,16 @@ describe('ArchiveOrchestratorService', () => {
       expect(
         noticeArchiveService.appendSourceDeletedEventByNoticeNum,
       ).toHaveBeenCalledWith(2219717);
+      expect(
+        noticeArchiveService.flushQueuedChangeNotifications,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        (noticeArchiveService.appendSourceDeletedEventByNoticeNum as jest.Mock)
+          .mock.invocationCallOrder[0],
+      ).toBeLessThan(
+        (noticeArchiveService.flushQueuedChangeNotifications as jest.Mock).mock
+          .invocationCallOrder[0],
+      );
       expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
         BridgeLogLevel.WARN,
         'ArchiveOrchestratorService',

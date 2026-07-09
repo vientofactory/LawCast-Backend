@@ -612,9 +612,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
           return null;
         }
 
-        await this.noticeArchiveService.appendSourceDeletedEventByNoticeNum(
-          num,
-        );
+        await this.appendSourceDeletedAndFlushNotifications(num);
 
         const message = probeAlertMessage;
         this.logger.warn(
@@ -643,9 +641,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
             normalizedBillNo,
           );
         if (deletionAlertMessage) {
-          await this.noticeArchiveService.appendSourceDeletedEventByNoticeNum(
-            num,
-          );
+          await this.appendSourceDeletedAndFlushNotifications(num);
 
           this.logger.warn(
             `proposalReason backfill detected deleted NSM bill ${normalizedBillNo} via HTTP probe: ${deletionAlertMessage}`,
@@ -675,6 +671,28 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         { noticeNum: num, billNo: normalizedBillNo },
       );
       return null;
+    }
+  }
+
+  /**
+   * Appends a source_deleted invalidation event and flushes queued
+   * change-notification payloads immediately so retry-driven deletions
+   * are not left waiting on timer-based flush.
+   */
+  private async appendSourceDeletedAndFlushNotifications(
+    noticeNum: number,
+  ): Promise<void> {
+    await this.noticeArchiveService.appendSourceDeletedEventByNoticeNum(
+      noticeNum,
+    );
+
+    try {
+      await this.noticeArchiveService.flushQueuedChangeNotifications();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `failed to flush change notifications after source_deleted invalidation for notice ${noticeNum}: ${message}`,
+      );
     }
   }
 

@@ -150,6 +150,46 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     ).toHaveBeenCalledTimes(1);
   });
 
+  it('forwards invalidated source-missing events to change-notification batch payloads', async () => {
+    const { service, notificationBatchService } = createService();
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 8,
+        noticeNum: 6001,
+        detectedAt: new Date('2026-01-01T00:04:00.000Z'),
+        eventType: 'invalidated',
+        source: NoticeChangeSource.ARCHIVE_SOURCE_MISSING,
+        eventHash: 'hash-invalidated-source-missing',
+        eventHeight: 3,
+      } as any,
+      subject: '삭제 감지 테스트 법률안',
+      changedFields: ['lifecycleStatus', 'sourceDeletedAt'],
+    });
+
+    await service.flushQueuedChangeNotificationsNow();
+
+    expect(
+      notificationBatchService.processChangeNotificationBatch,
+    ).toHaveBeenCalledTimes(1);
+
+    const [payloads] = (
+      notificationBatchService.processChangeNotificationBatch as jest.Mock
+    ).mock.calls[0];
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      noticeNum: 6001,
+      subject: '삭제 감지 테스트 법률안',
+      eventType: 'invalidated',
+      source: NoticeChangeSource.ARCHIVE_SOURCE_MISSING,
+      changedFields: ['lifecycleStatus', 'sourceDeletedAt'],
+      eventHash: 'hash-invalidated-source-missing',
+      eventHeight: 3,
+      eventId: 8,
+    });
+  });
+
   it('skips created events because regular notice notifications already cover them', async () => {
     const { service, notificationBatchService } = createService();
 
