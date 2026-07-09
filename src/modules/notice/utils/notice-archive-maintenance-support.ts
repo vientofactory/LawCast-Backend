@@ -46,15 +46,6 @@ export async function getNsmProposalReasonRetryCandidatesInternal(
       'na.attachmentHwpFile AS attachmentHwpFile',
     ])
     .where('na.contentId IS NULL')
-    .andWhere(
-      `COALESCE((
-          SELECT s.is_done
-          FROM notice_archive_snapshot_states s
-          WHERE s.notice_num = na.noticeNum
-          LIMIT 1
-        ), 0) = :isDone`,
-      { isDone: 0 },
-    )
     .andWhere('na.lifecycle_status = :status', { status: 'active' })
     .andWhere("(na.proposalReason IS NULL OR TRIM(na.proposalReason) = '')")
     .andWhere(
