@@ -11,6 +11,8 @@ import { type NotificationOrchestratorService } from '../../notification/notific
 import { type SummaryGenerationService } from '../summary-generation.service';
 import { type DiscordBridgeService } from '../../discord-bridge/discord-bridge.service';
 import { type CrawlingSchedulerProposalRetry } from './crawling-scheduler-proposal-retry';
+import { delayMs } from '../../../utils/async-delay.utils';
+import { logAndBridge } from '../../../utils/bridge-log.utils';
 
 export interface PendingWorkflowDeps {
   isInitialized: boolean;
@@ -55,16 +57,19 @@ export async function handlePendingCronInternal(
       }
 
       const backoffMs = pendingCrawlRetryBaseMs * 2 ** attempt;
-      await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+      await delayMs(backoffMs);
     }
   }
 
-  deps.logger.error('Error during pending bills crawl', lastError);
-  void deps.discordBridge?.logEvent(
-    BridgeLogLevel.ERROR,
-    'CrawlingSchedulerService',
-    `Pending bills crawl failed: ${(lastError as Error).message}`,
-  );
+  logAndBridge({
+    logger: deps.logger,
+    method: 'error',
+    message: 'Error during pending bills crawl',
+    loggerArgs: [lastError],
+    context: 'CrawlingSchedulerService',
+    discordBridge: deps.discordBridge,
+    bridgeMessage: `Pending bills crawl failed: ${(lastError as Error).message}`,
+  });
 }
 
 export async function performPendingBillsCrawlInternal(
@@ -111,18 +116,18 @@ export async function performPendingBillsCrawlInternal(
 
   if (newPendingNotices.length === 0) return;
 
-  deps.logger.log(
-    `Found ${newPendingNotices.length} new pending bill(s) from NsmLmSts`,
-  );
-  void deps.discordBridge?.logEvent(
-    BridgeLogLevel.LOG,
-    'CrawlingSchedulerService',
-    `Found **${newPendingNotices.length}** new pending bill(s) from NsmLmSts`,
-    {
+  logAndBridge({
+    logger: deps.logger,
+    method: 'log',
+    message: `Found ${newPendingNotices.length} new pending bill(s) from NsmLmSts`,
+    context: 'CrawlingSchedulerService',
+    discordBridge: deps.discordBridge,
+    bridgeMessage: `Found **${newPendingNotices.length}** new pending bill(s) from NsmLmSts`,
+    metadata: {
       subjects: newPendingNotices.slice(0, 5).map((n) => n.subject),
       total: newPendingNotices.length,
     },
-  );
+  });
 
   const newPendingItems = newPendingNotices
     .map((n) => rawItemMap.get(n.num))
@@ -136,15 +141,15 @@ export async function performPendingBillsCrawlInternal(
         newPendingNotices,
       );
     } catch (error) {
-      deps.logger.error(
-        'Background processing for pending bills failed:',
-        error,
-      );
-      void deps.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        'CrawlingSchedulerService',
-        `Pending bills background processing failed: ${(error as Error).message}`,
-      );
+      logAndBridge({
+        logger: deps.logger,
+        method: 'error',
+        message: 'Background processing for pending bills failed:',
+        loggerArgs: [error],
+        context: 'CrawlingSchedulerService',
+        discordBridge: deps.discordBridge,
+        bridgeMessage: `Pending bills background processing failed: ${(error as Error).message}`,
+      });
     }
   });
 }
@@ -177,14 +182,14 @@ export async function processPendingBillsInBackgroundInternal(
       { reason: 'new-pending-bills' },
     );
   } catch (error) {
-    deps.logger.error(
-      `Archive stage failed for pending bills, proceeding with cache and notifications: ${(error as Error).message}`,
-    );
-    void deps.discordBridge?.logEvent(
-      BridgeLogLevel.ERROR,
-      'CrawlingSchedulerService',
-      `Pending bills archive stage failed: ${(error as Error).message}`,
-    );
+    logAndBridge({
+      logger: deps.logger,
+      method: 'error',
+      message: `Archive stage failed for pending bills, proceeding with cache and notifications: ${(error as Error).message}`,
+      context: 'CrawlingSchedulerService',
+      discordBridge: deps.discordBridge,
+      bridgeMessage: `Pending bills archive stage failed: ${(error as Error).message}`,
+    });
   }
 
   const noticesWithReason = archivedNotices.filter((n) =>
@@ -205,15 +210,17 @@ export async function processPendingBillsInBackgroundInternal(
     void deps.notificationOrchestratorService
       .sendNotifications(noticesWithoutReasonForNotification)
       .catch((error) => {
-        deps.logger.error(
-          'Notification dispatch for pending bills without proposalReason failed:',
-          error,
-        );
-        void deps.discordBridge?.logEvent(
-          BridgeLogLevel.ERROR,
-          'CrawlingSchedulerService',
-          'Notification dispatch failed for pending bills without proposalReason',
-          {
+        logAndBridge({
+          logger: deps.logger,
+          method: 'error',
+          message:
+            'Notification dispatch for pending bills without proposalReason failed:',
+          loggerArgs: [error],
+          context: 'CrawlingSchedulerService',
+          discordBridge: deps.discordBridge,
+          bridgeMessage:
+            'Notification dispatch failed for pending bills without proposalReason',
+          metadata: {
             count: noticesWithoutReasonForNotification.length,
             billNos: noticesWithoutReasonForNotification.map(
               (notice) => notice.num,
@@ -222,23 +229,24 @@ export async function processPendingBillsInBackgroundInternal(
             notificationMode: 'immediate',
             guidanceIncluded: true,
           },
-        );
+        });
       });
   }
 
   if (noticesWithoutReason.length > 0) {
-    deps.logger.log(
-      `${noticesWithoutReason.length} pending bill(s) archived without proposalReason`,
-    );
-    void deps.discordBridge?.logEvent(
-      BridgeLogLevel.WARN,
-      'CrawlingSchedulerService',
-      `**${noticesWithoutReason.length}** pending bill(s) missing proposalReason`,
-      {
+    logAndBridge({
+      logger: deps.logger,
+      method: 'log',
+      message: `${noticesWithoutReason.length} pending bill(s) archived without proposalReason`,
+      context: 'CrawlingSchedulerService',
+      discordBridge: deps.discordBridge,
+      bridgeLevel: BridgeLogLevel.WARN,
+      bridgeMessage: `**${noticesWithoutReason.length}** pending bill(s) missing proposalReason`,
+      metadata: {
         nums: noticesWithoutReason.map((n) => n.num),
         immutableSnapshot: true,
       },
-    );
+    });
 
     const billNoByNum = new Map<number, string>();
     for (const item of newPendingItems) {

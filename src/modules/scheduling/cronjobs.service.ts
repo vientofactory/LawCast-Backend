@@ -6,9 +6,9 @@ import { CrawlingService } from '../crawling/crawling.service';
 import appConfig, { APP_CONSTANTS } from '../../config/app.config';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
-import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { ArchiveSyncService } from '../crawling/archive-sync.service';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
+import { logAndBridge } from '../../utils/bridge-log.utils';
 
 const CRON_TIMEZONE = appConfig().cron.timezone;
 
@@ -38,33 +38,34 @@ export class CronJobsService {
     taskName: string,
     task: () => Promise<void>,
   ): Promise<void> {
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.DEBUG,
-      CronJobsService.name,
-      `Scheduled task started: **${taskName}**`,
-    );
+    logAndBridge({
+      method: 'debug',
+      message: `Starting scheduled ${taskName}...`,
+      logger: this.logger,
+      context: CronJobsService.name,
+      discordBridge: this.discordBridge,
+      bridgeMessage: `Scheduled task started: **${taskName}**`,
+    });
     try {
-      LoggerUtils.debugDev(
-        CronJobsService.name,
-        `Starting scheduled ${taskName}...`,
-      );
       await task();
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.DEBUG,
-        CronJobsService.name,
-        `Scheduled task completed: **${taskName}**`,
-      );
-      LoggerUtils.debugDev(
-        CronJobsService.name,
-        `Completed scheduled ${taskName}.`,
-      );
+      logAndBridge({
+        method: 'debug',
+        message: `Completed scheduled ${taskName}.`,
+        logger: this.logger,
+        context: CronJobsService.name,
+        discordBridge: this.discordBridge,
+        bridgeMessage: `Scheduled task completed: **${taskName}**`,
+      });
     } catch (error) {
-      this.logger.error(`Scheduled ${taskName} failed:`, error);
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        CronJobsService.name,
-        `Scheduled task failed: **${taskName}** - ${(error as Error).message}`,
-      );
+      logAndBridge({
+        method: 'error',
+        message: `Scheduled ${taskName} failed:`,
+        logger: this.logger,
+        loggerArgs: [error],
+        context: CronJobsService.name,
+        discordBridge: this.discordBridge,
+        bridgeMessage: `Scheduled task failed: **${taskName}** - ${(error as Error).message}`,
+      });
     }
   }
 
@@ -77,12 +78,13 @@ export class CronJobsService {
     if (!this.archiveSyncService.isAnyPhaseRunning()) return false;
 
     const message = `${taskName} skipped - archive sync phase is currently running`;
-    this.logger.warn(message);
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.WARN,
-      CronJobsService.name,
+    logAndBridge({
+      method: 'warn',
       message,
-    );
+      logger: this.logger,
+      context: CronJobsService.name,
+      discordBridge: this.discordBridge,
+    });
     return true;
   }
 
@@ -97,12 +99,13 @@ export class CronJobsService {
     }
 
     const message = `${taskName} skipped - crawling scheduler is busy`;
-    this.logger.warn(message);
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.WARN,
-      CronJobsService.name,
+    logAndBridge({
+      method: 'warn',
       message,
-    );
+      logger: this.logger,
+      context: CronJobsService.name,
+      discordBridge: this.discordBridge,
+    });
     return true;
   }
 
@@ -114,12 +117,13 @@ export class CronJobsService {
   private shouldSkipDatabaseMaintenanceCron(taskName: string): boolean {
     if (this.archiveSyncService.isAnyPhaseRunning()) {
       const message = `${taskName} skipped - archive sync phase is currently running`;
-      this.logger.warn(message);
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        CronJobsService.name,
+      logAndBridge({
+        method: 'warn',
         message,
-      );
+        logger: this.logger,
+        context: CronJobsService.name,
+        discordBridge: this.discordBridge,
+      });
       return true;
     }
 
@@ -128,12 +132,13 @@ export class CronJobsService {
     }
 
     const message = `${taskName} skipped - crawling scheduler is busy`;
-    this.logger.warn(message);
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.WARN,
-      CronJobsService.name,
+    logAndBridge({
+      method: 'warn',
       message,
-    );
+      logger: this.logger,
+      context: CronJobsService.name,
+      discordBridge: this.discordBridge,
+    });
     return true;
   }
 
@@ -173,24 +178,26 @@ export class CronJobsService {
           const message =
             `${taskName} running despite crawling scheduler lock ` +
             '(critical scheduled audit)';
-          this.logger.warn(message);
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.WARN,
-            CronJobsService.name,
+          logAndBridge({
+            method: 'warn',
             message,
-          );
+            logger: this.logger,
+            context: CronJobsService.name,
+            discordBridge: this.discordBridge,
+          });
         }
 
         if (this.archiveSyncService.isAnyPhaseRunning()) {
           const message =
             `${taskName} running despite archive-sync phase lock ` +
             '(critical scheduled audit)';
-          this.logger.warn(message);
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.WARN,
-            CronJobsService.name,
+          logAndBridge({
+            method: 'warn',
             message,
-          );
+            logger: this.logger,
+            context: CronJobsService.name,
+            discordBridge: this.discordBridge,
+          });
         }
 
         await this.execute(taskName, () =>
@@ -380,11 +387,13 @@ export class CronJobsService {
       this.logger.log(
         `SQLite VACUUM completed (pageSize=${pageSize}, freePagesBefore=${beforeFreePages}, freePagesAfter=${afterFreePages}, reclaimedBytes≈${reclaimedBytes}, estimatedBytesBefore≈${beforeEstimatedBytes})`,
       );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
-        CronJobsService.name,
-        `SQLite VACUUM completed (pageSize=${pageSize}, freePagesBefore=${beforeFreePages}, freePagesAfter=${afterFreePages}, reclaimedBytes≈${reclaimedBytes}, estimatedBytesBefore≈${beforeEstimatedBytes})`,
-      );
+      logAndBridge({
+        method: 'log',
+        message: `SQLite VACUUM completed (pageSize=${pageSize}, freePagesBefore=${beforeFreePages}, freePagesAfter=${afterFreePages}, reclaimedBytes≈${reclaimedBytes}, estimatedBytesBefore≈${beforeEstimatedBytes})`,
+        logger: this.logger,
+        context: CronJobsService.name,
+        discordBridge: this.discordBridge,
+      });
     });
   }
 }

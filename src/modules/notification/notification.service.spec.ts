@@ -558,10 +558,13 @@ describe('NotificationService', () => {
       expect(mockMessageBuilder.setTitle).toHaveBeenCalledWith(
         '입법예고 신규 감지 (2건)',
       );
-      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+      expect(mockMessageBuilder.setDescription).toHaveBeenCalledWith(
+        '최근에 2개 법률안이 신규 감지되었습니다.\nAI 요약과 법률안 원문을 확인하려면 아래 링크를 클릭하세요.',
+      );
+      expect(mockMessageBuilder.addField).not.toHaveBeenCalledWith(
         '영향 법률안 수',
-        '2건',
-        true,
+        expect.any(String),
+        expect.any(Boolean),
       );
 
       const digestLinkFieldCall = (

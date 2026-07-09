@@ -14,8 +14,11 @@ import {
 } from './crawling-core.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
+import { delayMs } from '../../utils/async-delay.utils';
+import { logAndBridge } from '../../utils/bridge-log.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { normalizeNoticeNum } from '../../utils/notice-num.utils';
+import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import { ArchiveOrchestratorScreenshotCoordinator } from './utils/archive-orchestrator-screenshot-coordinator';
 
 type ArchiveRunReason =
@@ -153,12 +156,16 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     try {
       const reason = options?.reason ?? 'new-notices';
       const startLog = this.getArchiveStartLog(notices.length, reason);
-      void this.discordBridge?.logEvent(
-        startLog.level,
-        ArchiveOrchestratorService.name,
-        startLog.message,
-        { count: notices.length, reason },
-      );
+      logAndBridge({
+        method: 'log',
+        message: `Archive run started (${reason}) count=${notices.length}`,
+        logger: this.logger,
+        context: ArchiveOrchestratorService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: startLog.level,
+        bridgeMessage: startLog.message,
+        metadata: { count: notices.length, reason },
+      });
 
       const concurrency =
         this.noticeArchiveService.getRecommendedWriteConcurrency?.(5) ?? 5;
@@ -203,15 +210,19 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
                 } catch (error) {
                   const message =
                     error instanceof Error ? error.message : String(error);
-                  this.logger.warn(
-                    `Failed to fetch original content for archive notice ${notice.num}: ${message}`,
-                  );
-                  void this.discordBridge?.logEvent(
-                    BridgeLogLevel.VERBOSE,
-                    ArchiveOrchestratorService.name,
-                    `Content fetch failed for notice **${notice.num}**: ${message}`,
-                    { noticeNum: notice.num, contentId: notice.contentId },
-                  );
+                  logAndBridge({
+                    method: 'warn',
+                    message: `Failed to fetch original content for archive notice ${notice.num}: ${message}`,
+                    logger: this.logger,
+                    context: ArchiveOrchestratorService.name,
+                    discordBridge: this.discordBridge,
+                    bridgeLevel: BridgeLogLevel.VERBOSE,
+                    bridgeMessage: `Content fetch failed for notice **${notice.num}**: ${message}`,
+                    metadata: {
+                      noticeNum: notice.num,
+                      contentId: notice.contentId,
+                    },
+                  });
                 }
               }
 
@@ -225,15 +236,16 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
               } catch (error) {
                 const message =
                   error instanceof Error ? error.message : String(error);
-                this.logger.warn(
-                  `Failed to capture source HTML for archive notice ${notice.num}: ${message}`,
-                );
-                void this.discordBridge?.logEvent(
-                  BridgeLogLevel.VERBOSE,
-                  ArchiveOrchestratorService.name,
-                  `HTML capture failed for notice **${notice.num}**: ${message}`,
-                  { noticeNum: notice.num, link: notice.link },
-                );
+                logAndBridge({
+                  method: 'warn',
+                  message: `Failed to capture source HTML for archive notice ${notice.num}: ${message}`,
+                  logger: this.logger,
+                  context: ArchiveOrchestratorService.name,
+                  discordBridge: this.discordBridge,
+                  bridgeLevel: BridgeLogLevel.VERBOSE,
+                  bridgeMessage: `HTML capture failed for notice **${notice.num}**: ${message}`,
+                  metadata: { noticeNum: notice.num, link: notice.link },
+                });
               }
 
               try {
@@ -316,12 +328,16 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     try {
       const reason = options?.reason ?? 'new-pending-bills';
       const startLog = this.getNsmPendingArchiveStartLog(items.length, reason);
-      void this.discordBridge?.logEvent(
-        startLog.level,
-        ArchiveOrchestratorService.name,
-        startLog.message,
-        { count: items.length, reason },
-      );
+      logAndBridge({
+        method: 'log',
+        message: `NSM archive run started (${reason}) count=${items.length}`,
+        logger: this.logger,
+        context: ArchiveOrchestratorService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: startLog.level,
+        bridgeMessage: startLog.message,
+        metadata: { count: items.length, reason },
+      });
 
       const allArchived: CachedNotice[] = [];
 
@@ -335,12 +351,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
 
         // Inter-item delay for every item after the first.
         if (idx > 0) {
-          await new Promise<void>((resolve) =>
-            setTimeout(
-              resolve,
-              APP_CONSTANTS.SCREENSHOT.NSM_INTER_CAPTURE_DELAY_MS,
-            ),
-          );
+          await delayMs(APP_CONSTANTS.SCREENSHOT.NSM_INTER_CAPTURE_DELAY_MS);
         }
 
         const result = await (async (): Promise<CachedNotice | null> => {
@@ -407,15 +418,16 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : String(error);
-              this.logger.warn(
-                `captureNsmDetailFull failed for bill ${item.billNo}: ${message}`,
-              );
-              void this.discordBridge?.logEvent(
-                BridgeLogLevel.VERBOSE,
-                ArchiveOrchestratorService.name,
-                `NsmLmSts full capture failed for bill **${item.billNo}**: ${message}`,
-                { billNo: item.billNo },
-              );
+              logAndBridge({
+                logger: this.logger,
+                method: 'warn',
+                message: `captureNsmDetailFull failed for bill ${item.billNo}: ${message}`,
+                context: ArchiveOrchestratorService.name,
+                discordBridge: this.discordBridge,
+                bridgeLevel: BridgeLogLevel.VERBOSE,
+                bridgeMessage: `NsmLmSts full capture failed for bill **${item.billNo}**: ${message}`,
+                metadata: { billNo: item.billNo },
+              });
             }
 
             try {
@@ -594,42 +606,44 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
           );
 
         if (!probeAlertMessage) {
-          this.logger.warn(
-            `proposalReason backfill deletion signal not confirmed for bill ${normalizedBillNo}; skipping source_deleted event`,
-          );
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.WARN,
-            ArchiveOrchestratorService.name,
-            `proposalReason backfill deletion signal was not confirmed for bill **${normalizedBillNo}**; skipped source_deleted event`,
-            {
+          logAndBridge({
+            method: 'warn',
+            message: `proposalReason backfill deletion signal not confirmed for bill ${normalizedBillNo}; skipping source_deleted event`,
+            logger: this.logger,
+            context: ArchiveOrchestratorService.name,
+            discordBridge: this.discordBridge,
+            bridgeLevel: BridgeLogLevel.WARN,
+            bridgeMessage: `proposalReason backfill deletion signal was not confirmed for bill **${normalizedBillNo}**; skipped source_deleted event`,
+            metadata: {
               noticeNum: num,
               billNo: normalizedBillNo,
               responseUrl: error.responseUrl,
               detectedAs: 'unconfirmed',
               detectionMethod: 'nsm-error-without-http-probe-confirmation',
             },
-          );
+          });
           return null;
         }
 
         await this.appendSourceDeletedAndFlushNotifications(num);
 
         const message = probeAlertMessage;
-        this.logger.warn(
-          `proposalReason backfill confirmed deleted NSM bill ${normalizedBillNo}: ${message}`,
-        );
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.WARN,
-          ArchiveOrchestratorService.name,
-          `proposalReason backfill confirmed deleted NSM bill **${normalizedBillNo}**: ${message}`,
-          {
+        logAndBridge({
+          method: 'warn',
+          message: `proposalReason backfill confirmed deleted NSM bill ${normalizedBillNo}: ${message}`,
+          logger: this.logger,
+          context: ArchiveOrchestratorService.name,
+          discordBridge: this.discordBridge,
+          bridgeLevel: BridgeLogLevel.WARN,
+          bridgeMessage: `proposalReason backfill confirmed deleted NSM bill **${normalizedBillNo}**: ${message}`,
+          metadata: {
             noticeNum: num,
             billNo: normalizedBillNo,
             responseUrl: error.responseUrl,
             detectedAs: 'source_deleted',
             detectionMethod: 'nsm-error-confirmed-via-http-probe',
           },
-        );
+        });
         return null;
       }
 
@@ -643,33 +657,35 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         if (deletionAlertMessage) {
           await this.appendSourceDeletedAndFlushNotifications(num);
 
-          this.logger.warn(
-            `proposalReason backfill detected deleted NSM bill ${normalizedBillNo} via HTTP probe: ${deletionAlertMessage}`,
-          );
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.WARN,
-            ArchiveOrchestratorService.name,
-            `proposalReason backfill detected deleted NSM bill **${normalizedBillNo}** via HTTP probe: ${deletionAlertMessage}`,
-            {
+          logAndBridge({
+            method: 'warn',
+            message: `proposalReason backfill detected deleted NSM bill ${normalizedBillNo} via HTTP probe: ${deletionAlertMessage}`,
+            logger: this.logger,
+            context: ArchiveOrchestratorService.name,
+            discordBridge: this.discordBridge,
+            bridgeLevel: BridgeLogLevel.WARN,
+            bridgeMessage: `proposalReason backfill detected deleted NSM bill **${normalizedBillNo}** via HTTP probe: ${deletionAlertMessage}`,
+            metadata: {
               noticeNum: num,
               billNo: normalizedBillNo,
               detectedAs: 'source_deleted',
               detectionMethod: 'http-probe-after-timeout',
             },
-          );
+          });
           return null;
         }
       }
 
-      this.logger.warn(
-        `proposalReason backfill failed for bill ${normalizedBillNo}: ${message}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        ArchiveOrchestratorService.name,
-        `proposalReason backfill failed for bill **${normalizedBillNo}**: ${message}`,
-        { noticeNum: num, billNo: normalizedBillNo },
-      );
+      logAndBridge({
+        method: 'warn',
+        message: `proposalReason backfill failed for bill ${normalizedBillNo}: ${message}`,
+        logger: this.logger,
+        context: ArchiveOrchestratorService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+        bridgeMessage: `proposalReason backfill failed for bill **${normalizedBillNo}**: ${message}`,
+        metadata: { noticeNum: num, billNo: normalizedBillNo },
+      });
       return null;
     }
   }
@@ -727,16 +743,19 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       return !existingNoticeNums.has(normalizedNum);
     });
 
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.VERBOSE,
-      ArchiveOrchestratorService.name,
-      `Archive filter: **${filtered.length}** new out of **${notices.length}** (${notices.length - filtered.length} already archived)`,
-      {
+    logAndBridge({
+      method: 'verbose',
+      message: `archive filter stats total=${notices.length} new=${filtered.length} alreadyArchived=${notices.length - filtered.length}`,
+      context: ArchiveOrchestratorService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.VERBOSE,
+      bridgeMessage: `Archive filter: **${filtered.length}** new out of **${notices.length}** (${notices.length - filtered.length} already archived)`,
+      metadata: {
         total: notices.length,
         newCount: filtered.length,
         alreadyArchived: notices.length - filtered.length,
       },
-    );
+    });
 
     return filtered;
   }
@@ -760,15 +779,9 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     sha256: string;
     httpMetadata: ArchiveHttpMetadata;
   }> {
-    const response = await globalThis.fetch(link, {
-      method: 'GET',
-      headers: {
-        Accept:
-          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'User-Agent': APP_CONSTANTS.CRAWLING.USER_AGENT,
-      },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(15_000),
+    const response = await fetchHtmlPage(link, {
+      userAgent: APP_CONSTANTS.CRAWLING.USER_AGENT,
+      timeoutMs: 15000,
     });
 
     if (!response.ok) {

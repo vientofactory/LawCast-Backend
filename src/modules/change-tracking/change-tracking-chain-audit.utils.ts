@@ -14,6 +14,7 @@ import {
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { type DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { type ChangeChainAuditReport } from './change-tracking.service';
+import { logAndBridge } from '../../utils/bridge-log.utils';
 
 interface ChainVerificationIssue {
   noticeNum: number;
@@ -79,30 +80,34 @@ export async function runScheduledChainAuditInternal(
     `${result.failureCount} failure(s), checkpoint=${checkpointRootHash}`;
 
   if (result.failureCount > 0) {
-    deps.logger.error(summaryMessage);
-    void deps.discordBridge?.logEvent(
-      BridgeLogLevel.ERROR,
-      'ChangeTrackingService',
-      summaryMessage,
-      {
+    logAndBridge({
+      logger: deps.logger,
+      method: 'error',
+      message: summaryMessage,
+      context: 'ChangeTrackingService',
+      discordBridge: deps.discordBridge,
+      bridgeLevel: BridgeLogLevel.ERROR,
+      metadata: {
         scope,
         checkpointRootHash,
         failures: failures.slice(0, 20),
       },
-    );
+    });
   } else {
-    deps.logger.log(summaryMessage);
-    void deps.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      'ChangeTrackingService',
-      summaryMessage,
-      {
+    logAndBridge({
+      logger: deps.logger,
+      method: 'log',
+      message: summaryMessage,
+      context: 'ChangeTrackingService',
+      discordBridge: deps.discordBridge,
+      bridgeLevel: BridgeLogLevel.LOG,
+      metadata: {
         scope,
         checkpointRootHash,
         noticeCount: result.noticeCount,
         eventCount: result.eventCount,
       },
-    );
+    });
   }
 
   return result;

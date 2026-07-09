@@ -17,6 +17,8 @@ import {
 import sharp from 'sharp';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type CachedNotice } from '../../types/cache.types';
+import { delayMs } from '../../utils/async-delay.utils';
+import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 
 const SCREENSHOT_CONFIG = {
@@ -174,7 +176,7 @@ export class CrawlingCoreService {
           this.logger.warn(
             `${label}: browser launch resource pressure detected, retrying in ${waitMs}ms (${attempt + 1}/${retries})`,
           );
-          await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+          await delayMs(waitMs);
         }
       }
     } finally {
@@ -207,16 +209,10 @@ export class CrawlingCoreService {
     const detailUrl = `https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/${normalized}/detailRP`;
 
     try {
-      const response = await globalThis.fetch(detailUrl, {
-        method: 'GET',
-        headers: {
-          Accept:
-            'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'User-Agent': this.crawlConfig.userAgent,
-          ...this.crawlConfig.customHeaders,
-        },
-        redirect: 'follow',
-        signal: AbortSignal.timeout(15_000),
+      const response = await fetchHtmlPage(detailUrl, {
+        userAgent: this.crawlConfig.userAgent,
+        customHeaders: this.crawlConfig.customHeaders,
+        timeoutMs: 15000,
       });
 
       const html = await response.text();

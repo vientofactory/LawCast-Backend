@@ -11,6 +11,7 @@ import { BridgeLogLevel } from './modules/discord-bridge/discord-bridge.types';
 import { CrawlingSchedulerService } from './modules/crawling/crawling-scheduler.service';
 import { ArchiveSyncService } from './modules/crawling/archive-sync.service';
 import { LoggerUtils } from './utils/logger.utils';
+import { logAndBridge } from './utils/bridge-log.utils';
 
 if (!process.env.TZ) {
   process.env.TZ = 'Asia/Seoul';
@@ -218,16 +219,18 @@ function initShutdownHandlers(
 
   // Node.js runtime warnings (e.g. MaxListenersExceeded, DeprecationWarning)
   process.on('warning', (warning) => {
-    LoggerUtils.warn(
-      loggerContext,
-      `Node.js Warning [${warning.name}]: ${warning.message}`,
-    );
-    void discordBridge.logEvent(
-      BridgeLogLevel.WARN,
-      `Warning:${warning.name}`,
-      warning.message,
-      warning.stack ? { stack: warning.stack } : undefined,
-    );
+    logAndBridge({
+      logger: {
+        warn: (message: string) => LoggerUtils.warn(loggerContext, message),
+      },
+      method: 'warn',
+      message: `Node.js Warning [${warning.name}]: ${warning.message}`,
+      context: `Warning:${warning.name}`,
+      discordBridge,
+      bridgeLevel: BridgeLogLevel.WARN,
+      bridgeMessage: warning.message,
+      metadata: warning.stack ? { stack: warning.stack } : undefined,
+    });
   });
 
   // Unexpected error handling

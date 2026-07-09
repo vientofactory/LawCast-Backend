@@ -13,6 +13,9 @@ import {
 import { APP_CONSTANTS } from '../../config/app.config';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
+import { delayMs } from '../../utils/async-delay.utils';
+import { isRetryableNetworkOrSystemError } from '../../utils/db-error.utils';
+import { logAndBridge } from '../../utils/bridge-log.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { CrawlingSchedulerSummarySupport } from './utils/crawling-scheduler-summary-support';
 import { CrawlingSchedulerProposalRetry } from './utils/crawling-scheduler-proposal-retry';
@@ -21,26 +24,8 @@ import { handlePendingCronInternal } from './utils/crawling-scheduler-pending-su
 const { PENDING_CRAWL_MAX_RETRIES, PENDING_CRAWL_RETRY_BASE_MS } =
   APP_CONSTANTS.ARCHIVE_SYNC;
 
-const RETRYABLE_NETWORK_ERROR_CODES = new Set([
-  'ECONNRESET',
-  'ECONNREFUSED',
-  'ETIMEDOUT',
-  'EPIPE',
-  'EAI_AGAIN',
-]);
-
 function isRetryableNetworkError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const errno = error as NodeJS.ErrnoException;
-  if (errno.code && RETRYABLE_NETWORK_ERROR_CODES.has(errno.code)) {
-    return true;
-  }
-  const message = errno.message ?? '';
-  return [...RETRYABLE_NETWORK_ERROR_CODES].some((code) =>
-    message.includes(code),
-  );
+  return isRetryableNetworkOrSystemError(error);
 }
 @Injectable()
 export class CrawlingSchedulerService implements OnModuleInit {
@@ -110,27 +95,36 @@ export class CrawlingSchedulerService implements OnModuleInit {
   }
 
   private async initializeCacheInBackground(): Promise<void> {
-    this.logger.log('Initializing cache with recent legislative notices...');
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      CrawlingSchedulerService.name,
-      'Cache initialization started',
-    );
+    logAndBridge({
+      logger: this.logger,
+      method: 'log',
+      message: 'Initializing cache with recent legislative notices...',
+      context: CrawlingSchedulerService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.LOG,
+      bridgeMessage: 'Cache initialization started',
+    });
     try {
       await this.initializeCache();
-      this.logger.log('Cache initialization completed successfully');
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
-        CrawlingSchedulerService.name,
-        'Cache initialization completed successfully',
-      );
+      logAndBridge({
+        logger: this.logger,
+        method: 'log',
+        message: 'Cache initialization completed successfully',
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.LOG,
+      });
     } catch (error) {
-      this.logger.error('Failed to initialize cache:', error);
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        CrawlingSchedulerService.name,
-        `Cache initialization failed: ${(error as Error).message}`,
-      );
+      logAndBridge({
+        logger: this.logger,
+        method: 'error',
+        message: 'Failed to initialize cache:',
+        loggerArgs: [error],
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.ERROR,
+        bridgeMessage: `Cache initialization failed: ${(error as Error).message}`,
+      });
     } finally {
       this.isInitialized = true;
 
@@ -146,14 +140,14 @@ export class CrawlingSchedulerService implements OnModuleInit {
     }
 
     if (this.isProcessing) {
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        CrawlingSchedulerService.name,
-        'Previous crawling process is still running, skipping...',
-      );
-      this.logger.warn(
-        'Previous crawling process is still running, skipping...',
-      );
+      logAndBridge({
+        logger: this.logger,
+        method: 'warn',
+        message: 'Previous crawling process is still running, skipping...',
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+      });
       return;
     }
 
@@ -162,12 +156,16 @@ export class CrawlingSchedulerService implements OnModuleInit {
     try {
       await this.performCrawlingAndNotification();
     } catch (error) {
-      this.logger.error('Error during crawling process', error);
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        CrawlingSchedulerService.name,
-        `Crawling process failed: ${(error as Error).message}`,
-      );
+      logAndBridge({
+        logger: this.logger,
+        method: 'error',
+        message: 'Error during crawling process',
+        loggerArgs: [error],
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.ERROR,
+        bridgeMessage: `Crawling process failed: ${(error as Error).message}`,
+      });
     } finally {
       this.isProcessing = false;
     }
@@ -239,7 +237,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
         );
       }
 
-      await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+      await delayMs(pollMs);
     }
   }
 
@@ -323,11 +321,15 @@ export class CrawlingSchedulerService implements OnModuleInit {
     this.logger.log(
       `Archive has ${archivedCount} notices - loading cache from DB (no external crawl)`,
     );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      CrawlingSchedulerService.name,
-      `Cache initialization: loading **${archivedCount}** notice(s) from archive DB`,
-    );
+    logAndBridge({
+      logger: this.logger,
+      method: 'log',
+      message: `Archive has ${archivedCount} notices - loading cache from DB (no external crawl)`,
+      context: CrawlingSchedulerService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.LOG,
+      bridgeMessage: `Cache initialization: loading **${archivedCount}** notice(s) from archive DB`,
+    });
 
     let notices: CachedNotice[];
     try {
@@ -335,14 +337,15 @@ export class CrawlingSchedulerService implements OnModuleInit {
         APP_CONSTANTS.CACHE.MAX_SIZE,
       );
     } catch (error) {
-      this.logger.warn(
-        `Archive load failed, falling back to crawl: ${(error as Error).message}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        CrawlingSchedulerService.name,
-        `Cache init archive load failed, falling back to crawl: ${(error as Error).message}`,
-      );
+      logAndBridge({
+        logger: this.logger,
+        method: 'warn',
+        message: `Archive load failed, falling back to crawl: ${(error as Error).message}`,
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+        bridgeMessage: `Cache init archive load failed, falling back to crawl: ${(error as Error).message}`,
+      });
       await this.initializeCacheFromCrawl();
       return;
     }
@@ -359,12 +362,16 @@ export class CrawlingSchedulerService implements OnModuleInit {
     this.logger.log(
       `Initialized Redis cache with ${notices.length} notices (from archive DB, no crawl)`,
     );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.VERBOSE,
-      CrawlingSchedulerService.name,
-      `Bootstrap cache loaded: **${notices.length}** notice(s) from archive DB`,
-      { count: notices.length, source: 'archive' },
-    );
+    logAndBridge({
+      logger: this.logger,
+      method: 'log',
+      message: `Initialized Redis cache with ${notices.length} notices (from archive DB, no crawl)`,
+      context: CrawlingSchedulerService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.VERBOSE,
+      bridgeMessage: `Bootstrap cache loaded: **${notices.length}** notice(s) from archive DB`,
+      metadata: { count: notices.length, source: 'archive' },
+    });
   }
 
   /**
@@ -380,11 +387,17 @@ export class CrawlingSchedulerService implements OnModuleInit {
     this.logger.log(
       'Archive is empty - crawling to populate cache (first-ever startup)',
     );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      CrawlingSchedulerService.name,
-      'Cache initialization: archive is empty, crawling for initial data',
-    );
+    logAndBridge({
+      logger: this.logger,
+      method: 'log',
+      message:
+        'Archive is empty - crawling to populate cache (first-ever startup)',
+      context: CrawlingSchedulerService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.LOG,
+      bridgeMessage:
+        'Cache initialization: archive is empty, crawling for initial data',
+    });
 
     const crawledData = await this.crawlingCoreService.crawlAllPages();
 
@@ -426,14 +439,15 @@ export class CrawlingSchedulerService implements OnModuleInit {
           },
         );
     } catch (error) {
-      this.logger.warn(
-        `Summary enrichment failed during init, using raw crawled data: ${(error as Error).message}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        CrawlingSchedulerService.name,
-        `Summary enrichment failed during init: ${(error as Error).message}`,
-      );
+      logAndBridge({
+        logger: this.logger,
+        method: 'warn',
+        message: `Summary enrichment failed during init, using raw crawled data: ${(error as Error).message}`,
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+        bridgeMessage: `Summary enrichment failed during init: ${(error as Error).message}`,
+      });
       noticesWithSummary = crawledData.map((notice) => ({
         ...notice,
         aiSummary: null,
@@ -445,12 +459,16 @@ export class CrawlingSchedulerService implements OnModuleInit {
     this.logger.log(
       `Initialized Redis cache with ${noticesWithSummary.length} notices (crawled)`,
     );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.VERBOSE,
-      CrawlingSchedulerService.name,
-      `Bootstrap cache loaded: **${noticesWithSummary.length}** notice(s) stored in Redis`,
-      { count: noticesWithSummary.length, source: 'crawl' },
-    );
+    logAndBridge({
+      logger: this.logger,
+      method: 'log',
+      message: `Initialized Redis cache with ${noticesWithSummary.length} notices (crawled)`,
+      context: CrawlingSchedulerService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.VERBOSE,
+      bridgeMessage: `Bootstrap cache loaded: **${noticesWithSummary.length}** notice(s) stored in Redis`,
+      metadata: { count: noticesWithSummary.length, source: 'crawl' },
+    });
   }
 
   /**
@@ -494,14 +512,17 @@ export class CrawlingSchedulerService implements OnModuleInit {
     } catch {
       cacheAvailable = false;
       cacheDiffNotices = crawledData;
-      this.logger.warn(
-        'Redis unavailable - falling back to archive-based deduplication',
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        CrawlingSchedulerService.name,
-        'Redis unavailable - falling back to archive-based deduplication for this cycle',
-      );
+      logAndBridge({
+        logger: this.logger,
+        method: 'warn',
+        message:
+          'Redis unavailable - falling back to archive-based deduplication',
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+        bridgeMessage:
+          'Redis unavailable - falling back to archive-based deduplication for this cycle',
+      });
     }
 
     const newNotices =
@@ -509,17 +530,20 @@ export class CrawlingSchedulerService implements OnModuleInit {
         cacheDiffNotices,
       );
 
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.VERBOSE,
-      CrawlingSchedulerService.name,
-      `Crawl stats - crawled: **${crawledData.length}**, cache diff: **${cacheDiffNotices.length}**, new: **${newNotices.length}**${cacheAvailable ? '' : ' *(cache fallback)*'}`,
-      {
+    logAndBridge({
+      method: 'verbose',
+      message: `crawl stats: crawled=${crawledData.length} cacheDiff=${cacheDiffNotices.length} new=${newNotices.length} cacheAvailable=${cacheAvailable}`,
+      context: CrawlingSchedulerService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.VERBOSE,
+      bridgeMessage: `Crawl stats - crawled: **${crawledData.length}**, cache diff: **${cacheDiffNotices.length}**, new: **${newNotices.length}**${cacheAvailable ? '' : ' *(cache fallback)*'}`,
+      metadata: {
         totalCrawled: crawledData.length,
         cacheDiff: cacheDiffNotices.length,
         newAfterArchiveFilter: newNotices.length,
         cacheAvailable,
       },
-    );
+    });
 
     // ── Fast path: immediately update the cache while preserving existing summary states ──
     // Reflect the crawl result in the cache without waiting for AI summarisation or archiving.
@@ -559,16 +583,19 @@ export class CrawlingSchedulerService implements OnModuleInit {
     }
 
     if (newNotices.length > 0) {
-      this.logger.log(`Found ${newNotices.length} new legislative notices`);
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
-        CrawlingSchedulerService.name,
-        `Found **${newNotices.length}** new legislative notice(s)`,
-        {
+      logAndBridge({
+        logger: this.logger,
+        method: 'log',
+        message: `Found ${newNotices.length} new legislative notices`,
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.LOG,
+        bridgeMessage: `Found **${newNotices.length}** new legislative notice(s)`,
+        metadata: {
           subjects: newNotices.slice(0, 5).map((n) => n.subject ?? n.num),
           total: newNotices.length,
         },
-      );
+      });
 
       // ── Background path: AI summary → archiving → cache re-update → notifications ──
       // Runs independently after the isProcessing lock is released, so it never blocks the cron cycle.
@@ -579,24 +606,28 @@ export class CrawlingSchedulerService implements OnModuleInit {
             existingNoticeMap,
           );
         } catch (error) {
-          this.logger.error(
-            'Background processing for new notices failed:',
-            error,
-          );
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.ERROR,
-            CrawlingSchedulerService.name,
-            `Background new notice processing failed: ${(error as Error).message}`,
-          );
+          logAndBridge({
+            logger: this.logger,
+            method: 'error',
+            message: 'Background processing for new notices failed:',
+            loggerArgs: [error],
+            context: CrawlingSchedulerService.name,
+            discordBridge: this.discordBridge,
+            bridgeLevel: BridgeLogLevel.ERROR,
+            bridgeMessage: `Background new notice processing failed: ${(error as Error).message}`,
+          });
         }
       });
     } else {
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.VERBOSE,
-        CrawlingSchedulerService.name,
-        `No new notices - cache refreshed with **${crawledData.length}** existing notice(s)`,
-        { total: crawledData.length },
-      );
+      logAndBridge({
+        method: 'verbose',
+        message: `no new notices - cache refreshed count=${crawledData.length}`,
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.VERBOSE,
+        bridgeMessage: `No new notices - cache refreshed with **${crawledData.length}** existing notice(s)`,
+        metadata: { total: crawledData.length },
+      });
 
       // ── Background path: retry summaries that failed to generate in a previous cycle ──
       this.runBackgroundTask('retry-unavailable-summaries', async () => {
@@ -652,14 +683,15 @@ export class CrawlingSchedulerService implements OnModuleInit {
           archiveSummaryStates,
         );
     } catch (error) {
-      this.logger.error(
-        `Summary enrichment failed for new notices, using raw data: ${(error as Error).message}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        CrawlingSchedulerService.name,
-        `Summary enrichment failed: ${(error as Error).message}`,
-      );
+      logAndBridge({
+        logger: this.logger,
+        method: 'error',
+        message: `Summary enrichment failed for new notices, using raw data: ${(error as Error).message}`,
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.ERROR,
+        bridgeMessage: `Summary enrichment failed: ${(error as Error).message}`,
+      });
       newNoticesWithSummary = newNotices.map((notice) => ({
         ...notice,
         aiSummary: null,
@@ -673,14 +705,15 @@ export class CrawlingSchedulerService implements OnModuleInit {
         newNoticesWithSummary,
       );
     } catch (error) {
-      this.logger.error(
-        `Archive stage failed for new notices, proceeding with cache and notifications: ${(error as Error).message}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        CrawlingSchedulerService.name,
-        `Archive stage failed: ${(error as Error).message}`,
-      );
+      logAndBridge({
+        logger: this.logger,
+        method: 'error',
+        message: `Archive stage failed for new notices, proceeding with cache and notifications: ${(error as Error).message}`,
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.ERROR,
+        bridgeMessage: `Archive stage failed: ${(error as Error).message}`,
+      });
     }
 
     // Stage: Reconcile generated summaries against persisted summary_state.
@@ -766,26 +799,31 @@ export class CrawlingSchedulerService implements OnModuleInit {
     }
 
     await this.cacheService.updateCache(finalNotices);
-    this.logger.log(
-      `Background processing complete: cache updated with summaries for ${newNotices.length} new notice(s)`,
-    );
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.DEBUG,
-      CrawlingSchedulerService.name,
-      `Background processing complete: cache updated with summaries for **${newNotices.length}** new notice(s)`,
-      { count: newNotices.length },
-    );
+    logAndBridge({
+      logger: this.logger,
+      method: 'log',
+      message: `Background processing complete: cache updated with summaries for ${newNotices.length} new notice(s)`,
+      context: CrawlingSchedulerService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.DEBUG,
+      bridgeMessage: `Background processing complete: cache updated with summaries for **${newNotices.length}** new notice(s)`,
+      metadata: { count: newNotices.length },
+    });
 
     // Stage: Send notifications (already dispatched asynchronously)
     void this.notificationOrchestratorService
       .sendNotifications(reconciledNoticesWithSummary)
       .catch((error) => {
-        this.logger.error('Background notification dispatch failed:', error);
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.ERROR,
-          CrawlingSchedulerService.name,
-          'Background notification dispatch failed',
-        );
+        logAndBridge({
+          logger: this.logger,
+          method: 'error',
+          message: 'Background notification dispatch failed:',
+          loggerArgs: [error],
+          context: CrawlingSchedulerService.name,
+          discordBridge: this.discordBridge,
+          bridgeLevel: BridgeLogLevel.ERROR,
+          bridgeMessage: 'Background notification dispatch failed',
+        });
       });
   }
 
@@ -879,19 +917,20 @@ export class CrawlingSchedulerService implements OnModuleInit {
         : 0;
 
     if (upgraded > 0) {
-      this.logger.log(
-        `Periodic NSM->PAL archive refresh updated ${upgraded} bill(s)`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.DEBUG,
-        CrawlingSchedulerService.name,
-        `Periodic NSM->PAL archive refresh: upgraded **${upgraded}** bill(s)`,
-        {
+      logAndBridge({
+        logger: this.logger,
+        method: 'log',
+        message: `Periodic NSM->PAL archive refresh updated ${upgraded} bill(s)`,
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        bridgeMessage: `Periodic NSM->PAL archive refresh: upgraded **${upgraded}** bill(s)`,
+        metadata: {
           upgraded,
           detected: toUpgrade.length,
           sampleNoticeNums: toUpgrade.slice(0, 10).map((item) => item.num),
         },
-      );
+      });
     }
 
     if (toRecompare.length > 0) {

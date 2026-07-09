@@ -21,6 +21,18 @@ import { type ChainIntegrityAuditResult } from '../archive-sync.service';
 import { type PendingSyncResult } from '../archive-sync.service';
 import { type SummaryBackfillResult } from '../archive-sync.service';
 import { type SummaryUnavailableRetryResult } from '../archive-sync.service';
+import { delayMs } from '../../../utils/async-delay.utils';
+import { logAndBridge } from '../../../utils/bridge-log.utils';
+
+const ARCHIVE_SYNC_CONTEXT = 'ArchiveSyncService';
+const archiveSyncLogger = {
+  log: (message: string) => LoggerUtils.log(ARCHIVE_SYNC_CONTEXT, message),
+  warn: (message: string) => LoggerUtils.warn(ARCHIVE_SYNC_CONTEXT, message),
+  error: (message: string) => LoggerUtils.error(ARCHIVE_SYNC_CONTEXT, message),
+  debug: (message: string) => LoggerUtils.debug(ARCHIVE_SYNC_CONTEXT, message),
+  verbose: (message: string) =>
+    LoggerUtils.verbose(ARCHIVE_SYNC_CONTEXT, message),
+};
 
 export interface ArchiveSyncExecutorDeps {
   crawlingCoreService: CrawlingCoreService;
@@ -113,22 +125,25 @@ export async function executeFullSyncPhase(
             { reason: 'nsm-pal-upgrade' },
           );
           if (upgraded > 0) {
-            LoggerUtils.logDev(
-              'ArchiveSyncService',
-              `Upgraded ${upgraded} pending bill(s) from NSM to PAL with full archive refresh`,
-            );
-            void deps.discordBridge?.logEvent(
-              BridgeLogLevel.DEBUG,
-              'ArchiveSyncService',
-              `NSM->PAL archive refresh applied: upgraded **${upgraded}** bill(s) on full sync`,
-              {
+            logAndBridge({
+              logger: {
+                log: (message: string) =>
+                  LoggerUtils.logDev('ArchiveSyncService', message),
+              },
+              method: 'log',
+              message: `Upgraded ${upgraded} pending bill(s) from NSM to PAL with full archive refresh`,
+              context: 'ArchiveSyncService',
+              discordBridge: deps.discordBridge,
+              bridgeLevel: BridgeLogLevel.DEBUG,
+              bridgeMessage: `NSM->PAL archive refresh applied: upgraded **${upgraded}** bill(s) on full sync`,
+              metadata: {
                 upgraded,
                 detected: toUpgrade.length,
                 sampleNoticeNums: toUpgrade
                   .slice(0, 10)
                   .map((item) => item.num),
               },
-            );
+            });
           }
         }
       }
@@ -214,15 +229,14 @@ export async function executePendingSyncPhase(
       newlyArchivedCount = archived.length;
     }
 
-    LoggerUtils.log(
-      'ArchiveSyncService',
-      `Pending sync done - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
-    );
-    void deps.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      'ArchiveSyncService',
-      `Pending sync complete - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
-    );
+    logAndBridge({
+      logger: archiveSyncLogger,
+      method: 'log',
+      message: `Pending sync done - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
+      context: ARCHIVE_SYNC_CONTEXT,
+      discordBridge: deps.discordBridge,
+      bridgeMessage: `Pending sync complete - scanned=${totalScanned} new=${newPendingNotices.length} archived=${newlyArchivedCount}`,
+    });
 
     return { totalScanned, newlyArchivedCount };
   } finally {
@@ -246,16 +260,15 @@ export async function fetchDonePageWithRetry(
       lastError = error;
       if (attempt < options.donePageMaxRetries) {
         const backoff = options.donePageRetryBaseMs * (attempt + 1);
-        LoggerUtils.warn(
-          'ArchiveSyncService',
-          `isDone page ${pageIndex} failed (attempt ${attempt + 1}/${options.donePageMaxRetries + 1}): ${(error as Error).message} - retrying in ${backoff}ms`,
-        );
-        void deps.discordBridge?.logEvent(
-          BridgeLogLevel.WARN,
-          'ArchiveSyncService',
-          `isDone page **${pageIndex}** failed (attempt ${attempt + 1}/${options.donePageMaxRetries + 1}): ${(error as Error).message} - retrying in ${backoff}ms`,
-        );
-        await new Promise<void>((resolve) => setTimeout(resolve, backoff));
+        logAndBridge({
+          logger: archiveSyncLogger,
+          method: 'warn',
+          message: `isDone page ${pageIndex} failed (attempt ${attempt + 1}/${options.donePageMaxRetries + 1}): ${(error as Error).message} - retrying in ${backoff}ms`,
+          context: ARCHIVE_SYNC_CONTEXT,
+          discordBridge: deps.discordBridge,
+          bridgeMessage: `isDone page **${pageIndex}** failed (attempt ${attempt + 1}/${options.donePageMaxRetries + 1}): ${(error as Error).message} - retrying in ${backoff}ms`,
+        });
+        await delayMs(backoff);
       }
     }
   }
@@ -280,9 +293,7 @@ export async function reconcileIsDonePhase(
     await deps.noticeArchiveService.markNoticesDoneByNums(pageNums);
 
   for (let pageIndex = 2; pageIndex <= totalPages; pageIndex++) {
-    await new Promise<void>((resolve) =>
-      setTimeout(resolve, options.crawlerDelayMs),
-    );
+    await delayMs(options.crawlerDelayMs);
     const page = await fetchDonePageWithRetry(deps, options, pageIndex);
     pageNums = (page.items ?? []).map((item) => item.num);
     fetchedDoneCount += pageNums.length;
@@ -290,15 +301,14 @@ export async function reconcileIsDonePhase(
       await deps.noticeArchiveService.markNoticesDoneByNums(pageNums);
   }
 
-  LoggerUtils.log(
-    'ArchiveSyncService',
-    `isDone reconciliation done - fetched=${fetchedDoneCount} marked=${markedDoneCount}`,
-  );
-  void deps.discordBridge?.logEvent(
-    BridgeLogLevel.LOG,
-    'ArchiveSyncService',
-    `isDone sync complete - fetched=${fetchedDoneCount} marked=${markedDoneCount}`,
-  );
+  logAndBridge({
+    logger: archiveSyncLogger,
+    method: 'log',
+    message: `isDone reconciliation done - fetched=${fetchedDoneCount} marked=${markedDoneCount}`,
+    context: ARCHIVE_SYNC_CONTEXT,
+    discordBridge: deps.discordBridge,
+    bridgeMessage: `isDone sync complete - fetched=${fetchedDoneCount} marked=${markedDoneCount}`,
+  });
 
   return { fetchedDoneCount, markedDoneCount };
 }

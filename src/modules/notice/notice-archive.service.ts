@@ -51,6 +51,7 @@ import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
+import { logAndBridge } from '../../utils/bridge-log.utils';
 
 export interface ArchiveListQuery {
   page: number;
@@ -1954,15 +1955,16 @@ export class NoticeArchiveService {
         events,
       };
     } catch (error) {
-      this.logger.warn(
-        `Failed to collect change-tracking export data for notice ${noticeNum}: ${(error as Error).message}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        NoticeArchiveService.name,
-        `Failed to collect change-tracking export data for notice ${noticeNum}: ${(error as Error).message}`,
-        { noticeNum },
-      );
+      const warnMessage = `Failed to collect change-tracking export data for notice ${noticeNum}: ${(error as Error).message}`;
+      logAndBridge({
+        logger: this.logger,
+        method: 'warn',
+        message: warnMessage,
+        context: NoticeArchiveService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+        metadata: { noticeNum },
+      });
       return {
         exportedAt: new Date().toISOString(),
         noticeNum,
@@ -2472,26 +2474,28 @@ export class NoticeArchiveService {
           changedFields: built.diff.details.map((detail) => detail.fieldPath),
         })
         .catch((dispatchError) => {
-          this.logger.warn(
-            `Failed to dispatch change notification for event ${event.id}: ${(dispatchError as Error).message}`,
-          );
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.WARN,
-            NoticeArchiveService.name,
-            `Failed to dispatch change notification for event ${event.id}: ${(dispatchError as Error).message}`,
-            { eventId: event.id, noticeNum },
-          );
+          const warnMessage = `Failed to dispatch change notification for event ${event.id}: ${(dispatchError as Error).message}`;
+          logAndBridge({
+            logger: this.logger,
+            method: 'warn',
+            message: warnMessage,
+            context: NoticeArchiveService.name,
+            discordBridge: this.discordBridge,
+            bridgeLevel: BridgeLogLevel.WARN,
+            metadata: { eventId: event.id, noticeNum },
+          });
         });
     } catch (error) {
-      this.logger.warn(
-        `Failed to append change event for notice ${noticeNum} (${source}): ${(error as Error).message}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        NoticeArchiveService.name,
-        `Failed to append change event for notice ${noticeNum} (${source}): ${(error as Error).message}`,
-        { noticeNum, source },
-      );
+      const warnMessage = `Failed to append change event for notice ${noticeNum} (${source}): ${(error as Error).message}`;
+      logAndBridge({
+        logger: this.logger,
+        method: 'warn',
+        message: warnMessage,
+        context: NoticeArchiveService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+        metadata: { noticeNum, source },
+      });
       throw error;
     }
   }

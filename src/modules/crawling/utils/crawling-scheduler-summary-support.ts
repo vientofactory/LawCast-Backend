@@ -7,6 +7,7 @@ import {
 import { SummaryGenerationService } from '../summary-generation.service';
 import { DiscordBridgeService } from '../../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
+import { logAndBridge } from '../../../utils/bridge-log.utils';
 
 interface SummarySupportLogger {
   log(message: string): void;
@@ -129,11 +130,15 @@ export class CrawlingSchedulerSummarySupport {
     this.options.logger.log(
       `Retrying unavailable summaries for ${retryCandidates.length} notices`,
     );
-    void this.options.discordBridge?.logEvent(
-      BridgeLogLevel.WARN,
-      'CrawlingSchedulerService',
-      `Retrying unavailable summaries for ${retryCandidates.length} notices`,
-    );
+    logAndBridge({
+      logger: this.options.logger,
+      method: 'log',
+      message: `Retrying unavailable summaries for ${retryCandidates.length} notices`,
+      context: 'CrawlingSchedulerService',
+      discordBridge: this.options.discordBridge,
+      bridgeLevel: BridgeLogLevel.WARN,
+      bridgeMessage: `Retrying unavailable summaries for ${retryCandidates.length} notices`,
+    });
 
     const retryResults = await Promise.all(
       retryCandidates.map(async (notice, index) => {
@@ -163,16 +168,19 @@ export class CrawlingSchedulerSummarySupport {
     const recoveredCount = retryResults.filter(
       (result) => result.aiSummaryStatus === 'ready',
     ).length;
-    void this.options.discordBridge?.logEvent(
-      BridgeLogLevel.DEBUG,
-      'CrawlingSchedulerService',
-      `Summary retry: **${recoveredCount}/${retryCandidates.length}** recovered`,
-      {
+    logAndBridge({
+      method: 'debug',
+      message: `summary retry recovered=${recoveredCount}/${retryCandidates.length}`,
+      context: 'CrawlingSchedulerService',
+      discordBridge: this.options.discordBridge,
+      bridgeLevel: BridgeLogLevel.DEBUG,
+      bridgeMessage: `Summary retry: **${recoveredCount}/${retryCandidates.length}** recovered`,
+      metadata: {
         candidates: retryCandidates.length,
         recovered: recoveredCount,
         stillUnavailable: retryCandidates.length - recoveredCount,
       },
-    );
+    });
 
     const mergedNotices = notices.map((notice) => {
       const retryResult = retryResultMap.get(notice.num);

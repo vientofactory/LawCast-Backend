@@ -5,6 +5,7 @@ import { NotificationBatchService } from './notification-batch.service';
 import { BatchProcessingOptions } from '../shared/batch-processing.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
+import { logAndBridge } from '../../utils/bridge-log.utils';
 
 @Injectable()
 export class NotificationOrchestratorService {
@@ -34,15 +35,16 @@ export class NotificationOrchestratorService {
       // Apply batch size limit if there are more than 50 notifications
       if (notices.length > 50) {
         options.batchSize = 50;
-        this.logger.log(
-          `Large notification batch detected (${notices.length} notices), applying batch size limit of 50`,
-        );
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.DEBUG,
-          NotificationOrchestratorService.name,
-          `Large batch detected: **${notices.length}** notices - applying batch size limit of 50`,
-          { noticeCount: notices.length, batchSizeLimit: 50 },
-        );
+        logAndBridge({
+          logger: this.logger,
+          method: 'log',
+          message: `Large notification batch detected (${notices.length} notices), applying batch size limit of 50`,
+          context: NotificationOrchestratorService.name,
+          discordBridge: this.discordBridge,
+          bridgeLevel: BridgeLogLevel.DEBUG,
+          bridgeMessage: `Large batch detected: **${notices.length}** notices - applying batch size limit of 50`,
+          metadata: { noticeCount: notices.length, batchSizeLimit: 50 },
+        });
       }
 
       // Start batch processing and get the jobId
@@ -52,15 +54,16 @@ export class NotificationOrchestratorService {
           options,
         );
 
-      this.logger.log(
-        `Started notification batch processing for ${notices.length} notices (job: ${jobId})`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.DEBUG,
-        NotificationOrchestratorService.name,
-        `Notification batch dispatched: **${notices.length}** notice(s) (job: \`${jobId}\`)`,
-        { noticeCount: notices.length, jobId },
-      );
+      logAndBridge({
+        logger: this.logger,
+        method: 'log',
+        message: `Started notification batch processing for ${notices.length} notices (job: ${jobId})`,
+        context: NotificationOrchestratorService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        bridgeMessage: `Notification batch dispatched: **${notices.length}** notice(s) (job: \`${jobId}\`)`,
+        metadata: { noticeCount: notices.length, jobId },
+      });
 
       this.logger.log(
         `Notification batch processing is running asynchronously for ${notices.length} notices`,

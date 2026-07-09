@@ -13,6 +13,7 @@ import {
 } from '../shared/batch-processing.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
+import { logAndBridge } from '../../utils/bridge-log.utils';
 
 interface NotificationJobResult {
   notice: string;
@@ -62,17 +63,19 @@ export class NotificationBatchService {
     options: BatchProcessingOptions = {},
   ): Promise<string> {
     const batchRunId = BatchProcessingService.generateId('notification_batch');
-    LoggerUtils.logDev(
-      NotificationBatchService.name,
-      `Starting notification batch processing for ${notices.length} notices`,
-    );
-
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      NotificationBatchService.name,
-      `Notification batch started for **${notices.length}** notice(s)`,
-      { batchRunId, noticeCount: notices.length },
-    );
+    logAndBridge({
+      logger: {
+        log: (message: string) =>
+          LoggerUtils.logDev(NotificationBatchService.name, message),
+      },
+      method: 'log',
+      message: `Starting notification batch processing for ${notices.length} notices`,
+      context: NotificationBatchService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.LOG,
+      bridgeMessage: `Notification batch started for **${notices.length}** notice(s)`,
+      metadata: { batchRunId, noticeCount: notices.length },
+    });
 
     const batchPromise = this.executeNotificationBatch(notices, {
       ...options,
@@ -103,16 +106,18 @@ export class NotificationBatchService {
           temporaryFailures,
         });
 
-        this.logger.log(
-          `Notification batch ${batchRunId} completed: ${successCount} success, ${failureCount} failed` +
+        logAndBridge({
+          logger: this.logger,
+          method: 'log',
+          message:
+            `Notification batch ${batchRunId} completed: ${successCount} success, ${failureCount} failed` +
             ` (webhooks: ${totalWebhooks}, deactivated: ${deactivated}, temporary failures: ${temporaryFailures})`,
-        );
-
-        void this.discordBridge?.logEvent(
-          failureCount > 0 ? BridgeLogLevel.WARN : BridgeLogLevel.LOG,
-          NotificationBatchService.name,
-          `Batch **${batchRunId}** completed: ${successCount} success, ${failureCount} failed`,
-          {
+          context: NotificationBatchService.name,
+          discordBridge: this.discordBridge,
+          bridgeLevel:
+            failureCount > 0 ? BridgeLogLevel.WARN : BridgeLogLevel.LOG,
+          bridgeMessage: `Batch **${batchRunId}** completed: ${successCount} success, ${failureCount} failed`,
+          metadata: {
             batchRunId,
             successCount,
             failureCount,
@@ -120,16 +125,20 @@ export class NotificationBatchService {
             deactivated,
             temporaryFailures,
           },
-        );
+        });
       })
       .catch((error) => {
-        this.logger.error(`Batch ${batchRunId} processing error:`, error);
-        void this.discordBridge?.logEvent(
-          BridgeLogLevel.ERROR,
-          NotificationBatchService.name,
-          `Batch **${batchRunId}** failed: ${(error as Error).message}`,
-          { batchRunId },
-        );
+        logAndBridge({
+          logger: this.logger,
+          method: 'error',
+          message: `Batch ${batchRunId} processing error:`,
+          loggerArgs: [error],
+          context: NotificationBatchService.name,
+          discordBridge: this.discordBridge,
+          bridgeLevel: BridgeLogLevel.ERROR,
+          bridgeMessage: `Batch **${batchRunId}** failed: ${(error as Error).message}`,
+          metadata: { batchRunId },
+        });
       });
 
     LoggerUtils.logDev(
@@ -155,22 +164,23 @@ export class NotificationBatchService {
     const batchRunId = BatchProcessingService.generateId(
       'change_notification_batch',
     );
-
-    LoggerUtils.logDev(
-      NotificationBatchService.name,
-      `Starting change-notification batch for ${payloads.length} change event(s)`,
-    );
-
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      NotificationBatchService.name,
-      `Change-notification batch started for **${payloads.length}** event(s)`,
-      {
+    logAndBridge({
+      logger: {
+        log: (message: string) =>
+          LoggerUtils.logDev(NotificationBatchService.name, message),
+      },
+      method: 'log',
+      message: `Starting change-notification batch for ${payloads.length} change event(s)`,
+      context: NotificationBatchService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.LOG,
+      bridgeMessage: `Change-notification batch started for **${payloads.length}** event(s)`,
+      metadata: {
         batchRunId,
         eventCount: payloads.length,
         noticeNums: payloads.map((payload) => payload.noticeNum),
       },
-    );
+    });
 
     const batchPromise = this.executeChangeNotificationBatch(payloads, {
       ...options,
@@ -233,23 +243,27 @@ export class NotificationBatchService {
     try {
       activeWebhooks = (await this.webhookService.findAll()) ?? [];
     } catch (error) {
-      this.logger.error(
-        `Failed to load webhooks for notification batch, skipping dispatch: ${(error as Error).message}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.ERROR,
-        NotificationBatchService.name,
-        `Webhook load failed, notifications skipped: ${(error as Error).message}`,
-      );
+      logAndBridge({
+        logger: this.logger,
+        method: 'error',
+        message: `Failed to load webhooks for notification batch, skipping dispatch: ${(error as Error).message}`,
+        context: NotificationBatchService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.ERROR,
+        bridgeMessage: `Webhook load failed, notifications skipped: ${(error as Error).message}`,
+      });
       return [];
     }
 
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.VERBOSE,
-      NotificationBatchService.name,
-      `Starting notification dispatch - **${activeWebhooks.length}** active webhook(s) found`,
-      { webhookCount: activeWebhooks.length },
-    );
+    logAndBridge({
+      method: 'verbose',
+      message: `starting notification dispatch webhookCount=${activeWebhooks.length}`,
+      context: NotificationBatchService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.VERBOSE,
+      bridgeMessage: `Starting notification dispatch - **${activeWebhooks.length}** active webhook(s) found`,
+      metadata: { webhookCount: activeWebhooks.length },
+    });
 
     if (activeWebhooks.length === 0) {
       LoggerUtils.logDev(
@@ -493,17 +507,21 @@ export class NotificationBatchService {
         }
       }
 
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        NotificationBatchService.name,
-        `Deactivated **${permanentFailures.length}** permanently-failing webhook(s) for ${context.itemType}: **${context.itemLabel}**`,
-        {
+      logAndBridge({
+        logger: this.logger,
+        method: 'warn',
+        message: `Deactivated ${permanentFailures.length} permanently-failing webhook(s) for ${context.itemType}: ${context.itemLabel}`,
+        context: NotificationBatchService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+        bridgeMessage: `Deactivated **${permanentFailures.length}** permanently-failing webhook(s) for ${context.itemType}: **${context.itemLabel}**`,
+        metadata: {
           deactivatedCount: permanentFailures.length,
           webhookIds: permanentFailureIds,
           itemType: context.itemType,
           itemLabel: context.itemLabel,
         },
-      );
+      });
     }
 
     if (temporaryFailures.length > 0) {

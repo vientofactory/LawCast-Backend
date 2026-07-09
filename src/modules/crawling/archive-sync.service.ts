@@ -10,6 +10,7 @@ import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { type LegacyGenesisSeedResult } from '../notice/notice-archive.service';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
+import { logAndBridge } from '../../utils/bridge-log.utils';
 import {
   ArchiveSyncPhaseRunner,
   type ArchiveSyncPhaseState,
@@ -28,6 +29,7 @@ import {
   type ArchiveSyncExecutorDeps,
   type ArchiveSyncExecutorOptions,
 } from './utils/archive-sync-phase-executors';
+import { delayMs } from '../../utils/async-delay.utils';
 
 // ─── Tuning constants (sourced from APP_CONSTANTS.ARCHIVE_SYNC) ───────────────
 
@@ -162,7 +164,6 @@ export class ArchiveSyncService implements OnModuleInit {
   // ── Phase trackers ───────────────────────────────────────────────────────
 
   private readonly phaseRunner = new ArchiveSyncPhaseRunner();
-
   private readonly fullSync = makePhaseTracker<FullSyncResult>();
   private readonly isDoneSync = makePhaseTracker<IsDoneSyncResult>();
   private readonly integrityCheck = makePhaseTracker<IntegrityCheckResult>();
@@ -196,6 +197,10 @@ export class ArchiveSyncService implements OnModuleInit {
     };
   }
 
+  private readonly logger = LoggerUtils.getContextLogger(
+    ArchiveSyncService.name,
+  );
+
   constructor(
     private readonly crawlingCoreService: CrawlingCoreService,
     private readonly noticeArchiveService: NoticeArchiveService,
@@ -223,12 +228,18 @@ export class ArchiveSyncService implements OnModuleInit {
   // ─────────────────────────────────────────────────────────────────────────
 
   private async runBootstrapPipeline(): Promise<void> {
-    LoggerUtils.log(ArchiveSyncService.name, 'Bootstrap sync pipeline started');
-    void this.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      ArchiveSyncService.name,
-      'Bootstrap sync pipeline started',
-    );
+    const archiveSyncLogger = {
+      log: (message: string) =>
+        LoggerUtils.log(ArchiveSyncService.name, message),
+    };
+    logAndBridge({
+      logger: archiveSyncLogger,
+      method: 'log',
+      message: 'Bootstrap sync pipeline started',
+      context: ArchiveSyncService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.LOG,
+    });
     const bootstrapBoundaryAt = new Date();
 
     this.noticeArchiveService.beginChangeNotificationSuppression?.();
@@ -255,15 +266,14 @@ export class ArchiveSyncService implements OnModuleInit {
       );
       await this.safeRun('isDone sync', () => this.runIsDoneSync('bootstrap'));
 
-      LoggerUtils.log(
-        ArchiveSyncService.name,
-        'Bootstrap sync pipeline complete',
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
-        ArchiveSyncService.name,
-        'Bootstrap sync pipeline complete',
-      );
+      logAndBridge({
+        logger: archiveSyncLogger,
+        method: 'log',
+        message: 'Bootstrap sync pipeline complete',
+        context: ArchiveSyncService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.LOG,
+      });
     } finally {
       this.noticeArchiveService.endChangeNotificationSuppression?.();
     }
@@ -313,7 +323,7 @@ export class ArchiveSyncService implements OnModuleInit {
         );
       }
 
-      await new Promise<void>((resolve) => setTimeout(resolve, pollMs));
+      await delayMs(pollMs);
     }
   }
 
@@ -365,7 +375,14 @@ export class ArchiveSyncService implements OnModuleInit {
       phaseEntries: this.getPhaseEntries(),
       serviceName: ArchiveSyncService.name,
       discordLogger: (level, serviceName, message) => {
-        void this.discordBridge?.logEvent(level, serviceName, message);
+        logAndBridge({
+          method: 'log',
+          message,
+          context: serviceName,
+          discordBridge: this.discordBridge,
+          bridgeLevel: level,
+          bridgeMessage: message,
+        });
       },
     });
   }
@@ -524,11 +541,15 @@ export class ArchiveSyncService implements OnModuleInit {
     );
 
     if (result !== null && result.failed > 0) {
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        ArchiveSyncService.name,
-        `[${trigger}] Integrity rescan detected **${result.failed}** fingerprint mismatch(es) - scanned=${result.scanned} passed=${result.passed} skipped=${result.skipped}`,
-      );
+      logAndBridge({
+        method: 'warn',
+        message: `[${trigger}] integrity rescan detected ${result.failed} fingerprint mismatch(es)`,
+        logger: this.logger,
+        context: ArchiveSyncService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+        bridgeMessage: `[${trigger}] Integrity rescan detected **${result.failed}** fingerprint mismatch(es) - scanned=${result.scanned} passed=${result.passed} skipped=${result.skipped}`,
+      });
     }
 
     return result;

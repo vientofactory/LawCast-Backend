@@ -32,6 +32,10 @@ import { PackagesService } from '../modules/shared/packages.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
 import { type ChangeEventType } from '../modules/change-tracking/notice-change-event.entity';
 import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
+import {
+  parseIsoDate,
+  parsePositiveInteger,
+} from '../utils/query-parsing.utils';
 
 @Controller('api')
 export class ApiController {
@@ -217,11 +221,11 @@ export class ApiController {
 
     const excludeLegacyGenesisSource = excludeLegacyGenesisSourceRaw === 'true';
     const comparableOnly = comparableOnlyRaw === 'true';
-    const fromEventId = this.parsePositiveIntegerQuery(fromEventIdRaw);
-    const toEventId = this.parsePositiveIntegerQuery(toEventIdRaw);
-    const fromDetectedAt = this.parseIsoDateQuery(fromDetectedAtRaw);
-    const toDetectedAt = this.parseIsoDateQuery(toDetectedAtRaw);
-    const anchorEventId = this.parsePositiveIntegerQuery(anchorEventIdRaw);
+    const fromEventId = parsePositiveInteger(fromEventIdRaw);
+    const toEventId = parsePositiveInteger(toEventIdRaw);
+    const fromDetectedAt = parseIsoDate(fromDetectedAtRaw);
+    const toDetectedAt = parseIsoDate(toDetectedAtRaw);
+    const anchorEventId = parsePositiveInteger(anchorEventIdRaw);
 
     const result = await this.changeTrackingService.getRecentChanges({
       page,
@@ -371,31 +375,5 @@ export class ApiController {
   @Get('packages')
   getPackages() {
     return ApiResponseUtils.success(this.packagesService.getPackages());
-  }
-
-  private parsePositiveIntegerQuery(raw?: string): number | undefined {
-    if (!raw || raw.trim().length === 0) {
-      return undefined;
-    }
-
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-      return undefined;
-    }
-
-    return parsed;
-  }
-
-  private parseIsoDateQuery(raw?: string): Date | undefined {
-    if (!raw || raw.trim().length === 0) {
-      return undefined;
-    }
-
-    const parsed = new Date(raw);
-    if (Number.isNaN(parsed.getTime())) {
-      return undefined;
-    }
-
-    return parsed;
   }
 }

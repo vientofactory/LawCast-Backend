@@ -10,6 +10,7 @@ import { CacheService } from '../cache/cache.service';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { type CachedNotice } from '../../types/cache.types';
 import { type NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
+import { buildFrontendUrl } from './notification-helpers';
 
 export interface ChangeNotificationPayload {
   noticeNum: number;
@@ -419,17 +420,15 @@ export class NotificationService {
       itemLines.push(`... 외 ${notices.length - 8}건`);
     }
 
+    const description = [
+      `최근에 ${notices.length.toLocaleString()}개 법률안이 신규 감지되었습니다.`,
+      'AI 요약과 법률안 원문을 확인하려면 아래 링크를 클릭하세요.',
+    ].join('\n');
+
     return new MessageBuilder()
       .setTitle(`입법예고 신규 감지 (${notices.length}건)`)
-      .setDescription(
-        `최근에 ${notices.length.toLocaleString()}개 법률안이 신규 감지되었습니다.`,
-      )
-      .addField(
-        '영향 법률안 수',
-        `${uniqueNoticeNums.length.toLocaleString()}건`,
-        true,
-      )
-      .addField('자세히 보기', `[신규 항목 모아보기](${detailUrl})`, true)
+      .setDescription(description)
+      .addField('자세히 보기', `[신규 항목 모아보기](${detailUrl})`, false)
       .addField('감지 항목', this.truncateForEmbed(itemLines.join('\n')), false)
       .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
       .setTimestamp()
@@ -512,14 +511,12 @@ export class NotificationService {
   private buildFrontendNoticeDetailUrl(notice: CachedNotice): string {
     const frontendUrls =
       this.configService.get<string[]>('frontend.urls') || [];
-    const primaryFrontendUrl = frontendUrls.find((url) => !!url?.trim());
-
-    if (!primaryFrontendUrl) {
+    const detailUrl = buildFrontendUrl(frontendUrls, `/notices/${notice.num}`);
+    if (!detailUrl) {
       return notice.link;
     }
 
-    const normalizedBaseUrl = primaryFrontendUrl.replace(/\/+$/, '');
-    return `${normalizedBaseUrl}/notices/${notice.num}`;
+    return detailUrl;
   }
 
   private buildFrontendNoticeDetailUrlByNoticeNum(
@@ -528,22 +525,16 @@ export class NotificationService {
   ): string {
     const frontendUrls =
       this.configService.get<string[]>('frontend.urls') || [];
-    const primaryFrontendUrl = frontendUrls.find((url) => !!url?.trim());
-
-    if (!primaryFrontendUrl) {
+    const detailUrl = buildFrontendUrl(
+      frontendUrls,
+      `/notices/${noticeNum}`,
+      params,
+    );
+    if (!detailUrl) {
       return `https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOpn/list.do`;
     }
 
-    const normalizedBaseUrl = primaryFrontendUrl.replace(/\/+$/, '');
-    const queryString = params
-      ? `?${Object.entries(params)
-          .map(
-            ([key, value]) =>
-              `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
-          )
-          .join('&')}`
-      : '';
-    return `${normalizedBaseUrl}/notices/${noticeNum}${queryString}`;
+    return detailUrl;
   }
 
   private buildFrontendNoticeChangesUrl(
@@ -551,41 +542,22 @@ export class NotificationService {
   ): string {
     const frontendUrls =
       this.configService.get<string[]>('frontend.urls') || [];
-    const primaryFrontendUrl = frontendUrls.find((url) => !!url?.trim());
-    const normalizedBaseUrl = primaryFrontendUrl.replace(/\/+$/, '');
 
-    const queryString = params
-      ? `?${Object.entries(params)
-          .map(
-            ([key, value]) =>
-              `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
-          )
-          .join('&')}`
-      : '';
-
-    return `${normalizedBaseUrl}/notices/changes${queryString}`;
+    return (
+      buildFrontendUrl(frontendUrls, '/notices/changes', params) ??
+      'https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOpn/list.do'
+    );
   }
 
   private buildFrontendNoticesUrl(params?: Record<string, string>): string {
     const frontendUrls =
       this.configService.get<string[]>('frontend.urls') || [];
-    const primaryFrontendUrl = frontendUrls.find((url) => !!url?.trim());
-
-    if (!primaryFrontendUrl) {
+    const noticesUrl = buildFrontendUrl(frontendUrls, '/notices', params);
+    if (!noticesUrl) {
       return `https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOpn/list.do`;
     }
 
-    const normalizedBaseUrl = primaryFrontendUrl.replace(/\/+$/, '');
-    const queryString = params
-      ? `?${Object.entries(params)
-          .map(
-            ([key, value]) =>
-              `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
-          )
-          .join('&')}`
-      : '';
-
-    return `${normalizedBaseUrl}/notices${queryString}`;
+    return noticesUrl;
   }
 
   /**

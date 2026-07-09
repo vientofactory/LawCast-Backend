@@ -8,6 +8,8 @@ import { NoticeArchiveService } from '../../notice/notice-archive.service';
 import { DiscordBridgeService } from '../../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../../utils/logger.utils';
+import { delayMs } from '../../../utils/async-delay.utils';
+import { logAndBridge } from '../../../utils/bridge-log.utils';
 import {
   AI_SUMMARY_STATUS,
   normalizeAttemptedSummaryStatus,
@@ -198,15 +200,16 @@ export class CrawlingSchedulerProposalRetry {
     }
 
     if (evicted.length > 0) {
-      this.options.logger.warn(
-        `proposalReason retry: evicting ${evicted.length} bill(s) after exhausting retries - sending fallback notifications`,
-      );
-      void this.options.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        'CrawlingSchedulerService',
-        `proposalReason retry: evicting **${evicted.length}** bill(s) - sending notification without summary`,
-        { nums: evicted.map((item) => item.notice.num) },
-      );
+      logAndBridge({
+        logger: this.options.logger,
+        method: 'warn',
+        message: `proposalReason retry: evicting ${evicted.length} bill(s) after exhausting retries - sending fallback notifications`,
+        context: 'CrawlingSchedulerService',
+        discordBridge: this.options.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+        bridgeMessage: `proposalReason retry: evicting **${evicted.length}** bill(s) - sending notification without summary`,
+        metadata: { nums: evicted.map((item) => item.notice.num) },
+      });
       void this.options.notificationOrchestratorService
         .sendNotifications(
           evicted.map((item) => ({
@@ -235,9 +238,7 @@ export class CrawlingSchedulerProposalRetry {
       const item = queue[idx];
 
       if (idx > 0) {
-        await new Promise<void>((resolve) =>
-          setTimeout(resolve, APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS),
-        );
+        await delayMs(APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS);
       }
 
       const proposalReason =
@@ -307,12 +308,16 @@ export class CrawlingSchedulerProposalRetry {
       this.options.logger.log(
         `proposalReason retry: resolved bill ${item.billNo} after ${item.retryCount + 1} attempt(s)`,
       );
-      void this.options.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
-        'CrawlingSchedulerService',
-        `proposalReason retry: resolved bill **${item.billNo}**`,
-        { billNo: item.billNo, attempts: item.retryCount + 1 },
-      );
+      logAndBridge({
+        logger: this.options.logger,
+        method: 'log',
+        message: `proposalReason retry: resolved bill ${item.billNo} after ${item.retryCount + 1} attempt(s)`,
+        context: 'CrawlingSchedulerService',
+        discordBridge: this.options.discordBridge,
+        bridgeLevel: BridgeLogLevel.LOG,
+        bridgeMessage: `proposalReason retry: resolved bill **${item.billNo}**`,
+        metadata: { billNo: item.billNo, attempts: item.retryCount + 1 },
+      });
     }
 
     if (queueDirty) {
@@ -348,15 +353,19 @@ export class CrawlingSchedulerProposalRetry {
         );
       });
 
-    void this.options.discordBridge?.logEvent(
-      BridgeLogLevel.LOG,
-      'CrawlingSchedulerService',
-      `proposalReason retry: **${resolved.length}** resolved, **${queue.length}** still pending`,
-      {
+    logAndBridge({
+      logger: this.options.logger,
+      method: 'log',
+      message: `proposalReason retry: ${resolved.length} resolved, ${queue.length} still pending`,
+      context: 'CrawlingSchedulerService',
+      discordBridge: this.options.discordBridge,
+      bridgeLevel: BridgeLogLevel.LOG,
+      bridgeMessage: `proposalReason retry: **${resolved.length}** resolved, **${queue.length}** still pending`,
+      metadata: {
         resolved: resolved.length,
         pending: queue.length,
       },
-    );
+    });
   }
 
   private normalizeBillNo(value: string | null | undefined): string | null {

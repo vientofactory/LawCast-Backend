@@ -5,6 +5,8 @@ import { CrawlingCoreService } from '../crawling-core.service';
 import { DiscordBridgeService } from '../../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../../utils/logger.utils';
+import { delayMs } from '../../../utils/async-delay.utils';
+import { logAndBridge } from '../../../utils/bridge-log.utils';
 
 export interface ScreenshotQueueItem {
   num: number;
@@ -85,16 +87,18 @@ export class ArchiveOrchestratorScreenshotCoordinator {
       }
 
       const total = missing.length + nsmMissing.length;
-      this.options.logger.log(
-        `Screenshot backfill: queuing ${total} notice(s) with missing screenshots` +
+      logAndBridge({
+        logger: this.options.logger,
+        method: 'log',
+        message:
+          `Screenshot backfill: queuing ${total} notice(s) with missing screenshots` +
           ` (${missing.length} pal, ${nsmMissing.length} NsmLmSts)`,
-      );
-      void this.options.discordBridge?.logEvent(
-        BridgeLogLevel.LOG,
-        'ArchiveOrchestratorService',
-        `Screenshot backfill: queuing **${total}** notice(s)`,
-        { total, pal: missing.length, nsm: nsmMissing.length },
-      );
+        context: 'ArchiveOrchestratorService',
+        discordBridge: this.options.discordBridge,
+        bridgeLevel: BridgeLogLevel.LOG,
+        bridgeMessage: `Screenshot backfill: queuing **${total}** notice(s)`,
+        metadata: { total, pal: missing.length, nsm: nsmMissing.length },
+      });
 
       if (missing.length > 0) {
         this.scheduleScreenshots(missing);
@@ -138,9 +142,7 @@ export class ArchiveOrchestratorScreenshotCoordinator {
 
         try {
           if (notice.retryCount > 0) {
-            await new Promise<void>((resolve) =>
-              setTimeout(resolve, APP_CONSTANTS.SCREENSHOT.RETRY_DELAY_MS),
-            );
+            await delayMs(APP_CONSTANTS.SCREENSHOT.RETRY_DELAY_MS);
           }
 
           const screenshot = notice.nsmBillNo
@@ -175,12 +177,7 @@ export class ArchiveOrchestratorScreenshotCoordinator {
         }
 
         if (notice.nsmBillNo) {
-          await new Promise<void>((resolve) =>
-            setTimeout(
-              resolve,
-              APP_CONSTANTS.SCREENSHOT.NSM_INTER_CAPTURE_DELAY_MS,
-            ),
-          );
+          await delayMs(APP_CONSTANTS.SCREENSHOT.NSM_INTER_CAPTURE_DELAY_MS);
         }
       }
     } finally {

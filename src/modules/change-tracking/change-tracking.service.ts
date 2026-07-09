@@ -26,6 +26,9 @@ import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { runScheduledChainAuditInternal } from './change-tracking-chain-audit.utils';
+import { delayMs } from '../../utils/async-delay.utils';
+import { logAndBridge } from '../../utils/bridge-log.utils';
+import { isUniqueConstraintConflictError } from '../../utils/db-error.utils';
 
 interface AppendChangeEventInput {
   noticeNum: number;
@@ -290,36 +293,13 @@ export class ChangeTrackingService {
   ): Promise<NoticeChangeEvent> {
     const lastEvent = await this.getLastEventForNotice(input.noticeNum);
 
-    const event = this.changeEventRepository.create({
-      noticeNum: input.noticeNum,
-      detectedAt: input.detectedAt ?? new Date(),
-      eventType: input.eventType,
-      source: input.source ?? null,
-      eventHeight: (lastEvent?.eventHeight ?? 0) + 1,
-      prevEventHash: lastEvent?.eventHash ?? null,
-      eventHash: input.eventHash,
-      changedFieldCount: input.changedFieldCount ?? 0,
-      diffSummaryJson: input.diffSummaryJson ?? null,
-      crawlerRunId: input.crawlerRunId ?? null,
-      hashAlgo: input.hashAlgo ?? 'sha256',
-      canonVersion: input.canonVersion ?? 1,
-    });
+    const event = this.createChangeEventEntity(
+      this.changeEventRepository,
+      input,
+      lastEvent,
+    );
 
     const saved = await this.changeEventRepository.save(event);
-    // LoggerUtils.debugDev(
-    //   ChangeTrackingService.name,
-    //   `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
-    // );
-    // void this.discordBridge?.logEvent(
-    //   BridgeLogLevel.DEBUG,
-    //   ChangeTrackingService.name,
-    //   `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight}`,
-    //   {
-    //     noticeNum: saved.noticeNum,
-    //     eventHeight: saved.eventHeight,
-    //     eventHash: saved.eventHash,
-    //   },
-    // );
     return saved;
   }
 
@@ -329,16 +309,10 @@ export class ChangeTrackingService {
   ): Promise<void> {
     if (details.length === 0) return;
 
-    const rows = details.map((detail) =>
-      this.changeDetailRepository.create({
-        eventId,
-        fieldPath: detail.fieldPath,
-        changeType: detail.changeType,
-        beforeValue: detail.beforeValue ?? null,
-        afterValue: detail.afterValue ?? null,
-        beforeHash: detail.beforeHash ?? null,
-        afterHash: detail.afterHash ?? null,
-      }),
+    const rows = this.createChangeDetailRows(
+      this.changeDetailRepository,
+      eventId,
+      details,
     );
 
     await this.changeDetailRepository.save(rows);
@@ -374,20 +348,23 @@ export class ChangeTrackingService {
         );
 
         if (shouldEmitPerEventAppendDebug) {
-          LoggerUtils.debugDev(
-            ChangeTrackingService.name,
-            `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
-          );
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.DEBUG,
-            ChangeTrackingService.name,
-            `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight}`,
-            {
+          logAndBridge({
+            logger: {
+              debug: (message: string) =>
+                LoggerUtils.debugDev(ChangeTrackingService.name, message),
+            },
+            method: 'debug',
+            message: `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight} hash=${saved.eventHash}`,
+            context: ChangeTrackingService.name,
+            discordBridge: this.discordBridge,
+            bridgeLevel: BridgeLogLevel.DEBUG,
+            bridgeMessage: `Appended change event notice=${saved.noticeNum} height=${saved.eventHeight}`,
+            metadata: {
               noticeNum: saved.noticeNum,
               eventHeight: saved.eventHeight,
               eventHash: saved.eventHash,
             },
-          );
+          });
         }
         return saved;
       } catch (error) {
@@ -401,37 +378,37 @@ export class ChangeTrackingService {
         }
 
         if (this.isEventHeightConflictError(error) && attempt < maxRetries) {
-          this.logger.warn(
-            `Change event append conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`,
-          );
-          void this.discordBridge?.logEvent(
-            BridgeLogLevel.WARN,
-            ChangeTrackingService.name,
-            `Change event append conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`,
-            {
+          const conflictMessage = `Change event append conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`;
+          logAndBridge({
+            logger: this.logger,
+            method: 'warn',
+            message: conflictMessage,
+            context: ChangeTrackingService.name,
+            discordBridge: this.discordBridge,
+            metadata: {
               noticeNum: input.noticeNum,
               attempt,
               maxRetries,
             },
-          );
+          });
           continue;
         }
 
         if (this.isSqliteTransactionStartConflictError(error)) {
           if (attempt < maxRetries) {
-            this.logger.warn(
-              `SQLite transaction start conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`,
-            );
-            void this.discordBridge?.logEvent(
-              BridgeLogLevel.WARN,
-              ChangeTrackingService.name,
-              `SQLite transaction start conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`,
-              {
+            const sqliteConflictMessage = `SQLite transaction start conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`;
+            logAndBridge({
+              logger: this.logger,
+              method: 'warn',
+              message: sqliteConflictMessage,
+              context: ChangeTrackingService.name,
+              discordBridge: this.discordBridge,
+              metadata: {
                 noticeNum: input.noticeNum,
                 attempt,
                 maxRetries,
               },
-            );
+            });
             await this.delayBeforeRetry(attempt);
             continue;
           }
@@ -512,7 +489,25 @@ export class ChangeTrackingService {
       order: { eventHeight: 'DESC' },
     });
 
-    const event = eventRepo.create({
+    const event = this.createChangeEventEntity(eventRepo, input, lastEvent);
+
+    const saved = await eventRepo.save(event);
+
+    if (details.length > 0) {
+      const rows = this.createChangeDetailRows(detailRepo, saved.id, details);
+
+      await detailRepo.save(rows);
+    }
+
+    return saved;
+  }
+
+  private createChangeEventEntity(
+    repository: Repository<NoticeChangeEvent>,
+    input: AppendChangeEventInput,
+    lastEvent: NoticeChangeEvent | null,
+  ): NoticeChangeEvent {
+    return repository.create({
       noticeNum: input.noticeNum,
       detectedAt: input.detectedAt ?? new Date(),
       eventType: input.eventType,
@@ -526,180 +521,40 @@ export class ChangeTrackingService {
       hashAlgo: input.hashAlgo ?? 'sha256',
       canonVersion: input.canonVersion ?? 1,
     });
+  }
 
-    const saved = await eventRepo.save(event);
-
-    if (details.length > 0) {
-      const rows = details.map((detail) =>
-        detailRepo.create({
-          eventId: saved.id,
-          fieldPath: detail.fieldPath,
-          changeType: detail.changeType,
-          beforeValue: detail.beforeValue ?? null,
-          afterValue: detail.afterValue ?? null,
-          beforeHash: detail.beforeHash ?? null,
-          afterHash: detail.afterHash ?? null,
-        }),
-      );
-
-      await detailRepo.save(rows);
-    }
-
-    return saved;
+  private createChangeDetailRows(
+    repository: Repository<NoticeChangeDetail>,
+    eventId: number,
+    details: ChangeDetailInput[],
+  ): NoticeChangeDetail[] {
+    return details.map((detail) =>
+      repository.create({
+        eventId,
+        fieldPath: detail.fieldPath,
+        changeType: detail.changeType,
+        beforeValue: detail.beforeValue ?? null,
+        afterValue: detail.afterValue ?? null,
+        beforeHash: detail.beforeHash ?? null,
+        afterHash: detail.afterHash ?? null,
+      }),
+    );
   }
 
   private isEventHeightConflictError(error: unknown): boolean {
-    const extractErrorMeta = (
-      value: unknown,
-    ): {
-      code: string;
-      constraint: string;
-      message: string;
-      detail: string;
-      errno: number | null;
-    } => {
-      const obj = (value as Record<string, unknown> | undefined) ?? {};
-      const code = String(obj.code ?? '').toLowerCase();
-      const constraint = String(obj.constraint ?? '').toLowerCase();
-      const message = String(obj.message ?? '').toLowerCase();
-      const detail = String(obj.detail ?? '').toLowerCase();
-      const errnoRaw = obj.errno;
-      const errno =
-        typeof errnoRaw === 'number'
-          ? errnoRaw
-          : typeof errnoRaw === 'string'
-            ? Number.parseInt(errnoRaw, 10)
-            : null;
-
-      return {
-        code,
-        constraint,
-        message,
-        detail,
-        errno: Number.isNaN(errno ?? Number.NaN) ? null : errno,
-      };
-    };
-
-    const isTargetConstraint = (text: string): boolean =>
-      text.includes(
-        'idx_notice_change_events_notice_num_event_height_unique',
-      ) ||
-      text.includes(
-        'notice_change_events.notice_num, notice_change_events.event_height',
-      ) ||
-      text.includes('notice_num_event_height');
-
-    const isKnownUniqueCode = (meta: {
-      code: string;
-      errno: number | null;
-    }): boolean =>
-      meta.code === '23505' ||
-      meta.code === 'sqlite_constraint' ||
-      meta.code === 'sqlite_constraint_unique' ||
-      meta.code === 'er_dup_entry' ||
-      meta.errno === 1062;
-
-    const candidates = [error];
-    const driverError = (error as { driverError?: unknown } | undefined)
-      ?.driverError;
-    if (driverError) {
-      candidates.push(driverError);
-    }
-
-    for (const candidate of candidates) {
-      const meta = extractErrorMeta(candidate);
-      const joinedText = `${meta.constraint} ${meta.detail} ${meta.message}`;
-
-      if (!isTargetConstraint(joinedText)) {
-        continue;
-      }
-
-      const hasUniqueViolationText =
-        meta.message.includes('unique constraint') ||
-        meta.detail.includes('unique constraint') ||
-        meta.detail.includes('duplicate key');
-
-      if (isKnownUniqueCode(meta) || hasUniqueViolationText) {
-        return true;
-      }
-    }
-
-    return false;
+    return isUniqueConstraintConflictError(error, [
+      'idx_notice_change_events_notice_num_event_height_unique',
+      'notice_change_events.notice_num, notice_change_events.event_height',
+      'notice_num_event_height',
+    ]);
   }
 
   private isEventHashConflictError(error: unknown): boolean {
-    const extractErrorMeta = (
-      value: unknown,
-    ): {
-      code: string;
-      constraint: string;
-      message: string;
-      detail: string;
-      errno: number | null;
-    } => {
-      const obj = (value as Record<string, unknown> | undefined) ?? {};
-      const code = String(obj.code ?? '').toLowerCase();
-      const constraint = String(obj.constraint ?? '').toLowerCase();
-      const message = String(obj.message ?? '').toLowerCase();
-      const detail = String(obj.detail ?? '').toLowerCase();
-      const errnoRaw = obj.errno;
-      const errno =
-        typeof errnoRaw === 'number'
-          ? errnoRaw
-          : typeof errnoRaw === 'string'
-            ? Number.parseInt(errnoRaw, 10)
-            : null;
-
-      return {
-        code,
-        constraint,
-        message,
-        detail,
-        errno: Number.isNaN(errno ?? Number.NaN) ? null : errno,
-      };
-    };
-
-    const isTargetConstraint = (text: string): boolean =>
-      text.includes('idx_notice_change_events_event_hash_unique') ||
-      text.includes('notice_change_events.event_hash') ||
-      text.includes('event_hash');
-
-    const isKnownUniqueCode = (meta: {
-      code: string;
-      errno: number | null;
-    }): boolean =>
-      meta.code === '23505' ||
-      meta.code === 'sqlite_constraint' ||
-      meta.code === 'sqlite_constraint_unique' ||
-      meta.code === 'er_dup_entry' ||
-      meta.errno === 1062;
-
-    const candidates = [error];
-    const driverError = (error as { driverError?: unknown } | undefined)
-      ?.driverError;
-    if (driverError) {
-      candidates.push(driverError);
-    }
-
-    for (const candidate of candidates) {
-      const meta = extractErrorMeta(candidate);
-      const joinedText = `${meta.constraint} ${meta.detail} ${meta.message}`;
-
-      if (!isTargetConstraint(joinedText)) {
-        continue;
-      }
-
-      const hasUniqueViolationText =
-        meta.message.includes('unique constraint') ||
-        meta.detail.includes('unique constraint') ||
-        meta.detail.includes('duplicate key');
-
-      if (isKnownUniqueCode(meta) || hasUniqueViolationText) {
-        return true;
-      }
-    }
-
-    return false;
+    return isUniqueConstraintConflictError(error, [
+      'idx_notice_change_events_event_hash_unique',
+      'notice_change_events.event_hash',
+      'event_hash',
+    ]);
   }
 
   private isSqliteTransactionStartConflictError(error: unknown): boolean {
@@ -728,8 +583,8 @@ export class ChangeTrackingService {
   }
 
   private async delayBeforeRetry(attempt: number): Promise<void> {
-    const delayMs = Math.min(10 * attempt, 50);
-    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    const waitMs = Math.min(10 * attempt, 50);
+    await delayMs(waitMs);
   }
 
   /**
@@ -828,19 +683,22 @@ export class ChangeTrackingService {
     }
 
     if (input.event.eventType === 'created') {
-      LoggerUtils.debugDev(
-        ChangeTrackingService.name,
-        `Skipping change notification for created notice ${input.event.noticeNum} because the regular notice notification already covers it`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.DEBUG,
-        ChangeTrackingService.name,
-        `Skipped change notification for created notice **${input.event.noticeNum}**`,
-        {
+      logAndBridge({
+        logger: {
+          debug: (message: string) =>
+            LoggerUtils.debugDev(ChangeTrackingService.name, message),
+        },
+        method: 'debug',
+        message: `Skipping change notification for created notice ${input.event.noticeNum} because the regular notice notification already covers it`,
+        context: ChangeTrackingService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        bridgeMessage: `Skipped change notification for created notice **${input.event.noticeNum}**`,
+        metadata: {
           noticeNum: input.event.noticeNum,
           eventHash: input.event.eventHash,
         },
-      );
+      });
       return;
     }
 
@@ -967,31 +825,34 @@ export class ChangeTrackingService {
           },
         );
 
-      LoggerUtils.debugDev(
-        ChangeTrackingService.name,
-        `Change notification batch dispatched for ${payloads.length} event(s), job=${batchJobId}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.DEBUG,
-        ChangeTrackingService.name,
-        `Change notification batch dispatched for ${payloads.length} event(s)`,
-        {
+      logAndBridge({
+        logger: {
+          debug: (message: string) =>
+            LoggerUtils.debugDev(ChangeTrackingService.name, message),
+        },
+        method: 'debug',
+        message: `Change notification batch dispatched for ${payloads.length} event(s), job=${batchJobId}`,
+        context: ChangeTrackingService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        bridgeMessage: `Change notification batch dispatched for ${payloads.length} event(s)`,
+        metadata: {
           payloadCount: payloads.length,
           batchJobId,
         },
-      );
+      });
     } catch (error) {
-      this.logger.warn(
-        `Failed to dispatch queued change notifications (${payloads.length} event(s)): ${(error as Error).message}`,
-      );
-      void this.discordBridge?.logEvent(
-        BridgeLogLevel.WARN,
-        ChangeTrackingService.name,
-        `Failed to dispatch queued change notifications (${payloads.length} event(s)): ${(error as Error).message}`,
-        {
+      const warnMessage = `Failed to dispatch queued change notifications (${payloads.length} event(s)): ${(error as Error).message}`;
+      logAndBridge({
+        logger: this.logger,
+        method: 'warn',
+        message: warnMessage,
+        context: ChangeTrackingService.name,
+        discordBridge: this.discordBridge,
+        metadata: {
           payloadCount: payloads.length,
         },
-      );
+      });
     } finally {
       this.isFlushingQueuedNotifications = false;
       if (
