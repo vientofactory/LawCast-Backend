@@ -17,9 +17,9 @@ import {
 import sharp from 'sharp';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type CachedNotice } from '../../types/cache.types';
-import { delayMs } from '../../utils/async-delay.utils';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
+import { BrowserLaunchGuardService } from './browser-launch-guard.service';
 
 const SCREENSHOT_CONFIG = {
   enabled: true,
@@ -58,10 +58,8 @@ export class CrawlingCoreService {
     CrawlingCoreService.name,
   );
   private readonly crawlConfig: PalCrawlConfig;
-  private static activeBrowserSessions = 0;
-  private static readonly browserWaitQueue: Array<() => void> = [];
 
-  constructor() {
+  constructor(private readonly browserLaunchGuard: BrowserLaunchGuardService) {
     this.crawlConfig = {
       userAgent: APP_CONSTANTS.CRAWLING.USER_AGENT,
       timeout: APP_CONSTANTS.CRAWLING.TIMEOUT,
@@ -81,107 +79,6 @@ export class CrawlingCoreService {
       retryCount: this.crawlConfig.retryCount,
       customHeaders: this.crawlConfig.customHeaders,
     });
-  }
-
-  private resolvePositiveInt(value: string | undefined): number | null {
-    if (!value) return null;
-    const parsed = Number.parseInt(value, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return null;
-    }
-    return parsed;
-  }
-
-  private getBrowserConcurrencyLimit(): number {
-    return (
-      this.resolvePositiveInt(process.env.CRAWLING_BROWSER_MAX_CONCURRENCY) ??
-      APP_CONSTANTS.CRAWLING.BROWSER_MAX_CONCURRENCY
-    );
-  }
-
-  private getBrowserLaunchRetryCount(): number {
-    return (
-      this.resolvePositiveInt(
-        process.env.CRAWLING_BROWSER_LAUNCH_RETRY_COUNT,
-      ) ?? APP_CONSTANTS.CRAWLING.BROWSER_LAUNCH_RETRY_COUNT
-    );
-  }
-
-  private getBrowserLaunchRetryDelayMs(): number {
-    return (
-      this.resolvePositiveInt(
-        process.env.CRAWLING_BROWSER_LAUNCH_RETRY_DELAY_MS,
-      ) ?? APP_CONSTANTS.CRAWLING.BROWSER_LAUNCH_RETRY_DELAY_MS
-    );
-  }
-
-  private async acquireBrowserSlot(): Promise<void> {
-    for (;;) {
-      const limit = this.getBrowserConcurrencyLimit();
-      if (CrawlingCoreService.activeBrowserSessions < limit) {
-        CrawlingCoreService.activeBrowserSessions++;
-        return;
-      }
-
-      await new Promise<void>((resolve) => {
-        CrawlingCoreService.browserWaitQueue.push(resolve);
-      });
-    }
-  }
-
-  private releaseBrowserSlot(): void {
-    CrawlingCoreService.activeBrowserSessions = Math.max(
-      0,
-      CrawlingCoreService.activeBrowserSessions - 1,
-    );
-    const next = CrawlingCoreService.browserWaitQueue.shift();
-    if (next) next();
-  }
-
-  private isBrowserLaunchResourceError(error: unknown): boolean {
-    if (!(error instanceof Error)) {
-      return false;
-    }
-
-    const message = error.message.toLowerCase();
-    return (
-      message.includes('failed to launch the browser process') ||
-      message.includes('resource temporarily unavailable') ||
-      message.includes('posix_spawn') ||
-      message.includes('chrome_crashpad_handler') ||
-      message.includes('eagain')
-    );
-  }
-
-  private async withBrowserLaunchGuard<T>(
-    label: string,
-    task: () => Promise<T>,
-  ): Promise<T> {
-    await this.acquireBrowserSlot();
-    try {
-      const retries = this.getBrowserLaunchRetryCount();
-      const baseDelayMs = this.getBrowserLaunchRetryDelayMs();
-
-      for (let attempt = 0; ; attempt++) {
-        try {
-          return await task();
-        } catch (error) {
-          const shouldRetry =
-            this.isBrowserLaunchResourceError(error) && attempt < retries;
-          if (!shouldRetry) {
-            throw error;
-          }
-
-          const waitMs = baseDelayMs * (attempt + 1);
-          this.logger.warn(
-            `${label}: browser launch resource pressure detected, retrying in ${waitMs}ms (${attempt + 1}/${retries})`,
-          );
-          await delayMs(waitMs);
-        }
-      }
-    } finally {
-      this.releaseBrowserSlot();
-    }
   }
 
   private extractNsmDeletionAlertMessage(html: string): string | null {
@@ -479,7 +376,7 @@ export class CrawlingCoreService {
     const normalized = billNo.trim();
     if (!normalized) throw new Error('billNo is required');
 
-    return this.withBrowserLaunchGuard(
+    return this.browserLaunchGuard.runWithGuard(
       `captureNsmDetailFull(${normalized})`,
       async () => {
         const detailUrl = `https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/${normalized}/detailRP`;
@@ -684,7 +581,7 @@ export class CrawlingCoreService {
    * @param billNo 의안번호 (e.g. "2200001")
    */
   async captureNsmDetailScreenshot(billNo: string): Promise<Buffer | null> {
-    return this.withBrowserLaunchGuard(
+    return this.browserLaunchGuard.runWithGuard(
       `captureNsmDetailScreenshot(${billNo})`,
       async () => {
         const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
@@ -741,7 +638,7 @@ export class CrawlingCoreService {
     contentId: string,
     isDone = false,
   ): Promise<Buffer | null> {
-    return this.withBrowserLaunchGuard(
+    return this.browserLaunchGuard.runWithGuard(
       `captureContentScreenshot(${contentId})`,
       async () => {
         const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;

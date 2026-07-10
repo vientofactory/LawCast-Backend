@@ -110,6 +110,38 @@ export class CronJobsService {
   }
 
   /**
+   * proposalReason backfill is browser-heavy and should not overlap with
+   * archive sync phases or active crawling background workloads.
+   */
+  private shouldSkipProposalReasonBackfillCron(taskName: string): boolean {
+    if (this.archiveSyncService.isAnyPhaseRunning()) {
+      const message = `${taskName} skipped - archive sync phase is currently running`;
+      logAndBridge({
+        method: 'warn',
+        message,
+        logger: this.logger,
+        context: CronJobsService.name,
+        discordBridge: this.discordBridge,
+      });
+      return true;
+    }
+
+    if (!this.crawlingService.isSchedulerBusy({ includeBackground: true })) {
+      return false;
+    }
+
+    const message = `${taskName} skipped - crawling scheduler is busy`;
+    logAndBridge({
+      method: 'warn',
+      message,
+      logger: this.logger,
+      context: CronJobsService.name,
+      discordBridge: this.discordBridge,
+    });
+    return true;
+  }
+
+  /**
    * Determines whether a database maintenance cron job should be skipped based on the current state of the archive sync and crawling services.
    * @param taskName A descriptive name of the task for logging purposes.
    * @returns A boolean indicating whether the cron job should be skipped.
@@ -254,6 +286,12 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handleProposalReasonBackfillDrain(): Promise<void> {
+    if (
+      this.shouldSkipProposalReasonBackfillCron('proposalReason backfill drain')
+    ) {
+      return;
+    }
+
     await this.execute('proposalReason backfill drain', () =>
       this.crawlingService.handleProposalReasonBackfillCron(),
     );

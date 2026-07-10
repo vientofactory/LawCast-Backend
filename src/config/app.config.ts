@@ -134,6 +134,8 @@ export const APP_CONSTANTS = {
     BROWSER_LAUNCH_RETRY_COUNT: 2,
     /** Base delay (ms) between browser-launch retries. */
     BROWSER_LAUNCH_RETRY_DELAY_MS: 2000,
+    /** Minimum interval (ms) between Chromium launch attempts to avoid spawn bursts. */
+    BROWSER_MIN_LAUNCH_INTERVAL_MS: 1500,
     HEADERS: {
       'Accept-Language': 'ko-KR,ko;q=0.9',
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',

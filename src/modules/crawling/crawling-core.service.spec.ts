@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { BrowserLaunchGuardService } from './browser-launch-guard.service';
 import { CrawlingCoreService } from './crawling-core.service';
 import { PalCrawl, type ITableData } from 'pal-crawl';
 
@@ -44,7 +45,7 @@ describe('CrawlingCoreService', () => {
     );
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [CrawlingCoreService],
+      providers: [BrowserLaunchGuardService, CrawlingCoreService],
     }).compile();
 
     service = module.get<CrawlingCoreService>(CrawlingCoreService);
