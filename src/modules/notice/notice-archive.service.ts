@@ -1250,8 +1250,8 @@ export class NoticeArchiveService {
         'archive.archive_started_at',
         params.sortOrder === 'asc' ? 'ASC' : 'DESC',
       )
-      .skip(params.skip)
-      .take(params.take)
+      .offset(params.skip)
+      .limit(params.take)
       .getRawMany<{ noticeNum: number }>();
 
     return {
