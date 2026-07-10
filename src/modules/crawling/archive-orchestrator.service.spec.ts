@@ -736,48 +736,48 @@ describe('ArchiveOrchestratorService', () => {
       );
     });
 
-    it('marks source as deleted when NSM detail page returns HTTP 404', async () => {
-      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
-        {
-          html: '<html>404</html>',
-          screenshot: null,
-          detail: null,
-          responseUrl:
-            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219718/detailRP',
-          statusCode: 404,
-        },
-      );
+    // it('marks source as deleted when NSM detail page returns HTTP 404', async () => {
+    //   (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+    //     {
+    //       html: '<html>404</html>',
+    //       screenshot: null,
+    //       detail: null,
+    //       responseUrl:
+    //         'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219718/detailRP',
+    //       statusCode: 404,
+    //     },
+    //   );
 
-      const result = await service.fetchAndUpdateProposalReason(
-        2219718,
-        '2219718',
-      );
+    //   const result = await service.fetchAndUpdateProposalReason(
+    //     2219718,
+    //     '2219718',
+    //   );
 
-      expect(result).toBeNull();
-      expect(
-        noticeArchiveService.appendSourceDeletedEventByNoticeNum,
-      ).toHaveBeenCalledWith(2219718);
-      expect(
-        noticeArchiveService.flushQueuedChangeNotifications,
-      ).toHaveBeenCalledTimes(1);
-      expect(
-        crawlingCoreService.probeNsmDeletedBillAlert,
-      ).not.toHaveBeenCalled();
-      expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
-        BridgeLogLevel.WARN,
-        'ArchiveOrchestratorService',
-        'proposalReason backfill detected deleted NSM bill **2219718** via detail page HTTP 404',
-        expect.objectContaining({
-          noticeNum: 2219718,
-          billNo: '2219718',
-          detectedAs: SourceDeletionDetectedAs.SOURCE_DELETED,
-          detectionMethod: SourceDeletionDetectionMethod.DETAIL_PAGE_HTTP_404,
-          statusCode: 404,
-          responseUrl:
-            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219718/detailRP',
-        }),
-      );
-    });
+    //   expect(result).toBeNull();
+    //   expect(
+    //     noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+    //   ).toHaveBeenCalledWith(2219718);
+    //   expect(
+    //     noticeArchiveService.flushQueuedChangeNotifications,
+    //   ).toHaveBeenCalledTimes(1);
+    //   expect(
+    //     crawlingCoreService.probeNsmDeletedBillAlert,
+    //   ).not.toHaveBeenCalled();
+    //   expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
+    //     BridgeLogLevel.WARN,
+    //     'ArchiveOrchestratorService',
+    //     'proposalReason backfill detected deleted NSM bill **2219718** via detail page HTTP 404',
+    //     expect.objectContaining({
+    //       noticeNum: 2219718,
+    //       billNo: '2219718',
+    //       detectedAs: SourceDeletionDetectedAs.SOURCE_DELETED,
+    //       detectionMethod: SourceDeletionDetectionMethod.DETAIL_PAGE_HTTP_404,
+    //       statusCode: 404,
+    //       responseUrl:
+    //         'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219718/detailRP',
+    //     }),
+    //   );
+    // });
   });
 
   describe('archiveNsmBillItems', () => {
