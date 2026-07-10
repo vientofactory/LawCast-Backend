@@ -1,18 +1,36 @@
 import { type DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../modules/discord-bridge/discord-bridge.types';
 
-type LogMethod = 'log' | 'warn' | 'error' | 'debug' | 'verbose';
+type LogMethod =
+  | 'debugDev'
+  | 'logDev'
+  | 'log'
+  | 'logConditional'
+  | 'warn'
+  | 'error'
+  | 'verbose'
+  | 'debug';
 
 interface LoggerLike {
-  log?(message: string, ...optionalParams: unknown[]): void;
-  warn?(message: string, ...optionalParams: unknown[]): void;
-  error?(message: string, ...optionalParams: unknown[]): void;
-  debug?(message: string, ...optionalParams: unknown[]): void;
-  verbose?(message: string, ...optionalParams: unknown[]): void;
+  debugDev?(message: unknown, ...optionalParams: unknown[]): void;
+  logDev?(message: unknown, ...optionalParams: unknown[]): void;
+  log?(message: unknown, ...optionalParams: unknown[]): void;
+  logConditional?(
+    productionMessage: unknown,
+    developmentMessage?: unknown,
+    ...optionalParams: unknown[]
+  ): void;
+  warn?(message: unknown, ...optionalParams: unknown[]): void;
+  error?(message: unknown, ...optionalParams: unknown[]): void;
+  debug?(message: unknown, ...optionalParams: unknown[]): void;
+  verbose?(message: unknown, ...optionalParams: unknown[]): void;
 }
 
 const LOG_METHOD_TO_BRIDGE_LEVEL: Record<LogMethod, BridgeLogLevel> = {
+  debugDev: BridgeLogLevel.DEBUG,
+  logDev: BridgeLogLevel.LOG,
   log: BridgeLogLevel.LOG,
+  logConditional: BridgeLogLevel.LOG,
   warn: BridgeLogLevel.WARN,
   error: BridgeLogLevel.ERROR,
   debug: BridgeLogLevel.DEBUG,

@@ -39,7 +39,7 @@ export class CronJobsService {
     task: () => Promise<void>,
   ): Promise<void> {
     logAndBridge({
-      method: 'debug',
+      method: 'debugDev',
       message: `Starting scheduled ${taskName}...`,
       logger: this.logger,
       context: CronJobsService.name,
@@ -49,7 +49,7 @@ export class CronJobsService {
     try {
       await task();
       logAndBridge({
-        method: 'debug',
+        method: 'debugDev',
         message: `Completed scheduled ${taskName}.`,
         logger: this.logger,
         context: CronJobsService.name,
