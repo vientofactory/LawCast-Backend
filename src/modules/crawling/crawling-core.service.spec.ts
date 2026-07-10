@@ -1,14 +1,37 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BrowserLaunchGuardService } from './browser-launch-guard.service';
 import { CrawlingCoreService } from './crawling-core.service';
-import { PalCrawl, type ITableData } from 'pal-crawl';
+import { NsmLmSts, NsmLmStsParser, PalCrawl, type ITableData } from 'pal-crawl';
 
 // pal-crawl 모듈을 모킹
 jest.mock('pal-crawl');
 
 describe('CrawlingCoreService', () => {
   let service: CrawlingCoreService;
+  let browserLaunchGuard: BrowserLaunchGuardService;
   let mockPalCrawl: jest.Mocked<PalCrawl>;
+  let mockNsmLmSts: {
+    initBrowser: jest.Mock;
+    closeBrowser: jest.Mock;
+    getDetailScreenshot: jest.Mock;
+    browser: {
+      newPage: jest.Mock;
+    };
+  };
+  let mockNsmLmStsParser: {
+    parseDetail: jest.Mock;
+  };
+  let mockPage: {
+    setViewport: jest.Mock;
+    goto: jest.Mock;
+    waitForNavigation: jest.Mock;
+    title: jest.Mock;
+    content: jest.Mock;
+    url: jest.Mock;
+    evaluate: jest.Mock;
+    screenshot: jest.Mock;
+    close: jest.Mock;
+  };
 
   const mockTableData: ITableData[] = [
     {
@@ -38,17 +61,54 @@ describe('CrawlingCoreService', () => {
     mockPalCrawl = {
       get: jest.fn(),
       getContent: jest.fn(),
+      getContentScreenshot: jest.fn(),
+      getDoneContentScreenshot: jest.fn(),
+      closeBrowser: jest.fn(),
     } as any;
+
+    mockPage = {
+      setViewport: jest.fn().mockResolvedValue(undefined),
+      goto: jest.fn().mockResolvedValue({ status: () => 200 }),
+      waitForNavigation: jest.fn().mockResolvedValue(null),
+      title: jest.fn().mockResolvedValue('Detail Page'),
+      content: jest.fn().mockResolvedValue('<html></html>'),
+      url: jest.fn().mockReturnValue('https://example.com/detail'),
+      evaluate: jest.fn(),
+      screenshot: jest.fn().mockResolvedValue(Buffer.from('jpeg')),
+      close: jest.fn().mockResolvedValue(undefined),
+    };
+
+    mockNsmLmSts = {
+      initBrowser: jest.fn().mockResolvedValue(undefined),
+      closeBrowser: jest.fn().mockResolvedValue(undefined),
+      getDetailScreenshot: jest.fn().mockResolvedValue(Buffer.from('jpeg')),
+      browser: {
+        newPage: jest.fn().mockResolvedValue(mockPage),
+      },
+    };
+
+    mockNsmLmStsParser = {
+      parseDetail: jest.fn().mockReturnValue({ proposalReason: 'reason' }),
+    };
 
     (PalCrawl as jest.MockedClass<typeof PalCrawl>).mockImplementation(
       () => mockPalCrawl,
     );
+    (NsmLmSts as jest.MockedClass<typeof NsmLmSts>).mockImplementation(
+      () => mockNsmLmSts as any,
+    );
+    (
+      NsmLmStsParser as jest.MockedClass<typeof NsmLmStsParser>
+    ).mockImplementation(() => mockNsmLmStsParser as any);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [BrowserLaunchGuardService, CrawlingCoreService],
     }).compile();
 
     service = module.get<CrawlingCoreService>(CrawlingCoreService);
+    browserLaunchGuard = module.get<BrowserLaunchGuardService>(
+      BrowserLaunchGuardService,
+    );
   });
 
   afterEach(() => {
@@ -149,6 +209,53 @@ describe('CrawlingCoreService', () => {
         'Content retrieval failed',
       );
       expect(mockPalCrawl.getContent).toHaveBeenCalledWith(contentId);
+    });
+  });
+
+  describe('browser launch guard coverage', () => {
+    it('wraps captureNsmDetailFull with the shared browser guard', async () => {
+      const guardSpy = jest
+        .spyOn(browserLaunchGuard, 'runWithGuard')
+        .mockImplementation(async (_label, task) => task());
+
+      await service.captureNsmDetailFull(' 2219887 ');
+
+      expect(guardSpy).toHaveBeenCalledWith(
+        'captureNsmDetailFull(2219887)',
+        expect.any(Function),
+      );
+      expect(mockNsmLmSts.initBrowser).toHaveBeenCalledTimes(1);
+    });
+
+    it('wraps captureNsmDetailScreenshot with the shared browser guard', async () => {
+      const guardSpy = jest
+        .spyOn(browserLaunchGuard, 'runWithGuard')
+        .mockImplementation(async (_label, task) => task());
+
+      await service.captureNsmDetailScreenshot('2219887');
+
+      expect(guardSpy).toHaveBeenCalledWith(
+        'captureNsmDetailScreenshot(2219887)',
+        expect.any(Function),
+      );
+      expect(mockNsmLmSts.getDetailScreenshot).toHaveBeenCalledWith('2219887');
+    });
+
+    it('wraps captureContentScreenshot with the shared browser guard', async () => {
+      mockPalCrawl.getContentScreenshot.mockResolvedValue(Buffer.from('jpeg'));
+      const guardSpy = jest
+        .spyOn(browserLaunchGuard, 'runWithGuard')
+        .mockImplementation(async (_label, task) => task());
+
+      await service.captureContentScreenshot('content-123');
+
+      expect(guardSpy).toHaveBeenCalledWith(
+        'captureContentScreenshot(content-123)',
+        expect.any(Function),
+      );
+      expect(mockPalCrawl.getContentScreenshot).toHaveBeenCalledWith(
+        'content-123',
+      );
     });
   });
 });

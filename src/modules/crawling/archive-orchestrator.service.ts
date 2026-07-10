@@ -12,6 +12,10 @@ import {
   CrawlingCoreService,
   NsmBillDeletedError,
 } from './crawling-core.service';
+import {
+  SourceDeletionDetectedAs,
+  SourceDeletionDetectionMethod,
+} from './archive-detection-metadata.enum';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { delayMs } from '../../utils/async-delay.utils';
@@ -544,6 +548,29 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     try {
       const full =
         await this.crawlingCoreService.captureNsmDetailFull(normalizedBillNo);
+
+      if (full.statusCode === 404) {
+        await this.appendSourceDeletedAndFlushNotifications(num);
+        logAndBridge({
+          method: 'warn',
+          message: `proposalReason backfill detected deleted NSM bill ${normalizedBillNo} via detail page HTTP 404`,
+          logger: this.logger,
+          context: ArchiveOrchestratorService.name,
+          discordBridge: this.discordBridge,
+          bridgeLevel: BridgeLogLevel.WARN,
+          bridgeMessage: `proposalReason backfill detected deleted NSM bill **${normalizedBillNo}** via detail page HTTP 404`,
+          metadata: {
+            noticeNum: num,
+            billNo: normalizedBillNo,
+            detectedAs: SourceDeletionDetectedAs.SOURCE_DELETED,
+            detectionMethod: SourceDeletionDetectionMethod.DETAIL_PAGE_HTTP_404,
+            responseUrl: full.responseUrl,
+            statusCode: full.statusCode,
+          },
+        });
+        return null;
+      }
+
       const detail = full.detail as typeof full.detail & {
         committee?: string;
         referralDate?: string;
@@ -618,8 +645,9 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
               noticeNum: num,
               billNo: normalizedBillNo,
               responseUrl: error.responseUrl,
-              detectedAs: 'unconfirmed',
-              detectionMethod: 'nsm-error-without-http-probe-confirmation',
+              detectedAs: SourceDeletionDetectedAs.UNCONFIRMED,
+              detectionMethod:
+                SourceDeletionDetectionMethod.NSM_ERROR_WITHOUT_HTTP_PROBE_CONFIRMATION,
             },
           });
           return null;
@@ -640,8 +668,9 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
             noticeNum: num,
             billNo: normalizedBillNo,
             responseUrl: error.responseUrl,
-            detectedAs: 'source_deleted',
-            detectionMethod: 'nsm-error-confirmed-via-http-probe',
+            detectedAs: SourceDeletionDetectedAs.SOURCE_DELETED,
+            detectionMethod:
+              SourceDeletionDetectionMethod.NSM_ERROR_CONFIRMED_VIA_HTTP_PROBE,
           },
         });
         return null;
@@ -668,8 +697,9 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
             metadata: {
               noticeNum: num,
               billNo: normalizedBillNo,
-              detectedAs: 'source_deleted',
-              detectionMethod: 'http-probe-after-timeout',
+              detectedAs: SourceDeletionDetectedAs.SOURCE_DELETED,
+              detectionMethod:
+                SourceDeletionDetectionMethod.HTTP_PROBE_AFTER_TIMEOUT,
             },
           });
           return null;

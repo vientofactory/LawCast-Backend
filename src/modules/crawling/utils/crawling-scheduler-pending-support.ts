@@ -14,6 +14,83 @@ import { type CrawlingSchedulerProposalRetry } from './crawling-scheduler-propos
 import { delayMs } from '../../../utils/async-delay.utils';
 import { logAndBridge } from '../../../utils/bridge-log.utils';
 
+interface PendingErrorDiagnostics {
+  message: string;
+  name?: string;
+  stack?: string;
+  statusCode?: number;
+  statusText?: string;
+  responseUrl?: string;
+}
+
+function toPendingErrorDiagnostics(error: unknown): PendingErrorDiagnostics {
+  const fallbackMessage =
+    error instanceof Error ? error.message : String(error ?? 'Unknown error');
+
+  const details: PendingErrorDiagnostics = {
+    message: fallbackMessage,
+    name: error instanceof Error ? error.name : undefined,
+    stack: error instanceof Error ? error.stack : undefined,
+  };
+
+  if (typeof error === 'object' && error !== null) {
+    const candidate = error as {
+      response?: {
+        status?: number;
+        statusText?: string;
+        url?: string;
+      };
+      status?: number;
+      statusText?: string;
+      responseUrl?: string;
+      url?: string;
+    };
+
+    const statusCode =
+      typeof candidate.response?.status === 'number'
+        ? candidate.response.status
+        : typeof candidate.status === 'number'
+          ? candidate.status
+          : undefined;
+    const statusText =
+      typeof candidate.response?.statusText === 'string'
+        ? candidate.response.statusText
+        : typeof candidate.statusText === 'string'
+          ? candidate.statusText
+          : undefined;
+    const responseUrl =
+      typeof candidate.response?.url === 'string'
+        ? candidate.response.url
+        : typeof candidate.responseUrl === 'string'
+          ? candidate.responseUrl
+          : typeof candidate.url === 'string'
+            ? candidate.url
+            : undefined;
+
+    details.statusCode = statusCode;
+    details.statusText = statusText;
+    details.responseUrl = responseUrl;
+  }
+
+  return details;
+}
+
+function buildPendingErrorLocationHint(
+  diagnostics: PendingErrorDiagnostics,
+): string {
+  if (diagnostics.responseUrl) {
+    return diagnostics.statusCode
+      ? `${diagnostics.responseUrl} (status=${diagnostics.statusCode}${diagnostics.statusText ? ` ${diagnostics.statusText}` : ''})`
+      : diagnostics.responseUrl;
+  }
+
+  if (diagnostics.statusCode) {
+    return `${diagnostics.statusCode}${diagnostics.statusText ? ` ${diagnostics.statusText}` : ''}`;
+  }
+
+  return 'unknown-location';
+}
+
 export interface PendingWorkflowDeps {
   isInitialized: boolean;
   logger: {
@@ -43,14 +120,37 @@ export async function handlePendingCronInternal(
   }
 
   let lastError: unknown;
+  let lastAttempt = 0;
   for (let attempt = 0; attempt <= pendingCrawlMaxRetries; attempt++) {
     try {
       await performPendingBillsCrawlInternal(deps);
       return;
     } catch (error) {
       lastError = error;
+      lastAttempt = attempt;
+      const diagnostics = toPendingErrorDiagnostics(error);
       const canRetry =
         attempt < pendingCrawlMaxRetries && deps.isRetryableNetworkError(error);
+
+      logAndBridge({
+        logger: deps.logger,
+        method: canRetry ? 'warn' : 'error',
+        message: `Pending bills crawl attempt ${attempt + 1}/${pendingCrawlMaxRetries + 1} failed at ${buildPendingErrorLocationHint(diagnostics)}: ${diagnostics.message}`,
+        loggerArgs: diagnostics.stack ? [diagnostics.stack] : [error],
+        context: 'CrawlingSchedulerService',
+        discordBridge: deps.discordBridge,
+        bridgeMessage: `Pending bills crawl attempt ${attempt + 1}/${pendingCrawlMaxRetries + 1} failed (${diagnostics.statusCode ?? 'no-status'}) at ${diagnostics.responseUrl ?? 'unknown-location'}`,
+        metadata: {
+          attempt: attempt + 1,
+          maxAttempts: pendingCrawlMaxRetries + 1,
+          willRetry: canRetry,
+          errorName: diagnostics.name,
+          errorMessage: diagnostics.message,
+          statusCode: diagnostics.statusCode,
+          statusText: diagnostics.statusText,
+          responseUrl: diagnostics.responseUrl,
+        },
+      });
 
       if (!canRetry) {
         break;
@@ -61,14 +161,30 @@ export async function handlePendingCronInternal(
     }
   }
 
+  const diagnostics = toPendingErrorDiagnostics(lastError);
+
   logAndBridge({
     logger: deps.logger,
     method: 'error',
-    message: 'Error during pending bills crawl',
-    loggerArgs: [lastError],
+    message: `Error during pending bills crawl after ${lastAttempt + 1}/${pendingCrawlMaxRetries + 1} attempts (last location: ${buildPendingErrorLocationHint(diagnostics)}): ${diagnostics.message}`,
+    loggerArgs: diagnostics.stack ? [diagnostics.stack] : [lastError],
     context: 'CrawlingSchedulerService',
     discordBridge: deps.discordBridge,
-    bridgeMessage: `Pending bills crawl failed: ${(lastError as Error).message}`,
+    bridgeMessage:
+      `Pending bills crawl failed: ${diagnostics.message}` +
+      (diagnostics.statusCode
+        ? ` (status=${diagnostics.statusCode}${diagnostics.statusText ? ` ${diagnostics.statusText}` : ''})`
+        : '') +
+      (diagnostics.responseUrl ? ` @ ${diagnostics.responseUrl}` : ''),
+    metadata: {
+      attempts: lastAttempt + 1,
+      maxAttempts: pendingCrawlMaxRetries + 1,
+      errorName: diagnostics.name,
+      errorMessage: diagnostics.message,
+      statusCode: diagnostics.statusCode,
+      statusText: diagnostics.statusText,
+      responseUrl: diagnostics.responseUrl,
+    },
   });
 }
 
