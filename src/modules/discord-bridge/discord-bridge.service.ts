@@ -46,6 +46,10 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: 'Lock/phase execution state and cron layout for debugging',
   },
   {
+    name: 'browser-guard',
+    description: 'Browser launch guard status (concurrency/lock/cooldown)',
+  },
+  {
     name: 'loglevel',
     description: 'Get or set the log level for the log channel',
     options: [

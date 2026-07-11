@@ -136,6 +136,26 @@ export const APP_CONSTANTS = {
     BROWSER_LAUNCH_RETRY_DELAY_MS: 2000,
     /** Minimum interval (ms) between Chromium launch attempts to avoid spawn bursts. */
     BROWSER_MIN_LAUNCH_INTERVAL_MS: 1500,
+    /** When enabled, serialize browser-heavy tasks across processes with a file lock. */
+    BROWSER_GLOBAL_LOCK_ENABLED: parseBooleanWithDefault(
+      process.env.CRAWLING_BROWSER_GLOBAL_LOCK_ENABLED,
+      true,
+    ),
+    /** Max wait (ms) to acquire cross-process browser lock before failing. */
+    BROWSER_GLOBAL_LOCK_WAIT_TIMEOUT_MS: parseIntWithDefault(
+      process.env.CRAWLING_BROWSER_GLOBAL_LOCK_WAIT_TIMEOUT_MS,
+      120000,
+    ),
+    /** Stale lock TTL (ms). Older lock files are evicted as abandoned. */
+    BROWSER_GLOBAL_LOCK_STALE_MS: parseIntWithDefault(
+      process.env.CRAWLING_BROWSER_GLOBAL_LOCK_STALE_MS,
+      300000,
+    ),
+    /** Global cooldown (ms) after launch resource-pressure failures (EAGAIN/posix_spawn). */
+    BROWSER_RESOURCE_COOLDOWN_MS: parseIntWithDefault(
+      process.env.CRAWLING_BROWSER_RESOURCE_COOLDOWN_MS,
+      15000,
+    ),
     HEADERS: {
       'Accept-Language': 'ko-KR,ko;q=0.9',
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -290,4 +310,31 @@ function parseBridgeLogLevel(value: string | undefined): number {
     VERBOSE: 4,
   };
   return map[value?.toUpperCase() ?? ''] ?? 2; // default: LOG
+}
+
+function parseBooleanWithDefault(
+  value: string | undefined,
+  fallback: boolean,
+): boolean {
+  if (value == null) {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+}
+
+function parseIntWithDefault(
+  value: string | undefined,
+  fallback: number,
+): number {
+  const parsed = parseInt(value ?? '', 10);
+  return isNaN(parsed) ? fallback : parsed;
 }

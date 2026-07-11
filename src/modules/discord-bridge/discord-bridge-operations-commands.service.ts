@@ -44,6 +44,9 @@ export class DiscordBridgeOperationsCommandsService {
       case 'locks':
         await this.cmdLocks(interaction);
         return true;
+      case 'browser-guard':
+        await this.cmdBrowserGuard(interaction);
+        return true;
       default:
         return false;
     }
@@ -496,6 +499,81 @@ export class DiscordBridgeOperationsCommandsService {
     embed.addFields({
       name: 'Cron Layout',
       value: `\`\`\`json\n${cronSnippet}\n\`\`\``,
+      inline: false,
+    });
+
+    await interaction.reply({ embeds: [embed] }).catch(() => {});
+  }
+
+  private async cmdBrowserGuard(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const { BrowserLaunchGuardService } =
+      await import('../crawling/browser-launch-guard.service');
+
+    const browserGuardService = this.moduleRef.get(BrowserLaunchGuardService, {
+      strict: false,
+    });
+
+    const state = await browserGuardService.getDebugState();
+
+    const lockState = state.globalLock.exists
+      ? `exists=true ageMs=${state.globalLock.ageMs ?? 'N/A'}`
+      : 'exists=false';
+
+    const ownerRaw = state.globalLock.owner ?? 'none';
+    const owner =
+      ownerRaw.length > 400 ? ownerRaw.slice(0, 397) + '...' : ownerRaw;
+
+    const embed = new EmbedBuilder()
+      .setColor(0x0ea5e9)
+      .setTitle('🌐 Browser Launch Guard')
+      .addFields(
+        {
+          name: 'Runtime',
+          value:
+            `activeSessions=${state.activeBrowserSessions} ` +
+            `queuedWaiters=${state.queuedWaiters} ` +
+            `cooldownRemainingMs=${state.runtime.resourceCooldownRemainingMs}`,
+          inline: false,
+        },
+        {
+          name: 'Launch Timing',
+          value:
+            `lastLaunchAt=${state.runtime.lastBrowserLaunchStartedAt ?? 'N/A'}\n` +
+            `minLaunchIntervalMs=${state.configured.minLaunchIntervalMs}`,
+          inline: false,
+        },
+        {
+          name: 'Concurrency / Retry',
+          value:
+            `maxConcurrency=${state.configured.maxConcurrency} ` +
+            `retryCount=${state.configured.launchRetryCount} ` +
+            `retryDelayMs=${state.configured.launchRetryDelayMs} ` +
+            `resourceCooldownMs=${state.configured.resourceCooldownMs}`,
+          inline: false,
+        },
+        {
+          name: 'Global Lock',
+          value:
+            `enabled=${state.configured.globalLockEnabled} ` +
+            `waitTimeoutMs=${state.configured.globalLockWaitTimeoutMs} ` +
+            `staleMs=${state.configured.globalLockStaleMs}\n` +
+            `${lockState}\nowner=${owner}`,
+          inline: false,
+        },
+      )
+      .setTimestamp()
+      .setFooter({ text: 'LawCast Debug Bridge' });
+
+    const lockPathRaw = state.configured.globalLockFilePath;
+    const lockPath =
+      lockPathRaw.length > 980
+        ? lockPathRaw.slice(0, 977) + '...'
+        : lockPathRaw;
+    embed.addFields({
+      name: 'Lock File',
+      value: lockPath,
       inline: false,
     });
 
