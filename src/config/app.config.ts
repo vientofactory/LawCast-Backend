@@ -129,13 +129,25 @@ export const APP_CONSTANTS = {
     RETRY_COUNT: 3, // 3 retries
     SUMMARY_CONCURRENCY: 3,
     /** Global max concurrent Chromium sessions across crawling/screenshot paths. */
-    BROWSER_MAX_CONCURRENCY: 1,
+    BROWSER_MAX_CONCURRENCY: parseIntWithDefault(
+      process.env.CRAWLING_BROWSER_MAX_CONCURRENCY,
+      1,
+    ),
     /** Extra retries when browser launch fails due to process/resource pressure. */
-    BROWSER_LAUNCH_RETRY_COUNT: 2,
+    BROWSER_LAUNCH_RETRY_COUNT: parseIntWithDefault(
+      process.env.CRAWLING_BROWSER_LAUNCH_RETRY_COUNT,
+      2,
+    ),
     /** Base delay (ms) between browser-launch retries. */
-    BROWSER_LAUNCH_RETRY_DELAY_MS: 2000,
+    BROWSER_LAUNCH_RETRY_DELAY_MS: parseIntWithDefault(
+      process.env.CRAWLING_BROWSER_LAUNCH_RETRY_DELAY_MS,
+      2000,
+    ),
     /** Minimum interval (ms) between Chromium launch attempts to avoid spawn bursts. */
-    BROWSER_MIN_LAUNCH_INTERVAL_MS: 1500,
+    BROWSER_MIN_LAUNCH_INTERVAL_MS: parseIntWithDefault(
+      process.env.CRAWLING_BROWSER_MIN_LAUNCH_INTERVAL_MS,
+      1500,
+    ),
     /** When enabled, serialize browser-heavy tasks across processes with a file lock. */
     BROWSER_GLOBAL_LOCK_ENABLED: parseBooleanWithDefault(
       process.env.CRAWLING_BROWSER_GLOBAL_LOCK_ENABLED,

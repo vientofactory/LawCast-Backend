@@ -18,83 +18,39 @@ export class BrowserLaunchGuardService {
   private browserLaunchThrottle: Promise<void> = Promise.resolve();
   private resourceCooldownUntil = 0;
 
-  private resolvePositiveInt(value: string | undefined): number | null {
-    if (!value) return null;
-    const parsed = Number.parseInt(value, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return null;
-    }
-    return parsed;
-  }
-
   private getBrowserConcurrencyLimit(): number {
-    return (
-      this.resolvePositiveInt(process.env.CRAWLING_BROWSER_MAX_CONCURRENCY) ??
-      APP_CONSTANTS.CRAWLING.BROWSER_MAX_CONCURRENCY
-    );
+    return APP_CONSTANTS.CRAWLING.BROWSER_MAX_CONCURRENCY;
   }
 
   private getBrowserLaunchRetryCount(): number {
-    return (
-      this.resolvePositiveInt(
-        process.env.CRAWLING_BROWSER_LAUNCH_RETRY_COUNT,
-      ) ?? APP_CONSTANTS.CRAWLING.BROWSER_LAUNCH_RETRY_COUNT
-    );
+    return APP_CONSTANTS.CRAWLING.BROWSER_LAUNCH_RETRY_COUNT;
   }
 
   private getBrowserLaunchRetryDelayMs(): number {
-    return (
-      this.resolvePositiveInt(
-        process.env.CRAWLING_BROWSER_LAUNCH_RETRY_DELAY_MS,
-      ) ?? APP_CONSTANTS.CRAWLING.BROWSER_LAUNCH_RETRY_DELAY_MS
-    );
+    return APP_CONSTANTS.CRAWLING.BROWSER_LAUNCH_RETRY_DELAY_MS;
   }
 
   private getBrowserMinLaunchIntervalMs(): number {
-    return (
-      this.resolvePositiveInt(
-        process.env.CRAWLING_BROWSER_MIN_LAUNCH_INTERVAL_MS,
-      ) ?? APP_CONSTANTS.CRAWLING.BROWSER_MIN_LAUNCH_INTERVAL_MS
-    );
+    return APP_CONSTANTS.CRAWLING.BROWSER_MIN_LAUNCH_INTERVAL_MS;
   }
 
   private getBrowserGlobalLockEnabled(): boolean {
-    const raw = process.env.CRAWLING_BROWSER_GLOBAL_LOCK_ENABLED;
-    if (!raw) return APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_ENABLED;
-
-    const normalized = raw.trim().toLowerCase();
-    if (['0', 'false', 'off', 'no'].includes(normalized)) return false;
-    if (['1', 'true', 'on', 'yes'].includes(normalized)) return true;
     return APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_ENABLED;
   }
 
   private getBrowserGlobalLockWaitTimeoutMs(): number {
-    return (
-      this.resolvePositiveInt(
-        process.env.CRAWLING_BROWSER_GLOBAL_LOCK_WAIT_TIMEOUT_MS,
-      ) ?? APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_WAIT_TIMEOUT_MS
-    );
+    return APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_WAIT_TIMEOUT_MS;
   }
 
   private getBrowserGlobalLockStaleMs(): number {
-    return (
-      this.resolvePositiveInt(
-        process.env.CRAWLING_BROWSER_GLOBAL_LOCK_STALE_MS,
-      ) ?? APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_STALE_MS
-    );
+    return APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_STALE_MS;
   }
 
   private getBrowserResourceCooldownMs(): number {
-    return (
-      this.resolvePositiveInt(
-        process.env.CRAWLING_BROWSER_RESOURCE_COOLDOWN_MS,
-      ) ?? APP_CONSTANTS.CRAWLING.BROWSER_RESOURCE_COOLDOWN_MS
-    );
+    return APP_CONSTANTS.CRAWLING.BROWSER_RESOURCE_COOLDOWN_MS;
   }
 
   private getBrowserGlobalLockFilePath(): string {
-    const fromEnv = process.env.CRAWLING_BROWSER_GLOBAL_LOCK_FILE_PATH?.trim();
-    if (fromEnv) return fromEnv;
     return join(tmpdir(), 'lawcast-browser-launch.lock');
   }
 
