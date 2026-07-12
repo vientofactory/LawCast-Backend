@@ -516,6 +516,13 @@ export class DiscordBridgeOperationsCommandsService {
     });
 
     const state = await browserGuardService.getDebugState();
+    const mem = process.memoryUsage();
+    const loadAvg =
+      typeof process.loadavg === 'function' ? process.loadavg() : [0, 0, 0];
+    const fmtBytes = (value: number): string =>
+      `${(value / 1024 / 1024).toFixed(1)} MB`;
+    const fmtNum = (value: number | null | undefined): string =>
+      value == null ? 'N/A' : String(value);
 
     const lockState = state.globalLock.exists
       ? `exists=true ageMs=${state.globalLock.ageMs ?? 'N/A'}`
@@ -529,6 +536,32 @@ export class DiscordBridgeOperationsCommandsService {
       .setColor(0x0ea5e9)
       .setTitle('🌐 Browser Launch Guard')
       .addFields(
+        {
+          name: 'Process',
+          value:
+            `pid=${process.pid} ` +
+            `platform=${process.platform} ` +
+            `arch=${process.arch} ` +
+            `node=${process.version} ` +
+            `uptimeSec=${Math.floor(process.uptime())}`,
+          inline: false,
+        },
+        {
+          name: 'Process Memory',
+          value:
+            `rss=${fmtBytes(mem.rss)} ` +
+            `heapUsed=${fmtBytes(mem.heapUsed)} ` +
+            `heapTotal=${fmtBytes(mem.heapTotal)}`,
+          inline: false,
+        },
+        {
+          name: 'System Load',
+          value:
+            `load1=${loadAvg[0].toFixed(2)} ` +
+            `load5=${loadAvg[1].toFixed(2)} ` +
+            `load15=${loadAvg[2].toFixed(2)}`,
+          inline: false,
+        },
         {
           name: 'Runtime',
           value:
@@ -554,6 +587,17 @@ export class DiscordBridgeOperationsCommandsService {
           inline: false,
         },
         {
+          name: 'System Guard',
+          value:
+            `enabled=${state.configured.systemGuardEnabled} ` +
+            `platformActive=${state.configured.systemGuardEnabledForCurrentPlatform} ` +
+            `waitTimeoutMs=${state.configured.systemGuardWaitTimeoutMs} ` +
+            `checkIntervalMs=${state.configured.systemGuardCheckIntervalMs} ` +
+            `pidsUsageMax=${state.configured.systemGuardMaxPidsUsagePercent}% ` +
+            `minMemAvailableMb=${state.configured.systemGuardMinMemAvailableMb}`,
+          inline: false,
+        },
+        {
           name: 'Global Lock',
           value:
             `enabled=${state.configured.globalLockEnabled} ` +
@@ -574,6 +618,21 @@ export class DiscordBridgeOperationsCommandsService {
     embed.addFields({
       name: 'Lock File',
       value: lockPath,
+      inline: false,
+    });
+
+    const pressure = state.systemPressure;
+    embed.addFields({
+      name: 'System Pressure Snapshot',
+      value:
+        `pidsCurrent=${fmtNum(pressure.pidsCurrent)} ` +
+        `pidsMax=${fmtNum(pressure.pidsMax)} ` +
+        `pidsUsagePercent=${
+          pressure.pidsUsagePercent == null
+            ? 'N/A'
+            : `${pressure.pidsUsagePercent.toFixed(1)}%`
+        } ` +
+        `memAvailableMb=${fmtNum(pressure.memAvailableMb)}`,
       inline: false,
     });
 

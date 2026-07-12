@@ -517,6 +517,11 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
    */
   async onApplicationShutdown(signal?: string): Promise<void> {
     await this.screenshotCoordinator.handleShutdown(signal);
+    await this.crawlingCoreService.waitForBrowserIdle(30000).catch((error) => {
+      this.logger.warn(
+        `Shutdown (${signal ?? 'unknown'}) waiting for browser idle failed: ${(error as Error).message}`,
+      );
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────

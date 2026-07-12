@@ -541,6 +541,20 @@ export class BrowserLaunchGuardService {
     };
   }
 
+  async waitForIdle(timeoutMs = 15000, pollMs = 200): Promise<void> {
+    const startedAt = Date.now();
+
+    while (this.activeBrowserSessions > 0 || this.browserWaitQueue.length > 0) {
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error(
+          `browser launch guard still busy after ${timeoutMs}ms (active=${this.activeBrowserSessions}, queued=${this.browserWaitQueue.length})`,
+        );
+      }
+
+      await delayMs(pollMs);
+    }
+  }
+
   async runWithGuard<T>(label: string, task: () => Promise<T>): Promise<T> {
     await this.acquireBrowserSlot(label);
     let releaseGlobalLock: (() => Promise<void>) | null = null;

@@ -68,6 +68,10 @@ export class CrawlingCoreService {
     };
   }
 
+  async waitForBrowserIdle(timeoutMs = 15000): Promise<void> {
+    await this.browserLaunchGuard.waitForIdle(timeoutMs);
+  }
+
   private createClient(): PalCrawl {
     return new PalCrawl(this.crawlConfig);
   }
