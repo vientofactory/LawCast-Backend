@@ -12,42 +12,43 @@ export class BrowserLaunchGuardService {
     BrowserLaunchGuardService.name,
   );
 
+  // Internal Variables
   private activeBrowserSessions = 0;
   private readonly browserWaitQueue: Array<() => void> = [];
   private lastBrowserLaunchStartedAt = 0;
   private browserLaunchThrottle: Promise<void> = Promise.resolve();
   private resourceCooldownUntil = 0;
 
-  private getBrowserConcurrencyLimit(): number {
-    return APP_CONSTANTS.CRAWLING.BROWSER_MAX_CONCURRENCY;
-  }
+  // Environment Variables
+  private readonly browserConcurrencyLimit =
+    APP_CONSTANTS.CRAWLING.BROWSER_MAX_CONCURRENCY;
+  private readonly browserLaunchRetryCount =
+    APP_CONSTANTS.CRAWLING.BROWSER_LAUNCH_RETRY_COUNT;
+  private readonly browserLaunchRetryDelayMs =
+    APP_CONSTANTS.CRAWLING.BROWSER_LAUNCH_RETRY_DELAY_MS;
+  private readonly browserMinLaunchIntervalMs =
+    APP_CONSTANTS.CRAWLING.BROWSER_MIN_LAUNCH_INTERVAL_MS;
+  private browserGlobalLockEnabled =
+    APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_ENABLED;
+  private readonly browserGlobalLockWaitTimeoutMs =
+    APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_WAIT_TIMEOUT_MS;
+  private readonly browserGlobalLockStaleMs =
+    APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_STALE_MS;
+  private readonly browserResourceCooldownMs =
+    APP_CONSTANTS.CRAWLING.BROWSER_RESOURCE_COOLDOWN_MS;
+  private readonly browserSystemGuardEnabled =
+    APP_CONSTANTS.CRAWLING.BROWSER_SYSTEM_GUARD_ENABLED;
+  private readonly browserSystemGuardWaitTimeoutMs =
+    APP_CONSTANTS.CRAWLING.BROWSER_SYSTEM_GUARD_WAIT_TIMEOUT_MS;
+  private readonly browserSystemGuardCheckIntervalMs =
+    APP_CONSTANTS.CRAWLING.BROWSER_SYSTEM_GUARD_CHECK_INTERVAL_MS;
+  private readonly browserSystemGuardMaxPidsUsagePercent =
+    APP_CONSTANTS.CRAWLING.BROWSER_SYSTEM_GUARD_MAX_PIDS_USAGE_PERCENT;
+  private readonly browserSystemGuardMinMemAvailableMb =
+    APP_CONSTANTS.CRAWLING.BROWSER_SYSTEM_GUARD_MIN_MEM_AVAILABLE_MB;
 
-  private getBrowserLaunchRetryCount(): number {
-    return APP_CONSTANTS.CRAWLING.BROWSER_LAUNCH_RETRY_COUNT;
-  }
-
-  private getBrowserLaunchRetryDelayMs(): number {
-    return APP_CONSTANTS.CRAWLING.BROWSER_LAUNCH_RETRY_DELAY_MS;
-  }
-
-  private getBrowserMinLaunchIntervalMs(): number {
-    return APP_CONSTANTS.CRAWLING.BROWSER_MIN_LAUNCH_INTERVAL_MS;
-  }
-
-  private getBrowserGlobalLockEnabled(): boolean {
-    return APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_ENABLED;
-  }
-
-  private getBrowserGlobalLockWaitTimeoutMs(): number {
-    return APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_WAIT_TIMEOUT_MS;
-  }
-
-  private getBrowserGlobalLockStaleMs(): number {
-    return APP_CONSTANTS.CRAWLING.BROWSER_GLOBAL_LOCK_STALE_MS;
-  }
-
-  private getBrowserResourceCooldownMs(): number {
-    return APP_CONSTANTS.CRAWLING.BROWSER_RESOURCE_COOLDOWN_MS;
+  private isSystemGuardActiveOnCurrentPlatform(): boolean {
+    return this.browserSystemGuardEnabled && process.platform === 'linux';
   }
 
   private getBrowserGlobalLockFilePath(): string {
@@ -59,7 +60,7 @@ export class BrowserLaunchGuardService {
     let warned = false;
 
     for (;;) {
-      const limit = this.getBrowserConcurrencyLimit();
+      const limit = this.browserConcurrencyLimit;
       if (this.activeBrowserSessions < limit) {
         this.activeBrowserSessions++;
 
@@ -108,7 +109,7 @@ export class BrowserLaunchGuardService {
   }
 
   private async throttleBrowserLaunch(label: string): Promise<void> {
-    const minIntervalMs = this.getBrowserMinLaunchIntervalMs();
+    const minIntervalMs = this.browserMinLaunchIntervalMs;
     if (minIntervalMs <= 0) {
       this.lastBrowserLaunchStartedAt = Date.now();
       return;
@@ -145,16 +146,203 @@ export class BrowserLaunchGuardService {
     await delayMs(waitMs);
   }
 
+  private async readFileTrimmed(path: string): Promise<string | null> {
+    try {
+      return (await fs.readFile(path, 'utf8')).trim();
+    } catch {
+      return null;
+    }
+  }
+
+  private parseNumberOrNull(value: string | null): number | null {
+    if (!value) return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return null;
+    }
+    return parsed;
+  }
+
+  private async readPidsSnapshot(): Promise<{
+    current: number | null;
+    max: number | null;
+    usagePercent: number | null;
+  }> {
+    const currentCandidates = [
+      '/sys/fs/cgroup/pids.current',
+      '/sys/fs/cgroup/pids/pids.current',
+    ];
+    const maxCandidates = [
+      '/sys/fs/cgroup/pids.max',
+      '/sys/fs/cgroup/pids/pids.max',
+    ];
+
+    let current: number | null = null;
+    for (const path of currentCandidates) {
+      current = this.parseNumberOrNull(await this.readFileTrimmed(path));
+      if (current != null) break;
+    }
+
+    let max: number | null = null;
+    for (const path of maxCandidates) {
+      const raw = await this.readFileTrimmed(path);
+      if (!raw || raw === 'max') continue;
+      max = this.parseNumberOrNull(raw);
+      if (max != null) break;
+    }
+
+    if (current == null || max == null || max <= 0) {
+      return { current, max, usagePercent: null };
+    }
+
+    return {
+      current,
+      max,
+      usagePercent: (current / max) * 100,
+    };
+  }
+
+  private async readMemAvailableFromMemInfoMb(): Promise<number | null> {
+    const memInfo = await this.readFileTrimmed('/proc/meminfo');
+    if (!memInfo) return null;
+
+    const match = memInfo.match(/^MemAvailable:\s+(\d+)\s+kB$/m);
+    if (!match?.[1]) return null;
+
+    const availableKb = Number(match[1]);
+    if (!Number.isFinite(availableKb) || availableKb < 0) return null;
+    return Math.floor(availableKb / 1024);
+  }
+
+  private async readCgroupMemAvailableMb(): Promise<number | null> {
+    const currentCandidates = [
+      '/sys/fs/cgroup/memory.current',
+      '/sys/fs/cgroup/memory/memory.usage_in_bytes',
+    ];
+    const maxCandidates = [
+      '/sys/fs/cgroup/memory.max',
+      '/sys/fs/cgroup/memory/memory.limit_in_bytes',
+    ];
+
+    let current: number | null = null;
+    for (const path of currentCandidates) {
+      current = this.parseNumberOrNull(await this.readFileTrimmed(path));
+      if (current != null) break;
+    }
+
+    let max: number | null = null;
+    for (const path of maxCandidates) {
+      const raw = await this.readFileTrimmed(path);
+      if (!raw || raw === 'max') continue;
+      max = this.parseNumberOrNull(raw);
+      if (max != null) break;
+    }
+
+    if (current == null || max == null || max <= current) {
+      return null;
+    }
+
+    return Math.floor((max - current) / (1024 * 1024));
+  }
+
+  private async readSystemPressureSnapshot(): Promise<{
+    pidsCurrent: number | null;
+    pidsMax: number | null;
+    pidsUsagePercent: number | null;
+    memAvailableMb: number | null;
+  }> {
+    if (!this.isSystemGuardActiveOnCurrentPlatform()) {
+      return {
+        pidsCurrent: null,
+        pidsMax: null,
+        pidsUsagePercent: null,
+        memAvailableMb: null,
+      };
+    }
+
+    const pids = await this.readPidsSnapshot();
+    const cgroupMemAvailableMb = await this.readCgroupMemAvailableMb();
+    const memInfoAvailableMb = await this.readMemAvailableFromMemInfoMb();
+
+    return {
+      pidsCurrent: pids.current,
+      pidsMax: pids.max,
+      pidsUsagePercent: pids.usagePercent,
+      memAvailableMb: cgroupMemAvailableMb ?? memInfoAvailableMb,
+    };
+  }
+
+  private async waitForSystemPressureToRecover(label: string): Promise<void> {
+    if (!this.isSystemGuardActiveOnCurrentPlatform()) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    let warnedAt = 0;
+
+    for (;;) {
+      const snapshot = await this.readSystemPressureSnapshot();
+      const reasons: string[] = [];
+
+      if (
+        snapshot.pidsUsagePercent != null &&
+        snapshot.pidsUsagePercent >= this.browserSystemGuardMaxPidsUsagePercent
+      ) {
+        reasons.push(
+          `pid usage ${snapshot.pidsUsagePercent.toFixed(1)}% >= ${this.browserSystemGuardMaxPidsUsagePercent}%`,
+        );
+      }
+
+      if (
+        snapshot.memAvailableMb != null &&
+        snapshot.memAvailableMb < this.browserSystemGuardMinMemAvailableMb
+      ) {
+        reasons.push(
+          `mem available ${snapshot.memAvailableMb}MiB < ${this.browserSystemGuardMinMemAvailableMb}MiB`,
+        );
+      }
+
+      if (reasons.length === 0) {
+        return;
+      }
+
+      const waitedMs = Date.now() - startedAt;
+      if (warnedAt === 0 || Date.now() - warnedAt >= 5000) {
+        warnedAt = Date.now();
+        this.logger.warn(
+          `${label}: delaying Chromium launch due to system pressure (${reasons.join(', ')})`,
+        );
+      }
+
+      if (waitedMs >= this.browserSystemGuardWaitTimeoutMs) {
+        const pressureError = new Error(
+          `${label}: system guard timeout after ${this.browserSystemGuardWaitTimeoutMs}ms (${reasons.join(', ')})`,
+        );
+        (pressureError as Error & { cause?: unknown }).cause = {
+          waitedMs,
+          snapshot,
+          thresholds: {
+            maxPidsUsagePercent: this.browserSystemGuardMaxPidsUsagePercent,
+            minMemAvailableMb: this.browserSystemGuardMinMemAvailableMb,
+          },
+        };
+        throw pressureError;
+      }
+
+      await delayMs(this.browserSystemGuardCheckIntervalMs);
+    }
+  }
+
   private async acquireGlobalBrowserLock(
     label: string,
   ): Promise<(() => Promise<void>) | null> {
-    if (!this.getBrowserGlobalLockEnabled()) {
+    if (!this.browserGlobalLockEnabled) {
       return null;
     }
 
     const lockFilePath = this.getBrowserGlobalLockFilePath();
-    const waitTimeoutMs = this.getBrowserGlobalLockWaitTimeoutMs();
-    const staleMs = this.getBrowserGlobalLockStaleMs();
+    const waitTimeoutMs = this.browserGlobalLockWaitTimeoutMs;
+    const staleMs = this.browserGlobalLockStaleMs;
     const waitStartedAt = Date.now();
     let warned = false;
 
@@ -251,6 +439,12 @@ export class BrowserLaunchGuardService {
       globalLockStaleMs: number;
       resourceCooldownMs: number;
       globalLockFilePath: string;
+      systemGuardEnabled: boolean;
+      systemGuardEnabledForCurrentPlatform: boolean;
+      systemGuardWaitTimeoutMs: number;
+      systemGuardCheckIntervalMs: number;
+      systemGuardMaxPidsUsagePercent: number;
+      systemGuardMinMemAvailableMb: number;
     };
     runtime: {
       lastBrowserLaunchStartedAt: string | null;
@@ -260,6 +454,12 @@ export class BrowserLaunchGuardService {
       exists: boolean;
       ageMs: number | null;
       owner: string | null;
+    };
+    systemPressure: {
+      pidsCurrent: number | null;
+      pidsMax: number | null;
+      pidsUsagePercent: number | null;
+      memAvailableMb: number | null;
     };
   }> {
     const lockFilePath = this.getBrowserGlobalLockFilePath();
@@ -304,15 +504,23 @@ export class BrowserLaunchGuardService {
       activeBrowserSessions: this.activeBrowserSessions,
       queuedWaiters: this.browserWaitQueue.length,
       configured: {
-        maxConcurrency: this.getBrowserConcurrencyLimit(),
-        launchRetryCount: this.getBrowserLaunchRetryCount(),
-        launchRetryDelayMs: this.getBrowserLaunchRetryDelayMs(),
-        minLaunchIntervalMs: this.getBrowserMinLaunchIntervalMs(),
-        globalLockEnabled: this.getBrowserGlobalLockEnabled(),
-        globalLockWaitTimeoutMs: this.getBrowserGlobalLockWaitTimeoutMs(),
-        globalLockStaleMs: this.getBrowserGlobalLockStaleMs(),
-        resourceCooldownMs: this.getBrowserResourceCooldownMs(),
+        maxConcurrency: this.browserConcurrencyLimit,
+        launchRetryCount: this.browserLaunchRetryCount,
+        launchRetryDelayMs: this.browserLaunchRetryDelayMs,
+        minLaunchIntervalMs: this.browserMinLaunchIntervalMs,
+        globalLockEnabled: this.browserGlobalLockEnabled,
+        globalLockWaitTimeoutMs: this.browserGlobalLockWaitTimeoutMs,
+        globalLockStaleMs: this.browserGlobalLockStaleMs,
+        resourceCooldownMs: this.browserResourceCooldownMs,
         globalLockFilePath: lockFilePath,
+        systemGuardEnabled: this.browserSystemGuardEnabled,
+        systemGuardEnabledForCurrentPlatform:
+          this.isSystemGuardActiveOnCurrentPlatform(),
+        systemGuardWaitTimeoutMs: this.browserSystemGuardWaitTimeoutMs,
+        systemGuardCheckIntervalMs: this.browserSystemGuardCheckIntervalMs,
+        systemGuardMaxPidsUsagePercent:
+          this.browserSystemGuardMaxPidsUsagePercent,
+        systemGuardMinMemAvailableMb: this.browserSystemGuardMinMemAvailableMb,
       },
       runtime: {
         lastBrowserLaunchStartedAt:
@@ -329,6 +537,7 @@ export class BrowserLaunchGuardService {
         ageMs: globalLockAgeMs,
         owner: globalLockOwner,
       },
+      systemPressure: await this.readSystemPressureSnapshot(),
     };
   }
 
@@ -337,18 +546,19 @@ export class BrowserLaunchGuardService {
     let releaseGlobalLock: (() => Promise<void>) | null = null;
     try {
       releaseGlobalLock = await this.acquireGlobalBrowserLock(label);
-      const retries = this.getBrowserLaunchRetryCount();
-      const baseDelayMs = this.getBrowserLaunchRetryDelayMs();
+      const retries = this.browserLaunchRetryCount;
+      const baseDelayMs = this.browserLaunchRetryDelayMs;
 
       for (let attempt = 0; ; attempt++) {
         try {
           await this.waitForResourceCooldownIfNeeded(label);
+          await this.waitForSystemPressureToRecover(label);
           await this.throttleBrowserLaunch(label);
           return await task();
         } catch (error) {
           const isResourceError = this.isBrowserLaunchResourceError(error);
           if (isResourceError) {
-            const cooldownMs = this.getBrowserResourceCooldownMs();
+            const cooldownMs = this.browserResourceCooldownMs;
             this.resourceCooldownUntil = Math.max(
               this.resourceCooldownUntil,
               Date.now() + cooldownMs,

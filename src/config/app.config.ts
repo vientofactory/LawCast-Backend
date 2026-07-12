@@ -168,6 +168,31 @@ export const APP_CONSTANTS = {
       process.env.CRAWLING_BROWSER_RESOURCE_COOLDOWN_MS,
       15000,
     ),
+    /** Enables system-pressure preflight guard before Chromium launch. */
+    BROWSER_SYSTEM_GUARD_ENABLED: parseBooleanWithDefault(
+      process.env.CRAWLING_BROWSER_SYSTEM_GUARD_ENABLED,
+      true,
+    ),
+    /** Max wait (ms) for system pressure to recover before launch attempt fails. */
+    BROWSER_SYSTEM_GUARD_WAIT_TIMEOUT_MS: parseIntWithDefault(
+      process.env.CRAWLING_BROWSER_SYSTEM_GUARD_WAIT_TIMEOUT_MS,
+      45000,
+    ),
+    /** Poll interval (ms) while waiting for system pressure to recover. */
+    BROWSER_SYSTEM_GUARD_CHECK_INTERVAL_MS: parseIntWithDefault(
+      process.env.CRAWLING_BROWSER_SYSTEM_GUARD_CHECK_INTERVAL_MS,
+      1000,
+    ),
+    /** Block launch when PID usage reaches this percentage of cgroup/system limit. */
+    BROWSER_SYSTEM_GUARD_MAX_PIDS_USAGE_PERCENT: parseIntWithDefault(
+      process.env.CRAWLING_BROWSER_SYSTEM_GUARD_MAX_PIDS_USAGE_PERCENT,
+      92,
+    ),
+    /** Minimum required memory headroom (MiB) before launching Chromium. */
+    BROWSER_SYSTEM_GUARD_MIN_MEM_AVAILABLE_MB: parseIntWithDefault(
+      process.env.CRAWLING_BROWSER_SYSTEM_GUARD_MIN_MEM_AVAILABLE_MB,
+      256,
+    ),
     HEADERS: {
       'Accept-Language': 'ko-KR,ko;q=0.9',
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
