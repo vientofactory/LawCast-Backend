@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
+import { loadavg } from 'node:os';
 import { APP_CONSTANTS } from '../../config/app.config';
 import {
   BridgeLogLevel,
@@ -517,8 +518,7 @@ export class DiscordBridgeOperationsCommandsService {
 
     const state = await browserGuardService.getDebugState();
     const mem = process.memoryUsage();
-    const loadAvg =
-      typeof process.loadavg === 'function' ? process.loadavg() : [0, 0, 0];
+    const loadAvg = loadavg();
     const fmtBytes = (value: number): string =>
       `${(value / 1024 / 1024).toFixed(1)} MB`;
     const fmtNum = (value: number | null | undefined): string =>
