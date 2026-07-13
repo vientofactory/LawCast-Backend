@@ -258,8 +258,8 @@ export class ArchiveSyncService implements OnModuleInit {
       await this.safeRun('unavailable retry', () =>
         this.runUnavailableRetry('bootstrap'),
       );
-      await this.safeRun('integrity check', () =>
-        this.runIntegrityCheck('bootstrap'),
+      await this.safeRun('integrity rescan', () =>
+        this.runScheduledIntegrityRescan('bootstrap'),
       );
       await this.safeRun('chain integrity audit', () =>
         this.runChainIntegrityAudit('bootstrap'),
