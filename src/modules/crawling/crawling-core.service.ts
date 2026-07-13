@@ -7,10 +7,10 @@ import {
   type IContentData,
   type INsmBillDetail,
   type INsmBillItem,
-  type INsmSearchQuery,
-  type INsmSearchResult,
   type ISearchQuery,
   type ISearchResult,
+  type INsmSearchQuery,
+  type INsmSearchResult,
   type ITableData,
   type PalCrawlConfig,
 } from 'pal-crawl';
@@ -19,7 +19,7 @@ import { APP_CONSTANTS } from '../../config/app.config';
 import { type CachedNotice } from '../../types/cache.types';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
-import { BrowserLaunchGuardService } from './browser-launch-guard.service';
+import { BrowserLeaseManagerService } from './browser-lease-manager.service';
 
 const SCREENSHOT_CONFIG = {
   enabled: true,
@@ -59,17 +59,15 @@ export class CrawlingCoreService {
   );
   private readonly crawlConfig: PalCrawlConfig;
 
-  constructor(private readonly browserLaunchGuard: BrowserLaunchGuardService) {
+  constructor(
+    private readonly browserLeaseManager: BrowserLeaseManagerService,
+  ) {
     this.crawlConfig = {
       userAgent: APP_CONSTANTS.CRAWLING.USER_AGENT,
       timeout: APP_CONSTANTS.CRAWLING.TIMEOUT,
       retryCount: APP_CONSTANTS.CRAWLING.RETRY_COUNT,
       customHeaders: APP_CONSTANTS.CRAWLING.HEADERS,
     };
-  }
-
-  async waitForBrowserIdle(timeoutMs = 15000): Promise<void> {
-    await this.browserLaunchGuard.waitForIdle(timeoutMs);
   }
 
   private createClient(): PalCrawl {
@@ -180,8 +178,7 @@ export class CrawlingCoreService {
   }
 
   /**
-   * Get the list of done notices from the crawler.
-   * @returns A promise that resolves to an array of done notice summaries.
+   * Get the list of completed notices from the crawler.
    */
   async getDone(): Promise<ITableData[]> {
     const data = await this.createClient().getDone();
@@ -189,40 +186,20 @@ export class CrawlingCoreService {
   }
 
   /**
-   * Get the detailed content of a done notice by its content ID.
-   * @param contentId The unique identifier for the done notice content.
-   * @returns A promise that resolves to the detailed content data of the done notice.
+   * Get the detailed content of a completed notice by its content ID.
    */
   async getDoneContent(contentId: string): Promise<IContentData> {
     return this.createClient().getDoneContent(contentId);
   }
 
-  /**
-   * Search for active notices.
-   * @param query The search query parameters.
-   * @returns A promise that resolves to the search results for active notices.
-   */
   async search(query?: ISearchQuery): Promise<ISearchResult> {
     return this.createClient().search(query);
   }
 
-  /**
-   * Search for done notices.
-   * @param query The search query parameters.
-   * @returns A promise that resolves to the search results for done notices.
-   */
   async searchDone(query?: ISearchQuery): Promise<ISearchResult> {
     return this.createClient().searchDone(query);
   }
 
-  /**
-   * Async generator that yields every page of active notices from the crawler.
-   * Use `query.pageUnit` (max 100) to control items-per-page, and
-   * `options.delayMs` to throttle between requests.
-   * @param query Search query parameters (excluding pageIndex).
-   * @param options Bulk fetching options (e.g., delayMs for throttling).
-   * @returns An async generator yielding search results for all active notices.
-   */
   async *getAllPages(
     query?: Omit<ISearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
@@ -230,14 +207,6 @@ export class CrawlingCoreService {
     yield* this.createClient().getAllPages(query, options);
   }
 
-  /**
-   * Async generator that yields every page of done notices from the crawler.
-   * Use `query.pageUnit` (max 100) to control items-per-page, and
-   * `options.delayMs` to throttle between requests.
-   * @param query Search query parameters (excluding pageIndex).
-   * @param options Bulk fetching options (e.g., delayMs for throttling).
-   * @returns An async generator yielding search results for done notices.
-   */
   async *getAllDonePages(
     query?: Omit<ISearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
@@ -245,19 +214,6 @@ export class CrawlingCoreService {
     yield* this.createClient().getAllDonePages(query, options);
   }
 
-  /**
-   * Collects **all** active notices across every page using pageUnit=100.
-   * Deduplicates by notice number so each notice appears exactly once.
-   *
-   * @param options.stopBelowNum  When provided, stops as soon as an entire
-   *   page contains only notices with `num <= stopBelowNum`.  This is the
-   *   "early-exit" optimisation for hot-path cron runs: since notices are
-   *   returned newest-first, reaching a page that is entirely known means
-   *   every subsequent page is also already known.
-   * @param options.delayMs  Overrides the default inter-page delay (ms).
-   *   Pass a shorter value for latency-sensitive cron paths.
-   * @returns A deduplicated array of all (or remaining-new) active notices.
-   */
   async crawlAllPages(options?: {
     stopBelowNum?: number;
     delayMs?: number;
@@ -274,7 +230,6 @@ export class CrawlingCoreService {
         { pageUnit: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_PAGE_UNIT },
         { delayMs, concurrency: 1 },
       )) {
-        // Guard against unexpected null/undefined items from the crawler
         const pageItems: ITableData[] = page.items ?? [];
         for (const item of pageItems) {
           if (!seen.has(item.num)) {
@@ -283,8 +238,6 @@ export class CrawlingCoreService {
           }
         }
 
-        // Early-exit: every item on this page is already known -> no need to
-        // fetch older pages (notices are ordered newest-first).
         if (
           stopBelowNum !== undefined &&
           pageItems.length > 0 &&
@@ -298,9 +251,6 @@ export class CrawlingCoreService {
         }
       }
     } catch (error) {
-      // Partial-failure recovery: if we already collected items, return them
-      // rather than discarding the entire run.  The caller's archive-dedup
-      // guard ensures consistency even with an incomplete page set.
       if (allItems.length > 0) {
         this.logger.warn(
           `Stream error after collecting ${allItems.length} items - returning partial data`,
@@ -313,6 +263,118 @@ export class CrawlingCoreService {
     }
 
     return allItems;
+  }
+
+  /**
+   * Captures a full-page JPEG screenshot of a notice's content page.
+   *
+   * If the raw capture exceeds MAX_SIZE_BYTES, the buffer is recompressed
+   * with progressively lower JPEG quality values before falling back to a
+   * viewport-only (non-full-page) shot. Returns null only when every
+   * strategy still exceeds the limit or an unrecoverable error occurs.
+   *
+   * @param contentId The content ID of the notice.
+   * @param isDone When true, uses the done-notice screenshot endpoint.
+   */
+  async captureContentScreenshot(
+    contentId: string,
+    isDone = false,
+  ): Promise<Buffer | null> {
+    const capture = async (fullPage: boolean): Promise<Buffer> => {
+      const client = new PalCrawl({
+        ...this.crawlConfig,
+        screenshot: { ...SCREENSHOT_CONFIG, fullPage },
+      });
+
+      return this.browserLeaseManager.runWithLease(
+        `captureContentScreenshot(${contentId}, fullPage=${fullPage})`,
+        client,
+        async () => {
+          return isDone
+            ? await client.getDoneContentScreenshot(contentId)
+            : await client.getContentScreenshot(contentId);
+        },
+      );
+    };
+
+    const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
+
+    /**
+     * Re-encode a raw JPEG buffer at a lower quality using sharp.
+     * Returns the recompressed buffer, or null if still over the limit.
+     */
+    const recompress = async (
+      input: Buffer,
+      quality: number,
+    ): Promise<Buffer | null> => {
+      const result = await sharp(input).jpeg({ quality }).toBuffer();
+      return result.length <= maxBytes ? result : null;
+    };
+
+    // ── Step 1: full-page capture at configured quality ──────────────────
+    const raw = await capture(true);
+
+    if (raw.length <= maxBytes) {
+      return raw;
+    }
+
+    LoggerUtils.debugDev(
+      CrawlingCoreService.name,
+      `Screenshot for ${contentId} is ${raw.length} B - attempting recompression`,
+    );
+
+    // ── Step 2: recompress with decreasing quality levels ────────────────
+    for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
+      const recompressed = await recompress(raw, quality);
+      if (recompressed) {
+        LoggerUtils.debugDev(
+          CrawlingCoreService.name,
+          `Recompressed screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
+        );
+        return recompressed;
+      }
+    }
+
+    // ── Step 3: viewport-only (non-full-page) shot ───────────────────────
+    LoggerUtils.debugDev(
+      CrawlingCoreService.name,
+      `Full-page recompression exhausted for ${contentId} - retrying viewport-only`,
+    );
+
+    const viewport = await capture(false);
+
+    if (viewport.length <= maxBytes) {
+      LoggerUtils.debugDev(
+        CrawlingCoreService.name,
+        `Viewport screenshot for ${contentId} fits: ${viewport.length} B`,
+      );
+      return viewport;
+    }
+
+    // Try recompressing the viewport shot as a last resort
+    for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
+      const recompressed = await recompress(viewport, quality);
+      if (recompressed) {
+        LoggerUtils.debugDev(
+          CrawlingCoreService.name,
+          `Recompressed viewport screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
+        );
+        return recompressed;
+      }
+    }
+
+    // All size-reduction strategies exhausted - this is a deterministic
+    // permanent failure (content is simply too large). Return null so the
+    // caller knows not to retry.
+    this.logger.warn(
+      `Screenshot for ${contentId} could not be reduced below ` +
+        `${maxBytes} B - discarding`,
+    );
+    return null;
+    // NOTE: Exceptions from capture / recompress are intentionally NOT
+    // caught here. Transient failures propagate to the caller so that the
+    // drain loop can decide whether to retry. Only the size-exceeded case
+    // above returns null.
   }
 
   /**
@@ -380,198 +442,191 @@ export class CrawlingCoreService {
     const normalized = billNo.trim();
     if (!normalized) throw new Error('billNo is required');
 
-    return this.browserLaunchGuard.runWithGuard(
+    const client = new NsmLmSts({
+      ...this.crawlConfig,
+      screenshot: SCREENSHOT_CONFIG,
+    });
+
+    return this.browserLeaseManager.runWithLease(
       `captureNsmDetailFull(${normalized})`,
+      client,
       async () => {
         const detailUrl = `https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/${normalized}/detailRP`;
         const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
 
-        const client = new NsmLmSts({
-          ...this.crawlConfig,
-          screenshot: SCREENSHOT_CONFIG,
-        });
+        await client.initBrowser();
 
-        try {
-          await client.initBrowser();
+        // `browser` is a private JS property - safe to access at runtime.
 
-          // `browser` is a private JS property - safe to access at runtime.
-
-          const browser = (
-            client as unknown as {
-              browser: {
-                newPage: () => Promise<{
-                  setViewport: (v: {
-                    width: number;
-                    height: number;
-                  }) => Promise<void>;
-                  goto: (
-                    url: string,
-                    opts: { waitUntil: string; timeout: number },
-                  ) => Promise<{ status: () => number } | null>;
-                  waitForNavigation: (opts: {
-                    waitUntil: string;
-                    timeout: number;
-                  }) => Promise<{ status: () => number } | null>;
-                  title: () => Promise<string>;
-                  content: () => Promise<string>;
-                  url: () => string;
-                  evaluate: <T>(fn: () => T) => Promise<T>;
-                  screenshot: (opts: {
-                    fullPage: boolean;
-                    type: string;
-                    quality?: number;
-                  }) => Promise<Buffer>;
-                  close: () => Promise<void>;
-                }>;
-              };
-            }
-          ).browser;
-
-          const page = await browser.newPage();
-          try {
-            await page.setViewport({
-              width: APP_CONSTANTS.SCREENSHOT.WIDTH,
-              height: APP_CONSTANTS.SCREENSHOT.HEIGHT,
-            });
-
-            // ── Navigate with Waitingroom bypass ──────────────────────────────
-            //
-            // opinion.lawmaking.go.kr serves a <title>Waitingroom</title> page
-            // that uses a JavaScript polling timer before redirecting to the real
-            // detail page.  Using `networkidle0` on the initial goto() resolves as
-            // soon as the Waitingroom itself becomes idle (before the JS redirect),
-            // so we end up capturing the wrong HTML.
-            //
-            // Fix:
-            //   1. Use `domcontentloaded` - resolves immediately on either the real
-            //      page or the Waitingroom without waiting for networkidle.
-            //   2. Inspect the page title.  If it's Waitingroom, call
-            //      waitForNavigation(networkidle0) to wait for the JS redirect.
-            //   3. Up to MAX_WAITINGROOM_RETRIES: if waitForNavigation times out,
-            //      reload the URL with a back-off delay and try again.
-
-            const MAX_WAITINGROOM_RETRIES = 2;
-            const WAITINGROOM_RETRY_DELAY_MS = 5_000;
-            let response: { status: () => number } | null = null;
-            let waitingroomHits = 0;
-
-            response = await page.goto(detailUrl, {
-              waitUntil: 'domcontentloaded',
-              timeout: 30_000,
-            });
-
-            for (
-              let attempt = 0;
-              attempt <= MAX_WAITINGROOM_RETRIES;
-              attempt++
-            ) {
-              const pageTitle = await page.title();
-              if (!pageTitle.toLowerCase().includes('waitingroom')) break;
-
-              waitingroomHits++;
-              LoggerUtils.debugDev(
-                CrawlingCoreService.name,
-                `NSM bill ${billNo}: Waitingroom hit (attempt ${
-                  attempt + 1
-                }/${MAX_WAITINGROOM_RETRIES + 1}), waiting for redirect…`,
-              );
-
-              if (attempt < MAX_WAITINGROOM_RETRIES) {
-                try {
-                  // Wait for the JS redirect to fire and the real page to load.
-                  const nav = await page.waitForNavigation({
-                    waitUntil: 'networkidle0',
-                    timeout: 30_000,
-                  });
-                  if (nav) response = nav;
-                } catch {
-                  // waitForNavigation timed out - pause then reload.
-                  await new Promise<void>((r) =>
-                    setTimeout(r, WAITINGROOM_RETRY_DELAY_MS * (attempt + 1)),
-                  );
-                  response = await page.goto(detailUrl, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 30_000,
-                  });
-                }
-              }
-            }
-
-            if (waitingroomHits > MAX_WAITINGROOM_RETRIES) {
-              this.logger.warn(
-                `NSM bill ${billNo}: Waitingroom not resolved after ${
-                  MAX_WAITINGROOM_RETRIES + 1
-                } attempts - HTML may be a Waitingroom page`,
-              );
-            }
-
-            const html = await page.content();
-            const responseUrl = page.url();
-            const statusCode = response?.status() ?? 200;
-
-            const deletionAlertMessage =
-              this.extractNsmDeletionAlertMessage(html);
-            if (deletionAlertMessage) {
-              throw new NsmBillDeletedError(billNo, deletionAlertMessage, {
-                responseUrl,
-              });
-            }
-
-            // Parse detail from the already-loaded HTML - no extra HTTP request.
-            let detail: INsmBillDetail | null = null;
-            try {
-              detail = new NsmLmStsParser().parseDetail(html);
-            } catch (err) {
-              this.logger.warn(
-                `NSM detail parse failed for bill ${billNo}: ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-              );
-            }
-
-            // Take screenshot in the same session.
-            let screenshot: Buffer | null = null;
-            try {
-              const raw = await page.screenshot({
-                fullPage: true,
-                type: 'jpeg',
-                quality: APP_CONSTANTS.SCREENSHOT.QUALITY,
-              });
-
-              if (raw.length <= maxBytes) {
-                screenshot = raw;
-              } else {
-                for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
-                  const recompressed = await sharp(raw)
-                    .jpeg({ quality })
-                    .toBuffer();
-                  if (recompressed.length <= maxBytes) {
-                    screenshot = recompressed;
-                    break;
-                  }
-                }
-                if (!screenshot) {
-                  this.logger.warn(
-                    `NSM screenshot for bill ${billNo} could not be reduced below ${
-                      maxBytes
-                    }B - discarding`,
-                  );
-                }
-              }
-            } catch (err) {
-              this.logger.warn(
-                `NSM screenshot capture failed for bill ${billNo}: ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
-              );
-            }
-
-            return { html, screenshot, detail, responseUrl, statusCode };
-          } finally {
-            await page.close();
+        const browser = (
+          client as unknown as {
+            browser: {
+              newPage: () => Promise<{
+                setViewport: (v: {
+                  width: number;
+                  height: number;
+                }) => Promise<void>;
+                goto: (
+                  url: string,
+                  opts: { waitUntil: string; timeout: number },
+                ) => Promise<{ status: () => number } | null>;
+                waitForNavigation: (opts: {
+                  waitUntil: string;
+                  timeout: number;
+                }) => Promise<{ status: () => number } | null>;
+                title: () => Promise<string>;
+                content: () => Promise<string>;
+                url: () => string;
+                evaluate: <T>(fn: () => T) => Promise<T>;
+                screenshot: (opts: {
+                  fullPage: boolean;
+                  type: string;
+                  quality?: number;
+                }) => Promise<Buffer>;
+                close: () => Promise<void>;
+              }>;
+            };
           }
+        ).browser;
+
+        const page = await browser.newPage();
+        try {
+          await page.setViewport({
+            width: APP_CONSTANTS.SCREENSHOT.WIDTH,
+            height: APP_CONSTANTS.SCREENSHOT.HEIGHT,
+          });
+
+          // ── Navigate with Waitingroom bypass ──────────────────────────────
+          //
+          // opinion.lawmaking.go.kr serves a <title>Waitingroom</title> page
+          // that uses a JavaScript polling timer before redirecting to the real
+          // detail page.  Using `networkidle0` on the initial goto() resolves as
+          // soon as the Waitingroom itself becomes idle (before the JS redirect),
+          // so we end up capturing the wrong HTML.
+          //
+          // Fix:
+          //   1. Use `domcontentloaded` - resolves immediately on either the real
+          //      page or the Waitingroom without waiting for networkidle.
+          //   2. Inspect the page title.  If it's Waitingroom, call
+          //      waitForNavigation(networkidle0) to wait for the JS redirect.
+          //   3. Up to MAX_WAITINGROOM_RETRIES: if waitForNavigation times out,
+          //      reload the URL with a back-off delay and try again.
+
+          const MAX_WAITINGROOM_RETRIES = 2;
+          const WAITINGROOM_RETRY_DELAY_MS = 5_000;
+          let response: { status: () => number } | null = null;
+          let waitingroomHits = 0;
+
+          response = await page.goto(detailUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: 30_000,
+          });
+
+          for (let attempt = 0; attempt <= MAX_WAITINGROOM_RETRIES; attempt++) {
+            const pageTitle = await page.title();
+            if (!pageTitle.toLowerCase().includes('waitingroom')) break;
+
+            waitingroomHits++;
+            LoggerUtils.debugDev(
+              CrawlingCoreService.name,
+              `NSM bill ${billNo}: Waitingroom hit (attempt ${
+                attempt + 1
+              }/${MAX_WAITINGROOM_RETRIES + 1}), waiting for redirect…`,
+            );
+
+            if (attempt < MAX_WAITINGROOM_RETRIES) {
+              try {
+                // Wait for the JS redirect to fire and the real page to load.
+                const nav = await page.waitForNavigation({
+                  waitUntil: 'networkidle0',
+                  timeout: 30_000,
+                });
+                if (nav) response = nav;
+              } catch {
+                // waitForNavigation timed out - pause then reload.
+                await new Promise<void>((r) =>
+                  setTimeout(r, WAITINGROOM_RETRY_DELAY_MS * (attempt + 1)),
+                );
+                response = await page.goto(detailUrl, {
+                  waitUntil: 'domcontentloaded',
+                  timeout: 30_000,
+                });
+              }
+            }
+          }
+
+          if (waitingroomHits > MAX_WAITINGROOM_RETRIES) {
+            this.logger.warn(
+              `NSM bill ${billNo}: Waitingroom not resolved after ${
+                MAX_WAITINGROOM_RETRIES + 1
+              } attempts - HTML may be a Waitingroom page`,
+            );
+          }
+
+          const html = await page.content();
+          const responseUrl = page.url();
+          const statusCode = response?.status() ?? 200;
+
+          const deletionAlertMessage =
+            this.extractNsmDeletionAlertMessage(html);
+          if (deletionAlertMessage) {
+            throw new NsmBillDeletedError(billNo, deletionAlertMessage, {
+              responseUrl,
+            });
+          }
+
+          // Parse detail from the already-loaded HTML - no extra HTTP request.
+          let detail: INsmBillDetail | null = null;
+          try {
+            detail = new NsmLmStsParser().parseDetail(html);
+          } catch (err) {
+            this.logger.warn(
+              `NSM detail parse failed for bill ${billNo}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+
+          // Take screenshot in the same session.
+          let screenshot: Buffer | null = null;
+          try {
+            const raw = await page.screenshot({
+              fullPage: true,
+              type: 'jpeg',
+              quality: APP_CONSTANTS.SCREENSHOT.QUALITY,
+            });
+
+            if (raw.length <= maxBytes) {
+              screenshot = raw;
+            } else {
+              for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
+                const recompressed = await sharp(raw)
+                  .jpeg({ quality })
+                  .toBuffer();
+                if (recompressed.length <= maxBytes) {
+                  screenshot = recompressed;
+                  break;
+                }
+              }
+              if (!screenshot) {
+                this.logger.warn(
+                  `NSM screenshot for bill ${billNo} could not be reduced below ${
+                    maxBytes
+                  }B - discarding`,
+                );
+              }
+            }
+          } catch (err) {
+            this.logger.warn(
+              `NSM screenshot capture failed for bill ${billNo}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+
+          return { html, screenshot, detail, responseUrl, statusCode };
         } finally {
-          await client.closeBrowser();
+          await page.close();
         }
       },
     );
@@ -585,158 +640,41 @@ export class CrawlingCoreService {
    * @param billNo 의안번호 (e.g. "2200001")
    */
   async captureNsmDetailScreenshot(billNo: string): Promise<Buffer | null> {
-    return this.browserLaunchGuard.runWithGuard(
+    const client = new NsmLmSts({
+      ...this.crawlConfig,
+      screenshot: SCREENSHOT_CONFIG,
+    });
+
+    return this.browserLeaseManager.runWithLease(
       `captureNsmDetailScreenshot(${billNo})`,
+      client,
       async () => {
         const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
 
-        const client = new NsmLmSts({
-          ...this.crawlConfig,
-          screenshot: SCREENSHOT_CONFIG,
-        });
+        const raw = await client.getDetailScreenshot(billNo);
 
-        try {
-          const raw = await client.getDetailScreenshot(billNo);
-
-          if (raw.length <= maxBytes) return raw;
-
-          LoggerUtils.debugDev(
-            CrawlingCoreService.name,
-            `NSM screenshot for bill ${billNo} is ${raw.length}B - attempting recompression`,
-          );
-
-          for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
-            const recompressed = await sharp(raw).jpeg({ quality }).toBuffer();
-            if (recompressed.length <= maxBytes) {
-              LoggerUtils.debugDev(
-                CrawlingCoreService.name,
-                `Recompressed NSM screenshot for bill ${billNo} to ${recompressed.length}B (quality=${quality})`,
-              );
-              return recompressed;
-            }
-          }
-
-          this.logger.warn(
-            `NSM screenshot for bill ${billNo} could not be reduced below ${maxBytes}B - discarding`,
-          );
-          return null;
-        } finally {
-          await client.closeBrowser();
-        }
-      },
-    );
-  }
-
-  /**
-   * Captures a full-page JPEG screenshot of a notice's content page.
-   *
-   * If the raw capture exceeds MAX_SIZE_BYTES, the buffer is recompressed
-   * with progressively lower JPEG quality values before falling back to a
-   * viewport-only (non-full-page) shot.  Returns null only when every
-   * strategy still exceeds the limit or an unrecoverable error occurs.
-   *
-   * @param contentId The content ID of the notice.
-   * @param isDone When true, uses the done-notice screenshot endpoint.
-   */
-  async captureContentScreenshot(
-    contentId: string,
-    isDone = false,
-  ): Promise<Buffer | null> {
-    return this.browserLaunchGuard.runWithGuard(
-      `captureContentScreenshot(${contentId})`,
-      async () => {
-        const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
-
-        const doCapture = async (fullPage: boolean): Promise<Buffer> => {
-          const client = new PalCrawl({
-            ...this.crawlConfig,
-            screenshot: { ...SCREENSHOT_CONFIG, fullPage },
-          });
-          try {
-            return isDone
-              ? await client.getDoneContentScreenshot(contentId)
-              : await client.getContentScreenshot(contentId);
-          } finally {
-            await client.closeBrowser();
-          }
-        };
-
-        /**
-         * Re-encode a raw JPEG buffer at a lower quality using sharp.
-         * Returns the recompressed buffer, or null if still over the limit.
-         */
-        const recompress = async (
-          input: Buffer,
-          quality: number,
-        ): Promise<Buffer | null> => {
-          const result = await sharp(input).jpeg({ quality }).toBuffer();
-          return result.length <= maxBytes ? result : null;
-        };
-
-        // ── Step 1: full-page capture at configured quality ──────────────────
-        const raw = await doCapture(true);
-
-        if (raw.length <= maxBytes) {
-          return raw;
-        }
+        if (raw.length <= maxBytes) return raw;
 
         LoggerUtils.debugDev(
           CrawlingCoreService.name,
-          `Screenshot for ${contentId} is ${raw.length} B - attempting recompression`,
+          `NSM screenshot for bill ${billNo} is ${raw.length}B - attempting recompression`,
         );
 
-        // ── Step 2: recompress with decreasing quality levels ────────────────
         for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
-          const recompressed = await recompress(raw, quality);
-          if (recompressed) {
+          const recompressed = await sharp(raw).jpeg({ quality }).toBuffer();
+          if (recompressed.length <= maxBytes) {
             LoggerUtils.debugDev(
               CrawlingCoreService.name,
-              `Recompressed screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
+              `Recompressed NSM screenshot for bill ${billNo} to ${recompressed.length}B (quality=${quality})`,
             );
             return recompressed;
           }
         }
 
-        // ── Step 3: viewport-only (non-full-page) shot ───────────────────────
-        LoggerUtils.debugDev(
-          CrawlingCoreService.name,
-          `Full-page recompression exhausted for ${contentId} - retrying viewport-only`,
-        );
-
-        const viewport = await doCapture(false);
-
-        if (viewport.length <= maxBytes) {
-          LoggerUtils.debugDev(
-            CrawlingCoreService.name,
-            `Viewport screenshot for ${contentId} fits: ${viewport.length} B`,
-          );
-          return viewport;
-        }
-
-        // Try recompressing the viewport shot as a last resort
-        for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
-          const recompressed = await recompress(viewport, quality);
-          if (recompressed) {
-            LoggerUtils.debugDev(
-              CrawlingCoreService.name,
-              `Recompressed viewport screenshot for ${contentId} to ${recompressed.length} B (quality=${quality})`,
-            );
-            return recompressed;
-          }
-        }
-
-        // All size-reduction strategies exhausted - this is a deterministic
-        // permanent failure (content is simply too large).  Return null so the
-        // caller knows not to retry.
         this.logger.warn(
-          `Screenshot for ${contentId} could not be reduced below ` +
-            `${maxBytes} B - discarding`,
+          `NSM screenshot for bill ${billNo} could not be reduced below ${maxBytes}B - discarding`,
         );
         return null;
-        // NOTE: Exceptions from doCapture / recompress are intentionally NOT
-        // caught here.  Transient failures (Puppeteer crash, network timeout,
-        // sharp error) propagate to the caller so that the drain loop can decide
-        // whether to retry.  Only the size-exceeded case above returns null.
       },
     );
   }

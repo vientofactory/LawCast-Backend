@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BrowserLaunchGuardService } from './browser-launch-guard.service';
+import { BrowserLeaseManagerService } from './browser-lease-manager.service';
 import { CrawlingCoreService } from './crawling-core.service';
 import { NsmLmSts, NsmLmStsParser, PalCrawl, type ITableData } from 'pal-crawl';
 
@@ -8,7 +8,7 @@ jest.mock('pal-crawl');
 
 describe('CrawlingCoreService', () => {
   let service: CrawlingCoreService;
-  let browserLaunchGuard: BrowserLaunchGuardService;
+  let browserLeaseManager: BrowserLeaseManagerService;
   let mockPalCrawl: jest.Mocked<PalCrawl>;
   let mockNsmLmSts: {
     initBrowser: jest.Mock;
@@ -102,12 +102,12 @@ describe('CrawlingCoreService', () => {
     ).mockImplementation(() => mockNsmLmStsParser as any);
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [BrowserLaunchGuardService, CrawlingCoreService],
+      providers: [BrowserLeaseManagerService, CrawlingCoreService],
     }).compile();
 
     service = module.get<CrawlingCoreService>(CrawlingCoreService);
-    browserLaunchGuard = module.get<BrowserLaunchGuardService>(
-      BrowserLaunchGuardService,
+    browserLeaseManager = module.get<BrowserLeaseManagerService>(
+      BrowserLeaseManagerService,
     );
   });
 
@@ -212,45 +212,48 @@ describe('CrawlingCoreService', () => {
     });
   });
 
-  describe('browser launch guard coverage', () => {
-    it('wraps captureNsmDetailFull with the shared browser guard', async () => {
+  describe('browser lease coverage', () => {
+    it('wraps captureNsmDetailFull with the shared browser lease manager', async () => {
       const guardSpy = jest
-        .spyOn(browserLaunchGuard, 'runWithGuard')
-        .mockImplementation(async (_label, task) => task());
+        .spyOn(browserLeaseManager, 'runWithLease')
+        .mockImplementation(async (_label, _session, task) => task(_session));
 
       await service.captureNsmDetailFull(' 2219887 ');
 
       expect(guardSpy).toHaveBeenCalledWith(
         'captureNsmDetailFull(2219887)',
+        expect.anything(),
         expect.any(Function),
       );
       expect(mockNsmLmSts.initBrowser).toHaveBeenCalledTimes(1);
     });
 
-    it('wraps captureNsmDetailScreenshot with the shared browser guard', async () => {
+    it('wraps captureNsmDetailScreenshot with the shared browser lease manager', async () => {
       const guardSpy = jest
-        .spyOn(browserLaunchGuard, 'runWithGuard')
-        .mockImplementation(async (_label, task) => task());
+        .spyOn(browserLeaseManager, 'runWithLease')
+        .mockImplementation(async (_label, _session, task) => task(_session));
 
       await service.captureNsmDetailScreenshot('2219887');
 
       expect(guardSpy).toHaveBeenCalledWith(
         'captureNsmDetailScreenshot(2219887)',
+        expect.anything(),
         expect.any(Function),
       );
       expect(mockNsmLmSts.getDetailScreenshot).toHaveBeenCalledWith('2219887');
     });
 
-    it('wraps captureContentScreenshot with the shared browser guard', async () => {
+    it('wraps captureContentScreenshot with the shared browser lease manager', async () => {
       mockPalCrawl.getContentScreenshot.mockResolvedValue(Buffer.from('jpeg'));
       const guardSpy = jest
-        .spyOn(browserLaunchGuard, 'runWithGuard')
-        .mockImplementation(async (_label, task) => task());
+        .spyOn(browserLeaseManager, 'runWithLease')
+        .mockImplementation(async (_label, _session, task) => task(_session));
 
       await service.captureContentScreenshot('content-123');
 
       expect(guardSpy).toHaveBeenCalledWith(
-        'captureContentScreenshot(content-123)',
+        'captureContentScreenshot(content-123, fullPage=true)',
+        expect.anything(),
         expect.any(Function),
       );
       expect(mockPalCrawl.getContentScreenshot).toHaveBeenCalledWith(

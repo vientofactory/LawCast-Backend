@@ -45,7 +45,7 @@ export class DiscordBridgeOperationsCommandsService {
       case 'locks':
         await this.cmdLocks(interaction);
         return true;
-      case 'browser-guard':
+      case 'browser-lease':
         await this.cmdBrowserGuard(interaction);
         return true;
       default:
@@ -509,32 +509,22 @@ export class DiscordBridgeOperationsCommandsService {
   private async cmdBrowserGuard(
     interaction: ChatInputCommandInteraction,
   ): Promise<void> {
-    const { BrowserLaunchGuardService } =
-      await import('../crawling/browser-launch-guard.service');
+    const { BrowserLeaseManagerService } =
+      await import('../crawling/browser-lease-manager.service');
 
-    const browserGuardService = this.moduleRef.get(BrowserLaunchGuardService, {
+    const browserLeaseService = this.moduleRef.get(BrowserLeaseManagerService, {
       strict: false,
     });
 
-    const state = await browserGuardService.getDebugState();
+    const state = await browserLeaseService.getDebugState();
     const mem = process.memoryUsage();
     const loadAvg = loadavg();
     const fmtBytes = (value: number): string =>
       `${(value / 1024 / 1024).toFixed(1)} MB`;
-    const fmtNum = (value: number | null | undefined): string =>
-      value == null ? 'N/A' : String(value);
-
-    const lockState = state.globalLock.exists
-      ? `exists=true ageMs=${state.globalLock.ageMs ?? 'N/A'}`
-      : 'exists=false';
-
-    const ownerRaw = state.globalLock.owner ?? 'none';
-    const owner =
-      ownerRaw.length > 400 ? ownerRaw.slice(0, 397) + '...' : ownerRaw;
 
     const embed = new EmbedBuilder()
       .setColor(0x0ea5e9)
-      .setTitle('🌐 Browser Launch Guard')
+      .setTitle('🌐 Browser Lease Manager')
       .addFields(
         {
           name: 'Process',
@@ -542,8 +532,7 @@ export class DiscordBridgeOperationsCommandsService {
             `pid=${process.pid} ` +
             `platform=${process.platform} ` +
             `arch=${process.arch} ` +
-            `node=${process.version} ` +
-            `uptimeSec=${Math.floor(process.uptime())}`,
+            `node=${process.version} `,
           inline: false,
         },
         {
@@ -565,76 +554,21 @@ export class DiscordBridgeOperationsCommandsService {
         {
           name: 'Runtime',
           value:
-            `activeSessions=${state.activeBrowserSessions} ` +
+            `activeLeases=${state.activeLeases} ` +
             `queuedWaiters=${state.queuedWaiters} ` +
-            `cooldownRemainingMs=${state.runtime.resourceCooldownRemainingMs}`,
+            `trackedBrowserPids=${state.trackedBrowserPids.length}`,
           inline: false,
         },
         {
-          name: 'Launch Timing',
+          name: 'Cleanup',
           value:
-            `lastLaunchAt=${state.runtime.lastBrowserLaunchStartedAt ?? 'N/A'}\n` +
-            `minLaunchIntervalMs=${state.configured.minLaunchIntervalMs}`,
-          inline: false,
-        },
-        {
-          name: 'Concurrency / Retry',
-          value:
-            `maxConcurrency=${state.configured.maxConcurrency} ` +
-            `retryCount=${state.configured.launchRetryCount} ` +
-            `retryDelayMs=${state.configured.launchRetryDelayMs} ` +
-            `resourceCooldownMs=${state.configured.resourceCooldownMs}`,
-          inline: false,
-        },
-        {
-          name: 'System Guard',
-          value:
-            `enabled=${state.configured.systemGuardEnabled} ` +
-            `platformActive=${state.configured.systemGuardEnabledForCurrentPlatform} ` +
-            `waitTimeoutMs=${state.configured.systemGuardWaitTimeoutMs} ` +
-            `checkIntervalMs=${state.configured.systemGuardCheckIntervalMs} ` +
-            `pidsUsageMax=${state.configured.systemGuardMaxPidsUsagePercent}% ` +
-            `minMemAvailableMb=${state.configured.systemGuardMinMemAvailableMb}`,
-          inline: false,
-        },
-        {
-          name: 'Global Lock',
-          value:
-            `enabled=${state.configured.globalLockEnabled} ` +
-            `waitTimeoutMs=${state.configured.globalLockWaitTimeoutMs} ` +
-            `staleMs=${state.configured.globalLockStaleMs}\n` +
-            `${lockState}\nowner=${owner}`,
+            `closeTimeoutMs=${state.closeTimeoutMs} ` +
+            `forceKillWaitMs=${state.forceKillWaitMs}`,
           inline: false,
         },
       )
       .setTimestamp()
       .setFooter({ text: 'LawCast Debug Bridge' });
-
-    const lockPathRaw = state.configured.globalLockFilePath;
-    const lockPath =
-      lockPathRaw.length > 980
-        ? lockPathRaw.slice(0, 977) + '...'
-        : lockPathRaw;
-    embed.addFields({
-      name: 'Lock File',
-      value: lockPath,
-      inline: false,
-    });
-
-    const pressure = state.systemPressure;
-    embed.addFields({
-      name: 'System Pressure Snapshot',
-      value:
-        `pidsCurrent=${fmtNum(pressure.pidsCurrent)} ` +
-        `pidsMax=${fmtNum(pressure.pidsMax)} ` +
-        `pidsUsagePercent=${
-          pressure.pidsUsagePercent == null
-            ? 'N/A'
-            : `${pressure.pidsUsagePercent.toFixed(1)}%`
-        } ` +
-        `memAvailableMb=${fmtNum(pressure.memAvailableMb)}`,
-      inline: false,
-    });
 
     await interaction.reply({ embeds: [embed] }).catch(() => {});
   }

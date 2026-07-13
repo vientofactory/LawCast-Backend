@@ -6,7 +6,7 @@ import { HealthModule } from '../health/health.module';
 import { OllamaModule } from '../ollama/ollama.module';
 import { DiscordBridgeModule } from '../discord-bridge/discord-bridge.module';
 import { ChangeTrackingModule } from '../change-tracking/change-tracking.module';
-import { BrowserLaunchGuardService } from './browser-launch-guard.service';
+import { BrowserLeaseManagerService } from './browser-lease-manager.service';
 import { CrawlingCoreService } from './crawling-core.service';
 import { SummaryGenerationService } from './summary-generation.service';
 import { ArchiveOrchestratorService } from './archive-orchestrator.service';
@@ -27,7 +27,7 @@ import { NoticeSearchService } from './notice-search.service';
     ChangeTrackingModule,
   ],
   providers: [
-    BrowserLaunchGuardService,
+    BrowserLeaseManagerService,
     CrawlingCoreService,
     SummaryGenerationService,
     ArchiveOrchestratorService,

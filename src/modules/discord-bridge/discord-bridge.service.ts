@@ -46,7 +46,7 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: 'Lock/phase execution state and cron layout for debugging',
   },
   {
-    name: 'browser-guard',
+    name: 'browser-lease',
     description: 'Browser launch guard status (concurrency/lock/cooldown)',
   },
   {

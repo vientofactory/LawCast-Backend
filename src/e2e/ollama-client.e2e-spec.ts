@@ -5,6 +5,7 @@ import type { IContentData, ITableData } from 'pal-crawl';
 import appConfig from '../config/app.config';
 import { OllamaModule } from '../modules/ollama/ollama.module';
 import { OllamaClientService } from '../modules/ollama/ollama-client.service';
+import { BrowserLeaseManagerService } from '../modules/crawling/browser-lease-manager.service';
 import { CrawlingCoreService } from '../modules/crawling/crawling-core.service';
 
 const runOllamaE2E = process.env.RUN_OLLAMA_E2E === 'true';
@@ -90,7 +91,7 @@ describe('OllamaClientService (e2e)', () => {
       }).compile();
 
       service = moduleRef.get<OllamaClientService>(OllamaClientService);
-      crawlService = new CrawlingCoreService();
+      crawlService = new CrawlingCoreService(new BrowserLeaseManagerService());
 
       if (runOllamaE2E) {
         [activeProposals, doneProposals] = await Promise.all([
