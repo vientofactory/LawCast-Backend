@@ -64,9 +64,10 @@ ENV TZ=Asia/Seoul
 # - freetype:      font rasterisation
 # - harfbuzz:      text shaping
 # - ttf-freefont:  basic Unicode font coverage
+# - tini:          minimal init process (zombie reaping for PID 1)
 # PUPPETEER_EXECUTABLE_PATH tells puppeteer to use this binary instead of the
 # bundled Chrome that was skipped during npm install.
-RUN apk add --no-cache chromium nss freetype harfbuzz ttf-freefont tzdata && \
+RUN apk add --no-cache chromium nss freetype harfbuzz ttf-freefont tzdata tini && \
   cp /usr/share/zoneinfo/Asia/Seoul /etc/localtime && \
   echo "Asia/Seoul" > /etc/timezone
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
@@ -102,4 +103,5 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3001/api/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })" || exit 1
 
 # Start the application
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/main"]
