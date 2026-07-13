@@ -71,7 +71,7 @@ describe('BrowserLeaseManagerService', () => {
     expect((service as any).trackedBrowserPids.size).toBe(0);
   });
 
-  it('keeps zombie browser pids tracked and does not force kill them during lease close', async () => {
+  it('does not track zombie browser pids and does not force kill them during lease close', async () => {
     jest
       .spyOn(service as any, 'collectBrowserDescendants')
       .mockResolvedValueOnce([])
@@ -94,7 +94,7 @@ describe('BrowserLeaseManagerService', () => {
     await service.runWithLease('zombie-test', session, async () => undefined);
 
     expect(forceKillSpy).not.toHaveBeenCalled();
-    expect((service as any).trackedBrowserPids.has(901)).toBe(true);
+    expect((service as any).trackedBrowserPids.has(901)).toBe(false);
   });
 
   it('rejects new lease acquisition after shutdown starts', async () => {

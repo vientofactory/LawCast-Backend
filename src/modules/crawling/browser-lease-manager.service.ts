@@ -6,6 +6,7 @@ import { LoggerUtils } from '../../utils/logger.utils';
 
 const execFileAsync = promisify(execFile);
 const BROWSER_PROCESS_NAME_REGEX = /chromium|chrome|crashpad/i;
+const ZOMBIE_LOG_THROTTLE_MS = 60_000;
 
 interface BrowserSessionLike {
   closeBrowser(): Promise<void>;
@@ -27,6 +28,7 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
   private activeLeases = 0;
   private readonly leaseWaitQueue: Array<() => void> = [];
   private readonly trackedBrowserPids = new Set<number>();
+  private readonly zombieWarningLastAt = new Map<number, number>();
   private readonly closeTimeoutMs = 10_000;
   private readonly forceKillWaitMs = 5_000;
   private shuttingDown = false;
@@ -94,6 +96,19 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
     this.activeLeases = Math.max(0, this.activeLeases - 1);
     const next = this.leaseWaitQueue.shift();
     if (next) next();
+  }
+
+  private logZombieIfNeeded(label: string, row: ProcessSnapshotRow): void {
+    const now = Date.now();
+    const last = this.zombieWarningLastAt.get(row.pid) ?? 0;
+    if (now - last < ZOMBIE_LOG_THROTTLE_MS) {
+      return;
+    }
+
+    this.zombieWarningLastAt.set(row.pid, now);
+    this.logger.warn(
+      `${label}: browser pid ${row.pid} is zombie (${row.command}); waiting for parent reap`,
+    );
   }
 
   private async isProcessAlive(pid: number): Promise<boolean> {
@@ -290,10 +305,21 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
 
     const observedAfterClose = await this.collectBrowserDescendants();
     const observedAfterSet = new Set(observedAfterClose.map((row) => row.pid));
+    const zombieAfterSet = new Set(
+      observedAfterClose
+        .filter((row) => row.stat.startsWith('Z'))
+        .map((row) => row.pid),
+    );
 
     for (const trackedPid of [...this.trackedBrowserPids]) {
-      if (!observedAfterSet.has(trackedPid)) {
+      if (!observedAfterSet.has(trackedPid) || zombieAfterSet.has(trackedPid)) {
         this.trackedBrowserPids.delete(trackedPid);
+      }
+    }
+
+    for (const row of observedAfterClose) {
+      if (row.stat.startsWith('Z')) {
+        this.logZombieIfNeeded(label, row);
       }
     }
 
@@ -302,13 +328,6 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
     );
 
     for (const row of leakedRows) {
-      if (row.stat.startsWith('Z')) {
-        this.logger.warn(
-          `${label}: browser pid ${row.pid} is zombie (${row.command}); waiting for parent reap`,
-        );
-        continue;
-      }
-
       const stillAlive = await this.isProcessAlive(row.pid);
       if (!stillAlive) {
         this.trackedBrowserPids.delete(row.pid);
@@ -393,10 +412,7 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
     const descendants = await this.collectBrowserDescendants();
     for (const row of descendants) {
       if (row.stat.startsWith('Z')) {
-        this.logger.warn(
-          `${shutdownLabel}: browser pid ${row.pid} remains zombie (${row.command})`,
-        );
-        this.trackedBrowserPids.add(row.pid);
+        this.logZombieIfNeeded(shutdownLabel, row);
         continue;
       }
 
@@ -414,6 +430,7 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
       stat: string;
       command: string;
     }>;
+    zombieDescendants: number;
     shuttingDown: boolean;
     closeTimeoutMs: number;
     forceKillWaitMs: number;
@@ -427,6 +444,8 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
       discoveredBrowserDescendants: descendants
         .sort((a, b) => a.pid - b.pid)
         .slice(0, 50),
+      zombieDescendants: descendants.filter((row) => row.stat.startsWith('Z'))
+        .length,
       shuttingDown: this.shuttingDown,
       closeTimeoutMs: this.closeTimeoutMs,
       forceKillWaitMs: this.forceKillWaitMs,

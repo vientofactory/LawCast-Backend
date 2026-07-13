@@ -558,6 +558,7 @@ export class DiscordBridgeOperationsCommandsService {
             `queuedWaiters=${state.queuedWaiters} ` +
             `trackedBrowserPids=${state.trackedBrowserPids.length} ` +
             `discoveredDescendants=${state.discoveredBrowserDescendants.length} ` +
+            `zombieDescendants=${state.zombieDescendants} ` +
             `shuttingDown=${state.shuttingDown}`,
           inline: false,
         },
