@@ -8,6 +8,8 @@ import { ApiController } from './controllers/api.controller';
 import { Webhook } from './modules/webhook/webhook.entity';
 import { NoticeArchive } from './modules/notice/notice-archive.entity';
 import { NoticeArchiveSnapshotState } from './modules/notice/notice-archive-summary-state.entity';
+import { NoticeArchiveIntegrityCheck } from './modules/notice/notice-archive-integrity-check.entity';
+import { NoticeArchiveIntegrityState } from './modules/notice/notice-archive-integrity-state.entity';
 import { NoticeChangeEvent } from './modules/change-tracking/notice-change-event.entity';
 import { NoticeChangeDetail } from './modules/change-tracking/notice-change-detail.entity';
 import { migrations } from './migrations';
@@ -61,6 +63,8 @@ import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.
           Webhook,
           NoticeArchive,
           NoticeArchiveSnapshotState,
+          NoticeArchiveIntegrityCheck,
+          NoticeArchiveIntegrityState,
           NoticeChangeEvent,
           NoticeChangeDetail,
         ],

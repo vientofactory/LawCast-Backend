@@ -1,6 +1,14 @@
 import { MoreThan, type Repository } from 'typeorm';
 import JSZip from 'jszip';
 import { NoticeArchive } from '../notice-archive.entity';
+import {
+  NoticeArchiveIntegrityCheck,
+  type ArchiveIntegrityCheckResult,
+} from '../notice-archive-integrity-check.entity';
+import {
+  NoticeArchiveIntegrityState,
+  type ArchiveIntegrityStatus,
+} from '../notice-archive-integrity-state.entity';
 import { NoticeArchiveSnapshotState } from '../notice-archive-summary-state.entity';
 import { buildArchiveExportArtifacts } from '../archive-export.builder';
 import {
@@ -17,8 +25,19 @@ import type {
 export class NoticeArchiveArtifactSupport {
   constructor(
     private readonly archiveRepository: Repository<NoticeArchive>,
+    private readonly integrityCheckRepository?: Repository<NoticeArchiveIntegrityCheck>,
+    private readonly integrityStateRepository?: Repository<NoticeArchiveIntegrityState>,
     private readonly summaryStateRepository?: Repository<NoticeArchiveSnapshotState>,
   ) {}
+
+  private getIntegrityStatusFromCheckResult(
+    checkResult: ArchiveIntegrityCheckResult | null,
+  ): ArchiveIntegrityStatus {
+    if (checkResult === 'passed') return 'passed';
+    if (checkResult === 'failed') return 'failed';
+    if (checkResult === 'skipped') return 'skipped';
+    return 'pending';
+  }
 
   private async hydrateSummaryState(row: NoticeArchive): Promise<void> {
     if (!this.summaryStateRepository) {
@@ -84,8 +103,10 @@ export class NoticeArchiveArtifactSupport {
           ? Buffer.byteLength(row.sourceHtml, 'utf8')
           : 0,
         integrity: {
+          status: integrity.status,
           checkedAt: integrity.checkedAt,
           passed: integrity.passed,
+          skipReason: integrity.skipReason,
           calculatedSha256: integrity.calculatedSha256,
         },
         http: {
@@ -282,6 +303,7 @@ export class NoticeArchiveArtifactSupport {
         where: lastSeenId > 0 ? { id: MoreThan(lastSeenId) } : undefined,
         select: {
           id: true,
+          noticeNum: true,
           sourceHtml: true,
           sourceHtmlSha256: true,
           integrityCheckPassed: true,
@@ -295,14 +317,98 @@ export class NoticeArchiveArtifactSupport {
 
       for (const row of rows) {
         scanned++;
+        let checkResult: ArchiveIntegrityCheckResult;
+        let skipReason: string | null = null;
+        let calculatedSha256: string | null = null;
+
         if (!row.sourceHtml || !row.sourceHtmlSha256) {
+          checkResult = 'skipped';
+          skipReason = 'missing_source_or_hash';
           skipped++;
-          continue;
+        } else {
+          calculatedSha256 = computeSha256(row.sourceHtml);
+          checkResult =
+            calculatedSha256 === row.sourceHtmlSha256 ? 'passed' : 'failed';
+
+          if (checkResult === 'passed') {
+            passed++;
+          } else {
+            failed++;
+          }
         }
-        const computed = computeSha256(row.sourceHtml);
-        const ok = computed === row.sourceHtmlSha256;
-        if (ok) passed++;
-        else failed++;
+
+        const checkedAt = new Date();
+
+        const createdCheck = this.integrityCheckRepository
+          ? await this.integrityCheckRepository.save(
+              this.integrityCheckRepository.create({
+                noticeNum: row.noticeNum,
+                checkedAt,
+                storedSha256: row.sourceHtmlSha256,
+                calculatedSha256,
+                checkResult,
+                skipReason,
+                verifierVersion: 'integrity-scan-v2',
+                diagnosticsJson: null,
+              }),
+            )
+          : null;
+
+        if (this.integrityStateRepository) {
+          const previousState = await this.integrityStateRepository.findOne({
+            where: { noticeNum: row.noticeNum },
+            select: {
+              id: true,
+              failureStreak: true,
+              lastPassedAt: true,
+              createdAt: true,
+            },
+          });
+
+          const failureStreak =
+            checkResult === 'failed'
+              ? (previousState?.failureStreak ?? 0) + 1
+              : 0;
+
+          const statePayload = {
+            noticeNum: row.noticeNum,
+            latestCheckId: createdCheck?.id ?? null,
+            latestResult: checkResult,
+            latestCheckedAt: checkedAt,
+            lastPassedAt:
+              checkResult === 'passed'
+                ? checkedAt
+                : (previousState?.lastPassedAt ?? null),
+            failureStreak,
+            lastSkipReason: checkResult === 'skipped' ? skipReason : null,
+            latestStoredSha256: row.sourceHtmlSha256,
+            latestCalculatedSha256: calculatedSha256,
+          };
+
+          if (previousState?.id) {
+            await this.integrityStateRepository.update(
+              { id: previousState.id },
+              statePayload,
+            );
+          } else {
+            await this.integrityStateRepository.insert(statePayload);
+          }
+        }
+
+        if (!this.integrityStateRepository && !this.integrityCheckRepository) {
+          await this.archiveRepository.update(
+            { id: row.id },
+            {
+              integrityVerifiedAt: checkedAt,
+              integrityCheckPassed:
+                checkResult === 'passed'
+                  ? true
+                  : checkResult === 'failed'
+                    ? false
+                    : null,
+            },
+          );
+        }
       }
 
       lastSeenId = rows[rows.length - 1].id;
@@ -331,25 +437,76 @@ export class NoticeArchiveArtifactSupport {
   }
 
   private async verifyAndRefreshIntegrity(row: NoticeArchive): Promise<{
+    status: ArchiveIntegrityStatus;
     checkedAt: Date | null;
     passed: boolean | null;
+    skipReason: string | null;
     calculatedSha256: string | null;
   }> {
+    if (this.integrityStateRepository) {
+      const state = await this.integrityStateRepository.findOne({
+        where: { noticeNum: row.noticeNum },
+        select: {
+          latestResult: true,
+          latestCheckedAt: true,
+          latestCalculatedSha256: true,
+          lastSkipReason: true,
+        },
+      });
+
+      if (state) {
+        const status = this.getIntegrityStatusFromCheckResult(
+          state.latestResult,
+        );
+        return {
+          status,
+          checkedAt: state.latestCheckedAt ?? null,
+          passed:
+            state.latestResult === 'passed'
+              ? true
+              : state.latestResult === 'failed'
+                ? false
+                : null,
+          skipReason: state.lastSkipReason ?? null,
+          calculatedSha256: state.latestCalculatedSha256 ?? null,
+        };
+      }
+    }
+
     if (!row.sourceHtml || !row.sourceHtmlSha256) {
       return {
+        status: 'pending',
         checkedAt: row.integrityVerifiedAt ?? null,
         passed: row.integrityCheckPassed ?? null,
+        skipReason: null,
         calculatedSha256: null,
+      };
+    }
+
+    if (row.integrityVerifiedAt || row.integrityCheckPassed !== null) {
+      return {
+        status:
+          row.integrityCheckPassed === true
+            ? 'passed'
+            : row.integrityCheckPassed === false
+              ? 'failed'
+              : 'pending',
+        checkedAt: row.integrityVerifiedAt ?? null,
+        passed: row.integrityCheckPassed ?? null,
+        skipReason: null,
+        calculatedSha256:
+          row.integrityCheckPassed !== null ? row.sourceHtmlSha256 : null,
       };
     }
 
     const calculatedSha256 = computeSha256(row.sourceHtml);
     const passed = calculatedSha256 === row.sourceHtmlSha256;
-    const checkedAt = new Date();
 
     return {
-      checkedAt,
+      status: passed ? 'passed' : 'failed',
+      checkedAt: new Date(),
       passed,
+      skipReason: null,
       calculatedSha256,
     };
   }

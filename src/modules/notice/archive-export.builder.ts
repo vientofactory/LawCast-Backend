@@ -6,8 +6,10 @@ export interface ArchiveVerificationScript {
 }
 
 export interface ArchiveIntegrityState {
+  status: 'pending' | 'passed' | 'failed' | 'skipped';
   checkedAt: Date | null;
   passed: boolean | null;
+  skipReason: string | null;
   calculatedSha256: string | null;
 }
 
@@ -54,8 +56,10 @@ export const buildArchiveExportArtifacts = (
     },
     dbRecord,
     integritySnapshot: {
+      status: integrity.status,
       checkedAt: integrity.checkedAt,
       passed: integrity.passed,
+      skipReason: integrity.skipReason,
       storedSha256: row.sourceHtmlSha256,
       calculatedSha256: integrity.calculatedSha256,
     },
@@ -108,7 +112,9 @@ const buildIntegrityMetadataText = (params: {
     `sourceHtmlSizeBytes: ${row.sourceHtml ? Buffer.byteLength(row.sourceHtml, 'utf8') : 0}`,
     `storedSha256: ${row.sourceHtmlSha256 ?? 'N/A'}`,
     `calculatedSha256: ${integrity.calculatedSha256 ?? 'N/A'}`,
+    `integrityStatus: ${integrity.status}`,
     `integrityPassed: ${integrity.passed === null ? 'N/A' : integrity.passed ? 'true' : 'false'}`,
+    `integritySkipReason: ${integrity.skipReason ?? 'N/A'}`,
     `integrityCheckedAt: ${integrity.checkedAt?.toISOString() ?? 'N/A'}`,
     `httpFetchedAt: ${row.httpFetchedAt?.toISOString() ?? 'N/A'}`,
     `httpStatusCode: ${row.httpStatusCode ?? 'N/A'}`,

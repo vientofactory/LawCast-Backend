@@ -23,6 +23,11 @@ import {
   NoticeArchive,
   type NoticeLifecycleStatus,
 } from '../notice/notice-archive.entity';
+import { NoticeArchiveIntegrityCheck } from './notice-archive-integrity-check.entity';
+import {
+  NoticeArchiveIntegrityState,
+  type ArchiveIntegrityStatus,
+} from './notice-archive-integrity-state.entity';
 import { NoticeArchiveSnapshotState } from './notice-archive-summary-state.entity';
 import {
   NOTICE_ITEM_SELECT,
@@ -126,8 +131,10 @@ export interface ArchiveDetailResult {
     sourceHtmlSha256: string | null;
     sourceHtmlSize: number;
     integrity: {
+      status: ArchiveIntegrityStatus;
       checkedAt: Date | null;
       passed: boolean | null;
+      skipReason: string | null;
       calculatedSha256: string | null;
     };
     http: {
@@ -231,9 +238,17 @@ export class NoticeArchiveService {
     @Optional()
     private readonly changeTrackingService?: ChangeTrackingService,
     @Optional() private readonly discordBridge?: DiscordBridgeService,
+    @Optional()
+    @InjectRepository(NoticeArchiveIntegrityCheck)
+    private readonly integrityCheckRepository?: Repository<NoticeArchiveIntegrityCheck>,
+    @Optional()
+    @InjectRepository(NoticeArchiveIntegrityState)
+    private readonly integrityStateRepository?: Repository<NoticeArchiveIntegrityState>,
   ) {
     this.artifactSupport = new NoticeArchiveArtifactSupport(
       this.archiveRepository,
+      this.integrityCheckRepository,
+      this.integrityStateRepository,
       this.summaryStateRepository,
     );
 
