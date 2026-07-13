@@ -556,7 +556,9 @@ export class DiscordBridgeOperationsCommandsService {
           value:
             `activeLeases=${state.activeLeases} ` +
             `queuedWaiters=${state.queuedWaiters} ` +
-            `trackedBrowserPids=${state.trackedBrowserPids.length}`,
+            `trackedBrowserPids=${state.trackedBrowserPids.length} ` +
+            `discoveredDescendants=${state.discoveredBrowserDescendants.length} ` +
+            `shuttingDown=${state.shuttingDown}`,
           inline: false,
         },
         {
@@ -569,6 +571,25 @@ export class DiscordBridgeOperationsCommandsService {
       )
       .setTimestamp()
       .setFooter({ text: 'LawCast Debug Bridge' });
+
+    if (state.discoveredBrowserDescendants.length > 0) {
+      const procLines = state.discoveredBrowserDescendants
+        .slice(0, 20)
+        .map(
+          (row) =>
+            `pid=${row.pid} ppid=${row.ppid} stat=${row.stat} cmd=${row.command}`,
+        );
+
+      const procText = procLines.join('\n');
+      const procSnippet =
+        procText.length > 1000 ? procText.slice(0, 997) + '...' : procText;
+
+      embed.addFields({
+        name: 'Discovered Browser Descendants',
+        value: `\`\`\`\n${procSnippet}\n\`\`\``,
+        inline: false,
+      });
+    }
 
     await interaction.reply({ embeds: [embed] }).catch(() => {});
   }
