@@ -9,6 +9,7 @@ import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { ArchiveSyncService } from '../crawling/archive-sync.service';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 import { logAndBridge } from '../../utils/bridge-log.utils';
+import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 
 const CRON_TIMEZONE = appConfig().cron.timezone;
 
@@ -79,9 +80,10 @@ export class CronJobsService {
 
     const message = `${taskName} skipped - archive sync phase is currently running`;
     logAndBridge({
-      method: 'warn',
+      method: 'debugDev',
       message,
       logger: this.logger,
+      bridgeLevel: BridgeLogLevel.DEBUG,
       context: CronJobsService.name,
       discordBridge: this.discordBridge,
     });
@@ -100,9 +102,10 @@ export class CronJobsService {
 
     const message = `${taskName} skipped - crawling scheduler is busy`;
     logAndBridge({
-      method: 'warn',
+      method: 'debugDev',
       message,
       logger: this.logger,
+      bridgeLevel: BridgeLogLevel.DEBUG,
       context: CronJobsService.name,
       discordBridge: this.discordBridge,
     });
@@ -117,9 +120,10 @@ export class CronJobsService {
     if (this.archiveSyncService.isAnyPhaseRunning()) {
       const message = `${taskName} skipped - archive sync phase is currently running`;
       logAndBridge({
-        method: 'warn',
+        method: 'debugDev',
         message,
         logger: this.logger,
+        bridgeLevel: BridgeLogLevel.DEBUG,
         context: CronJobsService.name,
         discordBridge: this.discordBridge,
       });
@@ -132,9 +136,10 @@ export class CronJobsService {
 
     const message = `${taskName} skipped - crawling scheduler is busy`;
     logAndBridge({
-      method: 'warn',
+      method: 'debugDev',
       message,
       logger: this.logger,
+      bridgeLevel: BridgeLogLevel.DEBUG,
       context: CronJobsService.name,
       discordBridge: this.discordBridge,
     });
@@ -150,9 +155,10 @@ export class CronJobsService {
     if (this.archiveSyncService.isAnyPhaseRunning()) {
       const message = `${taskName} skipped - archive sync phase is currently running`;
       logAndBridge({
-        method: 'warn',
+        method: 'debugDev',
         message,
         logger: this.logger,
+        bridgeLevel: BridgeLogLevel.DEBUG,
         context: CronJobsService.name,
         discordBridge: this.discordBridge,
       });
@@ -165,9 +171,10 @@ export class CronJobsService {
 
     const message = `${taskName} skipped - crawling scheduler is busy`;
     logAndBridge({
-      method: 'warn',
+      method: 'debugDev',
       message,
       logger: this.logger,
+      bridgeLevel: BridgeLogLevel.DEBUG,
       context: CronJobsService.name,
       discordBridge: this.discordBridge,
     });
@@ -211,9 +218,10 @@ export class CronJobsService {
             `${taskName} running despite crawling scheduler lock ` +
             '(critical scheduled audit)';
           logAndBridge({
-            method: 'warn',
+            method: 'debugDev',
             message,
             logger: this.logger,
+            bridgeLevel: BridgeLogLevel.DEBUG,
             context: CronJobsService.name,
             discordBridge: this.discordBridge,
           });
@@ -224,9 +232,10 @@ export class CronJobsService {
             `${taskName} running despite archive-sync phase lock ` +
             '(critical scheduled audit)';
           logAndBridge({
-            method: 'warn',
+            method: 'debugDev',
             message,
             logger: this.logger,
+            bridgeLevel: BridgeLogLevel.DEBUG,
             context: CronJobsService.name,
             discordBridge: this.discordBridge,
           });

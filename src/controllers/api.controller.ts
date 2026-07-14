@@ -55,6 +55,8 @@ export class ApiController {
     private readonly changeTrackingService: ChangeTrackingService,
   ) {}
 
+  private readonly nodeEnv: string = this.configService.get<string>('nodeEnv');
+
   @Post('webhooks')
   @HttpCode(HttpStatus.CREATED)
   async createWebhook(
@@ -294,9 +296,8 @@ export class ApiController {
 
   @Get('stats')
   async getStats() {
-    const nodeEnv = this.configService.get<string>('nodeEnv');
     const stats = await this.runtimeStatsService.getAggregatedStats(
-      { nodeEnv },
+      { nodeEnv: this.nodeEnv },
       this.webhookService,
       this.crawlingService,
       this.batchProcessingService,
@@ -309,8 +310,8 @@ export class ApiController {
 
   @Get('batch/status')
   async getBatchStatus() {
-    const status = await this.batchProcessingService.getBatchStatusForApi({
-      nodeEnv: this.configService.get<string>('nodeEnv'),
+    const status = this.batchProcessingService.getBatchStatusForApi({
+      nodeEnv: this.nodeEnv,
     });
     return ApiResponseUtils.success(
       status,
@@ -321,7 +322,7 @@ export class ApiController {
   @Get('health')
   async getHealth() {
     const healthPayload = await this.crawlingService.getApiHealthPayload({
-      nodeEnv: this.configService.get<string>('nodeEnv'),
+      nodeEnv: this.nodeEnv,
     });
     return ApiResponseUtils.success(healthPayload, 'LawCast API is healthy');
   }
@@ -329,7 +330,7 @@ export class ApiController {
   @Get('webhooks/stats/detailed')
   async getDetailedWebhookStats() {
     const stats = await this.webhookService.getDetailedStatsForApi({
-      nodeEnv: this.configService.get<string>('nodeEnv'),
+      nodeEnv: this.nodeEnv,
     });
     return ApiResponseUtils.success(
       stats,
@@ -340,7 +341,7 @@ export class ApiController {
   @Get('webhooks/system-health')
   async getSystemHealth() {
     const systemHealth = await this.webhookService.getSystemHealthForApi({
-      nodeEnv: this.configService.get<string>('nodeEnv'),
+      nodeEnv: this.nodeEnv,
     });
     return ApiResponseUtils.success(
       systemHealth,
@@ -351,7 +352,7 @@ export class ApiController {
   @Get('redis/status')
   async getRedisStatus() {
     const redisStatusPayload = await this.crawlingService.getRedisStatusForApi({
-      nodeEnv: this.configService.get<string>('nodeEnv'),
+      nodeEnv: this.nodeEnv,
     });
     return ApiResponseUtils.success(
       redisStatusPayload.data,

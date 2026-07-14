@@ -318,7 +318,7 @@ export async function executeSummaryBackfillPhase(
   options: ArchiveSyncExecutorOptions,
 ): Promise<SummaryBackfillResult> {
   if (!deps.summaryGenerationService.isAiSummaryEnabled()) {
-    LoggerUtils.logDev(
+    LoggerUtils.debugDev(
       'ArchiveSyncService',
       'Summary backfill skipped - AI summary disabled',
     );
@@ -415,7 +415,7 @@ export async function executeUnavailableRetryPhase(
   options: ArchiveSyncExecutorOptions,
 ): Promise<SummaryUnavailableRetryResult> {
   if (!deps.summaryGenerationService.isAiSummaryEnabled()) {
-    LoggerUtils.logDev(
+    LoggerUtils.debugDev(
       'ArchiveSyncService',
       'Unavailable summary retry skipped - AI summary disabled',
     );
