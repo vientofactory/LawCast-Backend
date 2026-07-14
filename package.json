@@ -73,7 +73,7 @@
   "overrides": {
     "js-yaml": "^4.1.1",
     "glob": "^13.0.0",
-    "node-gyp": "^12.0.0",
+    "node-gyp": "^13.0.0",
     "tar": "^7.5.9"
   },
   "jest": {
