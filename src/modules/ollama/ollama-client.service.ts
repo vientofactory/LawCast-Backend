@@ -28,11 +28,7 @@ interface OllamaTagsResponse {
 }
 
 export type OllamaHealthStatus =
-  | 'disabled'
-  | 'misconfigured'
-  | 'unknown'
-  | 'healthy'
-  | 'unhealthy';
+  'disabled' | 'misconfigured' | 'unknown' | 'healthy' | 'unhealthy';
 
 export interface OllamaRuntimeMetrics {
   enabled: boolean;

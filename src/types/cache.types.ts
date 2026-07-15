@@ -8,10 +8,7 @@ export interface CacheInfo {
 }
 
 export type AISummaryStatus =
-  | 'ready'
-  | 'unavailable'
-  | 'not_supported'
-  | 'not_requested';
+  'ready' | 'unavailable' | 'not_supported' | 'not_requested';
 
 type CachedBaseNotice = Omit<ITableData, 'numComments'>;
 

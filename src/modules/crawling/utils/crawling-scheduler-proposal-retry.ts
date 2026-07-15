@@ -39,6 +39,7 @@ interface ProposalRetryLogger {
   log(message: string): void;
   warn(message: string): void;
   error(message: string, error?: unknown): void;
+  debugDev?(message: string): void;
 }
 
 interface ProposalRetryOptions {
@@ -252,7 +253,7 @@ export class CrawlingSchedulerProposalRetry {
         // Drop the item immediately to avoid repeated useless retries.
         queue.splice(idx, 1);
         queueDirty = true;
-        this.options.logger.warn(
+        this.options.logger.debugDev?.(
           `proposalReason retry: empty proposalReason for bill ${item.billNo} - dropping from retry queue`,
         );
         idx--;

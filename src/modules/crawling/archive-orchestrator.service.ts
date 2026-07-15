@@ -26,18 +26,14 @@ import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import { ArchiveOrchestratorScreenshotCoordinator } from './utils/archive-orchestrator-screenshot-coordinator';
 
 type ArchiveRunReason =
-  | 'new-notices'
-  | 'full-sync-new-notices'
-  | 'nsm-pal-upgrade'
-  | 'pal-recompare';
+  'new-notices' | 'full-sync-new-notices' | 'nsm-pal-upgrade' | 'pal-recompare';
 
 interface ArchiveRunOptions {
   reason?: ArchiveRunReason;
 }
 
 type NsmPendingArchiveReason =
-  | 'new-pending-bills'
-  | 'existing-pending-recompare';
+  'new-pending-bills' | 'existing-pending-recompare';
 
 interface NsmPendingArchiveOptions {
   reason?: NsmPendingArchiveReason;
@@ -548,30 +544,6 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     try {
       const full =
         await this.crawlingCoreService.captureNsmDetailFull(normalizedBillNo);
-
-      // TODO: Probing the HTTP status code is not reliable because the NsmLmSts service sometimes returns 200 OK with a "deleted" page instead of a proper 404.  The probeNsmDeletedBillAlert() method is more reliable for detecting deleted bills, so we will rely on that instead of checking the status code here.
-      // if (full.statusCode === 404) {
-      //   await this.appendSourceDeletedAndFlushNotifications(num);
-      //   logAndBridge({
-      //     method: 'warn',
-      //     message: `proposalReason backfill detected deleted NSM bill ${normalizedBillNo} via detail page HTTP 404`,
-      //     logger: this.logger,
-      //     context: ArchiveOrchestratorService.name,
-      //     discordBridge: this.discordBridge,
-      //     bridgeLevel: BridgeLogLevel.WARN,
-      //     bridgeMessage: `proposalReason backfill detected deleted NSM bill **${normalizedBillNo}** via detail page HTTP 404`,
-      //     metadata: {
-      //       noticeNum: num,
-      //       billNo: normalizedBillNo,
-      //       detectedAs: SourceDeletionDetectedAs.SOURCE_DELETED,
-      //       detectionMethod: SourceDeletionDetectionMethod.DETAIL_PAGE_HTTP_404,
-      //       responseUrl: full.responseUrl,
-      //       statusCode: full.statusCode,
-      //     },
-      //   });
-      //   return null;
-      // }
-
       const detail = full.detail as typeof full.detail & {
         committee?: string;
         referralDate?: string;
@@ -601,9 +573,9 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       });
 
       if (!proposalReason) {
-        LoggerUtils.warn(
+        LoggerUtils.debugDev(
           ArchiveOrchestratorService.name,
-          `proposalReason backfill still empty for bill ${normalizedBillNo}`,
+          `[WARN] proposalReason backfill still empty for bill ${normalizedBillNo}`,
         );
         return null;
       }
