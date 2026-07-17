@@ -24,7 +24,7 @@ export interface NoticeArchiveMaintenanceDeps {
   logger: { warn(message: string): void };
 }
 
-export async function getNsmProposalReasonRetryCandidatesInternal(
+export async function getNsmProposalReasonRetryCandidates(
   deps: NoticeArchiveMaintenanceDeps,
   limit: number,
 ): Promise<
@@ -107,13 +107,13 @@ export async function getNsmProposalReasonRetryCandidatesInternal(
   }));
 }
 
-export async function getArchiveCountInternal(
+export async function getArchiveCount(
   deps: NoticeArchiveMaintenanceDeps,
 ): Promise<number> {
   return deps.archiveRepository.count();
 }
 
-export async function getRecentNoticesForCacheInternal(
+export async function getRecentNoticesForCache(
   deps: NoticeArchiveMaintenanceDeps,
   limit: number,
 ): Promise<CachedNotice[]> {
@@ -169,7 +169,7 @@ export async function getRecentNoticesForCacheInternal(
   );
 
   if (deps.summaryStateRepository && rows.length > 0) {
-    const summaryStates = await getSummaryStateByNoticeNumsInternal(
+    const summaryStates = await getSummaryStateByNoticeNums(
       deps,
       rows.map((row) => row.noticeNum),
     );
@@ -188,7 +188,7 @@ export async function getRecentNoticesForCacheInternal(
   );
 }
 
-export async function getLatestProposalReasonForNoticeInternal(
+export async function getLatestProposalReason(
   deps: NoticeArchiveMaintenanceDeps,
   noticeNum: number,
 ): Promise<string | null> {
@@ -197,7 +197,7 @@ export async function getLatestProposalReasonForNoticeInternal(
   }
 
   try {
-    return deps.changeTrackingService.getLatestFieldAfterValue(
+    return deps.changeTrackingService.getLatestFieldValue(
       noticeNum,
       'proposalReason',
     );
@@ -209,7 +209,7 @@ export async function getLatestProposalReasonForNoticeInternal(
   }
 }
 
-export async function runIntegrityScanInternal(
+export async function runIntegrityScan(
   deps: NoticeArchiveMaintenanceDeps,
   batchSize = 200,
 ): Promise<{
@@ -221,7 +221,7 @@ export async function runIntegrityScanInternal(
   return deps.artifactSupport.runIntegrityScan(batchSize);
 }
 
-export async function getArchiveStartedAtByNoticeNumsInternal(
+export async function getArchiveStartedAtByNoticeNums(
   deps: NoticeArchiveMaintenanceDeps,
   noticeNums: number[],
 ): Promise<Map<number, Date>> {
@@ -244,7 +244,7 @@ export async function getArchiveStartedAtByNoticeNumsInternal(
   return new Map(rows.map((row) => [row.noticeNum, row.archiveStartedAt]));
 }
 
-export async function countByNoticeNumComparisonInternal(
+export async function countByNoticeNumComparison(
   deps: NoticeArchiveMaintenanceDeps,
   query: ArchiveNumCompareCountQuery,
 ): Promise<number> {
@@ -259,7 +259,7 @@ export async function countByNoticeNumComparisonInternal(
   return deps.archiveRepository.count({ where });
 }
 
-export async function getSummaryStateByNoticeNumsInternal(
+export async function getSummaryStateByNoticeNums(
   deps: NoticeArchiveMaintenanceDeps,
   noticeNums: number[],
 ): Promise<Map<number, ArchiveSummaryState>> {
@@ -296,7 +296,7 @@ export async function getSummaryStateByNoticeNumsInternal(
   );
 }
 
-export async function updateSummaryStateByNoticeNumInternal(
+export async function updateSummaryStateByNoticeNum(
   deps: NoticeArchiveMaintenanceDeps,
   noticeNum: number,
   summary: string | null,

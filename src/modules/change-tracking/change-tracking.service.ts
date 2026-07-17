@@ -965,6 +965,26 @@ export class ChangeTrackingService {
     return value ? value : null;
   }
 
+  async getLatestFieldValue(
+    noticeNum: number,
+    fieldPath: string,
+  ): Promise<string | null> {
+    const row = await this.changeDetailRepository
+      .createQueryBuilder('detail')
+      .innerJoin(NoticeChangeEvent, 'event', 'event.id = detail.event_id')
+      .select('detail.after_value', 'afterValue')
+      .where('event.notice_num = :noticeNum', { noticeNum })
+      .andWhere('detail.field_path = :fieldPath', { fieldPath })
+      .orderBy('event.detected_at', 'DESC')
+      .addOrderBy('event.event_height', 'DESC')
+      .addOrderBy('detail.id', 'DESC')
+      .limit(1)
+      .getRawOne<{ afterValue: string | null }>();
+
+    const value = row?.afterValue?.trim();
+    return value ? value : null;
+  }
+
   async getRecentChanges(
     query: RecentChangesQuery,
   ): Promise<RecentChangesResult> {

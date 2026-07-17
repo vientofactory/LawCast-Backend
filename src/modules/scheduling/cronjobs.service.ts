@@ -301,9 +301,11 @@ export class CronJobsService {
       return;
     }
 
-    await this.execute('proposalReason backfill drain', () =>
-      this.crawlingService.handleProposalReasonBackfillCron(),
-    );
+    await this.execute('proposalReason backfill drain', async () => {
+      await this.crawlingService.handleProposalReasonBackfillCron();
+      await this.archiveSyncService.runSummaryBackfill('proposal-reason-cron');
+      await this.archiveSyncService.runUnavailableRetry('proposal-reason-cron');
+    });
   }
 
   /**

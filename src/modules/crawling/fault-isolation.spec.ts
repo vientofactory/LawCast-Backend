@@ -927,25 +927,27 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(result!.recovered).toBe(0);
   });
 
-  it('Unavailable retry uses offset pagination and scans subsequent pages', async () => {
+  it('Unavailable retry uses a drain loop and keeps requesting from the head until eligible rows are exhausted', async () => {
     summaryGenerationService.generateSummaryForNotice.mockResolvedValue({
       aiSummary: '복구 요약',
       aiSummaryStatus: 'ready',
     });
 
     let capturedTake = 0;
+    let callCount = 0;
     noticeArchiveService.getUnavailableSummaryPage.mockImplementation(
       async (skip: number, take: number) => {
         capturedTake = take;
+        callCount += 1;
 
-        if (skip === 0) {
+        if (callCount === 1) {
           return Array.from({ length: take }, (_, idx) => ({
             ...makeCachedNotice(1000 + idx),
             aiSummaryStatus: 'unavailable' as const,
           })) as any;
         }
 
-        if (skip === take) {
+        if (callCount === 2) {
           return [
             {
               ...makeCachedNotice(2000),
@@ -968,7 +970,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     ).toHaveBeenNthCalledWith(1, 0, capturedTake);
     expect(
       noticeArchiveService.getUnavailableSummaryPage,
-    ).toHaveBeenNthCalledWith(2, capturedTake, capturedTake);
+    ).toHaveBeenNthCalledWith(2, 0, capturedTake);
   });
 
   // ── Concurrent phase guard ────────────────────────────────────────────────

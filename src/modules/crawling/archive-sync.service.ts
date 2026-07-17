@@ -31,15 +31,13 @@ import {
 } from './utils/archive-sync-phase-executors';
 import { delayMs } from '../../utils/async-delay.utils';
 
-// ─── Tuning constants (sourced from APP_CONSTANTS.ARCHIVE_SYNC) ───────────────
-
 const {
   CRAWLER_PAGE_UNIT,
   CRAWLER_DELAY_MS,
   INTEGRITY_BATCH_SIZE,
   SUMMARY_BACKFILL_BATCH_SIZE,
 } = APP_CONSTANTS.ARCHIVE_SYNC;
-/** Max concurrent Ollama calls within a single backfill / retry batch. */
+
 const SUMMARY_BACKFILL_CONCURRENCY = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
 
 /**
@@ -653,7 +651,7 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Phase 5 - Unavailable summary retry (implementation)
+  // Phase 5 - Unavailable summary retry
   // ─────────────────────────────────────────────────────────────────────────
 
   private async executeUnavailableRetry(): Promise<SummaryUnavailableRetryResult> {
@@ -663,6 +661,9 @@ export class ArchiveSyncService implements OnModuleInit {
     );
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Phase 6 - Change chain integrity audit
+  // ─────────────────────────────────────────────────────────────────────────
   private async executeChainIntegrityAudit(): Promise<ChainIntegrityAuditResult> {
     return executeChainIntegrityAuditPhase(this.getExecutorDeps());
   }

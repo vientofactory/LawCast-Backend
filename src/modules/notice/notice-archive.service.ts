@@ -39,15 +39,15 @@ import {
 } from './notice-archive.helpers';
 import { NoticeArchiveArtifactSupport } from './utils/notice-archive-artifact-support';
 import {
-  countByNoticeNumComparisonInternal,
-  getArchiveCountInternal,
-  getArchiveStartedAtByNoticeNumsInternal,
-  getLatestProposalReasonForNoticeInternal,
-  getNsmProposalReasonRetryCandidatesInternal,
-  getRecentNoticesForCacheInternal,
-  getSummaryStateByNoticeNumsInternal,
-  runIntegrityScanInternal,
-  updateSummaryStateByNoticeNumInternal,
+  countByNoticeNumComparison,
+  getArchiveCount,
+  getArchiveStartedAtByNoticeNums,
+  getLatestProposalReason,
+  getNsmProposalReasonRetryCandidates,
+  getRecentNoticesForCache,
+  getSummaryStateByNoticeNums,
+  runIntegrityScan,
+  updateSummaryStateByNoticeNum,
 } from './utils/notice-archive-maintenance-support';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 import { type ChangeEventType } from '../change-tracking/notice-change-event.entity';
@@ -966,100 +966,32 @@ export class NoticeArchiveService {
    * Returns the first `take` archive rows whose `aiSummaryStatus` is
    * `'not_requested'`, ordered by `noticeNum` ascending.
    *
+   * When there is no pending row, this also pulls a recovery page from
+   * `'not_supported'` for NSM rows (`contentId IS NULL`) so legacy rows that
+   * were prematurely marked not_supported can re-enter the backfill pipeline
+   * once proposalReason becomes available via change-chain repair.
+   *
    * Intended for a **drain loop** - callers should always pass `skip=0`
    * because processed rows transition away from `'not_requested'` and
    * naturally drop out of subsequent calls.
    */
   async getPendingSummaryPage(take: number): Promise<CachedNotice[]> {
-    if (!this.summaryStateRepository) {
-      const rows = await this.archiveRepository.find({
-        where: { aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED },
-        select: {
-          noticeNum: true,
-          subject: true,
-          proposerCategory: true,
-          committee: true,
-          assemblyLink: true,
-          contentId: true,
-          proposalReason: true,
-          attachmentPdfFile: true,
-          attachmentHwpFile: true,
-          aiSummary: true,
-          aiSummaryStatus: true,
-        },
-        order: { noticeNum: 'ASC' },
-        take,
-      });
-
-      return rows.map((row) =>
-        mapArchiveEntityToCachedNotice(row, AI_SUMMARY_STATUS.NOT_REQUESTED),
-      );
-    }
-
-    const summaryRows = await this.summaryStateRepository.find({
-      where: {
-        aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
-      },
-      select: {
-        noticeNum: true,
-        aiSummary: true,
-        aiSummaryStatus: true,
-      },
-      order: {
-        noticeNum: 'ASC',
-      },
+    const pending = await this.collectSummaryBackfillCandidates(
+      AI_SUMMARY_STATUS.NOT_REQUESTED,
+      0,
       take,
-    });
-
-    const noticeNums = summaryRows.map((row) => row.noticeNum);
-    if (noticeNums.length === 0) {
-      return [];
-    }
-
-    const archives = await this.archiveRepository.find({
-      where: { noticeNum: In(noticeNums) },
-      select: {
-        noticeNum: true,
-        subject: true,
-        proposerCategory: true,
-        committee: true,
-        assemblyLink: true,
-        contentId: true,
-        proposalReason: true,
-        attachmentPdfFile: true,
-        attachmentHwpFile: true,
-      },
-    });
-
-    const archiveByNoticeNum = new Map(
-      archives.map((archive) => [archive.noticeNum, archive] as const),
     );
 
-    return summaryRows
-      .map((summary) => {
-        const archive = archiveByNoticeNum.get(summary.noticeNum);
-        if (!archive) {
-          return null;
-        }
+    if (pending.length > 0) {
+      return pending;
+    }
 
-        return mapArchiveEntityToCachedNotice(
-          {
-            noticeNum: archive.noticeNum,
-            subject: archive.subject,
-            proposerCategory: archive.proposerCategory,
-            committee: archive.committee,
-            assemblyLink: archive.assemblyLink,
-            contentId: archive.contentId,
-            proposalReason: archive.proposalReason ?? '',
-            attachmentPdfFile: archive.attachmentPdfFile ?? '',
-            attachmentHwpFile: archive.attachmentHwpFile ?? '',
-            aiSummary: summary.aiSummary,
-            aiSummaryStatus: summary.aiSummaryStatus as AISummaryStatus,
-          },
-          AI_SUMMARY_STATUS.NOT_REQUESTED,
-        );
-      })
-      .filter((row): row is CachedNotice => row !== null);
+    return this.collectSummaryBackfillCandidates(
+      AI_SUMMARY_STATUS.NOT_SUPPORTED,
+      0,
+      take,
+      (row) => !row.contentId,
+    );
   }
 
   /**
@@ -1076,9 +1008,61 @@ export class NoticeArchiveService {
     skip: number,
     take: number,
   ): Promise<CachedNotice[]> {
+    return this.collectSummaryBackfillCandidates(
+      AI_SUMMARY_STATUS.UNAVAILABLE,
+      skip,
+      take,
+    );
+  }
+
+  private async collectSummaryBackfillCandidates(
+    status: AISummaryStatus,
+    skip: number,
+    take: number,
+    rawRowFilter?: (row: CachedNotice) => boolean,
+  ): Promise<CachedNotice[]> {
+    const pageSize = Math.max(take, 1);
+    const candidates: CachedNotice[] = [];
+    let rawSkip = Math.max(skip, 0);
+
+    for (;;) {
+      const rows = await this.getSummaryPageByStatus(status, rawSkip, pageSize);
+      if (rows.length === 0) {
+        break;
+      }
+
+      const filteredRows = rawRowFilter ? rows.filter(rawRowFilter) : rows;
+
+      if (filteredRows.length === 0) {
+        if (rows.length < pageSize) {
+          break;
+        }
+        rawSkip += pageSize;
+        continue;
+      }
+
+      const eligibleRows =
+        await this.resolveSummaryBackfillCandidates(filteredRows);
+      candidates.push(...eligibleRows);
+
+      if (candidates.length >= pageSize || rows.length < pageSize) {
+        break;
+      }
+
+      rawSkip += pageSize;
+    }
+
+    return candidates.slice(0, pageSize);
+  }
+
+  private async getSummaryPageByStatus(
+    status: AISummaryStatus,
+    skip: number,
+    take: number,
+  ): Promise<CachedNotice[]> {
     if (!this.summaryStateRepository) {
       const rows = await this.archiveRepository.find({
-        where: { aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE },
+        where: { aiSummaryStatus: status },
         select: {
           noticeNum: true,
           subject: true,
@@ -1097,14 +1081,12 @@ export class NoticeArchiveService {
         take,
       });
 
-      return rows.map((row) =>
-        mapArchiveEntityToCachedNotice(row, AI_SUMMARY_STATUS.UNAVAILABLE),
-      );
+      return rows.map((row) => mapArchiveEntityToCachedNotice(row, status));
     }
 
     const summaryRows = await this.summaryStateRepository.find({
       where: {
-        aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
+        aiSummaryStatus: status,
       },
       select: {
         noticeNum: true,
@@ -1163,10 +1145,41 @@ export class NoticeArchiveService {
             aiSummary: summary.aiSummary,
             aiSummaryStatus: summary.aiSummaryStatus as AISummaryStatus,
           },
-          AI_SUMMARY_STATUS.UNAVAILABLE,
+          status,
         );
       })
       .filter((row): row is CachedNotice => row !== null);
+  }
+
+  private async resolveSummaryBackfillCandidates(
+    rows: CachedNotice[],
+  ): Promise<CachedNotice[]> {
+    const resolved: Array<CachedNotice | null> = await Promise.all(
+      rows.map(async (row): Promise<CachedNotice | null> => {
+        const snapshotProposalReason = row.proposalReason?.trim() || null;
+
+        if (row.contentId || snapshotProposalReason) {
+          return {
+            ...row,
+            proposalReason: snapshotProposalReason,
+          };
+        }
+
+        const latestProposalReason =
+          await this.getLatestProposalReasonForNotice(row.num);
+
+        if (!latestProposalReason) {
+          return null;
+        }
+
+        return {
+          ...row,
+          proposalReason: latestProposalReason,
+        };
+      }),
+    );
+
+    return resolved.filter((row): row is CachedNotice => row !== null);
   }
 
   private applyArchiveSearchFilters(
@@ -2866,7 +2879,7 @@ export class NoticeArchiveService {
       billNo: string | null;
     }>
   > {
-    return getNsmProposalReasonRetryCandidatesInternal(
+    return getNsmProposalReasonRetryCandidates(
       this.getMaintenanceDeps(),
       limit,
     );
@@ -2895,7 +2908,7 @@ export class NoticeArchiveService {
   }
 
   async getArchiveCount(): Promise<number> {
-    return getArchiveCountInternal(this.getMaintenanceDeps());
+    return getArchiveCount(this.getMaintenanceDeps());
   }
 
   /**
@@ -2908,16 +2921,13 @@ export class NoticeArchiveService {
    * any Ollama calls.
    */
   async getRecentNoticesForCache(limit: number): Promise<CachedNotice[]> {
-    return getRecentNoticesForCacheInternal(this.getMaintenanceDeps(), limit);
+    return getRecentNoticesForCache(this.getMaintenanceDeps(), limit);
   }
 
   async getLatestProposalReasonForNotice(
     noticeNum: number,
   ): Promise<string | null> {
-    return getLatestProposalReasonForNoticeInternal(
-      this.getMaintenanceDeps(),
-      noticeNum,
-    );
+    return getLatestProposalReason(this.getMaintenanceDeps(), noticeNum);
   }
 
   /**
@@ -2939,13 +2949,13 @@ export class NoticeArchiveService {
     failed: number;
     skipped: number;
   }> {
-    return runIntegrityScanInternal(this.getMaintenanceDeps(), batchSize);
+    return runIntegrityScan(this.getMaintenanceDeps(), batchSize);
   }
 
   async getArchiveStartedAtByNoticeNums(
     noticeNums: number[],
   ): Promise<Map<number, Date>> {
-    return getArchiveStartedAtByNoticeNumsInternal(
+    return getArchiveStartedAtByNoticeNums(
       this.getMaintenanceDeps(),
       noticeNums,
     );
@@ -2954,16 +2964,13 @@ export class NoticeArchiveService {
   async countByNoticeNumComparison(
     query: ArchiveNumCompareCountQuery,
   ): Promise<number> {
-    return countByNoticeNumComparisonInternal(this.getMaintenanceDeps(), query);
+    return countByNoticeNumComparison(this.getMaintenanceDeps(), query);
   }
 
   async getSummaryStateByNoticeNums(
     noticeNums: number[],
   ): Promise<Map<number, ArchiveSummaryState>> {
-    return getSummaryStateByNoticeNumsInternal(
-      this.getMaintenanceDeps(),
-      noticeNums,
-    );
+    return getSummaryStateByNoticeNums(this.getMaintenanceDeps(), noticeNums);
   }
 
   async updateSummaryStateByNoticeNum(
@@ -2971,7 +2978,7 @@ export class NoticeArchiveService {
     summary: string | null,
     status: AISummaryStatus,
   ): Promise<void> {
-    await updateSummaryStateByNoticeNumInternal(
+    await updateSummaryStateByNoticeNum(
       this.getMaintenanceDeps(),
       noticeNum,
       summary,

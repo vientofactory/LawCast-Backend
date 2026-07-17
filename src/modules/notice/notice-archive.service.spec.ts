@@ -34,6 +34,9 @@ describe('NoticeArchiveService', () => {
     getNoticeChangeTimeline: jest
       .fn<(...args: any[]) => Promise<any[]>>()
       .mockResolvedValue([]),
+    getLatestFieldValue: jest
+      .fn<(...args: any[]) => Promise<string | null>>()
+      .mockResolvedValue(null),
     getLatestFieldAfterValue: jest
       .fn<(...args: any[]) => Promise<string | null>>()
       .mockResolvedValue(null),
@@ -369,6 +372,95 @@ describe('NoticeArchiveService', () => {
 
       expect(result).toEqual([]);
     });
+
+    it('uses the latest change-chain proposalReason for NSM rows whose snapshot value is empty', async () => {
+      const pendingRows: NoticeArchive[] = [
+        buildRow({
+          noticeNum: 1002,
+          subject: '체인 보정 대상 법률안',
+          contentId: null,
+          proposalReason: '',
+          aiSummaryStatus: 'not_requested',
+        }),
+      ];
+
+      const findMock = jest
+        .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+        .mockResolvedValue(pendingRows);
+      const repoMock = { ...createRepositoryMock(), find: findMock };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldValue.mockResolvedValue(
+        '변경 체인 최신 제안이유',
+      );
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.getPendingSummaryPage(50);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        num: 1002,
+        proposalReason: '변경 체인 최신 제안이유',
+        aiSummaryStatus: 'not_requested',
+      });
+      expect(changeTrackingService.getLatestFieldValue).toHaveBeenCalledWith(
+        1002,
+        'proposalReason',
+      );
+    });
+
+    it('falls back to recoverable NSM not_supported rows when not_requested is empty', async () => {
+      const findMock = jest
+        .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          buildRow({
+            noticeNum: 1301,
+            subject: '레거시 상태 복구 대상',
+            contentId: null,
+            proposalReason: '',
+            aiSummaryStatus: 'not_supported',
+            aiSummary: null,
+          }),
+        ]);
+      const repoMock = { ...createRepositoryMock(), find: findMock };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldValue.mockResolvedValue(
+        '체인 보정 사유',
+      );
+
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.getPendingSummaryPage(20);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        num: 1301,
+        contentId: null,
+        proposalReason: '체인 보정 사유',
+        aiSummaryStatus: 'not_supported',
+      });
+      expect(findMock).toHaveBeenCalledTimes(2);
+      expect(
+        (findMock.mock.calls[0][0] as Record<string, unknown>).where as Record<
+          string,
+          unknown
+        >,
+      ).toMatchObject({ aiSummaryStatus: 'not_requested' });
+      expect(
+        (findMock.mock.calls[1][0] as Record<string, unknown>).where as Record<
+          string,
+          unknown
+        >,
+      ).toMatchObject({ aiSummaryStatus: 'not_supported' });
+    });
   });
 
   describe('getUnavailableSummaryPage', () => {
@@ -439,6 +531,38 @@ describe('NoticeArchiveService', () => {
 
       expect(result).toEqual([]);
     });
+
+    it('filters out unavailable NSM rows until the latest change-chain proposalReason exists', async () => {
+      const unavailableRows: NoticeArchive[] = [
+        buildRow({
+          noticeNum: 2003,
+          subject: '체인 대기 법률안',
+          contentId: null,
+          proposalReason: '',
+          aiSummaryStatus: 'unavailable',
+          aiSummary: null,
+        }),
+      ];
+
+      const findMock = jest
+        .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+        .mockResolvedValue(unavailableRows);
+      const repoMock = { ...createRepositoryMock(), find: findMock };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.getUnavailableSummaryPage(0, 50);
+
+      expect(result).toEqual([]);
+      expect(changeTrackingService.getLatestFieldValue).toHaveBeenCalledWith(
+        2003,
+        'proposalReason',
+      );
+    });
   });
 
   describe('change notification collection bridge', () => {
@@ -481,7 +605,7 @@ describe('NoticeArchiveService', () => {
         ...createRepositoryMock(),
       };
       const changeTrackingService = createChangeTrackingServiceMock();
-      changeTrackingService.getLatestFieldAfterValue.mockResolvedValue(
+      changeTrackingService.getLatestFieldValue.mockResolvedValue(
         '사유   본문',
       );
 

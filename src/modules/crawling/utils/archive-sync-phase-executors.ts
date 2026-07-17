@@ -14,7 +14,6 @@ import { CrawlingCoreService } from '../crawling-core.service';
 import { type NoticeArchiveService } from '../../notice/notice-archive.service';
 import { type SummaryGenerationService } from '../summary-generation.service';
 import { type ChangeTrackingService } from '../../change-tracking/change-tracking.service';
-import { AI_SUMMARY_STATUS } from './ai-summary-status.utils';
 import { type FullSyncResult } from '../archive-sync.service';
 import { type IsDoneSyncResult } from '../archive-sync.service';
 import { type ChainIntegrityAuditResult } from '../archive-sync.service';
@@ -23,6 +22,7 @@ import { type SummaryBackfillResult } from '../archive-sync.service';
 import { type SummaryUnavailableRetryResult } from '../archive-sync.service';
 import { delayMs } from '../../../utils/async-delay.utils';
 import { logAndBridge } from '../../../utils/bridge-log.utils';
+import { AI_SUMMARY_STATUS } from './ai-summary-status.utils';
 
 const ARCHIVE_SYNC_CONTEXT = 'ArchiveSyncService';
 const archiveSyncLogger = {
@@ -426,11 +426,10 @@ export async function executeUnavailableRetryPhase(
   let recovered = 0;
   let skipped = 0;
   let stillFailed = 0;
-  let skip = 0;
 
   for (;;) {
     const batch = await deps.noticeArchiveService.getUnavailableSummaryPage(
-      skip,
+      0,
       options.summaryBackfillBatchSize,
     );
     if (batch.length === 0) break;
@@ -479,7 +478,6 @@ export async function executeUnavailableRetryPhase(
 
     scanned += batch.length;
     if (batch.length < options.summaryBackfillBatchSize) break;
-    skip += options.summaryBackfillBatchSize;
   }
 
   LoggerUtils.log(
