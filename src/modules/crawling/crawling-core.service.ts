@@ -455,41 +455,9 @@ export class CrawlingCoreService {
         const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
 
         await client.initBrowser();
-
-        // `browser` is a private JS property - safe to access at runtime.
-
-        const browser = (
-          client as unknown as {
-            browser: {
-              newPage: () => Promise<{
-                setViewport: (v: {
-                  width: number;
-                  height: number;
-                }) => Promise<void>;
-                goto: (
-                  url: string,
-                  opts: { waitUntil: string; timeout: number },
-                ) => Promise<{ status: () => number } | null>;
-                waitForNavigation: (opts: {
-                  waitUntil: string;
-                  timeout: number;
-                }) => Promise<{ status: () => number } | null>;
-                title: () => Promise<string>;
-                content: () => Promise<string>;
-                url: () => string;
-                evaluate: <T>(fn: () => T) => Promise<T>;
-                screenshot: (opts: {
-                  fullPage: boolean;
-                  type: string;
-                  quality?: number;
-                }) => Promise<Buffer>;
-                close: () => Promise<void>;
-              }>;
-            };
-          }
-        ).browser;
-
+        const browser = client.browser;
         const page = await browser.newPage();
+
         try {
           await page.setViewport({
             width: APP_CONSTANTS.SCREENSHOT.WIDTH,
@@ -512,8 +480,6 @@ export class CrawlingCoreService {
           //   3. Up to MAX_WAITINGROOM_RETRIES: if waitForNavigation times out,
           //      reload the URL with a back-off delay and try again.
 
-          const MAX_WAITINGROOM_RETRIES = 2;
-          const WAITINGROOM_RETRY_DELAY_MS = 5_000;
           let response: { status: () => number } | null = null;
           let waitingroomHits = 0;
 
@@ -522,7 +488,11 @@ export class CrawlingCoreService {
             timeout: 30_000,
           });
 
-          for (let attempt = 0; attempt <= MAX_WAITINGROOM_RETRIES; attempt++) {
+          for (
+            let attempt = 0;
+            attempt <= APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES;
+            attempt++
+          ) {
             const pageTitle = await page.title();
             if (!pageTitle.toLowerCase().includes('waitingroom')) break;
 
@@ -531,10 +501,10 @@ export class CrawlingCoreService {
               CrawlingCoreService.name,
               `NSM bill ${billNo}: Waitingroom hit (attempt ${
                 attempt + 1
-              }/${MAX_WAITINGROOM_RETRIES + 1}), waiting for redirect…`,
+              }/${APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES + 1}), waiting for redirect…`,
             );
 
-            if (attempt < MAX_WAITINGROOM_RETRIES) {
+            if (attempt < APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES) {
               try {
                 // Wait for the JS redirect to fire and the real page to load.
                 const nav = await page.waitForNavigation({
@@ -545,7 +515,11 @@ export class CrawlingCoreService {
               } catch {
                 // waitForNavigation timed out - pause then reload.
                 await new Promise<void>((r) =>
-                  setTimeout(r, WAITINGROOM_RETRY_DELAY_MS * (attempt + 1)),
+                  setTimeout(
+                    r,
+                    APP_CONSTANTS.CRAWLING.WAITINGROOM_RETRY_DELAY_MS *
+                      (attempt + 1),
+                  ),
                 );
                 response = await page.goto(detailUrl, {
                   waitUntil: 'domcontentloaded',
@@ -555,10 +529,12 @@ export class CrawlingCoreService {
             }
           }
 
-          if (waitingroomHits > MAX_WAITINGROOM_RETRIES) {
+          if (
+            waitingroomHits > APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES
+          ) {
             this.logger.warn(
               `NSM bill ${billNo}: Waitingroom not resolved after ${
-                MAX_WAITINGROOM_RETRIES + 1
+                APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES + 1
               } attempts - HTML may be a Waitingroom page`,
             );
           }

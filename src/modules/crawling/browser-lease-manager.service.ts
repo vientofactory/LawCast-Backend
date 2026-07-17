@@ -5,7 +5,7 @@ import { delayMs } from '../../utils/async-delay.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 
 const execFileAsync = promisify(execFile);
-const BROWSER_PROCESS_NAME_REGEX = /chromium|chrome|crashpad/i;
+const BROWSER_PROCESS_NAME_REGEX = new RegExp(/chromium|chrome|crashpad/i);
 const ZOMBIE_LOG_THROTTLE_MS = 60_000;
 
 interface BrowserSessionLike {

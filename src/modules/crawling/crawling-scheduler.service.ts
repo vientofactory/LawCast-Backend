@@ -839,26 +839,6 @@ export class CrawlingSchedulerService implements OnModuleInit {
     );
   }
 
-  private async persistRetriedArchiveSummaryStates(
-    noticesWithSummary: CachedNotice[],
-    archiveSummaryStates: Map<number, ArchiveSummaryState>,
-  ): Promise<void> {
-    await this.summarySupport.persistRetriedArchiveSummaryStates(
-      noticesWithSummary,
-      archiveSummaryStates,
-    );
-  }
-
-  private async retryUnavailableSummariesFromPreviousCycle(
-    notices: CachedNotice[],
-    existingNoticeMap: Map<number, CachedNotice>,
-  ): Promise<CachedNotice[]> {
-    return this.summarySupport.retryUnavailableSummariesFromPreviousCycle(
-      notices,
-      existingNoticeMap,
-    );
-  }
-
   /**
    * Periodic (cron) NSM->PAL transition refresh.
    *

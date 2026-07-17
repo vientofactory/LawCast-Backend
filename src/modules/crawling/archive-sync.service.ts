@@ -211,39 +211,45 @@ export class ArchiveSyncService implements OnModuleInit {
   // ─────────────────────────────────────────────────────────────────────────
 
   private async runBootstrapPipeline(): Promise<void> {
-    const archiveSyncLogger = {
-      log: (message: string) =>
-        LoggerUtils.log(ArchiveSyncService.name, message),
-    };
-    logAndBridge({
-      logger: archiveSyncLogger,
-      method: 'log',
-      message: 'Bootstrap sync pipeline started',
-      context: ArchiveSyncService.name,
-      discordBridge: this.discordBridge,
-      bridgeLevel: BridgeLogLevel.LOG,
-    });
-    const bootstrapBoundaryAt = new Date();
-
-    this.noticeArchiveService.beginChangeNotificationSuppression?.();
-
     try {
+      this.noticeArchiveService.beginChangeNotificationSuppression();
+      const archiveSyncLogger = {
+        log: (message: string) =>
+          LoggerUtils.log(ArchiveSyncService.name, message),
+      };
+      logAndBridge({
+        logger: archiveSyncLogger,
+        method: 'log',
+        message: 'Bootstrap sync pipeline started',
+        context: ArchiveSyncService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.LOG,
+      });
+
       await this.safeRun('pending sync', () =>
         this.runPendingSync('bootstrap'),
       );
+
+      // Timestamp for legacy genesis seed boundary
+      const bootstrapBoundaryAt = new Date();
       await this.safeRun('legacy genesis seed', () =>
         this.runLegacyGenesisSeed('bootstrap', bootstrapBoundaryAt),
       );
+
       await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
+
       await this.safeRun('summary backfill', () =>
         this.runSummaryBackfill('bootstrap'),
       );
+
       await this.safeRun('integrity rescan', () =>
         this.runScheduledIntegrityRescan('bootstrap'),
       );
+
       await this.safeRun('chain integrity audit', () =>
         this.runChainIntegrityAudit('bootstrap'),
       );
+
       await this.safeRun('isDone sync', () => this.runIsDoneSync('bootstrap'));
 
       logAndBridge({
@@ -255,7 +261,7 @@ export class ArchiveSyncService implements OnModuleInit {
         bridgeLevel: BridgeLogLevel.LOG,
       });
     } finally {
-      this.noticeArchiveService.endChangeNotificationSuppression?.();
+      this.noticeArchiveService.endChangeNotificationSuppression();
     }
   }
 

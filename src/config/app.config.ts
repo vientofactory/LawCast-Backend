@@ -198,6 +198,9 @@ export const APP_CONSTANTS = {
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Cache-Control': 'no-cache',
     },
+    // Waiting room handling for NsmLmSts (opinion.lawmaking.go.kr)
+    MAX_WAITINGROOM_RETRIES: 3,
+    WAITINGROOM_RETRY_DELAY_MS: 5_000,
   },
   SCREENSHOT: {
     /** Headless Chromium viewport width (px). Narrower viewport → smaller file. */

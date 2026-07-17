@@ -1988,11 +1988,11 @@ export class NoticeArchiveService {
   }
 
   beginChangeNotificationCollection(): void {
-    this.changeTrackingService?.beginChangeNotificationCollection();
+    this.changeTrackingService.beginChangeNotificationCollection();
   }
 
   beginChangeNotificationSuppression(): void {
-    this.changeTrackingService?.beginChangeNotificationSuppression();
+    this.changeTrackingService.beginChangeNotificationSuppression();
   }
 
   async endChangeNotificationCollection(): Promise<void> {
@@ -2004,7 +2004,7 @@ export class NoticeArchiveService {
   }
 
   endChangeNotificationSuppression(): void {
-    this.changeTrackingService?.endChangeNotificationSuppression();
+    this.changeTrackingService.endChangeNotificationSuppression();
   }
 
   private async buildChangeTrackingExportData(noticeNum: number): Promise<any> {
