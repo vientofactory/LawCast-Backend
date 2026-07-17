@@ -19,7 +19,6 @@ import { type IsDoneSyncResult } from '../archive-sync.service';
 import { type ChainIntegrityAuditResult } from '../archive-sync.service';
 import { type PendingSyncResult } from '../archive-sync.service';
 import { type SummaryBackfillResult } from '../archive-sync.service';
-import { type SummaryUnavailableRetryResult } from '../archive-sync.service';
 import { delayMs } from '../../../utils/async-delay.utils';
 import { logAndBridge } from '../../../utils/bridge-log.utils';
 import { AI_SUMMARY_STATUS } from './ai-summary-status.utils';
@@ -322,13 +321,24 @@ export async function executeSummaryBackfillPhase(
       'ArchiveSyncService',
       'Summary backfill skipped - AI summary disabled',
     );
-    return { scanned: 0, generated: 0, skipped: 0, failed: 0 };
+    return {
+      scanned: 0,
+      generated: 0,
+      skipped: 0,
+      failed: 0,
+      retryScanned: 0,
+      recovered: 0,
+      stillFailed: 0,
+    };
   }
 
   let scanned = 0;
   let generated = 0;
   let skipped = 0;
   let failed = 0;
+  let retryScanned = 0;
+  let recovered = 0;
+  let stillFailed = 0;
 
   for (;;) {
     const batch = await deps.noticeArchiveService.getPendingSummaryPage(
@@ -402,31 +412,6 @@ export async function executeSummaryBackfillPhase(
     if (batch.length < options.summaryBackfillBatchSize) break;
   }
 
-  LoggerUtils.log(
-    'ArchiveSyncService',
-    `Summary backfill done - scanned=${scanned} generated=${generated} skipped=${skipped} failed=${failed}`,
-  );
-
-  return { scanned, generated, skipped, failed };
-}
-
-export async function executeUnavailableRetryPhase(
-  deps: ArchiveSyncExecutorDeps,
-  options: ArchiveSyncExecutorOptions,
-): Promise<SummaryUnavailableRetryResult> {
-  if (!deps.summaryGenerationService.isAiSummaryEnabled()) {
-    LoggerUtils.debugDev(
-      'ArchiveSyncService',
-      'Unavailable summary retry skipped - AI summary disabled',
-    );
-    return { scanned: 0, recovered: 0, skipped: 0, stillFailed: 0 };
-  }
-
-  let scanned = 0;
-  let recovered = 0;
-  let skipped = 0;
-  let stillFailed = 0;
-
   for (;;) {
     const batch = await deps.noticeArchiveService.getUnavailableSummaryPage(
       0,
@@ -443,7 +428,7 @@ export async function executeUnavailableRetryPhase(
           const result =
             await deps.summaryGenerationService.generateSummaryForNotice(
               notice,
-              { phase: 'unavailable-retry' },
+              { phase: 'summary-backfill-retry' },
             );
           await deps.noticeArchiveService.updateSummaryStateByNoticeNum(
             notice.num,
@@ -459,9 +444,9 @@ export async function executeUnavailableRetryPhase(
         } catch (error) {
           LoggerUtils.error(
             'ArchiveSyncService',
-            `Unavailable retry failed for notice ${notice.num}: ${(error as Error).message}`,
+            `Summary backfill retry failed for notice ${notice.num}: ${(error as Error).message}`,
           );
-          return 'unavailable' as const;
+          return AI_SUMMARY_STATUS.UNAVAILABLE;
         }
       },
     );
@@ -476,16 +461,24 @@ export async function executeUnavailableRetryPhase(
       else stillFailed++;
     }
 
-    scanned += batch.length;
+    retryScanned += batch.length;
     if (batch.length < options.summaryBackfillBatchSize) break;
   }
 
   LoggerUtils.log(
     'ArchiveSyncService',
-    `Unavailable summary retry done - scanned=${scanned} recovered=${recovered} skipped=${skipped} stillFailed=${stillFailed}`,
+    `Summary backfill done - scanned=${scanned} generated=${generated} skipped=${skipped} failed=${failed} retryScanned=${retryScanned} recovered=${recovered} stillFailed=${stillFailed}`,
   );
 
-  return { scanned, recovered, skipped, stillFailed };
+  return {
+    scanned,
+    generated,
+    skipped,
+    failed,
+    retryScanned,
+    recovered,
+    stillFailed,
+  };
 }
 
 export async function executeChainIntegrityAuditPhase(

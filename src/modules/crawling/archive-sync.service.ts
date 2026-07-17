@@ -23,7 +23,6 @@ import {
   executeFullSyncPhase,
   executePendingSyncPhase,
   executeSummaryBackfillPhase,
-  executeUnavailableRetryPhase,
   executeChainIntegrityAuditPhase,
   reconcileIsDonePhase,
   type ArchiveSyncExecutorDeps,
@@ -83,18 +82,8 @@ export interface SummaryBackfillResult {
   generated: number;
   skipped: number;
   failed: number;
-}
-
-/**
- * Result of a single unavailable-summary retry pass.
- * `recovered` = rows that transitioned to `'ready'`;
- * `skipped` = rows that became `'not_supported'`;
- * `stillFailed` = rows that remain `'unavailable'` after retry.
- */
-export interface SummaryUnavailableRetryResult {
-  scanned: number;
+  retryScanned: number;
   recovered: number;
-  skipped: number;
   stillFailed: number;
 }
 
@@ -118,8 +107,6 @@ export type FullSyncStatus = PhaseStatus<FullSyncResult>;
 export type IsDoneSyncStatus = PhaseStatus<IsDoneSyncResult>;
 export type IntegrityCheckStatus = PhaseStatus<IntegrityCheckResult>;
 export type SummaryBackfillStatus = PhaseStatus<SummaryBackfillResult>;
-export type SummaryUnavailableRetryStatus =
-  PhaseStatus<SummaryUnavailableRetryResult>;
 export type ChainIntegrityAuditStatus = PhaseStatus<ChainIntegrityAuditResult>;
 export type PendingSyncStatus = PhaseStatus<PendingSyncResult>;
 export type LegacyGenesisSeedStatus = PhaseStatus<LegacyGenesisSeedResult>;
@@ -166,8 +153,6 @@ export class ArchiveSyncService implements OnModuleInit {
   private readonly isDoneSync = makePhaseTracker<IsDoneSyncResult>();
   private readonly integrityCheck = makePhaseTracker<IntegrityCheckResult>();
   private readonly summaryBackfill = makePhaseTracker<SummaryBackfillResult>();
-  private readonly unavailableRetry =
-    makePhaseTracker<SummaryUnavailableRetryResult>();
   private readonly chainIntegrityAudit =
     makePhaseTracker<ChainIntegrityAuditResult>();
   private readonly pendingSync = makePhaseTracker<PendingSyncResult>();
@@ -252,9 +237,6 @@ export class ArchiveSyncService implements OnModuleInit {
       await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
       await this.safeRun('summary backfill', () =>
         this.runSummaryBackfill('bootstrap'),
-      );
-      await this.safeRun('unavailable retry', () =>
-        this.runUnavailableRetry('bootstrap'),
       );
       await this.safeRun('integrity rescan', () =>
         this.runScheduledIntegrityRescan('bootstrap'),
@@ -397,7 +379,6 @@ export class ArchiveSyncService implements OnModuleInit {
       { name: 'integrity check', tracker: this.integrityCheck },
       { name: 'chain integrity audit', tracker: this.chainIntegrityAudit },
       { name: 'summary backfill', tracker: this.summaryBackfill },
-      { name: 'unavailable retry', tracker: this.unavailableRetry },
       { name: 'pending sync', tracker: this.pendingSync },
       { name: 'legacy genesis seed', tracker: this.legacyGenesisSeed },
     ];
@@ -592,7 +573,7 @@ export class ArchiveSyncService implements OnModuleInit {
       trigger,
       () => this.executeSummaryBackfill(),
       (r) =>
-        `scanned=${r.scanned} generated=${r.generated} skipped=${r.skipped} failed=${r.failed}`,
+        `scanned=${r.scanned} generated=${r.generated} skipped=${r.skipped} failed=${r.failed} retryScanned=${r.retryScanned} recovered=${r.recovered} stillFailed=${r.stillFailed}`,
     );
   }
 
@@ -600,41 +581,10 @@ export class ArchiveSyncService implements OnModuleInit {
     return this.toStatus(this.summaryBackfill);
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Phase 5 - Unavailable summary retry
-  // ─────────────────────────────────────────────────────────────────────────
-
-  /**
-   * Retries archive rows with `aiSummaryStatus = 'unavailable'` (e.g. rows
-   * that failed during a previous backfill due to a transient Ollama outage).
-   *
-   * Unlike the backfill drain loop this uses **offset-based pagination** so
-   * rows that remain `'unavailable'` after a failed retry do not cause an
-   * infinite loop.
-   *
-   * Can be triggered manually via the admin API or runs automatically at the
-   * end of the bootstrap pipeline (after the backfill phase).
-   */
-  async runUnavailableRetry(
-    trigger: string,
-  ): Promise<SummaryUnavailableRetryResult | null> {
-    return this.runPhase(
-      'Unavailable summary retry',
-      this.unavailableRetry,
-      trigger,
-      () => this.executeUnavailableRetry(),
-      (r) =>
-        `scanned=${r.scanned} recovered=${r.recovered} skipped=${r.skipped} stillFailed=${r.stillFailed}`,
-    );
-  }
-
-  getUnavailableRetryStatus(): SummaryUnavailableRetryStatus {
-    return this.toStatus(this.unavailableRetry);
-  }
-
   /**
    * Iterates all archive rows with `aiSummaryStatus = 'not_requested'` using
-   * a drain loop (always skip=0) and generates summaries via Ollama.
+   * a drain loop (always skip=0) and generates summaries via Ollama, then
+   * retries rows that remain in `unavailable` state within the same phase.
    *
    * Each processed row is immediately updated so it leaves the pending set -
    * guaranteeing termination even when Ollama fails (rows transition to
@@ -645,17 +595,6 @@ export class ArchiveSyncService implements OnModuleInit {
    */
   private async executeSummaryBackfill(): Promise<SummaryBackfillResult> {
     return executeSummaryBackfillPhase(
-      this.getExecutorDeps(),
-      this.executorOptions,
-    );
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Phase 5 - Unavailable summary retry
-  // ─────────────────────────────────────────────────────────────────────────
-
-  private async executeUnavailableRetry(): Promise<SummaryUnavailableRetryResult> {
-    return executeUnavailableRetryPhase(
       this.getExecutorDeps(),
       this.executorOptions,
     );

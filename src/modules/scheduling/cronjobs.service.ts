@@ -304,7 +304,6 @@ export class CronJobsService {
     await this.execute('proposalReason backfill drain', async () => {
       await this.crawlingService.handleProposalReasonBackfillCron();
       await this.archiveSyncService.runSummaryBackfill('proposal-reason-cron');
-      await this.archiveSyncService.runUnavailableRetry('proposal-reason-cron');
     });
   }
 

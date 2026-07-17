@@ -856,22 +856,18 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     );
   });
 
-  it('AI summary disabled → summary backfill and unavailable retry both skip without DB/cache access', async () => {
+  it('AI summary disabled → unified summary backfill skips without DB/cache access', async () => {
     summaryGenerationService.isAiSummaryEnabled.mockReturnValue(false);
 
     const backfill = await service.runSummaryBackfill('fault-test');
-    const retry = await service.runUnavailableRetry('fault-test');
 
     expect(backfill).toEqual({
       scanned: 0,
       generated: 0,
       skipped: 0,
       failed: 0,
-    });
-    expect(retry).toEqual({
-      scanned: 0,
+      retryScanned: 0,
       recovered: 0,
-      skipped: 0,
       stillFailed: 0,
     });
     expect(noticeArchiveService.getPendingSummaryPage).not.toHaveBeenCalled();
@@ -881,13 +877,15 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(cacheService.updateCache).not.toHaveBeenCalled();
   });
 
-  // ── executeUnavailableRetry (Phase 5) ─────────────────────────────────────
+  // ── unified unavailable retry path (inside summary backfill) ─────────────
 
-  it('Ollama throws for unavailable-retry item → item counted as stillFailed, phase completes', async () => {
+  it('Ollama throws for unavailable-retry item → item counted as stillFailed in unified phase', async () => {
     const batchItems = [
       { ...makeCachedNotice(30), aiSummaryStatus: 'unavailable' as const },
       { ...makeCachedNotice(31), aiSummaryStatus: 'unavailable' as const },
     ];
+
+    noticeArchiveService.getPendingSummaryPage.mockResolvedValue([]);
 
     noticeArchiveService.getUnavailableSummaryPage
       .mockResolvedValueOnce(batchItems as any)
@@ -897,16 +895,19 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
       .mockRejectedValueOnce(new Error('Ollama: model not loaded'))
       .mockResolvedValue({ aiSummary: '요약', aiSummaryStatus: 'ready' });
 
-    const result = await service.runUnavailableRetry('fault-test');
+    const result = await service.runSummaryBackfill('fault-test');
     expect(result).not.toBeNull();
+    expect(result!.retryScanned).toBe(2);
     expect(result!.stillFailed).toBe(1);
     expect(result!.recovered).toBe(1);
   });
 
-  it('DB updateSummaryStateByNoticeNum throws in unavailable-retry → phase still completes, item counted as stillFailed', async () => {
+  it('DB updateSummaryStateByNoticeNum throws in unavailable-retry branch → unified phase still completes', async () => {
     const batchItems = [
       { ...makeCachedNotice(40), aiSummaryStatus: 'unavailable' as const },
     ];
+
+    noticeArchiveService.getPendingSummaryPage.mockResolvedValue([]);
 
     noticeArchiveService.getUnavailableSummaryPage
       .mockResolvedValueOnce(batchItems as any)
@@ -921,17 +922,20 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
       new Error('DB: constraint'),
     );
 
-    const result = await service.runUnavailableRetry('fault-test');
+    const result = await service.runSummaryBackfill('fault-test');
     expect(result).not.toBeNull();
+    expect(result!.retryScanned).toBe(1);
     expect(result!.stillFailed).toBe(1);
     expect(result!.recovered).toBe(0);
   });
 
-  it('Unavailable retry uses a drain loop and keeps requesting from the head until eligible rows are exhausted', async () => {
+  it('Unified phase retries unavailable rows in a drain loop until eligible rows are exhausted', async () => {
     summaryGenerationService.generateSummaryForNotice.mockResolvedValue({
       aiSummary: '복구 요약',
       aiSummaryStatus: 'ready',
     });
+
+    noticeArchiveService.getPendingSummaryPage.mockResolvedValue([]);
 
     let capturedTake = 0;
     let callCount = 0;
@@ -960,10 +964,10 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
       },
     );
 
-    const result = await service.runUnavailableRetry('fault-test');
+    const result = await service.runSummaryBackfill('fault-test');
 
     expect(result).not.toBeNull();
-    expect(result!.scanned).toBe(capturedTake + 1);
+    expect(result!.retryScanned).toBe(capturedTake + 1);
     expect(result!.recovered).toBe(capturedTake + 1);
     expect(
       noticeArchiveService.getUnavailableSummaryPage,
