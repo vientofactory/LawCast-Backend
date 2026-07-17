@@ -22,7 +22,11 @@ import { PackagesService } from '../modules/shared/packages.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
 import { NoticeChangeSource } from '../modules/change-tracking/notice-change-source.enum';
 import { NoticeArchive } from '../modules/notice/notice-archive.entity';
-import { NoticeChangeEvent } from '../modules/change-tracking/notice-change-event.entity';
+import {
+  CHANGE_EVENT_TYPE,
+  NoticeChangeEvent,
+  type ChangeEventType,
+} from '../modules/change-tracking/notice-change-event.entity';
 import {
   NoticeChangeDetail,
   type ChangeDetailType,
@@ -323,7 +327,7 @@ describe('Diffchain API (e2e)', () => {
   async function seedNotice1001(): Promise<void> {
     await appendEvent({
       noticeNum: 1001,
-      eventType: 'created',
+      eventType: CHANGE_EVENT_TYPE.CREATED,
       source: LEGACY_GENESIS_SOURCE,
       detectedAt: '2026-07-01T00:00:00.000Z',
       details: [
@@ -346,7 +350,7 @@ describe('Diffchain API (e2e)', () => {
   async function seedNotice1002(): Promise<void> {
     await appendEvent({
       noticeNum: 1002,
-      eventType: 'created',
+      eventType: CHANGE_EVENT_TYPE.CREATED,
       source: LEGACY_GENESIS_SOURCE,
       detectedAt: '2026-07-01T00:00:00.000Z',
       details: [
@@ -367,7 +371,7 @@ describe('Diffchain API (e2e)', () => {
 
     await appendEvent({
       noticeNum: 1002,
-      eventType: 'updated',
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
       source: NoticeChangeSource.ARCHIVE_UPSERT,
       detectedAt: '2026-07-02T00:00:00.000Z',
       details: [
@@ -384,7 +388,7 @@ describe('Diffchain API (e2e)', () => {
   async function seedNotice1003(): Promise<void> {
     await appendEvent({
       noticeNum: 1003,
-      eventType: 'created',
+      eventType: CHANGE_EVENT_TYPE.CREATED,
       source: LEGACY_GENESIS_SOURCE,
       detectedAt: '2026-07-01T00:00:00.000Z',
       details: [
@@ -405,7 +409,7 @@ describe('Diffchain API (e2e)', () => {
 
     await appendEvent({
       noticeNum: 1003,
-      eventType: 'updated',
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
       source: NoticeChangeSource.ARCHIVE_UPSERT,
       detectedAt: '2026-07-02T00:00:00.000Z',
       details: [
@@ -420,7 +424,7 @@ describe('Diffchain API (e2e)', () => {
 
     await appendEvent({
       noticeNum: 1003,
-      eventType: 'updated',
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
       source: NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
       detectedAt: '2026-07-03T00:00:00.000Z',
       details: [
@@ -485,7 +489,7 @@ describe('Diffchain API (e2e)', () => {
 
   async function appendEvent(params: {
     noticeNum: number;
-    eventType: 'created' | 'updated';
+    eventType: ChangeEventType;
     source: NoticeChangeSource;
     detectedAt: string;
     details: SeedDetail[];

@@ -3,6 +3,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { ConfigService } from '@nestjs/config';
 import { NotificationService } from './notification.service';
 import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
+import { CHANGE_EVENT_TYPE } from '../change-tracking/notice-change-event.entity';
 import { CacheService } from '../cache/cache.service';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { Webhook } from '../webhook/webhook.entity';
@@ -425,7 +426,7 @@ describe('NotificationService', () => {
         {
           noticeNum: 2210001,
           subject: '변경 추적 테스트 법률안',
-          eventType: 'updated',
+          eventType: CHANGE_EVENT_TYPE.UPDATED,
           source: NoticeChangeSource.ARCHIVE_UPSERT,
           changedFields: ['subject', 'billNumber', 'unknown.field'],
           eventHash: 'hash-test-1',
@@ -471,7 +472,7 @@ describe('NotificationService', () => {
           {
             noticeNum: 3310001,
             subject: '법률안 A',
-            eventType: 'updated',
+            eventType: CHANGE_EVENT_TYPE.UPDATED,
             source: NoticeChangeSource.ARCHIVE_UPSERT,
             changedFields: ['subject', 'committee'],
             eventHash: 'hash-a',
@@ -482,7 +483,7 @@ describe('NotificationService', () => {
           {
             noticeNum: 3310002,
             subject: '법률안 B',
-            eventType: 'updated',
+            eventType: CHANGE_EVENT_TYPE.UPDATED,
             source: NoticeChangeSource.ARCHIVE_UPSERT,
             changedFields: ['proposalReason'],
             eventHash: 'hash-b',

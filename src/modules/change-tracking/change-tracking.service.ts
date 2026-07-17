@@ -2,6 +2,7 @@ import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { type EntityManager, In, Repository } from 'typeorm';
 import {
+  CHANGE_EVENT_TYPE,
   NoticeChangeEvent,
   type ChangeEventType,
 } from './notice-change-event.entity';
@@ -605,7 +606,8 @@ export class ChangeTrackingService {
     const eventType = this.resolveEventType(input);
 
     // For non-created events, append only when tracked fields changed.
-    const shouldAppend = eventType === 'created' || diff.changed;
+    const shouldAppend =
+      eventType === CHANGE_EVENT_TYPE.CREATED || diff.changed;
 
     const hashPayload = canonicalStringify({
       noticeNum: input.noticeNum,
@@ -634,7 +636,7 @@ export class ChangeTrackingService {
 
   private resolveEventType(input: BuildDiffEventInput): ChangeEventType {
     if (input.beforeSnapshot === null) {
-      return 'created';
+      return CHANGE_EVENT_TYPE.CREATED;
     }
 
     if (input.preferredEventType) {
@@ -657,10 +659,10 @@ export class ChangeTrackingService {
       lifecycleStatus === 'invalidated' ||
       hasSourceDeletedAt
     ) {
-      return 'invalidated';
+      return CHANGE_EVENT_TYPE.INVALIDATED;
     }
 
-    return 'updated';
+    return CHANGE_EVENT_TYPE.UPDATED;
   }
 
   /**
@@ -682,7 +684,7 @@ export class ChangeTrackingService {
       return;
     }
 
-    if (input.event.eventType === 'created') {
+    if (input.event.eventType === CHANGE_EVENT_TYPE.CREATED) {
       logAndBridge({
         logger: {
           debug: (message: string) =>
@@ -995,7 +997,7 @@ export class ChangeTrackingService {
 
     // This API is for post-genesis change browsing only.
     baseQueryBuilder.andWhere('event.eventType != :createdEventType', {
-      createdEventType: 'created',
+      createdEventType: CHANGE_EVENT_TYPE.CREATED,
     });
 
     if (query.eventType) {

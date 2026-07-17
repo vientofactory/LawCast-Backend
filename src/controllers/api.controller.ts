@@ -30,7 +30,10 @@ import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
-import { type ChangeEventType } from '../modules/change-tracking/notice-change-event.entity';
+import {
+  CHANGE_EVENT_TYPE,
+  type ChangeEventType,
+} from '../modules/change-tracking/notice-change-event.entity';
 import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
 import {
   parseIsoDate,
@@ -213,7 +216,10 @@ export class ApiController {
     @Query('toDetectedAt') toDetectedAtRaw?: string,
     @Query('anchorEventId') anchorEventIdRaw?: string,
   ) {
-    const allowedEventTypes: ChangeEventType[] = ['updated', 'invalidated'];
+    const allowedEventTypes: ChangeEventType[] = [
+      CHANGE_EVENT_TYPE.UPDATED,
+      CHANGE_EVENT_TYPE.INVALIDATED,
+    ];
 
     const eventType = allowedEventTypes.includes(
       eventTypeRaw as ChangeEventType,

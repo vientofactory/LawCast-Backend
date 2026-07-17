@@ -8,7 +8,14 @@ import {
 } from 'typeorm';
 import { type NoticeChangeSource } from './notice-change-source.enum';
 
-export type ChangeEventType = 'created' | 'updated' | 'invalidated';
+export const CHANGE_EVENT_TYPE = {
+  CREATED: 'created',
+  UPDATED: 'updated',
+  INVALIDATED: 'invalidated',
+} as const;
+
+export type ChangeEventType =
+  (typeof CHANGE_EVENT_TYPE)[keyof typeof CHANGE_EVENT_TYPE];
 
 @Entity('notice_change_events')
 @Index('idx_notice_change_events_notice_num_detected_at', [

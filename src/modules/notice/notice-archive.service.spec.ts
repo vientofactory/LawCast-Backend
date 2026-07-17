@@ -3,6 +3,7 @@ import { NoticeArchiveService } from './notice-archive.service';
 import { NoticeArchive } from '../notice/notice-archive.entity';
 import { computeSha256 } from './notice-archive.helpers';
 import { computeDiff } from '../change-tracking/change-tracking-diff.utils';
+import { CHANGE_EVENT_TYPE } from '../change-tracking/notice-change-event.entity';
 
 describe('NoticeArchiveService', () => {
   const createRepositoryMock = () => ({
@@ -53,14 +54,14 @@ describe('NoticeArchiveService', () => {
         String(sourceDeletedAt).trim().length > 0;
       const eventType =
         input.beforeSnapshot === null
-          ? 'created'
+          ? CHANGE_EVENT_TYPE.CREATED
           : (input.preferredEventType ??
             (lifecycleStatus === 'source_deleted' ||
             lifecycleStatus === 'renumbered' ||
             lifecycleStatus === 'invalidated' ||
             hasSourceDeletedAt
-              ? 'invalidated'
-              : 'updated'));
+              ? CHANGE_EVENT_TYPE.INVALIDATED
+              : CHANGE_EVENT_TYPE.UPDATED));
 
       return {
         shouldAppend: input.beforeSnapshot === null || diff.changed,
@@ -771,6 +772,110 @@ describe('NoticeArchiveService', () => {
       expect(repositoryMock.save).not.toHaveBeenCalled();
     });
 
+    it('uses chain-head fallback for missing incoming fields to avoid PAL->NSM rollback diffs', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219804,
+          subject: '체인 기준 보정 테스트',
+          proposalReason: 'stale nsm proposalReason',
+          contentBillNumber: 'NSM-OLD-001',
+          contentProposer: '기존 제안자',
+          contentProposalDate: '2025-01-01',
+          contentCommittee: '기존 위원회',
+          contentReferralDate: '2025-01-02',
+          contentNoticePeriod: '2025-01-03~2025-02-02',
+          contentProposalSession: '제419회',
+          contentId: 'PRC_2219804',
+        }),
+      );
+
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 1,
+          details: [
+            {
+              fieldPath: 'proposalReason',
+              afterValue: 'latest pal proposalReason',
+            },
+            {
+              fieldPath: 'billNumber',
+              afterValue: 'PAL-NEW-777',
+            },
+            {
+              fieldPath: 'proposer',
+              afterValue: '최신 제안자',
+            },
+            {
+              fieldPath: 'proposalDate',
+              afterValue: '2026-07-01',
+            },
+            {
+              fieldPath: 'contentCommittee',
+              afterValue: '최신 위원회',
+            },
+            {
+              fieldPath: 'referralDate',
+              afterValue: '2026-07-02',
+            },
+            {
+              fieldPath: 'noticePeriod',
+              afterValue: '2026-07-03~2026-08-02',
+            },
+            {
+              fieldPath: 'proposalSession',
+              afterValue: '제420회',
+            },
+            {
+              fieldPath: 'isDone',
+              afterValue: 'false',
+            },
+          ],
+        },
+      ]);
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219804,
+          subject: '체인 기준 보정 테스트',
+          proposerCategory: '정부',
+          committee: '정무위원회',
+          link: 'https://example.com/2219804',
+          contentId: 'PRC_2219804',
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          proposalReason: '',
+          billNumber: undefined,
+          proposer: undefined,
+          proposalDate: undefined,
+          committee: undefined,
+          referralDate: undefined,
+          noticePeriod: undefined,
+          proposalSession: undefined,
+          isDone: undefined,
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+      expect(repositoryMock.save).not.toHaveBeenCalled();
+    });
+
     it('uses chain-head baseline to avoid stale-row re-emission', async () => {
       const repositoryMock = {
         ...createRepositoryMock(),
@@ -942,7 +1047,7 @@ describe('NoticeArchiveService', () => {
       ).toHaveBeenCalledWith(
         expect.objectContaining({
           noticeNum: 2219901,
-          eventType: 'invalidated',
+          eventType: CHANGE_EVENT_TYPE.INVALIDATED,
         }),
       );
       expect(summaryStateRepositoryMock.update).toHaveBeenCalledWith(
@@ -990,6 +1095,144 @@ describe('NoticeArchiveService', () => {
           aiSummaryStatus: 'not_requested',
         }),
       );
+    });
+  });
+
+  describe('isDone sync diff baseline protections', () => {
+    it('markNoticesDoneByNums appends only isDone change even when tracked row is stale', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<NoticeArchive[]>>()
+          .mockResolvedValue([
+            buildRow({
+              noticeNum: 2219951,
+              subject: 'isDone 동기화 테스트',
+              proposalReason: 'stale nsm value',
+              isDone: false,
+            }),
+          ]),
+      };
+      const summaryStateRepositoryMock = createSummaryStateRepositoryMock();
+      summaryStateRepositoryMock.find
+        .mockResolvedValueOnce([{ noticeNum: 2219951 }])
+        .mockResolvedValueOnce([{ noticeNum: 2219951, isDone: false }]);
+      summaryStateRepositoryMock.update.mockResolvedValue({ affected: 1 });
+
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 2,
+          details: [
+            {
+              fieldPath: 'proposalReason',
+              afterValue: 'latest pal value',
+            },
+            {
+              fieldPath: 'isDone',
+              afterValue: 'false',
+            },
+          ],
+        },
+      ]);
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        summaryStateRepositoryMock as any,
+        changeTrackingService as any,
+      );
+
+      const affected = await service.markNoticesDoneByNums([2219951]);
+
+      expect(affected).toBe(1);
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).toHaveBeenCalledTimes(1);
+
+      const eventArg = (
+        changeTrackingService.appendChangeEventWithDetails as jest.Mock
+      ).mock.calls[0][0] as {
+        details: Array<{
+          fieldPath: string;
+          beforeValue: string | null;
+          afterValue: string | null;
+        }>;
+      };
+
+      expect(eventArg.details).toHaveLength(1);
+      expect(eventArg.details[0]).toMatchObject({
+        fieldPath: 'isDone',
+        beforeValue: 'false',
+        afterValue: 'true',
+      });
+    });
+
+    it('revertNoticesDoneByNums appends only isDone change even when tracked row is stale', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<NoticeArchive[]>>()
+          .mockResolvedValue([
+            buildRow({
+              noticeNum: 2219952,
+              subject: 'isDone 되돌리기 테스트',
+              proposalReason: 'stale nsm value',
+              isDone: true,
+            }),
+          ]),
+      };
+      const summaryStateRepositoryMock = createSummaryStateRepositoryMock();
+      summaryStateRepositoryMock.find
+        .mockResolvedValueOnce([{ noticeNum: 2219952 }])
+        .mockResolvedValueOnce([{ noticeNum: 2219952, isDone: true }]);
+      summaryStateRepositoryMock.update.mockResolvedValue({ affected: 1 });
+
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 3,
+          details: [
+            {
+              fieldPath: 'proposalReason',
+              afterValue: 'latest pal value',
+            },
+            {
+              fieldPath: 'isDone',
+              afterValue: 'true',
+            },
+          ],
+        },
+      ]);
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        summaryStateRepositoryMock as any,
+        changeTrackingService as any,
+      );
+
+      const affected = await service.revertNoticesDoneByNums([2219952]);
+
+      expect(affected).toBe(1);
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).toHaveBeenCalledTimes(1);
+
+      const eventArg = (
+        changeTrackingService.appendChangeEventWithDetails as jest.Mock
+      ).mock.calls[0][0] as {
+        details: Array<{
+          fieldPath: string;
+          beforeValue: string | null;
+          afterValue: string | null;
+        }>;
+      };
+
+      expect(eventArg.details).toHaveLength(1);
+      expect(eventArg.details[0]).toMatchObject({
+        fieldPath: 'isDone',
+        beforeValue: 'true',
+        afterValue: 'false',
+      });
     });
   });
 });

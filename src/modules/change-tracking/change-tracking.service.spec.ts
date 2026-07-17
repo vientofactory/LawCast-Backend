@@ -7,7 +7,10 @@ import {
   afterEach,
 } from '@jest/globals';
 import { ChangeTrackingService } from './change-tracking.service';
-import { NoticeChangeEvent } from './notice-change-event.entity';
+import {
+  CHANGE_EVENT_TYPE,
+  NoticeChangeEvent,
+} from './notice-change-event.entity';
 import { NoticeChangeDetail } from './notice-change-detail.entity';
 import { NoticeChangeSource } from './notice-change-source.enum';
 
@@ -52,7 +55,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 1,
         noticeNum: 1001,
         detectedAt: new Date('2026-01-01T00:00:00.000Z'),
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-1',
       } as any,
@@ -65,7 +68,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 2,
         noticeNum: 1002,
         detectedAt: new Date('2026-01-01T00:01:00.000Z'),
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-2',
       } as any,
@@ -104,7 +107,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 3,
         noticeNum: 2001,
         detectedAt: new Date('2026-01-01T00:02:00.000Z'),
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         source: NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
         eventHash: 'hash-nested',
       } as any,
@@ -131,7 +134,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 4,
         noticeNum: 3001,
         detectedAt: new Date('2026-01-01T00:03:00.000Z'),
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
         eventHash: 'hash-auto',
       } as any,
@@ -158,7 +161,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         id: 8,
         noticeNum: 6001,
         detectedAt: new Date('2026-01-01T00:04:00.000Z'),
-        eventType: 'invalidated',
+        eventType: CHANGE_EVENT_TYPE.INVALIDATED,
         source: NoticeChangeSource.ARCHIVE_SOURCE_MISSING,
         eventHash: 'hash-invalidated-source-missing',
         eventHeight: 3,
@@ -181,7 +184,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     expect(payloads[0]).toMatchObject({
       noticeNum: 6001,
       subject: '삭제 감지 테스트 법률안',
-      eventType: 'invalidated',
+      eventType: CHANGE_EVENT_TYPE.INVALIDATED,
       source: NoticeChangeSource.ARCHIVE_SOURCE_MISSING,
       changedFields: ['lifecycleStatus', 'sourceDeletedAt'],
       eventHash: 'hash-invalidated-source-missing',
@@ -197,7 +200,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       event: {
         id: 5,
         noticeNum: 4001,
-        eventType: 'created',
+        eventType: CHANGE_EVENT_TYPE.CREATED,
         source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-created',
       } as any,
@@ -219,7 +222,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       event: {
         id: 6,
         noticeNum: 5001,
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         source: NoticeChangeSource.BOOTSTRAP_LEGACY_SEED,
         eventHash: 'hash-bootstrap-suppressed',
       } as any,
@@ -243,7 +246,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       event: {
         id: 7,
         noticeNum: 5002,
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-bootstrap-blocked',
       } as any,
@@ -315,7 +318,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
 
     const saved = await service.appendChangeEventWithDetails({
       noticeNum: 1001,
-      eventType: 'updated',
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
       eventHash: 'hash-atomic-1',
       changedFieldCount: 1,
       details: [
@@ -339,7 +342,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const latestEvent = {
       id: 77,
       noticeNum: 2219775,
-      eventType: 'updated',
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
       source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
       eventHeight: 9,
       eventHash: 'hash-existing',
@@ -383,7 +386,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
 
     const saved = await service.appendChangeEventWithDetails({
       noticeNum: 2219775,
-      eventType: 'updated',
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
       source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
       eventHash: 'hash-new-but-should-skip',
       changedFieldCount: 1,
@@ -522,7 +525,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const appendInput = (hashSuffix: string) =>
       service.appendChangeEventWithDetails({
         noticeNum: 1001,
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         eventHash: `hash-${hashSuffix}`,
         changedFieldCount: 1,
         details: [
@@ -613,7 +616,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
 
     const savedPromise = service.appendChangeEventWithDetails({
       noticeNum: 2219530,
-      eventType: 'updated',
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
       eventHash: 'hash-sqlite-retry',
       changedFieldCount: 1,
       details: [
@@ -695,7 +698,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
             id: 11,
             noticeNum: 5001,
             detectedAt: createdDetectedAt,
-            eventType: 'created',
+            eventType: CHANGE_EVENT_TYPE.CREATED,
             source: NoticeChangeSource.ARCHIVE_UPSERT,
             eventHeight: 1,
             prevEventHash: null,
@@ -709,7 +712,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
             id: 12,
             noticeNum: 5001,
             detectedAt: updatedDetectedAt,
-            eventType: 'updated',
+            eventType: CHANGE_EVENT_TYPE.UPDATED,
             source: NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
             eventHeight: 2,
             prevEventHash: createdBuilt.eventHash,

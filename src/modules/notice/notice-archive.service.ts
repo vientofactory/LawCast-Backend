@@ -50,7 +50,10 @@ import {
   updateSummaryStateByNoticeNum,
 } from './utils/notice-archive-maintenance-support';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
-import { type ChangeEventType } from '../change-tracking/notice-change-event.entity';
+import {
+  CHANGE_EVENT_TYPE,
+  type ChangeEventType,
+} from '../change-tracking/notice-change-event.entity';
 import { DEFAULT_TRACKED_FIELDS } from '../change-tracking/change-tracking-diff.utils';
 import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
@@ -392,7 +395,7 @@ export class NoticeArchiveService {
           afterSnapshot,
           detectedAt: boundaryAt,
           source: LEGACY_GENESIS_SOURCE,
-          preferredEventType: 'created',
+          preferredEventType: CHANGE_EVENT_TYPE.CREATED,
         });
 
         const event =
@@ -514,9 +517,64 @@ export class NoticeArchiveService {
       previousNoticeNum !== null && previousNoticeNum !== notice.num;
     const existing = beforeRow !== null;
 
+    const baselineSnapshot = existing
+      ? await this.buildDiffBaselineSnapshot(notice.num, beforeRow)
+      : null;
+
+    const baselineText = (fieldPath: string): string | null => {
+      if (!baselineSnapshot) {
+        return null;
+      }
+
+      const raw = baselineSnapshot[fieldPath];
+      if (raw === null || raw === undefined) {
+        return null;
+      }
+
+      if (typeof raw === 'string') {
+        const normalized = raw.replace(/\s+/g, ' ').trim();
+        return normalized.length > 0 ? normalized : null;
+      }
+
+      if (typeof raw === 'number' || typeof raw === 'boolean') {
+        return String(raw);
+      }
+
+      return null;
+    };
+
+    const baselineBool = (fieldPath: string): boolean | null => {
+      if (!baselineSnapshot) {
+        return null;
+      }
+
+      const raw = baselineSnapshot[fieldPath];
+      return typeof raw === 'boolean' ? raw : null;
+    };
+
+    const fallbackProposalReason =
+      baselineText('proposalReason') ?? beforeRow?.proposalReason ?? null;
+    const fallbackBillNumber =
+      this.normalizeStableId(baselineText('billNumber')) ??
+      this.normalizeStableId(beforeRow?.contentBillNumber);
+    const fallbackProposer =
+      baselineText('proposer') ?? beforeRow?.contentProposer ?? null;
+    const fallbackProposalDate =
+      baselineText('proposalDate') ?? beforeRow?.contentProposalDate ?? null;
+    const fallbackContentCommittee =
+      baselineText('contentCommittee') ?? beforeRow?.contentCommittee ?? null;
+    const fallbackReferralDate =
+      baselineText('referralDate') ?? beforeRow?.contentReferralDate ?? null;
+    const fallbackNoticePeriod =
+      baselineText('noticePeriod') ?? beforeRow?.contentNoticePeriod ?? null;
+    const fallbackProposalSession =
+      baselineText('proposalSession') ??
+      beforeRow?.contentProposalSession ??
+      null;
+
     const resolvedProposalReason = this.preferIncomingTrackedValue(
       originalContent.proposalReason,
-      beforeRow?.proposalReason,
+      fallbackProposalReason,
       {
         preserveExistingWhenIncomingNull: existing,
         normalizeText: true,
@@ -525,13 +583,13 @@ export class NoticeArchiveService {
 
     const resolvedContentBillNumber = this.preferIncomingTrackedValue(
       this.normalizeStableId(originalContent.billNumber),
-      this.normalizeStableId(beforeRow?.contentBillNumber),
+      fallbackBillNumber,
       { preserveExistingWhenIncomingNull: existing },
     );
 
     const resolvedContentProposer = this.preferIncomingTrackedValue(
       originalContent.proposer?.trim() || null,
-      beforeRow?.contentProposer ?? null,
+      fallbackProposer,
       {
         preserveExistingWhenIncomingNull: existing,
         normalizeText: true,
@@ -540,7 +598,7 @@ export class NoticeArchiveService {
 
     const resolvedContentProposalDate = this.preferIncomingTrackedValue(
       originalContent.proposalDate?.trim() || null,
-      beforeRow?.contentProposalDate ?? null,
+      fallbackProposalDate,
       {
         preserveExistingWhenIncomingNull: existing,
         normalizeText: true,
@@ -549,7 +607,7 @@ export class NoticeArchiveService {
 
     const resolvedContentCommittee = this.preferIncomingTrackedValue(
       originalContent.committee?.trim() || null,
-      beforeRow?.contentCommittee ?? null,
+      fallbackContentCommittee,
       {
         preserveExistingWhenIncomingNull: existing,
         normalizeText: true,
@@ -558,7 +616,7 @@ export class NoticeArchiveService {
 
     const resolvedContentReferralDate = this.preferIncomingTrackedValue(
       originalContent.referralDate?.trim() || null,
-      beforeRow?.contentReferralDate ?? null,
+      fallbackReferralDate,
       {
         preserveExistingWhenIncomingNull: existing,
         normalizeText: true,
@@ -567,7 +625,7 @@ export class NoticeArchiveService {
 
     const resolvedContentNoticePeriod = this.preferIncomingTrackedValue(
       originalContent.noticePeriod?.trim() || null,
-      beforeRow?.contentNoticePeriod ?? null,
+      fallbackNoticePeriod,
       {
         preserveExistingWhenIncomingNull: existing,
         normalizeText: true,
@@ -576,7 +634,7 @@ export class NoticeArchiveService {
 
     const resolvedContentProposalSession = this.preferIncomingTrackedValue(
       originalContent.proposalSession?.trim() || null,
-      beforeRow?.contentProposalSession ?? null,
+      fallbackProposalSession,
       {
         preserveExistingWhenIncomingNull: existing,
         normalizeText: true,
@@ -586,7 +644,7 @@ export class NoticeArchiveService {
     const resolvedIsDone =
       originalContent.isDone !== undefined
         ? originalContent.isDone
-        : (beforeRow?.isDone ?? false);
+        : (baselineBool('isDone') ?? beforeRow?.isDone ?? false);
 
     // Core content fields - always written on both INSERT and UPDATE.
     const coreFields = {
@@ -643,7 +701,7 @@ export class NoticeArchiveService {
         await this.appendExplicitEventWithDiff({
           noticeNum: previousNoticeNum,
           source: NoticeChangeSource.ARCHIVE_RENUMBERED,
-          eventType: 'invalidated',
+          eventType: CHANGE_EVENT_TYPE.INVALIDATED,
           beforeSnapshot,
           afterSnapshot: invalidatedSnapshot,
           subject: beforeRow.subject,
@@ -797,15 +855,7 @@ export class NoticeArchiveService {
         continue;
       }
 
-      await this.appendTrackedDiffEvent(
-        noticeNum,
-        NoticeChangeSource.ARCHIVE_IS_DONE_SYNC,
-        beforeRow,
-        {
-          ...beforeRow,
-          isDone: true,
-        },
-      );
+      await this.appendIsDoneSyncDiffEvent(noticeNum, beforeRow, true);
     }
 
     return result.affected ?? 0;
@@ -856,15 +906,7 @@ export class NoticeArchiveService {
         continue;
       }
 
-      await this.appendTrackedDiffEvent(
-        noticeNum,
-        NoticeChangeSource.ARCHIVE_IS_DONE_SYNC,
-        beforeRow,
-        {
-          ...beforeRow,
-          isDone: false,
-        },
-      );
+      await this.appendIsDoneSyncDiffEvent(noticeNum, beforeRow, false);
     }
 
     return result.affected ?? 0;
@@ -909,7 +951,7 @@ export class NoticeArchiveService {
     await this.appendExplicitEventWithDiff({
       noticeNum,
       source: NoticeChangeSource.ARCHIVE_SOURCE_MISSING,
-      eventType: 'invalidated',
+      eventType: CHANGE_EVENT_TYPE.INVALIDATED,
       beforeSnapshot,
       afterSnapshot,
       subject: beforeRow.subject,
@@ -2321,7 +2363,7 @@ export class NoticeArchiveService {
     await this.appendExplicitEventWithDiff({
       noticeNum,
       source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
-      eventType: 'updated',
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
       beforeSnapshot,
       afterSnapshot,
       subject: beforeRow.subject,
@@ -2526,6 +2568,32 @@ export class NoticeArchiveService {
       });
       throw error;
     }
+  }
+
+  private async appendIsDoneSyncDiffEvent(
+    noticeNum: number,
+    beforeRow: TrackedArchiveRow,
+    isDone: boolean,
+  ): Promise<void> {
+    const beforeSnapshot = await this.buildDiffBaselineSnapshot(
+      noticeNum,
+      beforeRow,
+    );
+    if (!beforeSnapshot) {
+      return;
+    }
+
+    await this.appendExplicitEventWithDiff({
+      noticeNum,
+      source: NoticeChangeSource.ARCHIVE_IS_DONE_SYNC,
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
+      beforeSnapshot,
+      afterSnapshot: {
+        ...beforeSnapshot,
+        isDone,
+      },
+      subject: beforeRow.subject,
+    });
   }
 
   private async persistSummaryState(

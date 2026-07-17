@@ -9,6 +9,7 @@ import {
 import { NotificationBatchService } from './notification-batch.service';
 import { type ChangeNotificationPayload } from './notification.service';
 import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
+import { CHANGE_EVENT_TYPE } from '../change-tracking/notice-change-event.entity';
 
 describe('NotificationBatchService (diffchain change batching)', () => {
   let webhookService: {
@@ -182,7 +183,7 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       {
         noticeNum: 101,
         subject: '법률안 101',
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         source: NoticeChangeSource.ARCHIVE_UPSERT,
         changedFields: ['subject'],
         eventHash: 'hash-101',
@@ -190,7 +191,7 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       {
         noticeNum: 102,
         subject: '법률안 102',
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         source: NoticeChangeSource.ARCHIVE_UPSERT,
         changedFields: ['committee'],
         eventHash: 'hash-102',
@@ -223,7 +224,7 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       {
         noticeNum: 301,
         subject: '법률안 301',
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         source: NoticeChangeSource.ARCHIVE_UPSERT,
         changedFields: ['subject'],
         eventHash: 'hash-301',
@@ -252,7 +253,7 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       {
         noticeNum: 201,
         subject: '법률안 201',
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         source: NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
         changedFields: ['proposer'],
         eventHash: 'hash-201',
@@ -260,7 +261,7 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       {
         noticeNum: 202,
         subject: '법률안 202',
-        eventType: 'updated',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
         source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
         changedFields: ['proposalReason'],
         eventHash: 'hash-202',
