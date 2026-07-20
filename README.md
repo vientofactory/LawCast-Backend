@@ -175,48 +175,49 @@ flowchart TD
 
 ## Project Diffchain: 변경 추적 및 감사 기능
 
-Project Diffchain은 LawCast 아카이브 위에 올라가는 변경 추적 기능입니다. 주기적 재크롤링 결과를 기존 스냅샷과 비교해 필드 단위 diff를 생성하고, 이를 append-only 체인으로 저장한 뒤, 변경 알림·프론트 타임라인·ZIP export·감사 자동화까지 한 흐름으로 제공합니다.
-
-이 기능의 목적은 단순히 "무엇이 바뀌었는지"를 보여주는 데서 끝나지 않습니다. LawCast가 원래 갖고 있던 "원문 보존 + 해시 기반 검증 + 사후 증명 가능성"을 유지한 채, 특정 의안번호의 상태 변화까지 재현 가능한 형태로 남기는 것이 핵심입니다.
+Project Diffchain은 LawCast 아카이브의 변경 이력을 append-only 체인으로 저장하는 기능입니다. 재크롤링으로 얻은 현재 스냅샷과 기존 저장값을 비교해 필드 단위 diff를 만들고, 이를 `notice_change_events`와 `notice_change_details`에 기록합니다. 의안번호별로 `event_height`, `prev_event_hash`, `event_hash`를 유지해 체인 무결성을 검증할 수 있고, 상세 리비전 조회·변경 타임라인·최근 변경 목록·비교 가능 변경 요약·체인 감사·ZIP export가 모두 같은 데이터를 사용합니다.
 
 ### 기능 개요
 
-- 재크롤링 시점마다 이전 스냅샷과 현재 스냅샷을 비교해 변경 여부를 판정합니다.
-- 추적 대상 필드에 변화가 있으면 변경 이벤트와 필드 상세 diff를 함께 저장합니다.
+- 재크롤링 시점마다 이전 스냅샷과 현재 스냅샷을 비교해 tracked fields만 diff로 저장합니다.
+- 변경 이벤트 타입은 `created`, `updated`, `invalidated`입니다.
+- `created` 이벤트는 초기 체인 생성용이며, `/api/notices/changes` 같은 최근 변경 목록에서는 제외됩니다.
+- `invalidated` 이벤트는 `lifecycleStatus=source_deleted|renumbered|invalidated` 또는 `sourceDeletedAt` 존재 여부를 기준으로 생성됩니다.
 - 각 이벤트는 의안번호별 단일 체인으로 연결되며, `prev_event_hash`와 `event_hash`로 무결성을 검증할 수 있습니다.
-- 프론트 상세 페이지와 변경 API는 같은 체인 데이터를 사용해 리비전 타임라인을 제공합니다.
-- 일일/주간 체인 감사 작업이 전체 변경 체인을 재검증하고 체크포인트 루트 해시를 계산합니다.
+- 상세 페이지 리비전 조회는 체인 타임라인을 역방향으로 읽어 특정 `rev` 시점의 상태를 복원합니다.
+- 일일/주간 체인 감사 작업은 전체 체인을 다시 재구성해 해시와 detail hash를 검증하고 `checkpointRootHash`를 계산합니다.
 
 ### 데이터 보장 방식
 
 - 변경 이벤트는 UPDATE/DELETE 없이 append-only로 저장됩니다.
-- 아카이브 원본(`notice_archives`)은 최초 스냅샷 INSERT 이후 UPDATE/DELETE를 금지합니다. DB 트리거가 수정/삭제를 차단하며, 유동 상태(`isDone`, `aiSummary`, `aiSummaryStatus`)는 `notice_archive_snapshot_states`에서 관리합니다.
 - 각 이벤트는 `event_height`를 가지며, 동일 의안번호 안에서 `1, 2, 3...` 순서로만 증가합니다.
-- 이벤트 해시는 정규화된 canonical JSON으로 계산되며, 필드 순서와 공백/날짜 포맷 차이로 인해 동일 의미의 데이터가 다른 해시를 만들지 않도록 고정 규칙을 사용합니다.
-- 각 detail row에는 `before_value`, `after_value`와 함께 `before_hash`, `after_hash`가 저장됩니다.
-- `hash_algo`, `canon_version`을 이벤트에 함께 기록해 장기 호환성과 재검증 이식성을 유지합니다.
+- `notice_change_events`는 `notice_num + event_height`와 `event_hash`에 유니크 제약을 둬 중복 체인 생성을 막습니다.
+- 이벤트 헤더에는 `source`, `changed_field_count`, `diff_summary_json`, `crawler_run_id`, `hash_algo`, `canon_version`이 함께 저장됩니다.
+- 각 detail row에는 `before_value`, `after_value`, `before_hash`, `after_hash`가 저장됩니다.
+- 이벤트 해시는 `ChangeTrackingService.buildDiffEvent()`에서 canonical JSON으로 계산하며, 필드 순서와 공백/날짜 포맷 차이를 정규화합니다.
+- 감사 시에는 저장된 이벤트를 순서대로 다시 재구성해 `event_hash`, `prev_event_hash`, `event_height`, `changed_field_count`, `diffSummaryJson`, detail hash를 모두 대조합니다.
 
 ### 아카이브 라이프사이클 정책
 
 - `lifecycle_status=active`: 소스에서 정상 확인 가능한 상태
-- `lifecycle_status=source_deleted`: 컬럼/인덱스는 유지되며, 현재 릴리스에서는 자동 전이 로직이 비활성(no-op) 상태입니다.
+- `lifecycle_status=source_deleted`: 코드상 `invalidated` 체인 이벤트로 표현됩니다.
 - `lifecycle_status=renumbered`: 번호 변경(renumbering) 감지 시 기존 번호 체인 무효화(`invalidated`) 이벤트 표현에 사용됩니다.
 
 번호 변경은 `noticeNum` 단일 키만으로 판단하지 않고 `contentId`/`contentBillNumber` 기반 동일성 후보를 우선 탐색합니다. immutable 정책 때문에 기존 아카이브 row 자체를 갱신하지 않고, 기존 번호 체인에는 `invalidated` 이벤트를 append하며 요약/상태 테이블을 새 번호로 재매핑합니다.
 
-소스에서 사라진 법안 처리(`source_deleted` 전이)는 현재 코드에서 자동 적용되지 않으며, 향후 lifecycle 확장 포인트로 남아 있습니다.
+소스에서 사라진 법안 처리도 현재 구현에서는 별도 유지 테이블을 두지 않고 `invalidated` 이벤트와 체인 감사 결과로 추적합니다.
 
 ### 체인 구조 도식
 
 ```mermaid
 flowchart LR
-	E1[Event#1\nheight=1\nprev=NULL\nhash=H1] --> E2[Event#2\nheight=2\nprev=H1\nhash=H2]
-	E2 --> E3[Event#3\nheight=3\nprev=H2\nhash=H3]
-	E3 --> E4[Tombstone/Event#4\nheight=4\nprev=H3\nhash=H4]
-	E4 --> CP[Checkpoint Root\nday/week]
+	E1[created\nheight=1\nprev=NULL\nhash=H1] --> E2[updated\nheight=2\nprev=H1\nhash=H2]
+	E2 --> E3[updated\nheight=3\nprev=H2\nhash=H3]
+	E3 --> E4[invalidated\nheight=4\nprev=H3\nhash=H4]
+	E4 --> CP[checkpointRootHash\ndaily / weekly]
 ```
 
-체크포인트 블록(`Checkpoint Root`)은 단일 이벤트를 저장하는 별도 테이블이 아니라, 일/주간 감사 시점에 전체 체인 검증 결과를 요약해 계산한 루트 해시를 의미합니다. 구현상 `ChangeTrackingService.runScheduledChainAudit()`가 모든 의안 체인을 재검증한 뒤, 의안별 요약(`noticeNum`, `eventCount`, `latestEventHash`, `issueCount`)을 canonical JSON으로 직렬화하고 SHA-256을 계산해 `checkpointRootHash`를 만듭니다.
+체크포인트 블록(`checkpointRootHash`)은 단일 이벤트를 저장하는 별도 테이블이 아니라, 일/주간 감사 시점에 전체 체인 검증 결과를 요약해 계산한 SHA-256 값입니다. 구현상 `ChangeTrackingService.runScheduledChainAudit()`가 모든 의안 체인을 재검증한 뒤, 의안별 요약(`noticeNum`, `eventCount`, `latestEventHash`, `issueCount`)을 canonical JSON으로 직렬화해 `checkpointRootHash`를 만듭니다.
 
 왜 필요한가:
 
@@ -229,15 +230,15 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-	 A[Scheduled Re-crawl] --> B[Fetch Notice Snapshot]
-	 B --> C[Normalize Fields]
-	 C --> D{Changed?}
-	 D -->|No| E[Skip Event Write]
-	 D -->|Yes| F[Write Archive Upsert]
-	 F --> G[Write Change Event + Details]
-	 G --> H[Compute Event Hash Chain]
-	 H --> I[Send Change Webhook]
-	 I --> J[Expose Change Timeline API]
+	A[Scheduled Re-crawl] --> B[Fetch Notice Snapshot]
+	B --> C[Normalize tracked fields]
+	C --> D{Changed?}
+	D -->|No| E[Skip diffchain write]
+	D -->|Yes| F[Write archive row]
+	F --> G[Write change event + details]
+	G --> H[Compute canonical event hash]
+	H --> I[Queue change notifications]
+	I --> J[Expose timeline / recent / summary APIs]
 ```
 
 ### 감사 및 재검증 방식
@@ -245,27 +246,28 @@ flowchart TD
 1. 특정 의안번호의 이벤트를 `event_height` 오름차순으로 조회합니다.
 2. 각 이벤트에 대해 canonical JSON을 재구성하고 `event_hash`를 재계산합니다.
 3. `prev_event_hash` 연결성과 `event_height` 연속성을 검증합니다.
-4. 이벤트 해시와 chain linkage를 검증합니다.
-5. 최종 이벤트 해시를 체크포인트 루트 계산 입력과 대조합니다.
+4. 각 detail row의 `before_hash`/`after_hash`를 다시 계산해 비교합니다.
+5. 최종 결과를 의안별 요약으로 모아 `checkpointRootHash`를 계산합니다.
 
-체크포인트 루트는 감사 결과 객체(`ChangeChainAuditReport`)에 포함되어 반환되며, `scope=daily|weekly`와 함께 운영 로그 및 Discord Debug Bridge에 기록됩니다. 즉, 체크포인트는 "검증 이후 보고용 루트 해시"로써 감사 결과의 비교/추적 가능성을 높이는 장치입니다.
+체크포인트 루트는 감사 결과 객체(`ChangeChainAuditReport`)에 포함되어 반환되며, `scope=daily|weekly`와 함께 운영 로그 및 Discord Debug Bridge에 기록됩니다. 감사 결과에는 `noticeCount`, `eventCount`, `failureCount`, `checkpointRootHash`, `failures`가 포함됩니다.
 
 일일 감사는 최근 운영 상태를 빠르게 확인하기 위한 기본 검증이고, 주간 감사는 전체 체인을 다시 훑어 더 긴 시간 축의 무결성을 확인하는 용도입니다. 검증 실패가 발생하면 운영 채널과 Discord Debug Bridge에 요약이 남아 후속 대응이 가능해야 합니다.
 
 ### 저장 구조
 
 - `notice_change_events`:
-  `id`, `notice_num`, `detected_at`, `source`, `event_type`, `prev_event_hash`, `event_hash`, `changed_field_count`, `diff_summary_json`, `crawler_run_id`.
+  `id`, `notice_num`, `detected_at`, `event_type`, `source`, `event_height`, `prev_event_hash`, `event_hash`, `changed_field_count`, `diff_summary_json`, `crawler_run_id`, `hash_algo`, `canon_version`.
 - `notice_change_details`:
   `id`, `event_id`, `field_path`, `change_type`, `before_value`, `after_value`, `before_hash`, `after_hash`.
 
 ### 사용자 노출 지점
 
-- `GET /api/notices/:num/changes`: 특정 의안번호의 변경 이벤트 타임라인을 제공합니다.
-- `GET /api/notices/changes`: 전체 변경 이벤트 목록을 페이지네이션으로 제공합니다.
+- `GET /api/notices/:num/changes`: 특정 의안번호의 최근 변경 타임라인을 제공합니다.
+- `GET /api/notices/changes`: 전체 변경 이벤트 목록을 페이지네이션으로 제공합니다. 기본적으로 `created`는 제외되고, `eventType=updated|invalidated`만 필터로 허용됩니다.
+- `GET /api/notices/changes/summary`: 비교 가능한 변경 이벤트 수를 `comparableEventTotal`과 `comparableNoticeCount`로 반환합니다.
 - 상세 페이지 리비전 UI는 이벤트 해시, 변경 필드, before/after 값을 기반으로 변경 내역을 시각화합니다.
-- 변경 알림은 신규 입법예고 알림과 분리되며, 신규 생성 이벤트(`created`)는 중복 알림을 피하기 위해 변경 알림에서 제외됩니다.
-- `GET /api/notices/:num/export` 결과물에는 `.changes.json` 파일로 이벤트 타임라인이 포함됩니다.
+- 변경 알림은 신규 입법예고 알림과 분리되며, `created` 이벤트는 중복 알림을 피하기 위해 제외됩니다.
+- `GET /api/notices/:num/export` 결과물에는 JSON 본문, 무결성 메타데이터, 검증 스크립트, 선택적 스크린샷, 그리고 `changeTrackingData`가 제공될 때 `.changes.json` 파일이 포함됩니다.
 
 ### 운영 기준
 
@@ -342,7 +344,7 @@ Base path: `/api`
 
 - `page` (default: `1`)
 - `limit` (default: `20`)
-- `eventType` (`created` | `updated` | `redacted` | `invalidated`)
+- `eventType` (`updated` | `invalidated`)
 - `excludeLegacyGenesisSource` (`true`일 때 legacy bootstrap seed 이벤트 제외)
 - `comparableOnly` (`true`일 때 비교 가능한 변경 이벤트만 조회)
 

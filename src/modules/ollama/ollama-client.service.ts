@@ -27,8 +27,16 @@ interface OllamaTagsResponse {
   }>;
 }
 
+export enum AIHealthStatus {
+  Disabled = 'disabled',
+  Misconfigured = 'misconfigured',
+  Unknown = 'unknown',
+  Healthy = 'healthy',
+  Unhealthy = 'unhealthy',
+}
+
 export type OllamaHealthStatus =
-  'disabled' | 'misconfigured' | 'unknown' | 'healthy' | 'unhealthy';
+  (typeof AIHealthStatus)[keyof typeof AIHealthStatus];
 
 export interface OllamaRuntimeMetrics {
   enabled: boolean;
@@ -75,7 +83,7 @@ export class OllamaClientService {
   private lastSummaryFailureAt: Date | null = null;
   private lastSummaryError: string | null = null;
 
-  private healthStatus: OllamaHealthStatus = 'unknown';
+  private healthStatus: OllamaHealthStatus = AIHealthStatus.Unknown;
   private lastHealthCheckedAt: Date | null = null;
   private lastHealthLatencyMs: number | null = null;
   private availableModelCount: number | null = null;
@@ -90,7 +98,9 @@ export class OllamaClientService {
 
     if (!this.enabled || !apiUrl || !this.model) {
       this.client = null;
-      this.healthStatus = this.enabled ? 'misconfigured' : 'disabled';
+      this.healthStatus = this.enabled
+        ? AIHealthStatus.Misconfigured
+        : AIHealthStatus.Disabled;
       this.logger.log(
         'Ollama summarization is disabled. Set OLLAMA_ENABLED=true with OLLAMA_API_URL and OLLAMA_MODEL to enable it.',
       );
@@ -148,7 +158,7 @@ export class OllamaClientService {
       this.lastSummaryLatencyMs = Date.now() - requestStartedAt;
       this.lastSummarySuccessAt = new Date();
       this.lastSummaryError = null;
-      this.healthStatus = 'healthy';
+      this.healthStatus = AIHealthStatus.Healthy;
       this.lastHealthCheckedAt = this.lastSummarySuccessAt;
       this.lastHealthLatencyMs = this.lastSummaryLatencyMs;
       this.lastHealthError = null;
@@ -161,7 +171,7 @@ export class OllamaClientService {
       this.summaryFailed += 1;
       this.lastSummaryFailureAt = new Date();
       this.lastSummaryError = message;
-      this.healthStatus = 'unhealthy';
+      this.healthStatus = AIHealthStatus.Unhealthy;
       this.lastHealthCheckedAt = this.lastSummaryFailureAt;
       this.lastHealthError = message;
       this.logger.warn(`Failed to summarize proposal with Ollama: ${message}`);
@@ -210,12 +220,12 @@ export class OllamaClientService {
 
   private async refreshHealthStatus(forceHealthCheck: boolean): Promise<void> {
     if (!this.enabled) {
-      this.healthStatus = 'disabled';
+      this.healthStatus = AIHealthStatus.Disabled;
       return;
     }
 
     if (!this.client) {
-      this.healthStatus = 'misconfigured';
+      this.healthStatus = AIHealthStatus.Misconfigured;
       return;
     }
 
@@ -231,7 +241,7 @@ export class OllamaClientService {
 
     try {
       const response = await this.client.get<OllamaTagsResponse>('/api/tags');
-      this.healthStatus = 'healthy';
+      this.healthStatus = AIHealthStatus.Healthy;
       this.lastHealthCheckedAt = new Date();
       this.lastHealthLatencyMs = Date.now() - startedAt;
       this.availableModelCount = Array.isArray(response.data?.models)
@@ -240,7 +250,7 @@ export class OllamaClientService {
       this.lastHealthError = null;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.healthStatus = 'unhealthy';
+      this.healthStatus = AIHealthStatus.Unhealthy;
       this.lastHealthCheckedAt = new Date();
       this.lastHealthLatencyMs = Date.now() - startedAt;
       this.lastHealthError = message;

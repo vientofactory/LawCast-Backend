@@ -45,9 +45,13 @@ export class NotificationService {
   private readonly logger = LoggerUtils.getContextLogger(
     NotificationService.name,
   );
+
+  private readonly DEFAULT_NATL_ASSEMBLY_URL =
+    'https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOpn/list.do';
   private readonly MAX_NOTICE_NUMS_IN_DIGEST_URL = 40;
   private readonly PROPOSAL_REASON_MISSING_GUIDANCE =
     '법률안 제안이유를 아직 수집하지 못했습니다. 자세히 보기 링크를 통해 국회 페이지에서 직접 확인해 주세요.';
+
   // Mapping of change-tracking field paths to user-friendly labels for Discord embeds
   private readonly CHANGE_FIELD_LABELS: Readonly<Record<string, string>> = {
     num: '의안번호',
@@ -532,7 +536,7 @@ export class NotificationService {
       params,
     );
     if (!detailUrl) {
-      return `https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOpn/list.do`;
+      return this.DEFAULT_NATL_ASSEMBLY_URL;
     }
 
     return detailUrl;
@@ -546,7 +550,7 @@ export class NotificationService {
 
     return (
       buildFrontendUrl(frontendUrls, '/notices/changes', params) ??
-      'https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOpn/list.do'
+      this.DEFAULT_NATL_ASSEMBLY_URL
     );
   }
 
@@ -555,7 +559,7 @@ export class NotificationService {
       this.configService.get<string[]>('frontend.urls') || [];
     const noticesUrl = buildFrontendUrl(frontendUrls, '/notices', params);
     if (!noticesUrl) {
-      return `https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOpn/list.do`;
+      return this.DEFAULT_NATL_ASSEMBLY_URL;
     }
 
     return noticesUrl;

@@ -88,15 +88,15 @@ export class NotificationBatchService {
         const failureCount = results.length - successCount;
 
         const totalWebhooks = results.reduce(
-          (sum, r) => sum + ((r.data?.totalWebhooks as number) ?? 0),
+          (sum, r) => sum + (r.data.totalWebhooks ?? 0),
           0,
         );
         const deactivated = results.reduce(
-          (sum, r) => sum + ((r.data?.deactivated as number) ?? 0),
+          (sum, r) => sum + (r.data.deactivated ?? 0),
           0,
         );
         const temporaryFailures = results.reduce(
-          (sum, r) => sum + ((r.data?.temporaryFailures as number) ?? 0),
+          (sum, r) => sum + (r.data.temporaryFailures ?? 0),
           0,
         );
 
@@ -193,15 +193,15 @@ export class NotificationBatchService {
         const failureCount = results.length - successCount;
 
         const totalWebhooks = results.reduce(
-          (sum, r) => sum + ((r.data?.totalWebhooks as number) ?? 0),
+          (sum, r) => sum + (r.data.totalWebhooks ?? 0),
           0,
         );
         const deactivated = results.reduce(
-          (sum, r) => sum + ((r.data?.deactivated as number) ?? 0),
+          (sum, r) => sum + (r.data.deactivated ?? 0),
           0,
         );
         const temporaryFailures = results.reduce(
-          (sum, r) => sum + ((r.data?.temporaryFailures as number) ?? 0),
+          (sum, r) => sum + (r.data.temporaryFailures ?? 0),
           0,
         );
 

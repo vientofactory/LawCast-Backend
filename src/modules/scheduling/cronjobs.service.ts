@@ -71,14 +71,20 @@ export class CronJobsService {
   }
 
   /**
-   * Determines whether a crawling-related cron job should be skipped based on the current state of the archive sync service.
+   * Determines whether a cron job should be skipped and logs the shared skip reason.
    * @param taskName A descriptive name of the task for logging purposes.
    * @returns A boolean indicating whether the cron job should be skipped.
    */
-  private shouldSkipCrawlingCron(taskName: string): boolean {
-    if (!this.archiveSyncService.isAnyPhaseRunning()) return false;
+  private shouldSkipCron(
+    taskName: string,
+    shouldSkip: boolean,
+    reason: string,
+  ): boolean {
+    if (!shouldSkip) {
+      return false;
+    }
 
-    const message = `${taskName} skipped - archive sync phase is currently running`;
+    const message = `${taskName} skipped - ${reason}`;
     logAndBridge({
       method: 'debugDev',
       message,
@@ -88,6 +94,19 @@ export class CronJobsService {
       discordBridge: this.discordBridge,
     });
     return true;
+  }
+
+  /**
+   * Determines whether a crawling-related cron job should be skipped based on the current state of the archive sync service.
+   * @param taskName A descriptive name of the task for logging purposes.
+   * @returns A boolean indicating whether the cron job should be skipped.
+   */
+  private shouldSkipCrawlingCron(taskName: string): boolean {
+    return this.shouldSkipCron(
+      taskName,
+      this.archiveSyncService.isAnyPhaseRunning(),
+      'archive sync phase is currently running',
+    );
   }
 
   /**
@@ -96,20 +115,11 @@ export class CronJobsService {
    * @returns A boolean indicating whether the cron job should be skipped.
    */
   private shouldSkipArchiveSyncCron(taskName: string): boolean {
-    if (!this.crawlingService.isSchedulerBusy({ includeBackground: true })) {
-      return false;
-    }
-
-    const message = `${taskName} skipped - crawling scheduler is busy`;
-    logAndBridge({
-      method: 'debugDev',
-      message,
-      logger: this.logger,
-      bridgeLevel: BridgeLogLevel.DEBUG,
-      context: CronJobsService.name,
-      discordBridge: this.discordBridge,
-    });
-    return true;
+    return this.shouldSkipCron(
+      taskName,
+      this.crawlingService.isSchedulerBusy({ includeBackground: true }),
+      'crawling scheduler is busy',
+    );
   }
 
   /**
@@ -117,33 +127,21 @@ export class CronJobsService {
    * archive sync phases or active crawling background workloads.
    */
   private shouldSkipProposalReasonBackfillCron(taskName: string): boolean {
-    if (this.archiveSyncService.isAnyPhaseRunning()) {
-      const message = `${taskName} skipped - archive sync phase is currently running`;
-      logAndBridge({
-        method: 'debugDev',
-        message,
-        logger: this.logger,
-        bridgeLevel: BridgeLogLevel.DEBUG,
-        context: CronJobsService.name,
-        discordBridge: this.discordBridge,
-      });
+    if (
+      this.shouldSkipCron(
+        taskName,
+        this.archiveSyncService.isAnyPhaseRunning(),
+        'archive sync phase is currently running',
+      )
+    ) {
       return true;
     }
 
-    if (!this.crawlingService.isSchedulerBusy({ includeBackground: true })) {
-      return false;
-    }
-
-    const message = `${taskName} skipped - crawling scheduler is busy`;
-    logAndBridge({
-      method: 'debugDev',
-      message,
-      logger: this.logger,
-      bridgeLevel: BridgeLogLevel.DEBUG,
-      context: CronJobsService.name,
-      discordBridge: this.discordBridge,
-    });
-    return true;
+    return this.shouldSkipCron(
+      taskName,
+      this.crawlingService.isSchedulerBusy({ includeBackground: true }),
+      'crawling scheduler is busy',
+    );
   }
 
   /**
@@ -152,33 +150,21 @@ export class CronJobsService {
    * @returns A boolean indicating whether the cron job should be skipped.
    */
   private shouldSkipDatabaseMaintenanceCron(taskName: string): boolean {
-    if (this.archiveSyncService.isAnyPhaseRunning()) {
-      const message = `${taskName} skipped - archive sync phase is currently running`;
-      logAndBridge({
-        method: 'debugDev',
-        message,
-        logger: this.logger,
-        bridgeLevel: BridgeLogLevel.DEBUG,
-        context: CronJobsService.name,
-        discordBridge: this.discordBridge,
-      });
+    if (
+      this.shouldSkipCron(
+        taskName,
+        this.archiveSyncService.isAnyPhaseRunning(),
+        'archive sync phase is currently running',
+      )
+    ) {
       return true;
     }
 
-    if (!this.crawlingService.isSchedulerBusy({ includeBackground: true })) {
-      return false;
-    }
-
-    const message = `${taskName} skipped - crawling scheduler is busy`;
-    logAndBridge({
-      method: 'debugDev',
-      message,
-      logger: this.logger,
-      bridgeLevel: BridgeLogLevel.DEBUG,
-      context: CronJobsService.name,
-      discordBridge: this.discordBridge,
-    });
-    return true;
+    return this.shouldSkipCron(
+      taskName,
+      this.crawlingService.isSchedulerBusy({ includeBackground: true }),
+      'crawling scheduler is busy',
+    );
   }
 
   /**
@@ -254,11 +240,6 @@ export class CronJobsService {
 
   // Cron job handlers
 
-  /**
-   * Crawls for new legislative notices and dispatches notifications.
-   * Also checks NsmLmSts for newly proposed (\"\ubc1c\uc758\") bills that have not yet
-   * entered the formal \uc785\ubc95\uc608\uace0 process so the system can surface them earlier.
-   */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK, {
     timeZone: CRON_TIMEZONE,
   })
@@ -271,10 +252,6 @@ export class CronJobsService {
     );
   }
 
-  /**
-   * Crawls NsmLmSts pending ("발의") bills on a slower cadence to reduce
-   * upstream connection resets while keeping early detection coverage.
-   */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK, {
     timeZone: CRON_TIMEZONE,
   })
@@ -287,10 +264,6 @@ export class CronJobsService {
     );
   }
 
-  /**
-   * Drains proposalReason retry queue on a dedicated schedule.
-   * Uses append-only repair path (strict immutable snapshot policy).
-   */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.PROPOSAL_REASON_BACKFILL_DRAIN, {
     timeZone: CRON_TIMEZONE,
   })
@@ -307,9 +280,6 @@ export class CronJobsService {
     });
   }
 
-  /**
-   * Syncs isDone flags for expired legislative notices every 6 hours
-   */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC, {
     timeZone: CRON_TIMEZONE,
   })
@@ -322,9 +292,6 @@ export class CronJobsService {
     );
   }
 
-  /**
-   * Runs webhook cleanup daily at midnight
-   */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP, {
     timeZone: CRON_TIMEZONE,
   })
@@ -334,9 +301,6 @@ export class CronJobsService {
     );
   }
 
-  /**
-   * Runs deep system optimization daily at 2 AM
-   */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION, {
     timeZone: CRON_TIMEZONE,
   })
@@ -346,9 +310,6 @@ export class CronJobsService {
     );
   }
 
-  /**
-   * Runs real-time system monitoring and self-healing every hour
-   */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING, {
     timeZone: CRON_TIMEZONE,
   })
@@ -358,11 +319,6 @@ export class CronJobsService {
     );
   }
 
-  /**
-   * Re-validates the SHA-256 integrity of every archive record once a day.
-   * Forces `integrityVerifiedAt` to be refreshed on all verifiable rows so
-   * operators can confirm recency of the last check.
-   */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN, {
     timeZone: CRON_TIMEZONE,
   })
@@ -400,9 +356,6 @@ export class CronJobsService {
     );
   }
 
-  /**
-   * Compacts SQLite database pages to reclaim disk space.
-   */
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SQLITE_VACUUM, {
     timeZone: CRON_TIMEZONE,
   })

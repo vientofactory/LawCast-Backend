@@ -2,11 +2,7 @@ import { BadRequestException, ValidationPipeOptions } from '@nestjs/common';
 import { APP_CONSTANTS } from '../config/app.config';
 
 export class WebhookValidationUtils {
-  /**
-   * Discord 웹훅 URL의 유효성을 검증합니다.
-   */
   static validateDiscordWebhookUrl(url: string): void {
-    // URL 파싱 검증
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(url);
@@ -17,19 +13,16 @@ export class WebhookValidationUtils {
       });
     }
 
-    // Discord 도메인 검증
+    // Validate Discord domain
     this.validateDiscordDomain(parsedUrl.hostname);
 
-    // 웹훅 경로 검증
+    // Validate webhook path
     this.validateWebhookPath(parsedUrl.pathname);
 
-    // 웹훅 ID와 토큰 검증
+    // Validate webhook ID and token
     this.validateWebhookIdAndToken(parsedUrl.pathname);
   }
 
-  /**
-   * Discord 도메인을 검증합니다.
-   */
   private static validateDiscordDomain(hostname: string): void {
     if (hostname !== 'discord.com' && hostname !== 'discordapp.com') {
       throw new BadRequestException({
@@ -39,9 +32,6 @@ export class WebhookValidationUtils {
     }
   }
 
-  /**
-   * 웹훅 경로를 검증합니다.
-   */
   private static validateWebhookPath(pathname: string): void {
     if (!pathname.startsWith('/api/webhooks/')) {
       throw new BadRequestException({
@@ -51,9 +41,6 @@ export class WebhookValidationUtils {
     }
   }
 
-  /**
-   * 웹훅 ID와 토큰을 검증합니다.
-   */
   private static validateWebhookIdAndToken(pathname: string): void {
     const pathParts = pathname.split('/');
 
@@ -71,7 +58,6 @@ export class WebhookValidationUtils {
     const webhookId = pathParts[3];
     const webhookToken = pathParts[4];
 
-    // 웹훅 형식 검증
     if (
       !this.isValidSnowflakeId(webhookId) ||
       !this.isValidWebhookToken(webhookToken)
@@ -83,27 +69,18 @@ export class WebhookValidationUtils {
     }
   }
 
-  /**
-   * Discord Snowflake ID 형식을 검증합니다.
-   */
   private static isValidSnowflakeId(id: string): boolean {
     const { MIN, MAX } = APP_CONSTANTS.DISCORD.WEBHOOK.SNOWFLAKE_ID_LENGTH;
     const regex = new RegExp(`^\\d{${MIN},${MAX}}$`);
     return regex.test(id);
   }
 
-  /**
-   * Discord 웹훅 토큰 형식을 검증합니다.
-   */
   private static isValidWebhookToken(token: string): boolean {
     const { MIN, MAX } = APP_CONSTANTS.DISCORD.WEBHOOK.TOKEN_LENGTH;
     const regex = new RegExp(`^[a-zA-Z0-9_-]{${MIN},${MAX}}$`);
     return regex.test(token);
   }
 
-  /**
-   * 클라이언트 IP 주소를 추출합니다.
-   */
   static extractClientIp(req: any): string {
     return (
       req.ip ||
@@ -113,9 +90,6 @@ export class WebhookValidationUtils {
     );
   }
 
-  /**
-   * ValidationPipe 설정을 반환합니다.
-   */
   static getValidationPipeOptions(): ValidationPipeOptions {
     return {
       whitelist: true,
