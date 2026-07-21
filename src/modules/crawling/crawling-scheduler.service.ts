@@ -4,7 +4,10 @@ import { type CachedNotice } from '../../types/cache.types';
 import { CacheService } from '../cache/cache.service';
 import { CrawlingCoreService } from './crawling-core.service';
 import { SummaryGenerationService } from './summary-generation.service';
-import { ArchiveOrchestratorService } from './archive-orchestrator.service';
+import {
+  ArchiveOrchestratorService,
+  ArchiveReason,
+} from './archive-orchestrator.service';
 import { NotificationOrchestratorService } from '../notification/notification-orchestrator.service';
 import {
   NoticeArchiveService,
@@ -890,7 +893,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       toUpgrade.length > 0
         ? await this.archiveOrchestratorService.archiveNotices(
             toUpgrade.map(toCachedNotice),
-            { reason: 'nsm-pal-upgrade' },
+            { reason: ArchiveReason.PAL_RECOMPARE },
           )
         : 0;
 
@@ -914,7 +917,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     if (toRecompare.length > 0) {
       await this.archiveOrchestratorService.archiveNotices(
         toRecompare.map(toCachedNotice),
-        { reason: 'pal-recompare' },
+        { reason: ArchiveReason.PAL_RECOMPARE },
       );
       this.logger.log(
         `Periodic PAL re-compare scanned ${toRecompare.length} archived notice(s)`,

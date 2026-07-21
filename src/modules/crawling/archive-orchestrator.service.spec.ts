@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ArchiveOrchestratorService } from './archive-orchestrator.service';
+import {
+  ArchiveOrchestratorService,
+  ArchiveReason,
+  NsmArchiveReason,
+} from './archive-orchestrator.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import {
   CrawlingCoreService,
@@ -14,11 +18,15 @@ import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { type CachedNotice } from '../../types/cache.types';
 import { type INsmBillItem } from 'pal-crawl';
+import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 
-// fetch를 모킹
-declare const global: any;
-const mockFetch = jest.fn();
-global.fetch = mockFetch;
+jest.mock('../../utils/http-fetch.utils', () => ({
+  fetchHtmlPage: jest.fn(),
+}));
+
+const mockFetchHtmlPage = fetchHtmlPage as jest.MockedFunction<
+  typeof fetchHtmlPage
+>;
 
 describe('ArchiveOrchestratorService', () => {
   let service: ArchiveOrchestratorService;
@@ -171,26 +179,22 @@ describe('ArchiveOrchestratorService', () => {
       };
 
       const mockResponse = {
-        ok: true,
-        text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
-        url: 'https://example.com/notice/1',
+        data: '<html>Test HTML</html>',
+        statusText: 'OK',
+        config: { url: 'https://example.com/notice/1' },
+        request: { res: { responseUrl: 'https://example.com/notice/1' } },
         status: 200,
         headers: {
-          get: jest.fn((header: string) => {
-            const headers: Record<string, string> = {
-              'content-type': 'text/html',
-              etag: 'test-etag',
-              'last-modified': 'Wed, 21 Oct 2015 07:28:00 GMT',
-            };
-            return headers[header] || null;
-          }),
+          'content-type': 'text/html',
+          etag: 'test-etag',
+          'last-modified': 'Wed, 21 Oct 2015 07:28:00 GMT',
         },
       };
 
       (crawlingCoreService.getContent as jest.Mock).mockResolvedValue(
         mockContent,
       );
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetchHtmlPage.mockResolvedValue(mockResponse as any);
       (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
         undefined,
       );
@@ -198,15 +202,11 @@ describe('ArchiveOrchestratorService', () => {
       await service.archiveNotices([mockNotice]);
 
       expect(crawlingCoreService.getContent).toHaveBeenCalledWith('content-1');
-      expect(mockFetch).toHaveBeenCalledWith(
+      expect(mockFetchHtmlPage).toHaveBeenCalledWith(
         'https://example.com/notice/1',
         expect.objectContaining({
-          method: 'GET',
-          headers: expect.objectContaining({
-            'User-Agent': 'LawCast/1.0 (Legislative Notice Crawler)',
-          }),
-          redirect: 'follow',
-          signal: expect.any(Object),
+          userAgent: 'LawCast/1.0 (Legislative Notice Crawler)',
+          timeoutMs: 15000,
         }),
       );
       expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalledWith(
@@ -238,16 +238,15 @@ describe('ArchiveOrchestratorService', () => {
 
     it('should archive notices without contentId', async () => {
       const mockResponse = {
-        ok: true,
-        text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
-        url: 'https://example.com/notice/2',
+        data: '<html>Test HTML</html>',
         status: 200,
-        headers: {
-          get: jest.fn(() => null),
-        },
+        statusText: 'OK',
+        config: { url: 'https://example.com/notice/2' },
+        request: { res: { responseUrl: 'https://example.com/notice/2' } },
+        headers: {},
       };
 
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetchHtmlPage.mockResolvedValue(mockResponse as any);
       (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
         undefined,
       );
@@ -281,19 +280,18 @@ describe('ArchiveOrchestratorService', () => {
 
     it('should handle content fetch errors gracefully', async () => {
       const mockResponse = {
-        ok: true,
-        text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
-        url: 'https://example.com/notice/1',
+        data: '<html>Test HTML</html>',
         status: 200,
-        headers: {
-          get: jest.fn(() => null),
-        },
+        statusText: 'OK',
+        config: { url: 'https://example.com/notice/1' },
+        request: { res: { responseUrl: 'https://example.com/notice/1' } },
+        headers: {},
       };
 
       (crawlingCoreService.getContent as jest.Mock).mockRejectedValue(
         new Error('Content fetch failed'),
       );
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetchHtmlPage.mockResolvedValue(mockResponse as any);
       (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
         undefined,
       );
@@ -314,7 +312,7 @@ describe('ArchiveOrchestratorService', () => {
         title: 'Test Title',
         proposalReason: 'Test Proposal Reason',
       });
-      mockFetch.mockRejectedValue(new Error('HTML capture failed'));
+      mockFetchHtmlPage.mockRejectedValue(new Error('HTML capture failed'));
       (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
         undefined,
       );
@@ -335,20 +333,19 @@ describe('ArchiveOrchestratorService', () => {
 
     it('should handle archive upsert errors gracefully', async () => {
       const mockResponse = {
-        ok: true,
-        text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
-        url: 'https://example.com/notice/1',
+        data: '<html>Test HTML</html>',
         status: 200,
-        headers: {
-          get: jest.fn(() => null),
-        },
+        statusText: 'OK',
+        config: { url: 'https://example.com/notice/1' },
+        request: { res: { responseUrl: 'https://example.com/notice/1' } },
+        headers: {},
       };
 
       (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
         title: 'Test Title',
         proposalReason: 'Test Proposal Reason',
       });
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetchHtmlPage.mockResolvedValue(mockResponse as any);
       (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockRejectedValue(
         new Error('Archive failed'),
       );
@@ -368,20 +365,19 @@ describe('ArchiveOrchestratorService', () => {
       }));
 
       const mockResponse = {
-        ok: true,
-        text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
-        url: 'https://example.com/notice/1',
+        data: '<html>Test HTML</html>',
         status: 200,
-        headers: {
-          get: jest.fn(() => null),
-        },
+        statusText: 'OK',
+        config: { url: 'https://example.com/notice/1' },
+        request: { res: { responseUrl: 'https://example.com/notice/1' } },
+        headers: {},
       };
 
       (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
         title: 'Test Title',
         proposalReason: 'Test Proposal Reason',
       });
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetchHtmlPage.mockResolvedValue(mockResponse as any);
       (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
         undefined,
       );
@@ -395,20 +391,19 @@ describe('ArchiveOrchestratorService', () => {
 
     it('should log default archiving reason for new notices', async () => {
       const mockResponse = {
-        ok: true,
-        text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
-        url: 'https://example.com/notice/1',
+        data: '<html>Test HTML</html>',
         status: 200,
-        headers: {
-          get: jest.fn(() => null),
-        },
+        statusText: 'OK',
+        config: { url: 'https://example.com/notice/1' },
+        request: { res: { responseUrl: 'https://example.com/notice/1' } },
+        headers: {},
       };
 
       (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
         title: 'Test Title',
         proposalReason: 'Test Proposal Reason',
       });
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetchHtmlPage.mockResolvedValue(mockResponse as any);
       (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
         undefined,
       );
@@ -421,32 +416,33 @@ describe('ArchiveOrchestratorService', () => {
         'Archiving **1** notice(s)',
         expect.objectContaining({
           count: 1,
-          reason: 'new-notices',
+          reason: ArchiveReason.NEW_NOTICES,
         }),
       );
     });
 
     it('should log recompare reason with DEBUG level', async () => {
       const mockResponse = {
-        ok: true,
-        text: jest.fn().mockResolvedValue('<html>Test HTML</html>'),
-        url: 'https://example.com/notice/1',
+        data: '<html>Test HTML</html>',
         status: 200,
-        headers: {
-          get: jest.fn(() => null),
-        },
+        statusText: 'OK',
+        config: { url: 'https://example.com/notice/1' },
+        request: { res: { responseUrl: 'https://example.com/notice/1' } },
+        headers: {},
       };
 
       (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
         title: 'Test Title',
         proposalReason: 'Test Proposal Reason',
       });
-      mockFetch.mockResolvedValue(mockResponse);
+      mockFetchHtmlPage.mockResolvedValue(mockResponse as any);
       (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
         undefined,
       );
 
-      await service.archiveNotices([mockNotice], { reason: 'pal-recompare' });
+      await service.archiveNotices([mockNotice], {
+        reason: ArchiveReason.PAL_RECOMPARE,
+      });
 
       expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
         BridgeLogLevel.DEBUG,
@@ -454,7 +450,7 @@ describe('ArchiveOrchestratorService', () => {
         'Re-comparing archived notices for drift: **1** item(s)',
         expect.objectContaining({
           count: 1,
-          reason: 'pal-recompare',
+          reason: ArchiveReason.PAL_RECOMPARE,
         }),
       );
     });
@@ -811,7 +807,7 @@ describe('ArchiveOrchestratorService', () => {
         'Archiving **1** pending bill(s) from NsmLmSts',
         expect.objectContaining({
           count: 1,
-          reason: 'new-pending-bills',
+          reason: NsmArchiveReason.NEW_PENDING_BILLS,
         }),
       );
     });
@@ -839,7 +835,7 @@ describe('ArchiveOrchestratorService', () => {
       );
 
       await service.archiveNsmBillItems([mockNsmBillItem], {
-        reason: 'existing-pending-recompare',
+        reason: NsmArchiveReason.EXISTING_PENDING_RECOMPARE,
       });
 
       expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
@@ -848,7 +844,7 @@ describe('ArchiveOrchestratorService', () => {
         'Re-scanning archived pending bills from NsmLmSts: **1** item(s)',
         expect.objectContaining({
           count: 1,
-          reason: 'existing-pending-recompare',
+          reason: NsmArchiveReason.EXISTING_PENDING_RECOMPARE,
         }),
       );
     });

@@ -3,7 +3,10 @@ import { type CachedNotice } from '../../../types/cache.types';
 import { APP_CONSTANTS } from '../../../config/app.config';
 import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
 import { mapConcurrently } from '../../../utils/concurrency.utils';
-import { type ArchiveOrchestratorService } from '../archive-orchestrator.service';
+import {
+  NsmArchiveReason,
+  type ArchiveOrchestratorService,
+} from '../archive-orchestrator.service';
 import { type CacheService } from '../../cache/cache.service';
 import { CrawlingCoreService } from '../crawling-core.service';
 import { type NoticeArchiveService } from '../../notice/notice-archive.service';
@@ -276,7 +279,7 @@ export async function refreshExistingPendingBillsInBackgroundInternal(
 ): Promise<void> {
   const refreshed = await deps.archiveOrchestratorService.archiveNsmBillItems(
     items,
-    { reason: 'existing-pending-recompare' },
+    { reason: NsmArchiveReason.EXISTING_PENDING_RECOMPARE },
   );
 
   if (refreshed.length > 0) {
@@ -295,7 +298,7 @@ export async function processPendingBillsInBackgroundInternal(
   try {
     archivedNotices = await deps.archiveOrchestratorService.archiveNsmBillItems(
       newPendingItems,
-      { reason: 'new-pending-bills' },
+      { reason: NsmArchiveReason.NEW_PENDING_BILLS },
     );
   } catch (error) {
     logAndBridge({

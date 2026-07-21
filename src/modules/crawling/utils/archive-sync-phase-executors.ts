@@ -8,7 +8,11 @@ import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../../utils/logger.utils';
 import { mapConcurrently } from '../../../utils/concurrency.utils';
 import { type DiscordBridgeService } from '../../discord-bridge/discord-bridge.service';
-import { type ArchiveOrchestratorService } from '../archive-orchestrator.service';
+import {
+  ArchiveReason,
+  NsmArchiveReason,
+  type ArchiveOrchestratorService,
+} from '../archive-orchestrator.service';
 import { type CacheService } from '../../cache/cache.service';
 import { CrawlingCoreService } from '../crawling-core.service';
 import { type NoticeArchiveService } from '../../notice/notice-archive.service';
@@ -89,7 +93,7 @@ export async function executeFullSyncPhase(
             aiSummary: null,
             aiSummaryStatus: 'not_requested' as const,
           })),
-          { reason: 'full-sync-new-notices' },
+          { reason: ArchiveReason.FULL_SYNC_NEW_NOTICES },
         );
         newlyArchivedCount += saved;
       }
@@ -121,7 +125,7 @@ export async function executeFullSyncPhase(
                 hwpFile: null,
               },
             })),
-            { reason: 'nsm-pal-upgrade' },
+            { reason: ArchiveReason.NSM_PAL_UPGRADE },
           );
           if (upgraded > 0) {
             logAndBridge({
@@ -223,7 +227,7 @@ export async function executePendingSyncPhase(
       const archived =
         await deps.archiveOrchestratorService.archiveNsmBillItems(
           newPendingItems,
-          { reason: 'new-pending-bills' },
+          { reason: NsmArchiveReason.NEW_PENDING_BILLS },
         );
       newlyArchivedCount = archived.length;
     }

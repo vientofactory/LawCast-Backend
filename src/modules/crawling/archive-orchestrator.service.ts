@@ -25,19 +25,26 @@ import { normalizeNoticeNum } from '../../utils/notice-num.utils';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import { ArchiveOrchestratorScreenshotCoordinator } from './utils/archive-orchestrator-screenshot-coordinator';
 
-function normalizeHeaderValue(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
+export enum ArchiveReason {
+  NEW_NOTICES = 'new-notices',
+  FULL_SYNC_NEW_NOTICES = 'full-sync-new-notices',
+  NSM_PAL_UPGRADE = 'nsm-pal-upgrade',
+  PAL_RECOMPARE = 'pal-recompare',
 }
 
-type ArchiveRunReason =
-  'new-notices' | 'full-sync-new-notices' | 'nsm-pal-upgrade' | 'pal-recompare';
+type ArchiveRunReason = (typeof ArchiveReason)[keyof typeof ArchiveReason];
 
 interface ArchiveRunOptions {
   reason?: ArchiveRunReason;
 }
 
+export enum NsmArchiveReason {
+  NEW_PENDING_BILLS = 'new-pending-bills',
+  EXISTING_PENDING_RECOMPARE = 'existing-pending-recompare',
+}
+
 type NsmPendingArchiveReason =
-  'new-pending-bills' | 'existing-pending-recompare';
+  (typeof NsmArchiveReason)[keyof typeof NsmArchiveReason];
 
 interface NsmPendingArchiveOptions {
   reason?: NsmPendingArchiveReason;
@@ -49,13 +56,6 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     ArchiveOrchestratorService.name,
   );
   private readonly screenshotCoordinator: ArchiveOrchestratorScreenshotCoordinator;
-
-  private normalizeProposalReasonText(
-    value: string | null | undefined,
-  ): string | null {
-    const normalized = value?.replace(/\s+/g, ' ').trim();
-    return normalized && normalized.length > 0 ? normalized : null;
-  }
 
   constructor(
     private readonly cacheService: CacheService,
@@ -72,27 +72,38 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     });
   }
 
+  private normalizeProposalReasonText(
+    value: string | null | undefined,
+  ): string | null {
+    const normalized = value?.replace(/\s+/g, ' ').trim();
+    return normalized && normalized.length > 0 ? normalized : null;
+  }
+
+  private normalizeHeaderValue(value: unknown): string | undefined {
+    return typeof value === 'string' ? value : undefined;
+  }
+
   private getArchiveStartLog(
     count: number,
     reason: ArchiveRunReason,
   ): { level: BridgeLogLevel; message: string } {
     switch (reason) {
-      case 'full-sync-new-notices':
+      case ArchiveReason.FULL_SYNC_NEW_NOTICES:
         return {
           level: BridgeLogLevel.DEBUG,
           message: `Full sync archiving new notices: **${count}** item(s)`,
         };
-      case 'nsm-pal-upgrade':
+      case ArchiveReason.NSM_PAL_UPGRADE:
         return {
           level: BridgeLogLevel.DEBUG,
           message: `Refreshing archived notices (NSM->PAL upgrade): **${count}** item(s)`,
         };
-      case 'pal-recompare':
+      case ArchiveReason.PAL_RECOMPARE:
         return {
           level: BridgeLogLevel.DEBUG,
           message: `Re-comparing archived notices for drift: **${count}** item(s)`,
         };
-      case 'new-notices':
+      case ArchiveReason.NEW_NOTICES:
       default:
         return {
           level: BridgeLogLevel.LOG,
@@ -106,12 +117,12 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     reason: NsmPendingArchiveReason,
   ): { level: BridgeLogLevel; message: string } {
     switch (reason) {
-      case 'existing-pending-recompare':
+      case NsmArchiveReason.EXISTING_PENDING_RECOMPARE:
         return {
           level: BridgeLogLevel.DEBUG,
           message: `Re-scanning archived pending bills from NsmLmSts: **${count}** item(s)`,
         };
-      case 'new-pending-bills':
+      case NsmArchiveReason.NEW_PENDING_BILLS:
       default:
         return {
           level: BridgeLogLevel.LOG,
@@ -158,7 +169,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     this.noticeArchiveService.beginChangeNotificationCollection();
 
     try {
-      const reason = options?.reason ?? 'new-notices';
+      const reason = options?.reason ?? ArchiveReason.NEW_NOTICES;
       const startLog = this.getArchiveStartLog(notices.length, reason);
       logAndBridge({
         method: 'log',
@@ -330,7 +341,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     this.noticeArchiveService.beginChangeNotificationCollection();
 
     try {
-      const reason = options?.reason ?? 'new-pending-bills';
+      const reason = options?.reason ?? NsmArchiveReason.NEW_PENDING_BILLS;
       const startLog = this.getNsmPendingArchiveStartLog(items.length, reason);
       logAndBridge({
         method: 'log',
@@ -812,9 +823,13 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
           response.request?.res?.responseUrl ?? response.config.url ?? link,
         fetchedAt: new Date().toISOString(),
         statusCode: response.status,
-        contentType: normalizeHeaderValue(response.headers['content-type']),
-        etag: normalizeHeaderValue(response.headers.etag),
-        lastModified: normalizeHeaderValue(response.headers['last-modified']),
+        contentType: this.normalizeHeaderValue(
+          response.headers['content-type'],
+        ),
+        etag: this.normalizeHeaderValue(response.headers.etag),
+        lastModified: this.normalizeHeaderValue(
+          response.headers['last-modified'],
+        ),
       },
     };
   }
