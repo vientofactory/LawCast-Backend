@@ -616,6 +616,8 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
         {
           provide: NoticeArchiveService,
           useValue: {
+            beginChangeNotificationSuppression: jest.fn(),
+            endChangeNotificationSuppression: jest.fn(),
             beginChangeNotificationCollection: jest.fn(),
             endChangeNotificationCollection: jest
               .fn()

@@ -1,8 +1,8 @@
 {
-  "name": "backend",
+  "name": "lawcast-backend",
   "version": "0.0.1",
   "description": "",
-  "author": "",
+  "author": "vientorepublic",
   "private": true,
   "license": "MIT",
   "scripts": {
@@ -13,12 +13,20 @@
     "start:debug": "NODE_ENV=development nest start --debug --watch",
     "start:prod": "NODE_ENV=production node dist/main",
     "lint": "eslint \"{src,apps,libs}/**/*.ts\" --fix",
-    "test": "jest",
+    "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
-    "test:e2e": "jest --testRegex .*\\.e2e-spec\\.ts$",
+    "test:e2e": "jest --testRegex .*\\.e2e-spec\\.ts$ --runInBand",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vientofactory/Lawcast-Backend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vientofactory/Lawcast-Backend/issues"
+  },
+  "homepage": "https://github.com/vientofactory/Lawcast-Backend#readme",
   "dependencies": {
     "@keyv/redis": "^5.1.4",
     "@nestjs/cache-manager": "^3.0.1",

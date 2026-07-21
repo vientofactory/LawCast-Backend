@@ -13,6 +13,17 @@ export class NotificationOrchestratorService {
     NotificationOrchestratorService.name,
   );
 
+  // Limit for concurrent batch processing
+  private readonly batchConcurrencyLimit = 5;
+  // Timeout for batch processing in milliseconds
+  private readonly batchTimeout = 30000;
+  // Number of retries for failed batch processing
+  private readonly batchRetryCount = 3;
+  // Delay between retries in milliseconds
+  private readonly batchRetryDelay = 1000;
+  // Limit for batch size to prevent overwhelming the system
+  private readonly batchSizeLimit = 50;
+
   constructor(
     private notificationBatchService: NotificationBatchService,
     @Optional() private discordBridge: DiscordBridgeService,
@@ -26,24 +37,27 @@ export class NotificationOrchestratorService {
     try {
       // Apply batch size limit for large notification batches
       const options: BatchProcessingOptions = {
-        concurrency: 5,
-        timeout: 30000,
-        retryCount: 3,
-        retryDelay: 1000,
+        concurrency: this.batchConcurrencyLimit,
+        timeout: this.batchTimeout,
+        retryCount: this.batchRetryCount,
+        retryDelay: this.batchRetryDelay,
       };
 
       // Apply batch size limit if there are more than 50 notifications
-      if (notices.length > 50) {
-        options.batchSize = 50;
+      if (notices.length > this.batchSizeLimit) {
+        options.batchSize = this.batchSizeLimit;
         logAndBridge({
           logger: this.logger,
           method: 'log',
-          message: `Large notification batch detected (${notices.length} notices), applying batch size limit of 50`,
+          message: `Large notification batch detected (${notices.length} notices), applying batch size limit of ${this.batchSizeLimit}`,
           context: NotificationOrchestratorService.name,
           discordBridge: this.discordBridge,
           bridgeLevel: BridgeLogLevel.DEBUG,
-          bridgeMessage: `Large batch detected: **${notices.length}** notices - applying batch size limit of 50`,
-          metadata: { noticeCount: notices.length, batchSizeLimit: 50 },
+          bridgeMessage: `Large batch detected: **${notices.length}** notices - applying batch size limit of ${this.batchSizeLimit}`,
+          metadata: {
+            noticeCount: notices.length,
+            batchSizeLimit: this.batchSizeLimit,
+          },
         });
       }
 

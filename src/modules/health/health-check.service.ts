@@ -4,13 +4,9 @@ import {
   OllamaClientService,
   type OllamaRuntimeMetrics,
 } from '../ollama/ollama-client.service';
-import { LoggerUtils } from '../../utils/logger.utils';
 
 @Injectable()
 export class HealthCheckService {
-  private readonly logger = LoggerUtils.getContextLogger(
-    HealthCheckService.name,
-  );
   private ollamaMetricsCache: OllamaRuntimeMetrics | null = null;
   private ollamaMetricsCacheAt: number | null = null;
   private readonly ollamaMetricsCacheTtlMs = 30000;
