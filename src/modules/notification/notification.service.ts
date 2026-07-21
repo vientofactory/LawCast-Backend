@@ -153,6 +153,19 @@ export class NotificationService {
     });
   }
 
+  async sendDiscordNoticePeriodEndedBatch(
+    payload: ChangeNotificationPayload,
+    webhooks: Webhook[],
+    abortSignal?: AbortSignal,
+  ): Promise<NotificationSendResult[]> {
+    const embed = this.createNoticePeriodEndedEmbed(payload);
+    return this.sendDiscordEmbedBatch(embed, webhooks, {
+      username: 'LawCast 변경 추적',
+      context: 'notice period ended notification',
+      abortSignal,
+    });
+  }
+
   async sendDiscordChangeDigestNotificationBatch(
     payloads: ChangeNotificationPayload[],
     webhooks: Webhook[],
@@ -174,6 +187,31 @@ export class NotificationService {
     return this.sendDiscordEmbedBatch(embed, webhooks, {
       username: 'LawCast 변경 추적',
       context: 'change digest notification',
+      abortSignal,
+    });
+  }
+
+  async sendDiscordNoticePeriodEndedDigestBatch(
+    payloads: ChangeNotificationPayload[],
+    webhooks: Webhook[],
+    abortSignal?: AbortSignal,
+  ): Promise<NotificationSendResult[]> {
+    if (payloads.length === 0) {
+      return [];
+    }
+
+    if (payloads.length === 1) {
+      return this.sendDiscordNoticePeriodEndedBatch(
+        payloads[0],
+        webhooks,
+        abortSignal,
+      );
+    }
+
+    const embed = this.createNoticePeriodEndedDigestEmbed(payloads);
+    return this.sendDiscordEmbedBatch(embed, webhooks, {
+      username: 'LawCast 변경 추적',
+      context: 'notice period ended digest notification',
       abortSignal,
     });
   }
@@ -332,6 +370,34 @@ export class NotificationService {
     return embed;
   }
 
+  private createNoticePeriodEndedEmbed(
+    payload: ChangeNotificationPayload,
+  ): MessageBuilder {
+    const detailUrl =
+      payload.eventHeight && payload.eventHeight > 1
+        ? this.buildFrontendNoticeDetailUrlByNoticeNum(payload.noticeNum, {
+            timeline: 'true',
+            cmpFrom: String(payload.eventHeight - 1),
+            cmpTo: String(payload.eventHeight),
+          })
+        : this.buildFrontendNoticeDetailUrlByNoticeNum(payload.noticeNum, {
+            timeline: 'true',
+          });
+
+    return new MessageBuilder()
+      .setTitle('입법예고 기간 종료 감지')
+      .setDescription(
+        '입법예고 기간 종료가 확인되어 처리 상태가 변경되었습니다.',
+      )
+      .addField('법률안명', payload.subject, false)
+      .addField('의안번호', String(payload.noticeNum), true)
+      .addField('처리 상태', '입법예고 기간 종료', true)
+      .addField('자세히 보기', `[종료 추적 상세](${detailUrl})`, false)
+      .setColor(APP_CONSTANTS.COLORS.DISCORD.SUCCESS)
+      .setTimestamp()
+      .setFooter('LawCast 알림 서비스', '');
+  }
+
   private createChangeDigestNotificationEmbed(
     payloads: ChangeNotificationPayload[],
   ): MessageBuilder {
@@ -436,6 +502,65 @@ export class NotificationService {
       .addField('자세히 보기', `[신규 항목 모아보기](${detailUrl})`, false)
       .addField('감지 항목', this.truncateForEmbed(itemLines.join('\n')), false)
       .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
+      .setTimestamp()
+      .setFooter('LawCast 알림 서비스', '');
+  }
+
+  private createNoticePeriodEndedDigestEmbed(
+    payloads: ChangeNotificationPayload[],
+  ): MessageBuilder {
+    const uniqueNoticeNums = Array.from(
+      new Set(payloads.map((payload) => payload.noticeNum)),
+    );
+    const eventIds = payloads
+      .map((payload) => payload.eventId)
+      .filter(
+        (eventId): eventId is number =>
+          Number.isInteger(eventId) && eventId > 0,
+      );
+    const fromEventId = eventIds.length > 0 ? Math.min(...eventIds) : null;
+    const toEventId = eventIds.length > 0 ? Math.max(...eventIds) : null;
+
+    const detailParams: Record<string, string> = {
+      digest: '1',
+      jumpToFirst: '1',
+      comparableOnly: 'true',
+      excludeLegacyGenesisSource: 'true',
+      limit: '50',
+    };
+
+    if (fromEventId !== null) {
+      detailParams.fromEventId = String(fromEventId);
+    }
+
+    if (toEventId !== null) {
+      detailParams.toEventId = String(toEventId);
+    }
+
+    const detailUrl = this.buildFrontendNoticeChangesUrl(detailParams);
+
+    const itemLines: string[] = [];
+    for (const payload of payloads.slice(0, 6)) {
+      itemLines.push(`• **[${payload.noticeNum}]** ${payload.subject}`);
+    }
+
+    if (payloads.length > 6) {
+      itemLines.push(`... 외 ${payloads.length - 6}건`);
+    }
+
+    return new MessageBuilder()
+      .setTitle(`입법예고 기간 종료 감지 (${payloads.length}건)`)
+      .setDescription(
+        `입법예고 기간 종료가 확인된 ${payloads.length.toLocaleString()}건을 하나로 요약했습니다.`,
+      )
+      .addField(
+        '영향 법률안 수',
+        `${uniqueNoticeNums.length.toLocaleString()}건`,
+        true,
+      )
+      .addField('자세히 보기', `[종료 내역 모아보기](${detailUrl})`, true)
+      .addField('종료 항목', this.truncateForEmbed(itemLines.join('\n')), false)
+      .setColor(APP_CONSTANTS.COLORS.DISCORD.SUCCESS)
       .setTimestamp()
       .setFooter('LawCast 알림 서비스', '');
   }

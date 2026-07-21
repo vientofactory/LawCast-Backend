@@ -114,7 +114,7 @@ export class CrawlingCoreService {
         timeoutMs: 15000,
       });
 
-      const html = await response.text();
+      const html = response.data;
       return this.extractNsmDeletionAlertMessage(html);
     } catch {
       return null;

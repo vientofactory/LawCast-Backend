@@ -350,6 +350,13 @@ export class NotificationBatchService {
       return [];
     }
 
+    const noticePeriodEndedPayloads = payloads.filter((payload) =>
+      payload.changedFields.includes('isDone'),
+    );
+    const regularPayloads = payloads.filter(
+      (payload) => !payload.changedFields.includes('isDone'),
+    );
+
     let activeWebhooks: Awaited<ReturnType<typeof this.webhookService.findAll>>;
     try {
       activeWebhooks = (await this.webhookService.findAll()) ?? [];
@@ -360,52 +367,48 @@ export class NotificationBatchService {
       return [];
     }
 
-    const jobs =
-      payloads.length > 1
-        ? [
-            async (abortSignal: AbortSignal) => {
-              const uniqueNoticeCount = new Set(
-                payloads.map((payload) => payload.noticeNum),
-              ).size;
-              const {
-                successCount,
-                failedCount,
-                deactivated,
-                temporaryFailures,
-              } = await this.dispatchToWebhooks(
-                activeWebhooks,
-                (webhooks) =>
-                  this.notificationService.sendDiscordChangeDigestNotificationBatch(
-                    payloads,
-                    webhooks,
-                    abortSignal,
-                  ),
-                {
-                  itemLabel: `${payloads.length} events across ${uniqueNoticeCount} notices`,
-                  itemType: 'change',
-                },
-              );
+    const jobs: Array<
+      (abortSignal: AbortSignal) => Promise<ChangeNotificationJobResult>
+    > = [];
 
-              return {
-                noticeNum: payloads[0].noticeNum,
-                subject: `변경 ${payloads.length}건 요약`,
-                totalWebhooks: activeWebhooks.length,
-                successCount,
-                failedCount,
-                deactivated,
-                temporaryFailures,
-                aggregatedEventCount: payloads.length,
-                aggregatedNoticeCount: uniqueNoticeCount,
-              };
-            },
-          ]
-        : payloads.map((payload) => async (abortSignal: AbortSignal) => {
-            const {
-              successCount,
-              failedCount,
-              deactivated,
-              temporaryFailures,
-            } = await this.dispatchToWebhooks(
+    if (regularPayloads.length > 0) {
+      if (regularPayloads.length > 1) {
+        jobs.push(async (abortSignal: AbortSignal) => {
+          const uniqueNoticeCount = new Set(
+            regularPayloads.map((payload) => payload.noticeNum),
+          ).size;
+          const { successCount, failedCount, deactivated, temporaryFailures } =
+            await this.dispatchToWebhooks(
+              activeWebhooks,
+              (webhooks) =>
+                this.notificationService.sendDiscordChangeDigestNotificationBatch(
+                  regularPayloads,
+                  webhooks,
+                  abortSignal,
+                ),
+              {
+                itemLabel: `${regularPayloads.length} events across ${uniqueNoticeCount} notices`,
+                itemType: 'change',
+              },
+            );
+
+          return {
+            noticeNum: regularPayloads[0].noticeNum,
+            subject: `변경 ${regularPayloads.length}건 요약`,
+            totalWebhooks: activeWebhooks.length,
+            successCount,
+            failedCount,
+            deactivated,
+            temporaryFailures,
+            aggregatedEventCount: regularPayloads.length,
+            aggregatedNoticeCount: uniqueNoticeCount,
+          };
+        });
+      } else {
+        jobs.push(async (abortSignal: AbortSignal) => {
+          const payload = regularPayloads[0];
+          const { successCount, failedCount, deactivated, temporaryFailures } =
+            await this.dispatchToWebhooks(
               activeWebhooks,
               (webhooks) =>
                 this.notificationService.sendDiscordChangeNotificationBatch(
@@ -419,16 +422,82 @@ export class NotificationBatchService {
               },
             );
 
-            return {
-              noticeNum: payload.noticeNum,
-              subject: payload.subject,
-              totalWebhooks: activeWebhooks.length,
-              successCount,
-              failedCount,
-              deactivated,
-              temporaryFailures,
-            };
-          });
+          return {
+            noticeNum: payload.noticeNum,
+            subject: payload.subject,
+            totalWebhooks: activeWebhooks.length,
+            successCount,
+            failedCount,
+            deactivated,
+            temporaryFailures,
+          };
+        });
+      }
+    }
+
+    if (noticePeriodEndedPayloads.length > 0) {
+      if (noticePeriodEndedPayloads.length > 1) {
+        jobs.push(async (abortSignal: AbortSignal) => {
+          const uniqueNoticeCount = new Set(
+            noticePeriodEndedPayloads.map((payload) => payload.noticeNum),
+          ).size;
+          const { successCount, failedCount, deactivated, temporaryFailures } =
+            await this.dispatchToWebhooks(
+              activeWebhooks,
+              (webhooks) =>
+                this.notificationService.sendDiscordNoticePeriodEndedDigestBatch(
+                  noticePeriodEndedPayloads,
+                  webhooks,
+                  abortSignal,
+                ),
+              {
+                itemLabel: `${noticePeriodEndedPayloads.length} ended events across ${uniqueNoticeCount} notices`,
+                itemType: 'change',
+              },
+            );
+
+          return {
+            noticeNum: noticePeriodEndedPayloads[0].noticeNum,
+            subject: `입법예고 종료 ${noticePeriodEndedPayloads.length}건 요약`,
+            totalWebhooks: activeWebhooks.length,
+            successCount,
+            failedCount,
+            deactivated,
+            temporaryFailures,
+            aggregatedEventCount: noticePeriodEndedPayloads.length,
+            aggregatedNoticeCount: uniqueNoticeCount,
+          };
+        });
+      } else {
+        jobs.push(async (abortSignal: AbortSignal) => {
+          const payload = noticePeriodEndedPayloads[0];
+          const { successCount, failedCount, deactivated, temporaryFailures } =
+            await this.dispatchToWebhooks(
+              activeWebhooks,
+              (webhooks) =>
+                this.notificationService.sendDiscordNoticePeriodEndedBatch(
+                  payload,
+                  webhooks,
+                  abortSignal,
+                ),
+              {
+                itemLabel: `${payload.noticeNum}:${payload.subject}`,
+                itemType: 'change',
+              },
+            );
+
+          return {
+            noticeNum: payload.noticeNum,
+            subject: payload.subject,
+            totalWebhooks: activeWebhooks.length,
+            successCount,
+            failedCount,
+            deactivated,
+            temporaryFailures,
+          };
+        });
+      }
+    }
 
     return this.batchProcessingService.executeBatch<ChangeNotificationJobResult>(
       jobs,

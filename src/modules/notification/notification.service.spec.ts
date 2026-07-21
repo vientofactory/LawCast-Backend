@@ -520,6 +520,114 @@ describe('NotificationService', () => {
     });
   });
 
+  describe('sendDiscordNoticePeriodEndedBatch', () => {
+    const mockWebhooks: Webhook[] = [
+      {
+        id: 13,
+        url: 'https://discord.com/api/webhooks/13/token13',
+        isActive: true,
+      } as Webhook,
+    ];
+
+    it('should render a notice-period-ended embed for isDone changes', async () => {
+      mockDiscordWebhook.send.mockResolvedValue(undefined);
+
+      await service.sendDiscordNoticePeriodEndedBatch(
+        {
+          noticeNum: 5510001,
+          subject: '입법예고 종료 테스트 법률안',
+          eventType: CHANGE_EVENT_TYPE.UPDATED,
+          source: NoticeChangeSource.ARCHIVE_IS_DONE_SYNC,
+          changedFields: ['isDone'],
+          eventHash: 'hash-ended-1',
+          eventHeight: 9,
+        },
+        mockWebhooks,
+      );
+
+      expect(mockMessageBuilder.setTitle).toHaveBeenCalledWith(
+        '입법예고 기간 종료 감지',
+      );
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '처리 상태',
+        '입법예고 기간 종료',
+        true,
+      );
+
+      const detailFieldCall = (
+        mockMessageBuilder.addField as jest.Mock
+      ).mock.calls.find((call) => call[0] === '자세히 보기');
+
+      expect(detailFieldCall).toBeDefined();
+      expect(detailFieldCall?.[1]).toContain('/notices/5510001');
+      expect(detailFieldCall?.[1]).toContain('cmpFrom=8');
+      expect(detailFieldCall?.[1]).toContain('cmpTo=9');
+    });
+  });
+
+  describe('sendDiscordNoticePeriodEndedDigestBatch', () => {
+    const mockWebhooks: Webhook[] = [
+      {
+        id: 14,
+        url: 'https://discord.com/api/webhooks/14/token14',
+        isActive: true,
+      } as Webhook,
+    ];
+
+    it('should send one digest embed when multiple isDone changes are provided', async () => {
+      mockDiscordWebhook.send.mockResolvedValue(undefined);
+
+      const results = await service.sendDiscordNoticePeriodEndedDigestBatch(
+        [
+          {
+            noticeNum: 6610001,
+            subject: '종료 법률안 A',
+            eventType: CHANGE_EVENT_TYPE.UPDATED,
+            source: NoticeChangeSource.ARCHIVE_IS_DONE_SYNC,
+            changedFields: ['isDone'],
+            eventHash: 'hash-ended-a',
+            eventHeight: 2,
+            eventId: 201,
+          },
+          {
+            noticeNum: 6610002,
+            subject: '종료 법률안 B',
+            eventType: CHANGE_EVENT_TYPE.UPDATED,
+            source: NoticeChangeSource.ARCHIVE_IS_DONE_SYNC,
+            changedFields: ['isDone'],
+            eventHash: 'hash-ended-b',
+            eventHeight: 3,
+            eventId: 206,
+          },
+        ],
+        mockWebhooks,
+      );
+
+      expect(mockMessageBuilder.setTitle).toHaveBeenCalledWith(
+        '입법예고 기간 종료 감지 (2건)',
+      );
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '영향 법률안 수',
+        '2건',
+        true,
+      );
+
+      const digestLinkFieldCall = (
+        mockMessageBuilder.addField as jest.Mock
+      ).mock.calls.find((call) => call[0] === '자세히 보기');
+
+      expect(digestLinkFieldCall).toBeDefined();
+      expect(digestLinkFieldCall?.[1]).toContain('/notices/changes?');
+      expect(digestLinkFieldCall?.[1]).toContain('fromEventId=201');
+      expect(digestLinkFieldCall?.[1]).toContain('toEventId=206');
+      expect(digestLinkFieldCall?.[1]).toContain('digest=1');
+      expect(digestLinkFieldCall?.[1]).toContain('jumpToFirst=1');
+      expect(mockDiscordWebhook.send).toHaveBeenCalledTimes(1);
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ webhookId: 14, success: true });
+    });
+  });
+
   describe('sendDiscordNotificationDigestBatch', () => {
     const mockWebhooks: Webhook[] = [
       {

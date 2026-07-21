@@ -21,6 +21,8 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     sendDiscordNotificationDigestBatch: jest.Mock;
     sendDiscordChangeNotificationBatch: jest.Mock;
     sendDiscordChangeDigestNotificationBatch: jest.Mock;
+    sendDiscordNoticePeriodEndedBatch: jest.Mock;
+    sendDiscordNoticePeriodEndedDigestBatch: jest.Mock;
     clearPermanentFailureFlag: jest.Mock;
   };
   let batchProcessingService: {
@@ -70,6 +72,20 @@ describe('NotificationBatchService (diffchain change batching)', () => {
         >()
         .mockResolvedValue([{ webhookId: 1, success: true }]),
       sendDiscordChangeDigestNotificationBatch: jest
+        .fn<
+          (
+            ...args: any[]
+          ) => Promise<Array<{ webhookId: number; success: boolean }>>
+        >()
+        .mockResolvedValue([{ webhookId: 1, success: true }]),
+      sendDiscordNoticePeriodEndedBatch: jest
+        .fn<
+          (
+            ...args: any[]
+          ) => Promise<Array<{ webhookId: number; success: boolean }>>
+        >()
+        .mockResolvedValue([{ webhookId: 1, success: true }]),
+      sendDiscordNoticePeriodEndedDigestBatch: jest
         .fn<
           (
             ...args: any[]
@@ -245,6 +261,96 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     expect(results[0].data).toMatchObject({
       noticeNum: 301,
       subject: '법률안 301',
+    });
+  });
+
+  it('routes isDone payloads through the notice-period-ended notification path', async () => {
+    const payloads: ChangeNotificationPayload[] = [
+      {
+        noticeNum: 401,
+        subject: '종료 법률안 401',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_IS_DONE_SYNC,
+        changedFields: ['isDone'],
+        eventHash: 'hash-ended-401',
+      },
+      {
+        noticeNum: 402,
+        subject: '종료 법률안 402',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_IS_DONE_SYNC,
+        changedFields: ['isDone'],
+        eventHash: 'hash-ended-402',
+      },
+      {
+        noticeNum: 403,
+        subject: '일반 변경 법률안 403',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
+        changedFields: ['subject'],
+        eventHash: 'hash-403',
+      },
+    ];
+
+    const results = await service.executeChangeNotificationBatch(payloads, {
+      concurrency: 1,
+    });
+
+    expect(
+      notificationService.sendDiscordChangeDigestNotificationBatch,
+    ).toHaveBeenCalledTimes(0);
+    expect(
+      notificationService.sendDiscordNoticePeriodEndedDigestBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordChangeNotificationBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordNoticePeriodEndedBatch,
+    ).not.toHaveBeenCalled();
+    expect(results).toHaveLength(2);
+  });
+
+  it('does not send generic change notifications for isDone-only batches', async () => {
+    const payloads: ChangeNotificationPayload[] = [
+      {
+        noticeNum: 501,
+        subject: '종료 법률안 501',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_IS_DONE_SYNC,
+        changedFields: ['isDone'],
+        eventHash: 'hash-ended-501',
+      },
+      {
+        noticeNum: 502,
+        subject: '종료 법률안 502',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_IS_DONE_SYNC,
+        changedFields: ['isDone'],
+        eventHash: 'hash-ended-502',
+      },
+    ];
+
+    const results = await service.executeChangeNotificationBatch(payloads, {
+      concurrency: 1,
+    });
+
+    expect(
+      notificationService.sendDiscordChangeNotificationBatch,
+    ).not.toHaveBeenCalled();
+    expect(
+      notificationService.sendDiscordChangeDigestNotificationBatch,
+    ).not.toHaveBeenCalled();
+    expect(
+      notificationService.sendDiscordNoticePeriodEndedDigestBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordNoticePeriodEndedBatch,
+    ).not.toHaveBeenCalled();
+    expect(results).toHaveLength(1);
+    expect(results[0].data).toMatchObject({
+      aggregatedEventCount: 2,
+      aggregatedNoticeCount: 2,
     });
   });
 

@@ -25,6 +25,10 @@ import { normalizeNoticeNum } from '../../utils/notice-num.utils';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import { ArchiveOrchestratorScreenshotCoordinator } from './utils/archive-orchestrator-screenshot-coordinator';
 
+function normalizeHeaderValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
 type ArchiveRunReason =
   'new-notices' | 'full-sync-new-notices' | 'nsm-pal-upgrade' | 'pal-recompare';
 
@@ -787,13 +791,13 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       timeoutMs: 15000,
     });
 
-    if (!response.ok) {
+    if (response.status < 200 || response.status >= 300) {
       throw new Error(
         `HTTP ${response.status} ${response.statusText} fetching ${link}`,
       );
     }
 
-    const html = await response.text();
+    const html = response.data;
 
     if (!html.trim()) {
       throw new Error('Captured HTML is empty');
@@ -804,12 +808,13 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       sha256: this.computeSha256(html),
       httpMetadata: {
         requestUrl: link,
-        responseUrl: response.url,
+        responseUrl:
+          response.request?.res?.responseUrl ?? response.config.url ?? link,
         fetchedAt: new Date().toISOString(),
         statusCode: response.status,
-        contentType: response.headers.get('content-type') || undefined,
-        etag: response.headers.get('etag') || undefined,
-        lastModified: response.headers.get('last-modified') || undefined,
+        contentType: normalizeHeaderValue(response.headers['content-type']),
+        etag: normalizeHeaderValue(response.headers.etag),
+        lastModified: normalizeHeaderValue(response.headers['last-modified']),
       },
     };
   }
