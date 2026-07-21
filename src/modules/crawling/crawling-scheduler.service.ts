@@ -319,9 +319,6 @@ export class CrawlingSchedulerService implements OnModuleInit {
   private async initializeCacheFromArchive(
     archivedCount: number,
   ): Promise<void> {
-    this.logger.log(
-      `Archive has ${archivedCount} notices - loading cache from DB (no external crawl)`,
-    );
     logAndBridge({
       logger: this.logger,
       method: 'log',
@@ -360,9 +357,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     }
 
     await this.cacheService.updateCache(notices);
-    this.logger.log(
-      `Initialized Redis cache with ${notices.length} notices (from archive DB, no crawl)`,
-    );
+
     logAndBridge({
       logger: this.logger,
       method: 'log',
@@ -457,9 +452,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     }
 
     await this.cacheService.updateCache(noticesWithSummary);
-    this.logger.log(
-      `Initialized Redis cache with ${noticesWithSummary.length} notices (crawled)`,
-    );
+
     logAndBridge({
       logger: this.logger,
       method: 'log',
