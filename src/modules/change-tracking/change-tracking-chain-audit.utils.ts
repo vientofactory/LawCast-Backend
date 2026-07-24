@@ -57,6 +57,17 @@ export interface ChangeTrackingChainAuditDeps {
   discordBridge?: DiscordBridgeService;
 }
 
+export enum ChainVerificationErrorCode {
+  EventHeightGap = 'event_height_gap',
+  PrevHashMismatch = 'prev_hash_mismatch',
+  EventHashMismatch = 'event_hash_mismatch',
+  EventTypeMismatch = 'event_type_mismatch',
+  ChangedFieldCountMismatch = 'changed_field_count_mismatch',
+  DiffSummaryMismatch = 'diff_summary_mismatch',
+  DetailBeforeHashMismatch = 'detail_before_hash_mismatch',
+  DetailAfterHashMismatch = 'detail_after_hash_mismatch',
+}
+
 export async function runScheduledChainAuditInternal(
   deps: ChangeTrackingChainAuditDeps,
   scope: 'daily' | 'weekly',
@@ -124,7 +135,8 @@ async function verifyAllChains(
 
   const reports: ChainVerificationReport[] = [];
   for (const raw of rawNoticeNums) {
-    reports.push(await verifyNoticeChain(deps, Number(raw.noticeNum)));
+    const result = await verifyNoticeChain(deps, Number(raw.noticeNum));
+    reports.push(result);
   }
 
   return reports;
@@ -157,7 +169,8 @@ async function verifyNoticeChain(
   let previousHash: string | null = null;
   let currentState = createEmptyTrackedState();
 
-  events.forEach((event, index) => {
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
     const eventDetails = detailsByEventId.get(event.id) ?? [];
     const beforeState = index === 0 ? null : { ...currentState };
     const nextState = applyDetailsToTrackedState(currentState, eventDetails);
@@ -177,7 +190,7 @@ async function verifyNoticeChain(
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
-        code: 'event_height_gap',
+        code: ChainVerificationErrorCode.EventHeightGap,
         message: `Expected event height ${index + 1} but found ${event.eventHeight}`,
       });
     }
@@ -188,7 +201,7 @@ async function verifyNoticeChain(
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
-        code: 'prev_hash_mismatch',
+        code: ChainVerificationErrorCode.PrevHashMismatch,
         message: `Expected prev_event_hash ${expectedPrevHash ?? 'null'} but found ${event.prevEventHash ?? 'null'}`,
       });
     }
@@ -198,7 +211,7 @@ async function verifyNoticeChain(
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
-        code: 'event_hash_mismatch',
+        code: ChainVerificationErrorCode.EventHashMismatch,
         message:
           'Stored event hash does not match the reconstructed canonical event hash',
       });
@@ -209,7 +222,7 @@ async function verifyNoticeChain(
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
-        code: 'event_type_mismatch',
+        code: ChainVerificationErrorCode.EventTypeMismatch,
         message: `Expected event type ${rebuilt.eventType} but found ${event.eventType}`,
       });
     }
@@ -219,7 +232,7 @@ async function verifyNoticeChain(
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
-        code: 'changed_field_count_mismatch',
+        code: ChainVerificationErrorCode.ChangedFieldCountMismatch,
         message: `Expected changedFieldCount ${rebuilt.diff.changedFieldCount} but found ${event.changedFieldCount}`,
       });
     }
@@ -229,7 +242,7 @@ async function verifyNoticeChain(
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
-        code: 'diff_summary_mismatch',
+        code: ChainVerificationErrorCode.DiffSummaryMismatch,
         message:
           'Stored diff summary does not match the reconstructed diff summary',
       });
@@ -246,7 +259,7 @@ async function verifyNoticeChain(
           noticeNum,
           eventId: event.id,
           eventHeight: event.eventHeight,
-          code: 'detail_before_hash_mismatch',
+          code: ChainVerificationErrorCode.DetailBeforeHashMismatch,
           message: `before_hash mismatch on field ${detail.fieldPath}`,
         });
       }
@@ -256,7 +269,7 @@ async function verifyNoticeChain(
           noticeNum,
           eventId: event.id,
           eventHeight: event.eventHeight,
-          code: 'detail_after_hash_mismatch',
+          code: ChainVerificationErrorCode.DetailAfterHashMismatch,
           message: `after_hash mismatch on field ${detail.fieldPath}`,
         });
       }
@@ -264,7 +277,7 @@ async function verifyNoticeChain(
 
     currentState = nextState;
     previousHash = event.eventHash;
-  });
+  }
 
   return {
     noticeNum,

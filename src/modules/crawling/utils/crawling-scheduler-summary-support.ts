@@ -88,11 +88,12 @@ export class CrawlingSchedulerSummarySupport {
     );
 
     const persistedNoticeNums = new Set<number>();
-    persistResults.forEach((result, index) => {
+    for (let index = 0; index < persistResults.length; index += 1) {
+      const result = persistResults[index];
       if (result.status === 'fulfilled') {
         persistedNoticeNums.add(changedRetriedNotices[index].num);
       }
-    });
+    }
 
     const persistFailed = persistResults.filter(
       (result) => result.status === 'rejected',
@@ -228,11 +229,12 @@ export class CrawlingSchedulerSummarySupport {
     );
 
     const persistedNoticeNums = new Set<number>();
-    persistResults.forEach((result, index) => {
+    for (let index = 0; index < persistResults.length; index += 1) {
+      const result = persistResults[index];
       if (result.status === 'fulfilled') {
         persistedNoticeNums.add(changedRetriedNotices[index].num);
       }
-    });
+    }
 
     const persistFailed = persistResults.filter(
       (result) => result.status === 'rejected',

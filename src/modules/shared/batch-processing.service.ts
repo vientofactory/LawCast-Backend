@@ -423,9 +423,9 @@ export class BatchProcessingService implements OnApplicationShutdown {
    * Clear all active timeouts (for testing purposes)
    */
   clearAllTimeouts(): void {
-    this.activeTimeouts.forEach((timeoutId) => {
+    for (const timeoutId of this.activeTimeouts) {
       clearTimeout(timeoutId);
-    });
+    }
     this.activeTimeouts.clear();
   }
 

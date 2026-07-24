@@ -204,9 +204,9 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
     const cachedNotices: CachedNotice[] =
       cacheService.updateCache.mock.calls[0][0];
     expect(cachedNotices.length).toBeGreaterThan(0);
-    cachedNotices.forEach((n) =>
-      expect(n.aiSummaryStatus).toBe('not_requested'),
-    );
+    for (const cachedNotice of cachedNotices) {
+      expect(cachedNotice.aiSummaryStatus).toBe('not_requested');
+    }
   });
 
   it('Archive failure (archiveNotices) during initializeCache → cache still updated', async () => {

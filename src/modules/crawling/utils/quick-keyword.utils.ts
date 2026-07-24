@@ -93,17 +93,18 @@ export function buildQuickKeywordSuggestionsCache(
   const sourceNotices = notices.slice(0, sourceLimit);
   const total = sourceNotices.length;
 
-  sourceNotices.forEach((notice, index) => {
+  for (let index = 0; index < sourceNotices.length; index += 1) {
+    const notice = sourceNotices[index];
     const recencyWeight = 1 + (total - index) / Math.max(1, total);
     const tokens = extractKeywordTokens(notice.subject);
     const uniqueTokens = new Set(tokens);
 
-    uniqueTokens.forEach((token) => {
+    for (const token of uniqueTokens) {
       const existing = ranked.get(token);
       if (existing) {
         existing.score += recencyWeight;
         existing.matchCount += 1;
-        return;
+        continue;
       }
 
       ranked.set(token, {
@@ -111,8 +112,8 @@ export function buildQuickKeywordSuggestionsCache(
         score: recencyWeight,
         matchCount: 1,
       });
-    });
-  });
+    }
+  }
 
   const items = Array.from(ranked.values())
     .sort((left, right) => {
