@@ -118,6 +118,7 @@ export class CrawlingService {
   getSchedulerExecutionState(): {
     isInitialized: boolean;
     isProcessing: boolean;
+    isPendingProcessing: boolean;
     activeBackgroundTaskCount: number;
     activeBackgroundTasks: string[];
   } {

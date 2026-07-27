@@ -36,6 +36,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     CrawlingSchedulerService.name,
   );
   private isProcessing = false;
+  private isPendingProcessing = false;
   private isInitialized = false;
   private readonly activeBackgroundTasks = new Set<string>();
   private readonly summarySupport: CrawlingSchedulerSummarySupport;
@@ -220,6 +221,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
   isBusy(options: { includeBackground?: boolean } = {}): boolean {
     const includeBackground = options.includeBackground ?? true;
     if (this.isProcessing) return true;
+    if (this.isPendingProcessing) return true;
     if (includeBackground && this.activeBackgroundTasks.size > 0) return true;
     return false;
   }
@@ -234,7 +236,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     while (this.isBusy({ includeBackground: true })) {
       if (Date.now() - startedAt >= timeoutMs) {
         throw new Error(
-          `crawling scheduler still busy after ${timeoutMs}ms (activeBackgroundTasks=${this.activeBackgroundTasks.size}, isProcessing=${this.isProcessing})`,
+          `crawling scheduler still busy after ${timeoutMs}ms (activeBackgroundTasks=${this.activeBackgroundTasks.size}, isProcessing=${this.isProcessing}, isPendingProcessing=${this.isPendingProcessing})`,
         );
       }
 
@@ -246,12 +248,14 @@ export class CrawlingSchedulerService implements OnModuleInit {
   getExecutionState(): {
     isInitialized: boolean;
     isProcessing: boolean;
+    isPendingProcessing: boolean;
     activeBackgroundTaskCount: number;
     activeBackgroundTasks: string[];
   } {
     return {
       isInitialized: this.isInitialized,
       isProcessing: this.isProcessing,
+      isPendingProcessing: this.isPendingProcessing,
       activeBackgroundTaskCount: this.activeBackgroundTasks.size,
       activeBackgroundTasks: Array.from(this.activeBackgroundTasks).sort(),
     };
@@ -927,10 +931,33 @@ export class CrawlingSchedulerService implements OnModuleInit {
    * a slow NsmLmSts response never delays pal.assembly.go.kr processing.
    */
   async handlePendingCron(): Promise<void> {
-    await handlePendingCronInternal(
-      this.getPendingWorkflowDeps(),
-      PENDING_CRAWL_MAX_RETRIES,
-      PENDING_CRAWL_RETRY_BASE_MS,
-    );
+    if (!this.isInitialized) {
+      this.logger.warn('Cache not initialized yet, skipping pending cron job');
+      return;
+    }
+
+    if (this.isPendingProcessing) {
+      logAndBridge({
+        logger: this.logger,
+        method: 'warn',
+        message: 'Previous pending crawl process is still running, skipping...',
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+      });
+      return;
+    }
+
+    this.isPendingProcessing = true;
+
+    try {
+      await handlePendingCronInternal(
+        this.getPendingWorkflowDeps(),
+        PENDING_CRAWL_MAX_RETRIES,
+        PENDING_CRAWL_RETRY_BASE_MS,
+      );
+    } finally {
+      this.isPendingProcessing = false;
+    }
   }
 }

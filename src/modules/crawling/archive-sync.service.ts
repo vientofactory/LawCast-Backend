@@ -417,6 +417,7 @@ export class ArchiveSyncService implements OnModuleInit {
       () => this.executeFullSync(),
       (r) =>
         `pages=${r.totalPagesScanned} scanned=${r.totalNoticesScanned} archived=${r.newlyArchivedCount}`,
+      /* crossPhaseGuard */ true,
     );
   }
 
@@ -446,6 +447,7 @@ export class ArchiveSyncService implements OnModuleInit {
       trigger,
       () => this.executePendingSync(),
       (r) => `scanned=${r.totalScanned} archived=${r.newlyArchivedCount}`,
+      /* crossPhaseGuard */ true,
     );
   }
 
@@ -580,6 +582,7 @@ export class ArchiveSyncService implements OnModuleInit {
       () => this.executeSummaryBackfill(),
       (r) =>
         `scanned=${r.scanned} generated=${r.generated} skipped=${r.skipped} failed=${r.failed} retryScanned=${r.retryScanned} recovered=${r.recovered} stillFailed=${r.stillFailed}`,
+      /* crossPhaseGuard */ true,
     );
   }
 

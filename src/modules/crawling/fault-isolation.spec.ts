@@ -1007,6 +1007,30 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     const firstResult = await firstCall;
     expect(firstResult).not.toBeNull();
   });
+
+  it('Running different phases concurrently with cross-phase guard → second phase returns null (skipped)', async () => {
+    let resolveFirst!: () => void;
+    const firstCallBlocker = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+
+    noticeArchiveService.getPendingSummaryPage.mockImplementationOnce(
+      async () => {
+        await firstCallBlocker;
+        return [] as any;
+      },
+    );
+    noticeArchiveService.getUnavailableSummaryPage.mockResolvedValue([]);
+
+    const firstCall = service.runSummaryBackfill('first');
+
+    const secondResult = await service.runFullSync('second');
+    expect(secondResult).toBeNull();
+
+    resolveFirst();
+    const firstResult = await firstCall;
+    expect(firstResult).not.toBeNull();
+  });
 });
 
 // ─── Suite 5: CrawlingCoreService ────────────────────────────────────────────

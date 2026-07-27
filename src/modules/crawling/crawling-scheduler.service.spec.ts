@@ -522,10 +522,19 @@ describe('CrawlingSchedulerService', () => {
 
     beforeEach(() => {
       (service as any).isInitialized = true;
+      (service as any).isPendingProcessing = false;
     });
 
     it('should skip if cache not initialized', async () => {
       (service as any).isInitialized = false;
+
+      await service.handlePendingCron();
+
+      expect(crawlingCoreService.getAllNsmPendingPages).not.toHaveBeenCalled();
+    });
+
+    it('should skip when previous pending crawl is still running', async () => {
+      (service as any).isPendingProcessing = true;
 
       await service.handlePendingCron();
 
@@ -591,6 +600,24 @@ describe('CrawlingSchedulerService', () => {
       expect(crawlingCoreService.getAllNsmPendingPages).toHaveBeenCalledTimes(
         expectedAttempts,
       );
+    });
+
+    it('should release pending processing lock after failure path completes', async () => {
+      const econnreset = Object.assign(new Error('read ECONNRESET'), {
+        code: 'ECONNRESET',
+      });
+
+      (
+        crawlingCoreService.getAllNsmPendingPages as jest.Mock
+      ).mockImplementation(() => mockRejectingPendingPages(econnreset));
+
+      jest.useFakeTimers();
+      const pendingCronPromise = service.handlePendingCron();
+      await jest.runAllTimersAsync();
+      await pendingCronPromise;
+      jest.useRealTimers();
+
+      expect((service as any).isPendingProcessing).toBe(false);
     });
   });
 });
