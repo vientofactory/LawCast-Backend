@@ -570,9 +570,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     );
     if (alreadyArchivedWithContentId.length > 0) {
       this.runBackgroundTask('refresh-existing-pal-notices', async () => {
-        await this.refreshExistingPalNoticesInBackground(
-          alreadyArchivedWithContentId,
-        );
+        await this.refreshExistingPalNoticesInBackground();
       });
     }
 
@@ -842,31 +840,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
    * `contentId = NULL`, then re-archives them using PAL detail/source HTML
    * once PAL exposes a real contentId for the same notice number.
    */
-  private async refreshExistingPalNoticesInBackground(
-    itemsWithContentId: ITableData[],
-  ): Promise<void> {
-    const compareBatchLimit =
-      APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_BATCH_SIZE;
-    const nullContentIdNums =
-      await this.noticeArchiveService.getArchivedNullContentIdNums(
-        itemsWithContentId.map((item) => item.num),
-      );
-
-    if (nullContentIdNums.size === 0) {
-      return;
-    }
-
-    const toUpgrade = itemsWithContentId.filter((item) =>
-      nullContentIdNums.has(item.num),
-    );
-    const toRecompare = itemsWithContentId
-      .filter((item) => !nullContentIdNums.has(item.num))
-      .slice(0, compareBatchLimit);
-
-    if (toUpgrade.length === 0 && toRecompare.length === 0) {
-      return;
-    }
-
+  private async refreshExistingPalNoticesInBackground(): Promise<void> {
     const toCachedNotice = (item: ITableData): CachedNotice => {
       return {
         num: item.num,
@@ -882,30 +856,55 @@ export class CrawlingSchedulerService implements OnModuleInit {
       };
     };
 
-    const upgraded =
-      toUpgrade.length > 0
-        ? await this.archiveOrchestratorService.archiveNotices(
-            toUpgrade.map(toCachedNotice),
-            { reason: ArchiveReason.PAL_RECOMPARE },
-          )
-        : 0;
+    const fullCrawledData = await this.crawlingCoreService.crawlAllPages({
+      delayMs: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_CRON_DELAY_MS,
+    });
 
-    if (upgraded > 0) {
-      logAndBridge({
-        logger: this.logger,
-        method: 'log',
-        message: `Periodic NSM->PAL archive refresh updated ${upgraded} bill(s)`,
-        context: CrawlingSchedulerService.name,
-        discordBridge: this.discordBridge,
-        bridgeLevel: BridgeLogLevel.DEBUG,
-        bridgeMessage: `Periodic NSM->PAL archive refresh: upgraded **${upgraded}** bill(s)`,
-        metadata: {
-          upgraded,
-          detected: toUpgrade.length,
-          sampleNoticeNums: toUpgrade.slice(0, 10).map((item) => item.num),
-        },
-      });
+    if (fullCrawledData.length === 0) {
+      return;
     }
+
+    const nullContentIdNums =
+      (await this.noticeArchiveService.getArchivedNullContentIdNums(
+        fullCrawledData.map((item) => item.num),
+      )) ?? new Set<number>();
+
+    const toUpgrade = fullCrawledData.filter((item) =>
+      nullContentIdNums.has(item.num),
+    );
+
+    if (toUpgrade.length > 0) {
+      const upgraded = await this.archiveOrchestratorService.archiveNotices(
+        toUpgrade.map(toCachedNotice),
+        { reason: ArchiveReason.PAL_RECOMPARE },
+      );
+
+      if (upgraded > 0) {
+        logAndBridge({
+          logger: this.logger,
+          method: 'log',
+          message: `Periodic NSM->PAL archive refresh updated ${upgraded} bill(s)`,
+          context: CrawlingSchedulerService.name,
+          discordBridge: this.discordBridge,
+          bridgeLevel: BridgeLogLevel.DEBUG,
+          bridgeMessage: `Periodic NSM->PAL archive refresh: upgraded **${upgraded}** bill(s)`,
+          metadata: {
+            upgraded,
+            detected: toUpgrade.length,
+            sampleNoticeNums: toUpgrade.slice(0, 10).map((item) => item.num),
+          },
+        });
+      }
+    }
+
+    const archivedCandidates =
+      await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
+        fullCrawledData,
+      );
+
+    const toRecompare = archivedCandidates.filter(
+      (item) => !nullContentIdNums.has(item.num),
+    );
 
     if (toRecompare.length > 0) {
       await this.archiveOrchestratorService.archiveNotices(
@@ -913,7 +912,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
         { reason: ArchiveReason.PAL_RECOMPARE },
       );
       this.logger.log(
-        `Periodic PAL re-compare scanned ${toRecompare.length} archived notice(s)`,
+        `Periodic PAL re-compare scanned ${toRecompare.length} archived notice(s) across all pages`,
       );
     }
   }

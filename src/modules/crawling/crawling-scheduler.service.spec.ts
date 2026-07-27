@@ -8,6 +8,7 @@ import { NotificationOrchestratorService } from '../notification/notification-or
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type ITableData } from 'pal-crawl';
+import { ArchiveReason } from './archive-orchestrator.service';
 
 describe('CrawlingSchedulerService', () => {
   let service: CrawlingSchedulerService;
@@ -104,6 +105,7 @@ describe('CrawlingSchedulerService', () => {
             getSummaryStateByNoticeNums: jest.fn(),
             updateSummaryStateByNoticeNum: jest.fn(),
             getExistingNoticeNumSet: jest.fn(),
+            getArchivedNullContentIdNums: jest.fn(),
           },
         },
       ],
@@ -347,6 +349,73 @@ describe('CrawlingSchedulerService', () => {
         notificationOrchestratorService.sendNotifications,
       ).not.toHaveBeenCalled();
       expect(cacheService.updateCache).toHaveBeenCalled();
+    });
+
+    it('should re-crawl all pages for PAL re-compare when the fast crawl spans a full page', async () => {
+      const comparePage = Array.from(
+        { length: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_PAGE_UNIT },
+        (_, index) => ({
+          num: index + 1,
+          subject: `테스트 입법예고 ${index + 1}`,
+          proposerCategory: '정부',
+          committee: '법제사법위원회',
+          numComments: 0,
+          link: `/test/link/${index + 1}`,
+          contentId: `content-${index + 1}`,
+          attachments: { pdfFile: '', hwpFile: '' },
+        }),
+      );
+
+      (cacheService.getRecentNotices as jest.Mock).mockResolvedValue([
+        comparePage[0],
+      ]);
+      (crawlingCoreService.crawlAllPages as jest.Mock)
+        .mockResolvedValueOnce(comparePage)
+        .mockResolvedValueOnce(comparePage);
+      (cacheService.findNewNotices as jest.Mock).mockResolvedValue([]);
+      (archiveOrchestratorService.filterAlreadyArchivedNotices as jest.Mock)
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce(comparePage);
+      (
+        noticeArchiveService.getArchivedNullContentIdNums as jest.Mock
+      ).mockResolvedValue(new Set<number>());
+      (cacheService.updateCache as jest.Mock).mockResolvedValue(undefined);
+
+      await service.handleCron();
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (
+          (crawlingCoreService.crawlAllPages as jest.Mock).mock.calls.length >=
+          2
+        ) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (
+          (archiveOrchestratorService.archiveNotices as jest.Mock).mock.calls
+            .length > 0
+        ) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      expect(crawlingCoreService.crawlAllPages).toHaveBeenNthCalledWith(1, {
+        stopBelowNum: comparePage[0].num,
+        delayMs: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_CRON_DELAY_MS,
+      });
+      expect(crawlingCoreService.crawlAllPages).toHaveBeenNthCalledWith(2, {
+        delayMs: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_CRON_DELAY_MS,
+      });
+      expect(archiveOrchestratorService.archiveNotices).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ num: comparePage[0].num }),
+        ]),
+        { reason: ArchiveReason.PAL_RECOMPARE },
+      );
     });
 
     it('should handle errors gracefully', async () => {
