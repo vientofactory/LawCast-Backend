@@ -404,10 +404,6 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handleDatabaseMirrorUpload(): Promise<void> {
-    if (this.shouldSkipDatabaseMaintenanceCron('database mirror upload')) {
-      return;
-    }
-
     await this.execute('database mirror upload', async () => {
       await this.dbMirrorService.runMirrorJob();
     });
