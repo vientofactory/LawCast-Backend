@@ -94,6 +94,16 @@ FRONTEND_URL=http://localhost:5173
 # Cron timezone
 CRON_TIMEZONE=Asia/Seoul
 
+# Database mirror to file.kiwi (optional)
+FILE_MIRROR_ENABLED=false
+FILE_MIRROR_CRON=47 6 * * *
+FILE_MIRROR_API_BASE_URL=https://api.file.kiwi
+FILE_MIRROR_DUMP_DIR=./tmp/db-mirror
+FILE_MIRROR_TITLE_PREFIX=lawcast-db-mirror
+FILE_MIRROR_KEEP_LOCAL_DUMP=false
+FILE_MIRROR_TEST_UPLOAD_ON_STARTUP=false
+FILE_MIRROR_DISCORD_CHANNEL_ID=
+
 # Discord Debug Bridge (optional)
 DISCORD_BRIDGE_ENABLED=false
 DISCORD_BRIDGE_BOT_TOKEN=
@@ -138,6 +148,7 @@ DISCORD_BRIDGE_ADMIN_USER_IDS=
 - `19 4 * * 1`: change-tracking weekly audit (매주 월요일 04:19 실행)
 - `11 * * * *`: quick keywords refresh (매시 11분 실행)
 - `31 5 * * 0`: sqlite vacuum (매주 일요일 05:31 실행, DB 파일 공간 회수)
+- `47 6 * * *`: database mirror upload (매일 06:47 실행, 민감 테이블 제외 dump를 file.kiwi API로 업로드)
 
 ## 크론/페이즈 락
 

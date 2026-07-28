@@ -1,4 +1,5 @@
 import path from 'node:path';
+import os from 'node:os';
 
 export interface AppConfig {
   port: number;
@@ -27,6 +28,15 @@ export interface AppConfig {
   };
   cron: {
     timezone: string;
+  };
+  fileMirror: {
+    enabled: boolean;
+    apiBaseUrl: string;
+    dumpDir: string;
+    titlePrefix: string;
+    keepLocalDump: boolean;
+    testUploadOnStartup: boolean;
+    discordChannelId: string;
   };
   discordBridge: {
     enabled: boolean;
@@ -278,6 +288,7 @@ export const APP_CONSTANTS = {
       CHANGE_TRACKING_WEEKLY_AUDIT: '19 4 * * 1', // Every Monday at 04:19
       QUICK_KEYWORDS_REFRESH: '11 * * * *', // Every hour, refresh homepage keyword suggestions
       SQLITE_VACUUM: '31 5 * * 0', // Every Sunday at 05:31, after nightly maintenance tasks
+      DATABASE_MIRROR_UPLOAD: process.env.FILE_MIRROR_CRON || '47 6 * * *', // Daily at 06:47, after nightly maintenance tasks
     },
   },
 } as const;
@@ -315,6 +326,25 @@ export default (): AppConfig => ({
   },
   cron: {
     timezone: process.env.CRON_TIMEZONE || 'Asia/Seoul',
+  },
+  fileMirror: {
+    enabled: parseBooleanWithDefault(process.env.FILE_MIRROR_ENABLED, false),
+    apiBaseUrl:
+      process.env.FILE_MIRROR_API_BASE_URL?.trim() || 'https://api.file.kiwi',
+    dumpDir:
+      process.env.FILE_MIRROR_DUMP_DIR?.trim() ||
+      path.join(os.tmpdir(), 'lawcast-db-mirror'),
+    titlePrefix:
+      process.env.FILE_MIRROR_TITLE_PREFIX?.trim() || 'lawcast-db-mirror',
+    keepLocalDump: parseBooleanWithDefault(
+      process.env.FILE_MIRROR_KEEP_LOCAL_DUMP,
+      false,
+    ),
+    testUploadOnStartup: parseBooleanWithDefault(
+      process.env.FILE_MIRROR_TEST_UPLOAD_ON_STARTUP,
+      false,
+    ),
+    discordChannelId: process.env.FILE_MIRROR_DISCORD_CHANNEL_ID?.trim() || '',
   },
   discordBridge: {
     enabled: process.env.DISCORD_BRIDGE_ENABLED === 'true',

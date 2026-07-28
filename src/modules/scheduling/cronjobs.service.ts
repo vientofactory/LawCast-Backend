@@ -8,6 +8,7 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { ArchiveSyncService } from '../crawling/archive-sync.service';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
+import { DbMirrorService } from '../db-mirror/db-mirror.service';
 import { logAndBridge } from '../../utils/bridge-log.utils';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 
@@ -25,6 +26,7 @@ export class CronJobsService {
     private readonly crawlingService: CrawlingService,
     private readonly archiveSyncService: ArchiveSyncService,
     private readonly changeTrackingService: ChangeTrackingService,
+    private readonly dbMirrorService: DbMirrorService,
     @Optional() private readonly discordBridge: DiscordBridgeService,
   ) {}
 
@@ -395,6 +397,19 @@ export class CronJobsService {
         context: CronJobsService.name,
         discordBridge: this.discordBridge,
       });
+    });
+  }
+
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.DATABASE_MIRROR_UPLOAD, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleDatabaseMirrorUpload(): Promise<void> {
+    if (this.shouldSkipDatabaseMaintenanceCron('database mirror upload')) {
+      return;
+    }
+
+    await this.execute('database mirror upload', async () => {
+      await this.dbMirrorService.runMirrorJob();
     });
   }
 }

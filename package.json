@@ -28,6 +28,7 @@
   },
   "homepage": "https://github.com/vientofactory/Lawcast-Backend#readme",
   "dependencies": {
+    "@file-kiwi/node": "^1.0.9",
     "@keyv/redis": "^5.1.4",
     "@nestjs/cache-manager": "^3.0.1",
     "@nestjs/common": "^11.0.0",

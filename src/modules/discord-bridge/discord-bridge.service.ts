@@ -4,6 +4,7 @@ import {
   Client,
   GatewayIntentBits,
   TextChannel,
+  Message,
   EmbedBuilder,
   Events,
   REST,
@@ -69,6 +70,10 @@ const SLASH_COMMAND_DEFINITIONS = [
     ],
   },
 ] as const;
+
+const DB_MIRROR_ANNOUNCEMENT_FOOTER = 'Database Mirror Announcement';
+const DB_MIRROR_ANNOUNCEMENT_LEGACY_FOOTER = 'LawCast DB Mirror Announcement';
+const DB_MIRROR_ANNOUNCEMENT_TITLE = 'LawCast Database Mirror';
 
 @Injectable()
 export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
@@ -240,6 +245,55 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Upserts a DB mirror announcement embed in the target channel.
+   * If a previous announcement sent by this bot exists, edit it in place.
+   * Otherwise send a new message.
+   */
+  async upsertDbMirrorAnnouncement(params: {
+    channelId: string;
+    shareUrl: string;
+    dumpedAt: Date;
+    dumpFileName: string;
+    folderId: string;
+    fileId: string;
+  }): Promise<void> {
+    if (!this.enabled || !this.isReady || !this.client || !params.channelId) {
+      return;
+    }
+
+    try {
+      const channel = await this.client.channels.fetch(params.channelId);
+      if (!channel?.isTextBased()) {
+        return;
+      }
+
+      const textChannel = channel as TextChannel;
+      const embed = this.buildDbMirrorAnnouncementEmbed(params);
+      const existingMessages =
+        await this.findExistingDbMirrorAnnouncements(textChannel);
+      const primary = existingMessages[0] ?? null;
+
+      if (primary) {
+        await primary.edit({ embeds: [embed] });
+      } else {
+        await textChannel.send({ embeds: [embed] });
+      }
+
+      if (existingMessages.length > 1) {
+        const staleMessages = existingMessages.slice(1);
+        for (const staleMessage of staleMessages) {
+          await staleMessage.delete().catch(() => {});
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        'Failed to upsert DB mirror announcement:',
+        (error as Error).message,
+      );
+    }
+  }
+
   // ─── Embed builder ────────────────────────────────────────────────────────
 
   private buildLogEmbed(
@@ -269,6 +323,96 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
     }
 
     return embed;
+  }
+
+  private buildDbMirrorAnnouncementEmbed(params: {
+    shareUrl: string;
+    dumpedAt: Date;
+    dumpFileName: string;
+    folderId: string;
+    fileId: string;
+  }): EmbedBuilder {
+    return new EmbedBuilder()
+      .setColor(0x10b981)
+      .setTitle(DB_MIRROR_ANNOUNCEMENT_TITLE)
+      .setDescription('최신 법률안 스냅샷/변경기록 DB 덤프 링크입니다.')
+      .addFields(
+        {
+          name: 'Latest Dump Link',
+          value: `[Download Dump](${params.shareUrl})`,
+        },
+        {
+          name: 'Updated At (UTC)',
+          value: params.dumpedAt.toISOString(),
+          inline: true,
+        },
+        {
+          name: 'Dump File',
+          value: params.dumpFileName,
+          inline: true,
+        },
+        {
+          name: 'Reference',
+          value: `folderId=${params.folderId}, fileId=${params.fileId}`,
+        },
+      )
+      .setTimestamp(params.dumpedAt)
+      .setFooter({ text: DB_MIRROR_ANNOUNCEMENT_FOOTER });
+  }
+
+  private async findExistingDbMirrorAnnouncements(
+    channel: TextChannel,
+  ): Promise<Message[]> {
+    const botUserId = this.client?.user?.id;
+    if (!botUserId) {
+      return [];
+    }
+
+    const matchedMessages: Message[] = [];
+
+    let before: string | undefined;
+    const maxScanBatches = 6;
+    const pageSize = 50;
+
+    for (let batch = 0; batch < maxScanBatches; batch += 1) {
+      const messages = await channel.messages.fetch({
+        limit: pageSize,
+        ...(before ? { before } : {}),
+      });
+
+      if (messages.size === 0) {
+        break;
+      }
+
+      for (const message of messages.values()) {
+        if (message.author.id !== botUserId) {
+          continue;
+        }
+
+        const hasMarker = message.embeds.some((embed) => {
+          const footer = embed.footer?.text ?? '';
+          const title = embed.title ?? '';
+          const footerMatched =
+            footer === DB_MIRROR_ANNOUNCEMENT_FOOTER ||
+            footer === DB_MIRROR_ANNOUNCEMENT_LEGACY_FOOTER;
+          const titleMatched = title === DB_MIRROR_ANNOUNCEMENT_TITLE;
+          return footerMatched || titleMatched;
+        });
+
+        if (hasMarker) {
+          matchedMessages.push(message);
+        }
+      }
+
+      before = messages.last()?.id;
+      if (!before) {
+        break;
+      }
+    }
+
+    return matchedMessages.sort(
+      (a, b) => b.createdTimestamp - a.createdTimestamp,
+    );
   }
 
   // ─── Slash command registration ────────────────────────────────────────────

@@ -14,6 +14,14 @@ declare global {
       OLLAMA_API_URL?: string;
       OLLAMA_MODEL?: string;
       OLLAMA_TIMEOUT?: string;
+      FILE_MIRROR_ENABLED?: string;
+      FILE_MIRROR_CRON?: string;
+      FILE_MIRROR_API_BASE_URL?: string;
+      FILE_MIRROR_DUMP_DIR?: string;
+      FILE_MIRROR_TITLE_PREFIX?: string;
+      FILE_MIRROR_KEEP_LOCAL_DUMP?: string;
+      FILE_MIRROR_TEST_UPLOAD_ON_STARTUP?: string;
+      FILE_MIRROR_DISCORD_CHANNEL_ID?: string;
     }
   }
 }
