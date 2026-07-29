@@ -51,6 +51,10 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: 'Browser launch guard status (concurrency/lock/cooldown)',
   },
   {
+    name: 'mirror-upload',
+    description: 'Manually trigger a database dump upload for testing',
+  },
+  {
     name: 'loglevel',
     description: 'Get or set the log level for the log channel',
     options: [
@@ -258,7 +262,24 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
     folderId: string;
     fileId: string;
   }): Promise<void> {
-    if (!this.enabled || !this.isReady || !this.client || !params.channelId) {
+    if (!this.enabled) {
+      this.logger.warn(
+        'Skipping DB mirror announcement upsert because Discord bridge is disabled.',
+      );
+      return;
+    }
+
+    if (!this.isReady || !this.client) {
+      this.logger.warn(
+        'Skipping DB mirror announcement upsert because Discord bridge client is not ready yet.',
+      );
+      return;
+    }
+
+    if (!params.channelId) {
+      this.logger.warn(
+        'Skipping DB mirror announcement upsert because target channelId is empty.',
+      );
       return;
     }
 
@@ -271,7 +292,7 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
       const textChannel = channel as TextChannel;
       const embed = this.buildDbMirrorAnnouncementEmbed(params);
       const existingMessages =
-        await this.findExistingDbMirrorAnnouncements(textChannel);
+        await this.findExistingMirrorAnnouncements(textChannel);
       const primary = existingMessages[0] ?? null;
 
       if (primary) {
@@ -360,7 +381,7 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
       .setFooter({ text: DB_MIRROR_ANNOUNCEMENT_FOOTER });
   }
 
-  private async findExistingDbMirrorAnnouncements(
+  private async findExistingMirrorAnnouncements(
     channel: TextChannel,
   ): Promise<Message[]> {
     const botUserId = this.client?.user?.id;

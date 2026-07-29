@@ -3,9 +3,11 @@ import { DiscordBridgeService } from './discord-bridge.service';
 import { DiscordBridgeCommandsService } from './discord-bridge-commands.service';
 import { DiscordBridgeAdminAnnouncementCommandService } from './discord-bridge-admin-announcement-command.service';
 import { DiscordBridgeOperationsCommandsService } from './discord-bridge-operations-commands.service';
+import { DbMirrorModule } from '../db-mirror/db-mirror.module';
 
 @Global()
 @Module({
+  imports: [DbMirrorModule],
   providers: [
     DiscordBridgeOperationsCommandsService,
     DiscordBridgeAdminAnnouncementCommandService,

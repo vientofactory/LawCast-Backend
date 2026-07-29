@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
-import { ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
+import {
+  ChatInputCommandInteraction,
+  EmbedBuilder,
+  MessageFlags,
+} from 'discord.js';
 import { loadavg } from 'node:os';
 import { APP_CONSTANTS } from '../../config/app.config';
 import {
@@ -8,6 +12,7 @@ import {
   BRIDGE_LOG_LEVEL_LABELS,
   BridgeCommandContext,
 } from './discord-bridge.types';
+import { DbMirrorService } from '../db-mirror/db-mirror.service';
 
 @Injectable()
 export class DiscordBridgeOperationsCommandsService {
@@ -47,6 +52,9 @@ export class DiscordBridgeOperationsCommandsService {
         return true;
       case 'browser-lease':
         await this.cmdBrowserGuard(interaction);
+        return true;
+      case 'mirror-upload':
+        await this.cmdDbMirrorUpload(interaction);
         return true;
       default:
         return false;
@@ -593,5 +601,30 @@ export class DiscordBridgeOperationsCommandsService {
     }
 
     await interaction.reply({ embeds: [embed] }).catch(() => {});
+  }
+
+  private async cmdDbMirrorUpload(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    await interaction
+      .deferReply({ flags: MessageFlags.Ephemeral })
+      .catch(() => {});
+
+    const dbMirrorService = this.moduleRef.get(DbMirrorService, {
+      strict: false,
+    });
+
+    try {
+      dbMirrorService.runMirrorJob({ force: true });
+      await interaction
+        .editReply('✅ Database mirror upload triggered successfully.')
+        .catch(() => {});
+    } catch (error) {
+      await interaction
+        .editReply(
+          `❌ Database mirror upload failed: ${(error as Error).message}`,
+        )
+        .catch(() => {});
+    }
   }
 }
