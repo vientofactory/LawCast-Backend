@@ -96,6 +96,9 @@
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
+    "moduleNameMapper": {
+      "^@file-kiwi/node$": "<rootDir>/test/mocks/file-kiwi-node.mock.ts"
+    },
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],

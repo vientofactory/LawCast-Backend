@@ -60,6 +60,10 @@ import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { logAndBridge } from '../../utils/bridge-log.utils';
+import {
+  recoverCompetentAuthorityName,
+  recoverOptionalCompetentAuthorityName,
+} from '../crawling/utils/competent-authority-autocomplete.utils';
 
 export interface ArchiveListQuery {
   page: number;
@@ -641,6 +645,18 @@ export class NoticeArchiveService {
       },
     );
 
+    const resolvedNoticeCommittee = recoverCompetentAuthorityName(
+      notice.committee,
+      {
+        preferredKinds: ['committee', 'ministry', 'agency'],
+      },
+    );
+
+    const resolvedRecoveredContentCommittee =
+      recoverOptionalCompetentAuthorityName(resolvedContentCommittee, {
+        preferredKinds: ['committee', 'agency', 'ministry'],
+      });
+
     const resolvedIsDone =
       originalContent.isDone !== undefined
         ? originalContent.isDone
@@ -651,7 +667,7 @@ export class NoticeArchiveService {
       noticeNum: notice.num,
       subject: notice.subject,
       proposerCategory: notice.proposerCategory,
-      committee: notice.committee,
+      committee: resolvedNoticeCommittee,
       assemblyLink: notice.link,
       contentId: notice.contentId ?? null,
       proposalReason: resolvedProposalReason ?? '',
@@ -659,7 +675,7 @@ export class NoticeArchiveService {
       contentBillNumber: resolvedContentBillNumber,
       contentProposer: resolvedContentProposer,
       contentProposalDate: resolvedContentProposalDate,
-      contentCommittee: resolvedContentCommittee,
+      contentCommittee: resolvedRecoveredContentCommittee,
       contentReferralDate: resolvedContentReferralDate,
       contentNoticePeriod: resolvedContentNoticePeriod,
       contentProposalSession: resolvedContentProposalSession,

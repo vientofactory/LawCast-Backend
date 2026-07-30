@@ -1007,6 +1007,53 @@ describe('NoticeArchiveService', () => {
       expect(proposalReasonDetail?.beforeValue).toBeNull();
       expect(proposalReasonDetail?.afterValue).toBe('정상 제안이유 복구값');
     });
+
+    it('normalizes incomplete committee tokens before diff to avoid false updates', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219805,
+          subject: '소관위 보정 테스트',
+          committee: '정무위원회',
+          contentCommittee: '정무위원회',
+          contentId: 'PRC_2219805',
+        }),
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219805,
+          subject: '소관위 보정 테스트',
+          proposerCategory: '정부',
+          committee: '정무위',
+          link: 'https://example.com/2219805',
+          contentId: 'PRC_2219805',
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          proposalReason: '테스트 제안이유',
+          committee: '정무위',
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+      expect(repositoryMock.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('invalidated isDone promotion', () => {

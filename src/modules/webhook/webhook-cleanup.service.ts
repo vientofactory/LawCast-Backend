@@ -11,7 +11,7 @@ export class WebhookCleanupService {
   /**
    * Shared execution lock for all cleanup methods.
    * All three cron-triggered methods (intelligentWebhookCleanup,
-   * runSystemOptimization, realTimeSystemMonitoring) operate on the same
+   * runSystemOptimization, runSystemMonitoring) operate on the same
    * webhook table, so only one should run at a time to prevent concurrent
    * reads and deletes from interfering with each other.
    */
@@ -149,10 +149,10 @@ export class WebhookCleanupService {
    * Monitor system in real-time and take immediate actions if needed
    * @returns void
    */
-  async realTimeSystemMonitoring(): Promise<void> {
+  async runSystemMonitoring(): Promise<void> {
     if (this.isRunning) {
       this.logger.warn(
-        'Webhook cleanup already in progress, skipping realTimeSystemMonitoring',
+        'Webhook cleanup already in progress, skipping runSystemMonitoring',
       );
       return;
     }

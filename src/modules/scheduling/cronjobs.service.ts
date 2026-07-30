@@ -317,7 +317,7 @@ export class CronJobsService {
   })
   async handleSystemMonitoring(): Promise<void> {
     await this.execute('system monitoring', () =>
-      this.webhookCleanupService.realTimeSystemMonitoring(),
+      this.webhookCleanupService.runSystemMonitoring(),
     );
   }
 

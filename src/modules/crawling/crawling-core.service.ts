@@ -20,6 +20,7 @@ import { type CachedNotice } from '../../types/cache.types';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { BrowserLeaseManagerService } from './browser-lease-manager.service';
+import { recoverCompetentAuthorityName } from './utils/competent-authority-autocomplete.utils';
 
 const SCREENSHOT_CONFIG = {
   enabled: true,
@@ -144,13 +145,22 @@ export class CrawlingCoreService {
    * `ministry` (소관부처) is used as a fallback to preserve 소관 information.
    */
   static nsmBillToCachedNotice(item: INsmBillItem): CachedNotice {
+    const committee = item.committee?.trim() || '';
+    const ministry = item.ministry?.trim() || '';
+    const sourceAuthority = committee || ministry;
+    const recoveredAuthority = recoverCompetentAuthorityName(sourceAuthority, {
+      preferredKinds: committee
+        ? ['committee', 'agency', 'ministry']
+        : ['ministry', 'agency', 'committee'],
+    });
+
     return {
       num: parseInt(item.billNo, 10),
       subject: item.billName,
       proposerCategory: CrawlingCoreService.extractProposerCategory(
         item.proposer,
       ),
-      committee: item.committee || item.ministry || '',
+      committee: recoveredAuthority,
       link: item.link,
       contentId: null,
       attachments: { pdfFile: null, hwpFile: null },

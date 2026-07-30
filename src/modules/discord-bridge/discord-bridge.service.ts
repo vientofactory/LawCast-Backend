@@ -75,10 +75,6 @@ const SLASH_COMMAND_DEFINITIONS = [
   },
 ] as const;
 
-const DB_MIRROR_ANNOUNCEMENT_FOOTER = 'Database Mirror Announcement';
-const DB_MIRROR_ANNOUNCEMENT_LEGACY_FOOTER = 'LawCast DB Mirror Announcement';
-const DB_MIRROR_ANNOUNCEMENT_TITLE = 'LawCast Database Mirror';
-
 @Injectable()
 export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = LoggerUtils.getContextLogger(
@@ -94,6 +90,13 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
   private readonly logChannelId: string;
   private readonly adminUserIds: Set<string>;
   private readonly guildId: string;
+
+  // Markers for identifying DB mirror announcement messages
+  private readonly DB_MIRROR_ANNOUNCEMENT_FOOTER =
+    'Database Mirror Announcement';
+  private readonly DB_MIRROR_ANNOUNCEMENT_LEGACY_FOOTER =
+    'LawCast DB Mirror Announcement';
+  private readonly DB_MIRROR_ANNOUNCEMENT_TITLE = 'LawCast Database Mirror';
 
   constructor(
     private readonly configService: ConfigService,
@@ -355,7 +358,7 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
   }): EmbedBuilder {
     return new EmbedBuilder()
       .setColor(0x10b981)
-      .setTitle(DB_MIRROR_ANNOUNCEMENT_TITLE)
+      .setTitle(this.DB_MIRROR_ANNOUNCEMENT_TITLE)
       .setDescription('최신 법률안 스냅샷/변경기록 DB 덤프 링크입니다.')
       .addFields(
         {
@@ -378,7 +381,7 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
         },
       )
       .setTimestamp(params.dumpedAt)
-      .setFooter({ text: DB_MIRROR_ANNOUNCEMENT_FOOTER });
+      .setFooter({ text: this.DB_MIRROR_ANNOUNCEMENT_FOOTER });
   }
 
   private async findExistingMirrorAnnouncements(
@@ -414,9 +417,9 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
           const footer = embed.footer?.text ?? '';
           const title = embed.title ?? '';
           const footerMatched =
-            footer === DB_MIRROR_ANNOUNCEMENT_FOOTER ||
-            footer === DB_MIRROR_ANNOUNCEMENT_LEGACY_FOOTER;
-          const titleMatched = title === DB_MIRROR_ANNOUNCEMENT_TITLE;
+            footer === this.DB_MIRROR_ANNOUNCEMENT_FOOTER ||
+            footer === this.DB_MIRROR_ANNOUNCEMENT_LEGACY_FOOTER;
+          const titleMatched = title === this.DB_MIRROR_ANNOUNCEMENT_TITLE;
           return footerMatched || titleMatched;
         });
 

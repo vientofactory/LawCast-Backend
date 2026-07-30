@@ -212,6 +212,34 @@ describe('CrawlingCoreService', () => {
     });
   });
 
+  describe('nsmBillToCachedNotice', () => {
+    it('prefers committee recovery when committee text exists', () => {
+      const result = CrawlingCoreService.nsmBillToCachedNotice({
+        billNo: '2219991',
+        billName: '위원회 복구 테스트',
+        proposer: '홍길동의원',
+        committee: '정무위',
+        ministry: '법무부',
+        link: 'https://example.com/2219991',
+      } as any);
+
+      expect(result.committee).toBe('정무위원회');
+    });
+
+    it('prefers ministry recovery when committee is empty and only ministry is provided', () => {
+      const result = CrawlingCoreService.nsmBillToCachedNotice({
+        billNo: '2219992',
+        billName: '부처 복구 테스트',
+        proposer: '법무부장관',
+        committee: '',
+        ministry: '과학기술정보통신',
+        link: 'https://example.com/2219992',
+      } as any);
+
+      expect(result.committee).toBe('과학기술정보통신부');
+    });
+  });
+
   describe('browser lease coverage', () => {
     it('wraps captureNsmDetailFull with the shared browser lease manager', async () => {
       const guardSpy = jest
