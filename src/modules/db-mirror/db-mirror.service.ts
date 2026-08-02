@@ -79,9 +79,23 @@ export class DbMirrorService {
       this.configService.get<string>('fileMirror.discordChannelId') || '';
     const discordBridge = this.resolveDiscordBridge();
 
-    const dump = await this.databaseDumpService.createSanitizedDump();
+    let dump: Awaited<
+      ReturnType<DatabaseDumpService['createSanitizedDump']>
+    > | null = null;
 
     try {
+      try {
+        dump = await this.databaseDumpService.createSanitizedDump();
+      } catch (error) {
+        await this.notifyMirrorFailure({
+          stage: 'dump',
+          error,
+          mirrorAnnouncementChannelId,
+          discordBridge,
+        });
+        throw error;
+      }
+
       const upload = await this.fileKiwiClientService.uploadFile({
         filePath: dump.dumpPath,
         title: `${titlePrefix}-${dump.dumpFileName}`,
@@ -100,6 +114,29 @@ export class DbMirrorService {
           shareUrl: upload.shareUrl,
         },
       });
+
+      if (!mirrorAnnouncementChannelId) {
+        logAndBridge({
+          method: 'warn',
+          message:
+            'FILE_MIRROR_DISCORD_CHANNEL_ID is empty. Skipping cleanup of mirror error announcement messages.',
+          logger: this.logger,
+          context: DbMirrorService.name,
+          discordBridge,
+        });
+      } else if (!discordBridge) {
+        logAndBridge({
+          method: 'warn',
+          message:
+            'DiscordBridgeService is unavailable. Skipping cleanup of mirror error announcement messages.',
+          logger: this.logger,
+          context: DbMirrorService.name,
+        });
+      } else {
+        await discordBridge.clearDbMirrorErrorAnnouncements(
+          mirrorAnnouncementChannelId,
+        );
+      }
 
       if (!mirrorAnnouncementChannelId) {
         logAndBridge({
@@ -128,11 +165,79 @@ export class DbMirrorService {
           fileId: upload.fileId,
         });
       }
+    } catch (error) {
+      // Upload phase failures should notify mirror channel as actionable incidents.
+      if (dump) {
+        await this.notifyMirrorFailure({
+          stage: 'upload',
+          error,
+          mirrorAnnouncementChannelId,
+          discordBridge,
+          dumpFileName: dump.dumpFileName,
+        });
+      }
+      throw error;
     } finally {
-      if (!keepLocalDump) {
+      if (!keepLocalDump && dump) {
         await this.databaseDumpService.removeDumpFile(dump.dumpPath);
       }
     }
+  }
+
+  private async notifyMirrorFailure(params: {
+    stage: 'dump' | 'upload';
+    error: unknown;
+    mirrorAnnouncementChannelId: string;
+    discordBridge?: DiscordBridgeService;
+    dumpFileName?: string;
+  }): Promise<void> {
+    const message =
+      params.error instanceof Error
+        ? params.error.message
+        : String(params.error);
+
+    logAndBridge({
+      method: 'error',
+      message: `Database mirror ${params.stage} stage failed: ${message}`,
+      logger: this.logger,
+      context: DbMirrorService.name,
+      discordBridge: params.discordBridge,
+      metadata: {
+        stage: params.stage,
+        dumpFileName: params.dumpFileName,
+      },
+    });
+
+    if (!params.mirrorAnnouncementChannelId) {
+      logAndBridge({
+        method: 'warn',
+        message:
+          'FILE_MIRROR_DISCORD_CHANNEL_ID is empty. Skipping mirror error announcement embed update.',
+        logger: this.logger,
+        context: DbMirrorService.name,
+        discordBridge: params.discordBridge,
+      });
+      return;
+    }
+
+    if (!params.discordBridge) {
+      logAndBridge({
+        method: 'warn',
+        message:
+          'DiscordBridgeService is unavailable. Skipping mirror error announcement embed update.',
+        logger: this.logger,
+        context: DbMirrorService.name,
+      });
+      return;
+    }
+
+    await params.discordBridge.upsertDbMirrorErrorAnnouncement({
+      channelId: params.mirrorAnnouncementChannelId,
+      failedAt: new Date(),
+      stage: params.stage,
+      errorMessage: message,
+      dumpFileName: params.dumpFileName,
+    });
   }
 
   private resolveDiscordBridge(): DiscordBridgeService | undefined {

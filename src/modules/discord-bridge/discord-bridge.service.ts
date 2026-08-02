@@ -97,6 +97,10 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
   private readonly DB_MIRROR_ANNOUNCEMENT_LEGACY_FOOTER =
     'LawCast DB Mirror Announcement';
   private readonly DB_MIRROR_ANNOUNCEMENT_TITLE = 'LawCast Database Mirror';
+  private readonly DB_MIRROR_ERROR_ANNOUNCEMENT_FOOTER =
+    'Database Mirror Error Announcement';
+  private readonly DB_MIRROR_ERROR_ANNOUNCEMENT_TITLE =
+    'LawCast Database Mirror Error';
 
   constructor(
     private readonly configService: ConfigService,
@@ -318,6 +322,98 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Upserts a DB mirror error announcement embed in the target channel.
+   * Keeps only one latest error announcement sent by this bot.
+   */
+  async upsertDbMirrorErrorAnnouncement(params: {
+    channelId: string;
+    failedAt: Date;
+    stage: 'dump' | 'upload';
+    errorMessage: string;
+    dumpFileName?: string;
+  }): Promise<void> {
+    if (!this.enabled) {
+      this.logger.warn(
+        'Skipping DB mirror error announcement upsert because Discord bridge is disabled.',
+      );
+      return;
+    }
+
+    if (!this.isReady || !this.client) {
+      this.logger.warn(
+        'Skipping DB mirror error announcement upsert because Discord bridge client is not ready yet.',
+      );
+      return;
+    }
+
+    if (!params.channelId) {
+      this.logger.warn(
+        'Skipping DB mirror error announcement upsert because target channelId is empty.',
+      );
+      return;
+    }
+
+    try {
+      const channel = await this.client.channels.fetch(params.channelId);
+      if (!channel?.isTextBased()) {
+        return;
+      }
+
+      const textChannel = channel as TextChannel;
+      const embed = this.buildDbMirrorErrorAnnouncementEmbed(params);
+      const existingMessages =
+        await this.findExistingMirrorErrorAnnouncements(textChannel);
+      const primary = existingMessages[0] ?? null;
+
+      if (primary) {
+        await primary.edit({ embeds: [embed] });
+      } else {
+        await textChannel.send({ embeds: [embed] });
+      }
+
+      if (existingMessages.length > 1) {
+        const staleMessages = existingMessages.slice(1);
+        for (const staleMessage of staleMessages) {
+          await staleMessage.delete().catch(() => {});
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        'Failed to upsert DB mirror error announcement:',
+        (error as Error).message,
+      );
+    }
+  }
+
+  /**
+   * Deletes previously posted DB mirror error announcements sent by this bot.
+   */
+  async clearDbMirrorErrorAnnouncements(channelId: string): Promise<void> {
+    if (!this.enabled || !this.isReady || !this.client || !channelId) {
+      return;
+    }
+
+    try {
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel?.isTextBased()) {
+        return;
+      }
+
+      const textChannel = channel as TextChannel;
+      const errorMessages =
+        await this.findExistingMirrorErrorAnnouncements(textChannel);
+      for (const message of errorMessages) {
+        await message.delete().catch(() => {});
+      }
+    } catch (error) {
+      this.logger.error(
+        'Failed to clear DB mirror error announcements:',
+        (error as Error).message,
+      );
+    }
+  }
+
   // ─── Embed builder ────────────────────────────────────────────────────────
 
   private buildLogEmbed(
@@ -384,6 +480,50 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
       .setFooter({ text: this.DB_MIRROR_ANNOUNCEMENT_FOOTER });
   }
 
+  private buildDbMirrorErrorAnnouncementEmbed(params: {
+    failedAt: Date;
+    stage: 'dump' | 'upload';
+    errorMessage: string;
+    dumpFileName?: string;
+  }): EmbedBuilder {
+    const stageLabel =
+      params.stage === 'dump' ? 'Dump Creation' : 'File Upload';
+    const fields = [
+      {
+        name: 'Failed At (UTC)',
+        value: params.failedAt.toISOString(),
+        inline: true,
+      },
+      {
+        name: 'Stage',
+        value: stageLabel,
+        inline: true,
+      },
+      {
+        name: 'Error',
+        value: params.errorMessage.slice(0, 1000),
+      },
+    ];
+
+    if (params.dumpFileName) {
+      fields.push({
+        name: 'Dump File',
+        value: params.dumpFileName,
+        inline: true,
+      });
+    }
+
+    return new EmbedBuilder()
+      .setColor(0xef4444)
+      .setTitle(this.DB_MIRROR_ERROR_ANNOUNCEMENT_TITLE)
+      .setDescription(
+        '데이터베이스 미러 작업이 실패했습니다. 시스템 관리자에게 문의하세요.',
+      )
+      .addFields(...fields)
+      .setTimestamp(params.failedAt)
+      .setFooter({ text: this.DB_MIRROR_ERROR_ANNOUNCEMENT_FOOTER });
+  }
+
   private async findExistingMirrorAnnouncements(
     channel: TextChannel,
   ): Promise<Message[]> {
@@ -420,6 +560,61 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
             footer === this.DB_MIRROR_ANNOUNCEMENT_FOOTER ||
             footer === this.DB_MIRROR_ANNOUNCEMENT_LEGACY_FOOTER;
           const titleMatched = title === this.DB_MIRROR_ANNOUNCEMENT_TITLE;
+          return footerMatched || titleMatched;
+        });
+
+        if (hasMarker) {
+          matchedMessages.push(message);
+        }
+      }
+
+      before = messages.last()?.id;
+      if (!before) {
+        break;
+      }
+    }
+
+    return matchedMessages.sort(
+      (a, b) => b.createdTimestamp - a.createdTimestamp,
+    );
+  }
+
+  private async findExistingMirrorErrorAnnouncements(
+    channel: TextChannel,
+  ): Promise<Message[]> {
+    const botUserId = this.client?.user?.id;
+    if (!botUserId) {
+      return [];
+    }
+
+    const matchedMessages: Message[] = [];
+
+    let before: string | undefined;
+    const maxScanBatches = 6;
+    const pageSize = 50;
+
+    for (let batch = 0; batch < maxScanBatches; batch += 1) {
+      const messages = await channel.messages.fetch({
+        limit: pageSize,
+        ...(before ? { before } : {}),
+      });
+
+      if (messages.size === 0) {
+        break;
+      }
+
+      for (const message of messages.values()) {
+        if (message.author.id !== botUserId) {
+          continue;
+        }
+
+        const hasMarker = message.embeds.some((embed) => {
+          const footer = embed.footer?.text ?? '';
+          const title = embed.title ?? '';
+          const footerMatched =
+            footer === this.DB_MIRROR_ERROR_ANNOUNCEMENT_FOOTER;
+          const titleMatched =
+            title === this.DB_MIRROR_ERROR_ANNOUNCEMENT_TITLE;
           return footerMatched || titleMatched;
         });
 
