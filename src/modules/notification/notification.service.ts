@@ -60,13 +60,21 @@ export class NotificationService {
     committee: '소관위원회',
     proposalReason: '제안이유',
     billNumber: '입법예고 의안번호',
+    contentBillNumber: '입법예고 의안번호',
     proposer: '입법예고 제안자',
+    contentProposer: '입법예고 제안자',
     proposalDate: '입법예고 제안일',
+    contentProposalDate: '입법예고 제안일',
     contentCommittee: '입법예고 소관위원회',
     referralDate: '입법예고 회부일',
+    contentReferralDate: '입법예고 회부일',
     noticePeriod: '입법예고 기간',
+    contentNoticePeriod: '입법예고 기간',
     proposalSession: '입법예고 제안회기',
+    contentProposalSession: '입법예고 제안회기',
     isDone: '처리 상태',
+    lifecycleStatus: '보존 상태',
+    sourceDeletedAt: '소스 삭제 감지 시각',
   };
 
   // Rate limit keys
