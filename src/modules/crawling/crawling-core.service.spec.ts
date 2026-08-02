@@ -1,6 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BrowserLeaseManagerService } from './browser-lease-manager.service';
-import { CrawlingCoreService } from './crawling-core.service';
+import {
+  CrawlingCoreService,
+  NsmBillDeletedError,
+} from './crawling-core.service';
 import { NsmLmSts, NsmLmStsParser, PalCrawl, type ITableData } from 'pal-crawl';
 
 // pal-crawl 모듈을 모킹
@@ -241,6 +244,52 @@ describe('CrawlingCoreService', () => {
   });
 
   describe('browser lease coverage', () => {
+    it('throws NsmBillDeletedError only when alert and deleted structure are both present', async () => {
+      mockPage.content.mockResolvedValue(`
+        <html>
+          <body>
+            <script>alert("안건정보가 없습니다."); history.back();</script>
+          </body>
+        </html>
+      `);
+
+      await expect(
+        service.captureNsmDetailFull('2219887'),
+      ).rejects.toBeInstanceOf(NsmBillDeletedError);
+    });
+
+    it('does not treat alert-only page as deleted when normal core structure exists even without proposal reason section', async () => {
+      mockPage.content.mockResolvedValue(`
+        <html>
+          <body>
+            <div id="containerWrap" class="containerWrap">
+              <h2 class="subjectHead_tit">테스트 법률안</h2>
+              <div class="gridCnt_table"><table><tbody><tr><th>발의정보</th><td>내용</td></tr></tbody></table></div>
+              <form name="VIEW_FM"></form>
+            </div>
+            <script>alert("안건정보가 없습니다.");</script>
+          </body>
+        </html>
+      `);
+
+      const result = await service.captureNsmDetailFull('2219887');
+      expect(result.detail).toEqual({ proposalReason: 'reason' });
+    });
+
+    it('does not treat page as deleted when one core detail wrapper exists', async () => {
+      mockPage.content.mockResolvedValue(`
+        <html>
+          <body>
+            <div id="containerWrap"></div>
+            <script>alert("안건정보가 없습니다."); history.back();</script>
+          </body>
+        </html>
+      `);
+
+      const result = await service.captureNsmDetailFull('2219887');
+      expect(result.detail).toEqual({ proposalReason: 'reason' });
+    });
+
     it('wraps captureNsmDetailFull with the shared browser lease manager', async () => {
       const guardSpy = jest
         .spyOn(browserLeaseManager, 'runWithLease')

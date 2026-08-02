@@ -35,6 +35,11 @@ const SCREENSHOT_CONFIG = {
 const SCREENSHOT_FALLBACK_QUALITIES =
   APP_CONSTANTS.SCREENSHOT.FALLBACK_QUALITIES;
 
+type NsmDeletionCheck = {
+  confirmed: boolean;
+  alertMessage: string | null;
+};
+
 export class NsmBillDeletedError extends Error {
   readonly billNo: string;
   readonly responseUrl?: string;
@@ -91,13 +96,57 @@ export class CrawlingCoreService {
 
     const compact = html.replace(/\s+/g, ' ');
     const alertMatch = compact.match(
-      /alert\s*\(\s*['"]([^'"]*안건정보가 없습니다\.?[^'"]*)['"]\s*\)/i,
+      /alert\s*\(\s*['"]([^'"]*안건\s*정보가\s*없습니다\.?[^'"]*)['"]\s*\)/i,
     );
     if (alertMatch?.[1]) {
       return alertMatch[1].trim();
     }
 
     return null;
+  }
+
+  /**
+   * Confirms whether NSM detail HTML is a deleted-bill page.
+   *
+   * We require BOTH:
+   * 1) deletion alert text ("안건정보가 없습니다") and
+   * 2) deleted-page structure (core detail wrappers are all missing)
+   *
+   * This avoids false positives from generic alerts unrelated to deletion.
+   *
+   * NOTE: The proposal-reason section can be legitimately absent in some
+   * normal pages, so it is intentionally excluded from the strict threshold.
+   */
+  private detectNsmDeletedBillFromHtml(html: string): NsmDeletionCheck {
+    if (!html) {
+      return { confirmed: false, alertMessage: null };
+    }
+
+    const compact = html.replace(/\s+/g, ' ');
+    const alertMessage = this.extractNsmDeletionAlertMessage(compact);
+
+    const hasContainerWrap = /id\s*=\s*["']containerWrap["']/i.test(compact);
+    const hasGridTable = /class\s*=\s*["'][^"']*gridCnt_table[^"']*["']/i.test(
+      compact,
+    );
+    const hasViewForm = /name\s*=\s*["']VIEW_FM["']/i.test(compact);
+    const hasSubjectTitle =
+      /class\s*=\s*["'][^"']*subjectHead_tit[^"']*["']/i.test(compact);
+
+    const coreDetailSignalCount = [
+      hasContainerWrap,
+      hasGridTable,
+      hasViewForm,
+      hasSubjectTitle,
+    ].filter(Boolean).length;
+
+    const hasHistoryBack = /history\.back\s*\(/i.test(compact);
+
+    const looksLikeDeletedStructure =
+      coreDetailSignalCount === 0 && hasHistoryBack;
+    const confirmed = Boolean(alertMessage) && looksLikeDeletedStructure;
+
+    return { confirmed, alertMessage };
   }
 
   async probeNsmDeletedBillAlert(billNo: string): Promise<string | null> {
@@ -116,7 +165,18 @@ export class CrawlingCoreService {
       });
 
       const html = response.data;
-      return this.extractNsmDeletionAlertMessage(html);
+      const check = this.detectNsmDeletedBillFromHtml(html);
+      if (check.confirmed) {
+        return check.alertMessage;
+      }
+
+      if (check.alertMessage) {
+        LoggerUtils.debugDev(
+          CrawlingCoreService.name,
+          `NSM deletion alert observed but structure not confirmed for bill ${normalized}`,
+        );
+      }
+      return null;
     } catch {
       return null;
     }
@@ -553,12 +613,18 @@ export class CrawlingCoreService {
           const responseUrl = page.url();
           const statusCode = response?.status() ?? 200;
 
-          const deletionAlertMessage =
-            this.extractNsmDeletionAlertMessage(html);
-          if (deletionAlertMessage) {
-            throw new NsmBillDeletedError(billNo, deletionAlertMessage, {
+          const deletionCheck = this.detectNsmDeletedBillFromHtml(html);
+          if (deletionCheck.confirmed && deletionCheck.alertMessage) {
+            throw new NsmBillDeletedError(billNo, deletionCheck.alertMessage, {
               responseUrl,
             });
+          }
+
+          if (deletionCheck.alertMessage) {
+            LoggerUtils.debugDev(
+              CrawlingCoreService.name,
+              `NSM bill ${billNo}: deletion alert present but not structurally confirmed`,
+            );
           }
 
           // Parse detail from the already-loaded HTML - no extra HTTP request.
