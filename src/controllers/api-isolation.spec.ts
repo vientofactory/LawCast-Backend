@@ -12,6 +12,8 @@ import { CrawlingService } from '../modules/crawling/crawling.service';
 import { WebhookService } from '../modules/webhook/webhook.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
 import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
+import { WebPushSubscriptionService } from '../modules/notification/web-push-subscription.service';
+import { WebPushNotificationService } from '../modules/notification/web-push-notification.service';
 import { WebhookCleanupService } from '../modules/webhook/webhook-cleanup.service';
 import { NoticeArchiveService } from '../modules/notice/notice-archive.service';
 import { NoticesQueryService } from '../modules/crawling/notices-query.service';
@@ -215,6 +217,28 @@ describe('HTTP-Batch Processing Isolation', () => {
           provide: WebhookRegistrationService,
           useValue: {
             registerWebhook: jest.fn(),
+          },
+        },
+        {
+          provide: WebPushSubscriptionService,
+          useValue: {
+            createOrReactivate: jest.fn(),
+            deleteByEndpoint: jest.fn(),
+            getStatsForApi: jest.fn().mockResolvedValue({
+              total: 3,
+              active: 2,
+              inactive: 1,
+              withFailures: 1,
+            }),
+          },
+        },
+        {
+          provide: WebPushNotificationService,
+          useValue: {
+            getPublicConfig: jest.fn().mockReturnValue({
+              enabled: true,
+              publicKey: 'mock-public-key',
+            }),
           },
         },
         { provide: HealthCheckService, useValue: mockHealthCheckService },

@@ -14,6 +14,8 @@ import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
+import { WebPushSubscriptionService } from '../modules/notification/web-push-subscription.service';
+import { WebPushNotificationService } from '../modules/notification/web-push-notification.service';
 
 // NoticeArchiveService 모킹
 const mockBuildArchiveExportZip = jest.fn();
@@ -65,6 +67,28 @@ describe('ApiController archive export', () => {
           provide: WebhookRegistrationService,
           useValue: {
             registerWebhook: jest.fn(),
+          },
+        },
+        {
+          provide: WebPushSubscriptionService,
+          useValue: {
+            createOrReactivate: jest.fn(),
+            deleteByEndpoint: jest.fn(),
+            getStatsForApi: jest.fn().mockResolvedValue({
+              total: 0,
+              active: 0,
+              inactive: 0,
+              withFailures: 0,
+            }),
+          },
+        },
+        {
+          provide: WebPushNotificationService,
+          useValue: {
+            getPublicConfig: jest.fn().mockReturnValue({
+              enabled: false,
+              publicKey: null,
+            }),
           },
         },
         {

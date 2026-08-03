@@ -6,6 +6,7 @@ import { BatchProcessingService } from '../shared/batch-processing.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { ArchiveSyncService } from '../crawling/archive-sync.service';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
+import { WebPushSubscriptionService } from '../notification/web-push-subscription.service';
 
 @Injectable()
 export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
@@ -53,6 +54,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     noticeArchiveService: NoticeArchiveService,
     archiveSyncService?: ArchiveSyncService,
     changeTrackingService?: ChangeTrackingService,
+    webPushSubscriptionService?: WebPushSubscriptionService,
   ) {
     const nodeEnv = params.nodeEnv;
     if (
@@ -70,6 +72,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
       archiveCount,
       ollamaMetrics,
       comparableChangeSummary,
+      webPushStats,
     ] = await Promise.all([
       webhookService.getDetailedStatsForApi({ nodeEnv }),
       crawlingService.getCacheInfo(),
@@ -78,6 +81,13 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
       crawlingService.getOllamaMetrics(),
       changeTrackingService?.getComparableChangeSummary() ??
         Promise.resolve({ comparableEventTotal: 0, comparableNoticeCount: 0 }),
+      webPushSubscriptionService?.getStatsForApi() ??
+        Promise.resolve({
+          total: 0,
+          active: 0,
+          inactive: 0,
+          withFailures: 0,
+        }),
     ]);
     const nodeRuntime = this.getNodeRuntimeStats();
     const isProduction = nodeEnv === 'production';
@@ -97,6 +107,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         legacyGenesisSeed:
           archiveSyncService?.getLegacyGenesisSeedStatus() ?? null,
       },
+      webPush: webPushStats,
       batchProcessing: batchStatus,
       changeTracking: comparableChangeSummary,
       ollama: isProduction

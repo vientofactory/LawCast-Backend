@@ -356,6 +356,7 @@ export class ApiController {
       this.noticeArchiveService,
       this.archiveSyncService,
       this.changeTrackingService,
+      this.webPushSubscriptionService,
     );
     return ApiResponseUtils.success(stats);
   }

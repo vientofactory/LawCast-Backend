@@ -10,6 +10,13 @@ export interface UpsertWebPushSubscriptionInput {
   userAgent?: string | null;
 }
 
+export interface WebPushSubscriptionStats {
+  total: number;
+  active: number;
+  inactive: number;
+  withFailures: number;
+}
+
 @Injectable()
 export class WebPushSubscriptionService {
   constructor(
@@ -77,6 +84,24 @@ export class WebPushSubscriptionService {
     return this.subscriptionRepository.find({
       where: { isActive: true },
     });
+  }
+
+  async getStatsForApi(): Promise<WebPushSubscriptionStats> {
+    const [total, active, withFailures] = await Promise.all([
+      this.subscriptionRepository.count(),
+      this.subscriptionRepository.count({ where: { isActive: true } }),
+      this.subscriptionRepository
+        .createQueryBuilder('wps')
+        .where('wps.failure_count > 0')
+        .getCount(),
+    ]);
+
+    return {
+      total,
+      active,
+      inactive: Math.max(0, total - active),
+      withFailures,
+    };
   }
 
   async markSuccess(subscriptionId: number): Promise<void> {
