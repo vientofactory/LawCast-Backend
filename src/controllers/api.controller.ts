@@ -111,9 +111,7 @@ export class ApiController {
   async removeWebPushSubscription(
     @Body() removeDto: RemoveWebPushSubscriptionDto,
   ) {
-    await this.webPushSubscriptionService.deactivateByEndpoint(
-      removeDto.endpoint,
-    );
+    await this.webPushSubscriptionService.deleteByEndpoint(removeDto.endpoint);
     return ApiResponseUtils.success(
       { success: true },
       '웹 푸시 알림 구독이 해지되었습니다.',

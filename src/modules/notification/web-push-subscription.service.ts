@@ -66,6 +66,13 @@ export class WebPushSubscriptionService {
     await this.subscriptionRepository.save(existing);
   }
 
+  async deleteByEndpoint(endpoint: string): Promise<void> {
+    const normalized = endpoint.trim();
+    if (!normalized) return;
+
+    await this.subscriptionRepository.delete({ endpoint: normalized });
+  }
+
   async findAllActive(): Promise<WebPushSubscription[]> {
     return this.subscriptionRepository.find({
       where: { isActive: true },

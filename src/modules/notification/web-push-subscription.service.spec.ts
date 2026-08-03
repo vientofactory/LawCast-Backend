@@ -3,6 +3,35 @@ import { WebPushSubscriptionService } from './web-push-subscription.service';
 import { WebPushSubscription } from './web-push-subscription.entity';
 
 describe('WebPushSubscriptionService', () => {
+  describe('deleteByEndpoint', () => {
+    it('should delete subscription by normalized endpoint', async () => {
+      const deleteMock = jest.fn().mockResolvedValue({ affected: 1 });
+      const repository = {
+        delete: deleteMock,
+      } as unknown as Repository<WebPushSubscription>;
+
+      const service = new WebPushSubscriptionService(repository);
+      await service.deleteByEndpoint('  https://push.example/sub/1  ');
+
+      expect(deleteMock).toHaveBeenCalledTimes(1);
+      expect(deleteMock).toHaveBeenCalledWith({
+        endpoint: 'https://push.example/sub/1',
+      });
+    });
+
+    it('should no-op for empty endpoint', async () => {
+      const deleteMock = jest.fn();
+      const repository = {
+        delete: deleteMock,
+      } as unknown as Repository<WebPushSubscription>;
+
+      const service = new WebPushSubscriptionService(repository);
+      await service.deleteByEndpoint('   ');
+
+      expect(deleteMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe('cleanupInactiveSubscriptions', () => {
     it('should delete only inactive subscriptions older than cutoff and return affected count', async () => {
       const execute = jest.fn().mockResolvedValue({ affected: 3 });
