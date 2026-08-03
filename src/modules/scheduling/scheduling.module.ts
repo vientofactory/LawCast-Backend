@@ -4,6 +4,7 @@ import { CrawlingModule } from '../crawling/crawling.module';
 import { DiscordBridgeModule } from '../discord-bridge/discord-bridge.module';
 import { ChangeTrackingModule } from '../change-tracking/change-tracking.module';
 import { DbMirrorModule } from '../db-mirror/db-mirror.module';
+import { NotificationModule } from '../notification/notification.module';
 import { CronJobsService } from './cronjobs.service';
 
 @Module({
@@ -13,6 +14,7 @@ import { CronJobsService } from './cronjobs.service';
     DiscordBridgeModule,
     ChangeTrackingModule,
     DbMirrorModule,
+    NotificationModule,
   ],
   providers: [CronJobsService],
 })

@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Post,
   Body,
@@ -35,6 +36,10 @@ import {
   type ChangeEventType,
 } from '../modules/change-tracking/notice-change-event.entity';
 import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
+import { WebPushSubscriptionService } from '../modules/notification/web-push-subscription.service';
+import { WebPushNotificationService } from '../modules/notification/web-push-notification.service';
+import { CreateWebPushSubscriptionDto } from '../modules/notification/dto/create-web-push-subscription.dto';
+import { RemoveWebPushSubscriptionDto } from '../modules/notification/dto/remove-web-push-subscription.dto';
 import {
   parseIsoDate,
   parsePositiveInteger,
@@ -45,6 +50,8 @@ export class ApiController {
   constructor(
     private readonly configService: ConfigService,
     private readonly webhookRegistrationService: WebhookRegistrationService,
+    private readonly webPushSubscriptionService: WebPushSubscriptionService,
+    private readonly webPushNotificationService: WebPushNotificationService,
     private readonly webhookService: WebhookService,
     private readonly crawlingService: CrawlingService,
     private readonly healthCheckService: HealthCheckService,
@@ -69,6 +76,47 @@ export class ApiController {
     return this.webhookRegistrationService.registerWebhook(
       createWebhookDto,
       req,
+    );
+  }
+
+  @Get('push/public-key')
+  async getWebPushPublicKey() {
+    return ApiResponseUtils.success(
+      this.webPushNotificationService.getPublicConfig(),
+    );
+  }
+
+  @Post('push/subscriptions')
+  @HttpCode(HttpStatus.CREATED)
+  async createWebPushSubscription(
+    @Body() createDto: CreateWebPushSubscriptionDto,
+    @Req() req: Request,
+  ) {
+    const subscription =
+      await this.webPushSubscriptionService.createOrReactivate({
+        endpoint: createDto.endpoint,
+        p256dh: createDto.p256dh,
+        auth: createDto.auth,
+        userAgent: req.headers['user-agent'] ?? null,
+      });
+
+    return ApiResponseUtils.success(
+      { id: subscription.id },
+      '웹 푸시 알림 구독이 등록되었습니다.',
+    );
+  }
+
+  @Delete('push/subscriptions')
+  @HttpCode(HttpStatus.OK)
+  async removeWebPushSubscription(
+    @Body() removeDto: RemoveWebPushSubscriptionDto,
+  ) {
+    await this.webPushSubscriptionService.deactivateByEndpoint(
+      removeDto.endpoint,
+    );
+    return ApiResponseUtils.success(
+      { success: true },
+      '웹 푸시 알림 구독이 해지되었습니다.',
     );
   }
 

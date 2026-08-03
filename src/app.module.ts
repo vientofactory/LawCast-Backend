@@ -12,6 +12,7 @@ import { NoticeArchiveIntegrityCheck } from './modules/notice/notice-archive-int
 import { NoticeArchiveIntegrityState } from './modules/notice/notice-archive-integrity-state.entity';
 import { NoticeChangeEvent } from './modules/change-tracking/notice-change-event.entity';
 import { NoticeChangeDetail } from './modules/change-tracking/notice-change-detail.entity';
+import { WebPushSubscription } from './modules/notification/web-push-subscription.entity';
 import { migrations } from './migrations';
 import appConfig from './config/app.config';
 // Feature modules
@@ -67,6 +68,7 @@ import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.
           NoticeArchiveIntegrityState,
           NoticeChangeEvent,
           NoticeChangeDetail,
+          WebPushSubscription,
         ],
         synchronize: false,
         migrationsRun: false,

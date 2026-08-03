@@ -14,14 +14,24 @@ import {
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { logAndBridge } from '../../utils/bridge-log.utils';
+import { WebPushSubscriptionService } from './web-push-subscription.service';
+import {
+  WebPushDispatchSummary,
+  WebPushNotificationService,
+} from './web-push-notification.service';
+import { WebPushSubscription } from './web-push-subscription.entity';
 
 interface NotificationJobResult {
   notice: string;
   totalWebhooks: number;
+  totalPushSubscriptions: number;
   successCount: number;
   failedCount: number;
   deactivated: number;
   temporaryFailures: number;
+  webPushSuccessCount: number;
+  webPushFailedCount: number;
+  webPushDeactivatedCount: number;
   aggregatedNoticeCount?: number;
 }
 
@@ -29,10 +39,14 @@ interface ChangeNotificationJobResult {
   noticeNum: number;
   subject: string;
   totalWebhooks: number;
+  totalPushSubscriptions: number;
   successCount: number;
   failedCount: number;
   deactivated: number;
   temporaryFailures: number;
+  webPushSuccessCount: number;
+  webPushFailedCount: number;
+  webPushDeactivatedCount: number;
   aggregatedEventCount?: number;
   aggregatedNoticeCount?: number;
 }
@@ -46,6 +60,8 @@ export class NotificationBatchService {
   constructor(
     private webhookService: WebhookService,
     private notificationService: NotificationService,
+    private webPushSubscriptionService: WebPushSubscriptionService,
+    private webPushNotificationService: WebPushNotificationService,
     private batchProcessingService: BatchProcessingService,
     @Optional() private discordBridge: DiscordBridgeService,
   ) {}
@@ -99,11 +115,31 @@ export class NotificationBatchService {
           (sum, r) => sum + (r.data.temporaryFailures ?? 0),
           0,
         );
+        const totalPushSubscriptions = results.reduce(
+          (sum, r) => sum + (r.data.totalPushSubscriptions ?? 0),
+          0,
+        );
+        const webPushSuccessCount = results.reduce(
+          (sum, r) => sum + (r.data.webPushSuccessCount ?? 0),
+          0,
+        );
+        const webPushDispatchFailures = results.reduce(
+          (sum, r) => sum + (r.data.webPushFailedCount ?? 0),
+          0,
+        );
+        const webPushDeactivated = results.reduce(
+          (sum, r) => sum + (r.data.webPushDeactivatedCount ?? 0),
+          0,
+        );
 
         this.batchProcessingService.updateRecentJobMetadata(batchRunId, {
           totalWebhooks,
           deactivated,
           temporaryFailures,
+          totalPushSubscriptions,
+          webPushSuccessCount,
+          webPushDispatchFailures,
+          webPushDeactivated,
         });
 
         logAndBridge({
@@ -111,7 +147,7 @@ export class NotificationBatchService {
           method: 'log',
           message:
             `Notification batch ${batchRunId} completed: ${successCount} success, ${failureCount} failed` +
-            ` (webhooks: ${totalWebhooks}, deactivated: ${deactivated}, temporary failures: ${temporaryFailures})`,
+            ` (webhooks: ${totalWebhooks}, deactivated: ${deactivated}, temporary failures: ${temporaryFailures}, web push targets: ${totalPushSubscriptions}, web push success: ${webPushSuccessCount}, web push failures: ${webPushDispatchFailures}, web push deactivated: ${webPushDeactivated})`,
           context: NotificationBatchService.name,
           discordBridge: this.discordBridge,
           bridgeLevel:
@@ -124,6 +160,10 @@ export class NotificationBatchService {
             totalWebhooks,
             deactivated,
             temporaryFailures,
+            totalPushSubscriptions,
+            webPushSuccessCount,
+            webPushDispatchFailures,
+            webPushDeactivated,
           },
         });
       })
@@ -204,18 +244,38 @@ export class NotificationBatchService {
           (sum, r) => sum + (r.data.temporaryFailures ?? 0),
           0,
         );
+        const totalPushSubscriptions = results.reduce(
+          (sum, r) => sum + (r.data.totalPushSubscriptions ?? 0),
+          0,
+        );
+        const webPushSuccessCount = results.reduce(
+          (sum, r) => sum + (r.data.webPushSuccessCount ?? 0),
+          0,
+        );
+        const webPushDispatchFailures = results.reduce(
+          (sum, r) => sum + (r.data.webPushFailedCount ?? 0),
+          0,
+        );
+        const webPushDeactivated = results.reduce(
+          (sum, r) => sum + (r.data.webPushDeactivatedCount ?? 0),
+          0,
+        );
 
         this.batchProcessingService.updateRecentJobMetadata(batchRunId, {
           totalWebhooks,
           deactivated,
           temporaryFailures,
+          totalPushSubscriptions,
+          webPushSuccessCount,
+          webPushDispatchFailures,
+          webPushDeactivated,
           eventCount: payloads.length,
           noticeNums: payloads.map((payload) => payload.noticeNum),
         });
 
         this.logger.log(
           `Change batch ${batchRunId} completed: ${successCount} success, ${failureCount} failed` +
-            ` (webhooks: ${totalWebhooks}, deactivated: ${deactivated}, temporary failures: ${temporaryFailures})`,
+            ` (webhooks: ${totalWebhooks}, deactivated: ${deactivated}, temporary failures: ${temporaryFailures}, web push targets: ${totalPushSubscriptions}, web push success: ${webPushSuccessCount}, web push failures: ${webPushDispatchFailures}, web push deactivated: ${webPushDeactivated})`,
         );
       })
       .catch((error) => {
@@ -255,22 +315,36 @@ export class NotificationBatchService {
       return [];
     }
 
-    logAndBridge({
-      method: 'verbose',
-      message: `starting notification dispatch webhookCount=${activeWebhooks.length}`,
-      context: NotificationBatchService.name,
-      discordBridge: this.discordBridge,
-      bridgeLevel: BridgeLogLevel.VERBOSE,
-      bridgeMessage: `Starting notification dispatch - **${activeWebhooks.length}** active webhook(s) found`,
-      metadata: { webhookCount: activeWebhooks.length },
-    });
-
     if (activeWebhooks.length === 0) {
       LoggerUtils.logDev(
         NotificationBatchService.name,
         'No active webhooks available for notification batch',
       );
     }
+
+    let activePushSubscriptions: WebPushSubscription[];
+    try {
+      activePushSubscriptions =
+        await this.webPushSubscriptionService.findAllActive();
+    } catch (error) {
+      this.logger.error(
+        `Failed to load web push subscriptions for notification batch: ${(error as Error).message}`,
+      );
+      activePushSubscriptions = [];
+    }
+
+    logAndBridge({
+      method: 'verbose',
+      message: `starting notification dispatch webhookCount=${activeWebhooks.length} pushSubscriptionCount=${activePushSubscriptions.length}`,
+      context: NotificationBatchService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.VERBOSE,
+      bridgeMessage: `Starting notification dispatch - **${activeWebhooks.length}** active webhook(s), **${activePushSubscriptions.length}** active push subscription(s)`,
+      metadata: {
+        webhookCount: activeWebhooks.length,
+        pushSubscriptionCount: activePushSubscriptions.length,
+      },
+    });
 
     const notificationJobs =
       notices.length > 1
@@ -295,13 +369,26 @@ export class NotificationBatchService {
                 },
               );
 
+              const webPushDispatch = await this.dispatchToWebPush(
+                activePushSubscriptions,
+                (subscriptions) =>
+                  this.webPushNotificationService.sendNewNoticeDigestBatch(
+                    notices,
+                    subscriptions,
+                  ),
+              );
+
               return {
                 notice: `신규 ${notices.length}건 요약`,
                 totalWebhooks: activeWebhooks.length,
+                totalPushSubscriptions: webPushDispatch.targetCount,
                 successCount,
                 failedCount,
                 deactivated,
                 temporaryFailures,
+                webPushSuccessCount: webPushDispatch.successCount,
+                webPushFailedCount: webPushDispatch.failedCount,
+                webPushDeactivatedCount: webPushDispatch.deactivatedCount,
                 aggregatedNoticeCount: notices.length,
               };
             },
@@ -326,13 +413,26 @@ export class NotificationBatchService {
               },
             );
 
+            const webPushDispatch = await this.dispatchToWebPush(
+              activePushSubscriptions,
+              (subscriptions) =>
+                this.webPushNotificationService.sendNewNoticeBatch(
+                  notice,
+                  subscriptions,
+                ),
+            );
+
             return {
               notice: notice.subject,
               totalWebhooks: activeWebhooks.length,
+              totalPushSubscriptions: webPushDispatch.targetCount,
               successCount,
               failedCount,
               deactivated,
               temporaryFailures,
+              webPushSuccessCount: webPushDispatch.successCount,
+              webPushFailedCount: webPushDispatch.failedCount,
+              webPushDeactivatedCount: webPushDispatch.deactivatedCount,
             };
           });
 
@@ -367,6 +467,17 @@ export class NotificationBatchService {
       return [];
     }
 
+    let activePushSubscriptions: WebPushSubscription[];
+    try {
+      activePushSubscriptions =
+        await this.webPushSubscriptionService.findAllActive();
+    } catch (error) {
+      this.logger.error(
+        `Failed to load web push subscriptions for change batch: ${(error as Error).message}`,
+      );
+      activePushSubscriptions = [];
+    }
+
     const jobs: Array<
       (abortSignal: AbortSignal) => Promise<ChangeNotificationJobResult>
     > = [];
@@ -392,14 +503,28 @@ export class NotificationBatchService {
               },
             );
 
+          const webPushDispatch = await this.dispatchToWebPush(
+            activePushSubscriptions,
+            (subscriptions) =>
+              this.webPushNotificationService.sendChangeDigestBatch(
+                regularPayloads,
+                subscriptions,
+                { ended: false },
+              ),
+          );
+
           return {
             noticeNum: regularPayloads[0].noticeNum,
             subject: `변경 ${regularPayloads.length}건 요약`,
             totalWebhooks: activeWebhooks.length,
+            totalPushSubscriptions: webPushDispatch.targetCount,
             successCount,
             failedCount,
             deactivated,
             temporaryFailures,
+            webPushSuccessCount: webPushDispatch.successCount,
+            webPushFailedCount: webPushDispatch.failedCount,
+            webPushDeactivatedCount: webPushDispatch.deactivatedCount,
             aggregatedEventCount: regularPayloads.length,
             aggregatedNoticeCount: uniqueNoticeCount,
           };
@@ -422,14 +547,27 @@ export class NotificationBatchService {
               },
             );
 
+          const webPushDispatch = await this.dispatchToWebPush(
+            activePushSubscriptions,
+            (subscriptions) =>
+              this.webPushNotificationService.sendChangeBatch(
+                payload,
+                subscriptions,
+              ),
+          );
+
           return {
             noticeNum: payload.noticeNum,
             subject: payload.subject,
             totalWebhooks: activeWebhooks.length,
+            totalPushSubscriptions: webPushDispatch.targetCount,
             successCount,
             failedCount,
             deactivated,
             temporaryFailures,
+            webPushSuccessCount: webPushDispatch.successCount,
+            webPushFailedCount: webPushDispatch.failedCount,
+            webPushDeactivatedCount: webPushDispatch.deactivatedCount,
           };
         });
       }
@@ -456,14 +594,28 @@ export class NotificationBatchService {
               },
             );
 
+          const webPushDispatch = await this.dispatchToWebPush(
+            activePushSubscriptions,
+            (subscriptions) =>
+              this.webPushNotificationService.sendChangeDigestBatch(
+                noticePeriodEndedPayloads,
+                subscriptions,
+                { ended: true },
+              ),
+          );
+
           return {
             noticeNum: noticePeriodEndedPayloads[0].noticeNum,
             subject: `입법예고 종료 ${noticePeriodEndedPayloads.length}건 요약`,
             totalWebhooks: activeWebhooks.length,
+            totalPushSubscriptions: webPushDispatch.targetCount,
             successCount,
             failedCount,
             deactivated,
             temporaryFailures,
+            webPushSuccessCount: webPushDispatch.successCount,
+            webPushFailedCount: webPushDispatch.failedCount,
+            webPushDeactivatedCount: webPushDispatch.deactivatedCount,
             aggregatedEventCount: noticePeriodEndedPayloads.length,
             aggregatedNoticeCount: uniqueNoticeCount,
           };
@@ -486,14 +638,27 @@ export class NotificationBatchService {
               },
             );
 
+          const webPushDispatch = await this.dispatchToWebPush(
+            activePushSubscriptions,
+            (subscriptions) =>
+              this.webPushNotificationService.sendChangeBatch(
+                payload,
+                subscriptions,
+              ),
+          );
+
           return {
             noticeNum: payload.noticeNum,
             subject: payload.subject,
             totalWebhooks: activeWebhooks.length,
+            totalPushSubscriptions: webPushDispatch.targetCount,
             successCount,
             failedCount,
             deactivated,
             temporaryFailures,
+            webPushSuccessCount: webPushDispatch.successCount,
+            webPushFailedCount: webPushDispatch.failedCount,
+            webPushDeactivatedCount: webPushDispatch.deactivatedCount,
           };
         });
       }
@@ -608,5 +773,35 @@ export class NotificationBatchService {
       temporaryFailures: temporaryFailures.length,
       results,
     };
+  }
+
+  private async dispatchToWebPush(
+    subscriptions: WebPushSubscription[],
+    send: (
+      subscriptions: WebPushSubscription[],
+    ) => Promise<WebPushDispatchSummary>,
+  ): Promise<WebPushDispatchSummary> {
+    if (subscriptions.length === 0) {
+      return {
+        targetCount: 0,
+        successCount: 0,
+        failedCount: 0,
+        deactivatedCount: 0,
+      };
+    }
+
+    try {
+      return await send(subscriptions);
+    } catch (error) {
+      this.logger.error(
+        `Web push notification dispatch failed: ${(error as Error).message}`,
+      );
+      return {
+        targetCount: subscriptions.length,
+        successCount: 0,
+        failedCount: subscriptions.length,
+        deactivatedCount: 0,
+      };
+    }
   }
 }

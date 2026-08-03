@@ -10,6 +10,7 @@ NestJS 기반 API 서버입니다. 국회 입법예고(PAL)와 국민참여입�
 - Redis 캐시 기반 최근 목록/검색 성능 최적화
 - Ollama 연동 AI 요약(선택)
 - Discord 웹훅 알림 전송
+- 브라우저 Web Push 알림 전송(VAPID)
 - Discord Debug Bridge(슬래시 커맨드 기반 운영 도구)
 
 ## 기술 스택
@@ -20,7 +21,7 @@ NestJS 기반 API 서버입니다. 국회 입법예고(PAL)와 국민참여입�
 - Cache: Redis (`@keyv/redis`, `@nestjs/cache-manager`)
 - Crawler: `pal-crawl`
 - Scheduler: `@nestjs/schedule`
-- Notification: `discord-webhook-node`
+- Notification: `discord-webhook-node`, `web-push`
 
 ## 설치 및 실행
 
@@ -82,6 +83,12 @@ REDIS_TTL=1800
 HASHGUARD_API_URL=https://hashguard.viento.me
 HASHGUARD_API_KEY=
 
+# Web Push (optional)
+WEB_PUSH_ENABLED=false
+WEB_PUSH_VAPID_PUBLIC_KEY=
+WEB_PUSH_VAPID_PRIVATE_KEY=
+WEB_PUSH_SUBJECT=mailto:lawcast@example.com
+
 # Ollama (optional)
 OLLAMA_ENABLED=false
 OLLAMA_API_URL=http://localhost:11434
@@ -119,6 +126,37 @@ DISCORD_BRIDGE_ADMIN_USER_IDS=
 - `OLLAMA_ENABLED=true`: 항상 활성화 시도
 - `OLLAMA_ENABLED=false`: 항상 비활성화
 - `OLLAMA_ENABLED` 미설정: `OLLAMA_API_URL` + `OLLAMA_MODEL`이 모두 있을 때만 활성화
+
+### Web Push 활성화 규칙
+
+- `WEB_PUSH_ENABLED=true` 이고, `WEB_PUSH_VAPID_PUBLIC_KEY` + `WEB_PUSH_VAPID_PRIVATE_KEY`가 모두 설정된 경우에만 활성화됩니다.
+- 위 조건이 충족되지 않으면 서버는 Web Push를 비활성으로 간주하고 공개키 API는 `enabled=false`를 반환합니다.
+
+### Web Push 설정 가이드
+
+1. VAPID 키 생성
+
+```bash
+npx web-push generate-vapid-keys
+```
+
+2. 생성된 키를 `.env`에 설정
+
+```env
+WEB_PUSH_ENABLED=true
+WEB_PUSH_VAPID_PUBLIC_KEY=...
+WEB_PUSH_VAPID_PRIVATE_KEY=...
+WEB_PUSH_SUBJECT=mailto:lawcast@example.com
+```
+
+3. 프론트엔드에서 브라우저 알림 권한을 허용하고 구독을 등록하면, 백엔드가 `web_push_subscriptions` 테이블에 endpoint/key를 저장합니다.
+
+4. 신규 입법예고/변경 감지 배치가 실행될 때 Discord 웹훅과 함께 Web Push도 병렬 전송됩니다.
+
+주의사항:
+
+- 개발/운영 도메인이 다르면 각 도메인별로 브라우저 구독이 따로 생성됩니다.
+- 브라우저가 반환한 구독 endpoint가 만료(예: 404/410)되면 백엔드에서 해당 구독을 자동 비활성화합니다.
 
 ## 아카이브 동기화 파이프라인
 
@@ -298,27 +336,30 @@ flowchart TD
 
 Base path: `/api`
 
-| Method | Path                       | Description                                |
-| ------ | -------------------------- | ------------------------------------------ |
-| `POST` | `/webhooks`                | Discord 웹훅 등록 (PoW proof 필요)         |
-| `GET`  | `/notices/recent`          | 최근 입법예고 목록                         |
-| `GET`  | `/notices/keywords`        | 홈 빠른 검색용 추천 키워드                 |
-| `GET`  | `/notices/archive`         | 아카이브 목록 조회(필터/정렬/페이지네이션) |
-| `GET`  | `/notices/search`          | 통합 검색                                  |
-| `GET`  | `/notices/:num/detail`     | 의안번호 상세(아카이브 기반)               |
-| `GET`  | `/notices/:num/changes`    | 의안번호별 변경 이벤트 타임라인            |
-| `GET`  | `/notices/changes`         | 전체 의안 변경 이벤트 목록(페이지네이션)   |
-| `GET`  | `/notices/changes/summary` | 비교 가능한 변경 이벤트 요약               |
-| `GET`  | `/notices/:num/screenshot` | 아카이브 스크린샷 이미지                   |
-| `GET`  | `/notices/:num/export`     | 아카이브 ZIP 내보내기                      |
-| `GET`  | `/stats`                   | 런타임 통계(아카이브/요약/캐시 포함)       |
-| `GET`  | `/batch/status`            | 배치 상태                                  |
-| `GET`  | `/health`                  | 헬스 상태                                  |
-| `GET`  | `/webhooks/stats/detailed` | 웹훅 상세 통계                             |
-| `GET`  | `/webhooks/system-health`  | 웹훅 시스템 헬스                           |
-| `GET`  | `/redis/status`            | Redis 상세 상태                            |
-| `GET`  | `/redis/connection`        | Redis 연결 여부                            |
-| `GET`  | `/packages`                | 패키지 버전 정보                           |
+| Method   | Path                       | Description                                |
+| -------- | -------------------------- | ------------------------------------------ |
+| `POST`   | `/webhooks`                | Discord 웹훅 등록 (PoW proof 필요)         |
+| `GET`    | `/push/public-key`         | Web Push 공개키/활성화 상태 조회           |
+| `POST`   | `/push/subscriptions`      | Web Push 구독 등록/재활성화                |
+| `DELETE` | `/push/subscriptions`      | Web Push 구독 해지(비활성화)               |
+| `GET`    | `/notices/recent`          | 최근 입법예고 목록                         |
+| `GET`    | `/notices/keywords`        | 홈 빠른 검색용 추천 키워드                 |
+| `GET`    | `/notices/archive`         | 아카이브 목록 조회(필터/정렬/페이지네이션) |
+| `GET`    | `/notices/search`          | 통합 검색                                  |
+| `GET`    | `/notices/:num/detail`     | 의안번호 상세(아카이브 기반)               |
+| `GET`    | `/notices/:num/changes`    | 의안번호별 변경 이벤트 타임라인            |
+| `GET`    | `/notices/changes`         | 전체 의안 변경 이벤트 목록(페이지네이션)   |
+| `GET`    | `/notices/changes/summary` | 비교 가능한 변경 이벤트 요약               |
+| `GET`    | `/notices/:num/screenshot` | 아카이브 스크린샷 이미지                   |
+| `GET`    | `/notices/:num/export`     | 아카이브 ZIP 내보내기                      |
+| `GET`    | `/stats`                   | 런타임 통계(아카이브/요약/캐시 포함)       |
+| `GET`    | `/batch/status`            | 배치 상태                                  |
+| `GET`    | `/health`                  | 헬스 상태                                  |
+| `GET`    | `/webhooks/stats/detailed` | 웹훅 상세 통계                             |
+| `GET`    | `/webhooks/system-health`  | 웹훅 시스템 헬스                           |
+| `GET`    | `/redis/status`            | Redis 상세 상태                            |
+| `GET`    | `/redis/connection`        | Redis 연결 여부                            |
+| `GET`    | `/packages`                | 패키지 버전 정보                           |
 
 ### 주요 쿼리 파라미터
 

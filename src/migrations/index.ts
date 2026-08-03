@@ -15,6 +15,7 @@ import { RemoveNoticeArchiveImmutabilityTriggers1751760004000 } from './20260706
 import { RefactorArchiveSnapshotStatesAndImmutability1751846401000 } from './202607070001-refactor-archive-snapshot-states-and-immutability.migration';
 import { RemoveArchiveLastUpdatedAt1751932801000 } from './202607080001-remove-archive-last-updated-at.migration';
 import { AddArchiveIntegrityCheckTables1752019201000 } from './202607090001-add-archive-integrity-check-tables.migration';
+import { AddWebPushSubscriptions1754179201000 } from './202608030001-add-web-push-subscriptions.migration';
 
 export const migrations: (new () => MigrationInterface)[] = [
   InitialSchemaMigration1744953900000,
@@ -33,4 +34,5 @@ export const migrations: (new () => MigrationInterface)[] = [
   RefactorArchiveSnapshotStatesAndImmutability1751846401000,
   RemoveArchiveLastUpdatedAt1751932801000,
   AddArchiveIntegrityCheckTables1752019201000,
+  AddWebPushSubscriptions1754179201000,
 ];

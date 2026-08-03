@@ -10,6 +10,7 @@ import { NotificationBatchService } from './notification-batch.service';
 import { type ChangeNotificationPayload } from './notification.service';
 import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 import { CHANGE_EVENT_TYPE } from '../change-tracking/notice-change-event.entity';
+import { type WebPushSubscription } from './web-push-subscription.entity';
 
 describe('NotificationBatchService (diffchain change batching)', () => {
   let webhookService: {
@@ -28,6 +29,15 @@ describe('NotificationBatchService (diffchain change batching)', () => {
   let batchProcessingService: {
     executeBatch: jest.Mock;
     updateRecentJobMetadata: jest.Mock;
+  };
+  let webPushSubscriptionService: {
+    findAllActive: jest.Mock;
+  };
+  let webPushNotificationService: {
+    sendNewNoticeBatch: jest.Mock;
+    sendNewNoticeDigestBatch: jest.Mock;
+    sendChangeBatch: jest.Mock;
+    sendChangeDigestBatch: jest.Mock;
   };
   let service: NotificationBatchService;
 
@@ -111,9 +121,88 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       updateRecentJobMetadata: jest.fn(),
     };
 
+    webPushSubscriptionService = {
+      findAllActive: jest
+        .fn<() => Promise<WebPushSubscription[]>>()
+        .mockResolvedValue([
+          {
+            id: 11,
+            endpoint: 'https://push.example/subscriptions/11',
+            p256dh: 'p256dh-key',
+            auth: 'auth-key',
+            isActive: true,
+          } as WebPushSubscription,
+        ]),
+    };
+
+    webPushNotificationService = {
+      sendNewNoticeBatch: jest
+        .fn<
+          (...args: any[]) => Promise<{
+            targetCount: number;
+            successCount: number;
+            failedCount: number;
+            deactivatedCount: number;
+          }>
+        >()
+        .mockResolvedValue({
+          targetCount: 1,
+          successCount: 1,
+          failedCount: 0,
+          deactivatedCount: 0,
+        }),
+      sendNewNoticeDigestBatch: jest
+        .fn<
+          (...args: any[]) => Promise<{
+            targetCount: number;
+            successCount: number;
+            failedCount: number;
+            deactivatedCount: number;
+          }>
+        >()
+        .mockResolvedValue({
+          targetCount: 1,
+          successCount: 1,
+          failedCount: 0,
+          deactivatedCount: 0,
+        }),
+      sendChangeBatch: jest
+        .fn<
+          (...args: any[]) => Promise<{
+            targetCount: number;
+            successCount: number;
+            failedCount: number;
+            deactivatedCount: number;
+          }>
+        >()
+        .mockResolvedValue({
+          targetCount: 1,
+          successCount: 1,
+          failedCount: 0,
+          deactivatedCount: 0,
+        }),
+      sendChangeDigestBatch: jest
+        .fn<
+          (...args: any[]) => Promise<{
+            targetCount: number;
+            successCount: number;
+            failedCount: number;
+            deactivatedCount: number;
+          }>
+        >()
+        .mockResolvedValue({
+          targetCount: 1,
+          successCount: 1,
+          failedCount: 0,
+          deactivatedCount: 0,
+        }),
+    };
+
     service = new NotificationBatchService(
       webhookService as any,
       notificationService as any,
+      webPushSubscriptionService as any,
+      webPushNotificationService as any,
       batchProcessingService as any,
       undefined as any,
     );
@@ -157,8 +246,17 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       notificationService.sendDiscordNotificationBatch,
     ).not.toHaveBeenCalled();
     expect(
+      webPushNotificationService.sendNewNoticeDigestBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      webPushNotificationService.sendNewNoticeBatch,
+    ).not.toHaveBeenCalled();
+    expect(
       notificationService.sendDiscordNotificationDigestBatch,
     ).toHaveBeenCalledWith(notices, expect.any(Array), expect.any(Object));
+    expect(
+      webPushNotificationService.sendNewNoticeDigestBatch,
+    ).toHaveBeenCalledWith(notices, expect.any(Array));
     expect(results).toHaveLength(1);
     expect(results[0].data).toMatchObject({
       aggregatedNoticeCount: 2,
@@ -188,6 +286,16 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     expect(
       notificationService.sendDiscordNotificationDigestBatch,
     ).not.toHaveBeenCalled();
+    expect(webPushNotificationService.sendNewNoticeBatch).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(
+      webPushNotificationService.sendNewNoticeDigestBatch,
+    ).not.toHaveBeenCalled();
+    expect(webPushNotificationService.sendNewNoticeBatch).toHaveBeenCalledWith(
+      notices[0],
+      expect.any(Array),
+    );
     expect(results).toHaveLength(1);
     expect(results[0].data).toMatchObject({
       notice: '법률안 301',
@@ -226,8 +334,15 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       notificationService.sendDiscordChangeNotificationBatch,
     ).not.toHaveBeenCalled();
     expect(
+      webPushNotificationService.sendChangeDigestBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(webPushNotificationService.sendChangeBatch).not.toHaveBeenCalled();
+    expect(
       notificationService.sendDiscordChangeDigestNotificationBatch,
     ).toHaveBeenCalledWith(payloads, expect.any(Array), expect.any(Object));
+    expect(
+      webPushNotificationService.sendChangeDigestBatch,
+    ).toHaveBeenCalledWith(payloads, expect.any(Array), { ended: false });
     expect(results).toHaveLength(1);
     expect(results[0].data).toMatchObject({
       aggregatedEventCount: 2,
@@ -257,6 +372,14 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     expect(
       notificationService.sendDiscordChangeDigestNotificationBatch,
     ).not.toHaveBeenCalled();
+    expect(webPushNotificationService.sendChangeBatch).toHaveBeenCalledTimes(1);
+    expect(
+      webPushNotificationService.sendChangeDigestBatch,
+    ).not.toHaveBeenCalled();
+    expect(webPushNotificationService.sendChangeBatch).toHaveBeenCalledWith(
+      payloads[0],
+      expect.any(Array),
+    );
     expect(results).toHaveLength(1);
     expect(results[0].data).toMatchObject({
       noticeNum: 301,
@@ -308,6 +431,19 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     expect(
       notificationService.sendDiscordNoticePeriodEndedBatch,
     ).not.toHaveBeenCalled();
+    expect(
+      webPushNotificationService.sendChangeDigestBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(webPushNotificationService.sendChangeBatch).toHaveBeenCalledTimes(1);
+    expect(
+      webPushNotificationService.sendChangeDigestBatch,
+    ).toHaveBeenCalledWith([payloads[0], payloads[1]], expect.any(Array), {
+      ended: true,
+    });
+    expect(webPushNotificationService.sendChangeBatch).toHaveBeenCalledWith(
+      payloads[2],
+      expect.any(Array),
+    );
     expect(results).toHaveLength(2);
   });
 
@@ -347,10 +483,86 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     expect(
       notificationService.sendDiscordNoticePeriodEndedBatch,
     ).not.toHaveBeenCalled();
+    expect(
+      webPushNotificationService.sendChangeDigestBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(webPushNotificationService.sendChangeBatch).not.toHaveBeenCalled();
+    expect(
+      webPushNotificationService.sendChangeDigestBatch,
+    ).toHaveBeenCalledWith(payloads, expect.any(Array), { ended: true });
     expect(results).toHaveLength(1);
     expect(results[0].data).toMatchObject({
       aggregatedEventCount: 2,
       aggregatedNoticeCount: 2,
+    });
+  });
+
+  it('skips web push dispatch when there are no active subscriptions', async () => {
+    (
+      webPushSubscriptionService.findAllActive as jest.Mock
+    ).mockImplementationOnce(async () => []);
+
+    const notices = [
+      {
+        num: 901,
+        subject: '법률안 901',
+        proposerCategory: '정부',
+        committee: '법제사법위원회',
+        link: 'https://example.com/notices/901',
+        contentId: 'content-901',
+        attachments: { pdfFile: '', hwpFile: '' },
+      },
+    ];
+
+    const results = await service.executeNotificationBatch(notices as any, {
+      concurrency: 1,
+    });
+
+    expect(notificationService.sendDiscordNotificationBatch).toHaveBeenCalled();
+    expect(
+      webPushNotificationService.sendNewNoticeBatch,
+    ).not.toHaveBeenCalled();
+    expect(
+      webPushNotificationService.sendNewNoticeDigestBatch,
+    ).not.toHaveBeenCalled();
+    expect(results).toHaveLength(1);
+  });
+
+  it('keeps batch successful while recording web push failures in job data', async () => {
+    webPushNotificationService.sendChangeBatch.mockImplementationOnce(
+      async () => ({
+        targetCount: 1,
+        successCount: 0,
+        failedCount: 1,
+        deactivatedCount: 0,
+      }),
+    );
+
+    const payloads: ChangeNotificationPayload[] = [
+      {
+        noticeNum: 1001,
+        subject: '법률안 1001',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
+        changedFields: ['subject'],
+        eventHash: 'hash-1001',
+      },
+    ];
+
+    const results = await service.executeChangeNotificationBatch(payloads, {
+      concurrency: 1,
+    });
+
+    expect(
+      notificationService.sendDiscordChangeNotificationBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(webPushNotificationService.sendChangeBatch).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(1);
+    expect(results[0].success).toBe(true);
+    expect(results[0].data).toMatchObject({
+      webPushSuccessCount: 0,
+      webPushFailedCount: 1,
+      webPushDeactivatedCount: 0,
     });
   });
 

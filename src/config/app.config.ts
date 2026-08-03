@@ -17,6 +17,12 @@ export interface AppConfig {
     apiUrl: string;
     apiKey: string;
   };
+  webPush: {
+    enabled: boolean;
+    vapidPublicKey: string;
+    vapidPrivateKey: string;
+    subject: string;
+  };
   ollama: {
     enabled: boolean;
     apiUrl: string;
@@ -308,6 +314,16 @@ export default (): AppConfig => ({
   hashguard: {
     apiUrl: process.env.HASHGUARD_API_URL || 'https://hashguard.viento.me',
     apiKey: process.env.HASHGUARD_API_KEY || '',
+  },
+  webPush: {
+    enabled:
+      parseBooleanWithDefault(process.env.WEB_PUSH_ENABLED, false) &&
+      !!process.env.WEB_PUSH_VAPID_PUBLIC_KEY?.trim() &&
+      !!process.env.WEB_PUSH_VAPID_PRIVATE_KEY?.trim(),
+    vapidPublicKey: process.env.WEB_PUSH_VAPID_PUBLIC_KEY?.trim() || '',
+    vapidPrivateKey: process.env.WEB_PUSH_VAPID_PRIVATE_KEY?.trim() || '',
+    subject:
+      process.env.WEB_PUSH_SUBJECT?.trim() || 'mailto:lawcast@example.com',
   },
   ollama: {
     enabled:

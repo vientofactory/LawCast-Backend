@@ -11,6 +11,7 @@ import { ChangeTrackingService } from '../change-tracking/change-tracking.servic
 import { DbMirrorService } from '../db-mirror/db-mirror.service';
 import { logAndBridge } from '../../utils/bridge-log.utils';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
+import { WebPushSubscriptionService } from '../notification/web-push-subscription.service';
 
 const CRON_TIMEZONE = appConfig().cron.timezone;
 
@@ -18,6 +19,7 @@ const CRON_TIMEZONE = appConfig().cron.timezone;
 export class CronJobsService {
   private readonly logger = LoggerUtils.getContextLogger(CronJobsService.name);
   private readonly changeTrackingAuditQueue: Array<'daily' | 'weekly'> = [];
+  private readonly webPushCutoffDays = 14;
   private isDrainingChangeTrackingAuditQueue = false;
 
   constructor(
@@ -27,6 +29,8 @@ export class CronJobsService {
     private readonly archiveSyncService: ArchiveSyncService,
     private readonly changeTrackingService: ChangeTrackingService,
     private readonly dbMirrorService: DbMirrorService,
+    @Optional()
+    private readonly webPushSubscriptionService: WebPushSubscriptionService,
     @Optional() private readonly discordBridge: DiscordBridgeService,
   ) {}
 
@@ -316,9 +320,25 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handleSystemMonitoring(): Promise<void> {
-    await this.execute('system monitoring', () =>
-      this.webhookCleanupService.runSystemMonitoring(),
-    );
+    await this.execute('system monitoring', async () => {
+      await this.webhookCleanupService.runSystemMonitoring();
+
+      if (!this.webPushSubscriptionService) {
+        return;
+      }
+
+      const cleanedCount =
+        await this.webPushSubscriptionService.cleanupInactiveSubscriptions(
+          this.webPushCutoffDays,
+        );
+
+      if (cleanedCount > 0) {
+        LoggerUtils.debugDev(
+          CronJobsService.name,
+          `Web push monitoring cleanup removed ${cleanedCount} inactive subscription(s).`,
+        );
+      }
+    });
   }
 
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN, {
