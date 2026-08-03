@@ -2,10 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { type CachedNotice } from '../../types/cache.types';
 import { LoggerUtils } from '../../utils/logger.utils';
+import { delayMs } from '../../utils/async-delay.utils';
 import { type ChangeNotificationPayload } from './notification.service';
 import { WebPushSubscription } from './web-push-subscription.entity';
 import { WebPushSubscriptionService } from './web-push-subscription.service';
 import { buildFrontendUrl } from './notification-helpers';
+
+type WebPushUrgency = 'very-low' | 'low' | 'normal' | 'normal';
 
 type WebPushLike = {
   setVapidDetails(subject: string, publicKey: string, privateKey: string): void;
@@ -17,7 +20,7 @@ type WebPushLike = {
     payload: string,
     options?: {
       TTL?: number;
-      urgency?: 'very-low' | 'low' | 'normal' | 'high';
+      urgency?: WebPushUrgency;
     },
   ): Promise<unknown>;
 };
@@ -45,6 +48,9 @@ export class WebPushNotificationService {
   private readonly webPushEnabled: boolean;
   private readonly vapidPublicKey: string;
   private readonly frontendUrls: string[];
+  private readonly webPushSendConcurrency = 2;
+  private readonly webPushMaxAttempts = 3;
+  private readonly webPushRetryBaseDelayMs = 1000;
   private webPushClient: WebPushLike | null = null;
 
   constructor(
@@ -148,7 +154,7 @@ export class WebPushNotificationService {
           type: isDoneChanged ? 'notice_period_ended' : 'notice_changed',
         },
       },
-      { urgency: 'high' },
+      { urgency: 'normal' },
     );
   }
 
@@ -182,14 +188,14 @@ export class WebPushNotificationService {
             : 'notice_changed_digest',
         },
       },
-      { urgency: 'high' },
+      { urgency: 'normal' },
     );
   }
 
   private async sendBatch(
     subscriptions: WebPushSubscription[],
     payload: WebPushPayload,
-    options: { urgency: 'very-low' | 'low' | 'normal' | 'high' },
+    options: { urgency: WebPushUrgency },
   ): Promise<WebPushDispatchSummary> {
     if (!this.webPushEnabled || subscriptions.length === 0) {
       return {
@@ -212,46 +218,16 @@ export class WebPushNotificationService {
 
     const serializedPayload = JSON.stringify(payload);
 
-    const results = await Promise.all(
-      subscriptions.map(async (subscription) => {
-        try {
-          await webPush.sendNotification(
-            {
-              endpoint: subscription.endpoint,
-              keys: {
-                p256dh: subscription.p256dh,
-                auth: subscription.auth,
-              },
-            },
-            serializedPayload,
-            {
-              TTL: 60 * 60,
-              urgency: options.urgency,
-            },
-          );
-
-          await this.webPushSubscriptionService.markSuccess(subscription.id);
-          return { success: true, deactivated: false };
-        } catch (error) {
-          const statusCode = this.extractStatusCode(error);
-          const message =
-            error instanceof Error ? error.message : String(error);
-          const shouldDeactivate = statusCode === 404 || statusCode === 410;
-
-          await this.webPushSubscriptionService.markFailure(
-            subscription.id,
-            message,
-            { deactivate: shouldDeactivate },
-          );
-
-          LoggerUtils.debugDev(
-            WebPushNotificationService.name,
-            `Web push send failed subscription=${subscription.id} status=${statusCode ?? 'unknown'} deactivate=${shouldDeactivate}`,
-          );
-
-          return { success: false, deactivated: shouldDeactivate };
-        }
-      }),
+    const results = await this.dispatchWithConcurrency(
+      subscriptions,
+      async (subscription) =>
+        this.sendSingleWithRetry(
+          subscription,
+          serializedPayload,
+          options,
+          webPush,
+        ),
+      Math.min(this.webPushSendConcurrency, subscriptions.length),
     );
 
     const successCount = results.filter((result) => result.success).length;
@@ -266,6 +242,158 @@ export class WebPushNotificationService {
       failedCount,
       deactivatedCount,
     };
+  }
+
+  private async sendSingleWithRetry(
+    subscription: WebPushSubscription,
+    serializedPayload: string,
+    options: { urgency: WebPushUrgency },
+    webPush: WebPushLike,
+  ): Promise<{ success: boolean; deactivated: boolean }> {
+    for (let attempt = 1; attempt <= this.webPushMaxAttempts; attempt++) {
+      try {
+        await webPush.sendNotification(
+          {
+            endpoint: subscription.endpoint,
+            keys: {
+              p256dh: subscription.p256dh,
+              auth: subscription.auth,
+            },
+          },
+          serializedPayload,
+          {
+            TTL: 60 * 60,
+            urgency: options.urgency,
+          },
+        );
+
+        await this.webPushSubscriptionService.markSuccess(subscription.id);
+        return { success: true, deactivated: false };
+      } catch (error) {
+        const statusCode = this.extractStatusCode(error);
+        const shouldDeactivate = statusCode === 404 || statusCode === 410;
+        const isRetryable = this.isRetryableError(error, statusCode);
+        const hasNextAttempt = attempt < this.webPushMaxAttempts;
+
+        if (!shouldDeactivate && isRetryable && hasNextAttempt) {
+          const retryDelayMs = this.resolveRetryDelayMs(error, attempt);
+          LoggerUtils.debugDev(
+            WebPushNotificationService.name,
+            `Web push transient failure subscription=${subscription.id} status=${statusCode ?? 'unknown'} retryInMs=${retryDelayMs} attempt=${attempt}/${this.webPushMaxAttempts}`,
+          );
+          await delayMs(retryDelayMs);
+          continue;
+        }
+
+        const message = error instanceof Error ? error.message : String(error);
+
+        await this.webPushSubscriptionService.markFailure(
+          subscription.id,
+          message,
+          { deactivate: shouldDeactivate },
+        );
+
+        LoggerUtils.debugDev(
+          WebPushNotificationService.name,
+          `Web push send failed subscription=${subscription.id} status=${statusCode ?? 'unknown'} deactivate=${shouldDeactivate}`,
+        );
+
+        return { success: false, deactivated: shouldDeactivate };
+      }
+    }
+
+    return { success: false, deactivated: false };
+  }
+
+  private async dispatchWithConcurrency<T, R>(
+    items: T[],
+    worker: (item: T, index: number) => Promise<R>,
+    concurrency: number,
+  ): Promise<R[]> {
+    if (items.length === 0) {
+      return [];
+    }
+
+    const safeConcurrency = Math.max(1, concurrency);
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+
+    const runWorker = async (): Promise<void> => {
+      while (true) {
+        const current = nextIndex;
+        nextIndex += 1;
+        if (current >= items.length) {
+          return;
+        }
+        results[current] = await worker(items[current], current);
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: safeConcurrency }, () => runWorker()),
+    );
+
+    return results;
+  }
+
+  private isRetryableError(error: unknown, statusCode: number | null): boolean {
+    if (
+      statusCode &&
+      [408, 425, 429, 500, 502, 503, 504].includes(statusCode)
+    ) {
+      return true;
+    }
+
+    const candidate = error as { code?: string };
+    return ['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN'].includes(
+      String(candidate?.code ?? ''),
+    );
+  }
+
+  private resolveRetryDelayMs(error: unknown, attempt: number): number {
+    const retryAfterMs = this.extractRetryAfterMs(error);
+    if (retryAfterMs !== null) {
+      return retryAfterMs;
+    }
+
+    return this.webPushRetryBaseDelayMs * Math.max(1, attempt);
+  }
+
+  private extractRetryAfterMs(error: unknown): number | null {
+    const candidate = error as {
+      headers?: Record<string, unknown>;
+      response?: { headers?: Record<string, unknown> };
+    };
+
+    const headers = candidate?.headers ?? candidate?.response?.headers;
+    if (!headers) {
+      return null;
+    }
+
+    const rawRetryAfter =
+      headers['retry-after'] ??
+      headers['Retry-After'] ??
+      headers['RETRY-AFTER'];
+
+    if (rawRetryAfter == null) {
+      return null;
+    }
+
+    const retryAfter = Array.isArray(rawRetryAfter)
+      ? String(rawRetryAfter[0])
+      : String(rawRetryAfter);
+
+    const parsedSeconds = Number(retryAfter);
+    if (Number.isFinite(parsedSeconds)) {
+      return Math.max(0, Math.round(parsedSeconds * 1000));
+    }
+
+    const retryAt = Date.parse(retryAfter);
+    if (!Number.isNaN(retryAt)) {
+      return Math.max(0, retryAt - Date.now());
+    }
+
+    return null;
   }
 
   private async getWebPushClient(): Promise<WebPushLike | null> {
