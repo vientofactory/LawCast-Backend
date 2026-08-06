@@ -452,6 +452,11 @@ export class DiscordBridgeOperationsCommandsService {
       archive.runningPhases.length > 0
         ? archive.runningPhases.join(', ')
         : 'none';
+    const runningWriteHeavyPhases =
+      archive.runningWriteHeavyPhases.length > 0
+        ? archive.runningWriteHeavyPhases.join(', ')
+        : 'none';
+    const fmtTs = (value: string | null) => value ?? 'none';
     const backgroundTasks =
       scheduler.activeBackgroundTasks.length > 0
         ? scheduler.activeBackgroundTasks.join(', ')
@@ -488,6 +493,43 @@ export class DiscordBridgeOperationsCommandsService {
         {
           name: 'Archive Sync Phases',
           value: `anyRunning=${archive.isAnyPhaseRunning}\nrunning=${runningPhases}`,
+          inline: false,
+        },
+        {
+          name: 'Archive Sync Write-Heavy',
+          value:
+            `anyRunning=${archive.isWriteHeavyPhaseRunning}\n` +
+            `running=${runningWriteHeavyPhases}`,
+          inline: false,
+        },
+        {
+          name: 'Recompare Queue Throughput',
+          value:
+            `queue=${archive.asyncApply.pendingRecompareQueueLength} ` +
+            `worker=${archive.asyncApply.pendingRecompareWorkerRunning}\n` +
+            `processedTotal=${archive.asyncApply.pendingRecompareProcessedTotal} ` +
+            `lastBatch=${archive.asyncApply.pendingRecompareLastBatchProcessed}\n` +
+            `lastBatchAt=${fmtTs(archive.asyncApply.pendingRecompareLastBatchAt)}`,
+          inline: false,
+        },
+        {
+          name: 'Full Sync Apply Queue',
+          value:
+            `queue=${archive.asyncApply.fullSyncQueueLength} ` +
+            `worker=${archive.asyncApply.fullSyncWorkerRunning}\n` +
+            `processedTotal=${archive.asyncApply.fullSyncProcessedTotal} ` +
+            `lastBatch=${archive.asyncApply.fullSyncLastBatchProcessed}\n` +
+            `lastBatchAt=${fmtTs(archive.asyncApply.fullSyncLastBatchAt)}`,
+          inline: false,
+        },
+        {
+          name: 'Summary Backfill Queue',
+          value:
+            `queue=${archive.asyncApply.summaryBackfillQueueLength} ` +
+            `worker=${archive.asyncApply.summaryBackfillWorkerRunning}\n` +
+            `processedTotal=${archive.asyncApply.summaryBackfillProcessedTotal} ` +
+            `lastBatch=${archive.asyncApply.summaryBackfillLastBatchProcessed}\n` +
+            `lastBatchAt=${fmtTs(archive.asyncApply.summaryBackfillLastBatchAt)}`,
           inline: false,
         },
         {

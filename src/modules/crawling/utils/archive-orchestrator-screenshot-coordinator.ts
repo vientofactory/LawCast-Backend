@@ -7,6 +7,7 @@ import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../../utils/logger.utils';
 import { delayMs } from '../../../utils/async-delay.utils';
 import { logAndBridge } from '../../../utils/bridge-log.utils';
+import { mapConcurrently } from '../../../utils/concurrency.utils';
 
 export interface ScreenshotQueueItem {
   num: number;
@@ -125,12 +126,22 @@ export class ArchiveOrchestratorScreenshotCoordinator {
     this.isCaptureRunning = true;
 
     try {
+      const drainConcurrency = Math.max(
+        1,
+        APP_CONSTANTS.CRAWLING.BROWSER_MAX_CONCURRENCY,
+      );
+      const drainBatchSize = Math.max(drainConcurrency * 4, drainConcurrency);
+      LoggerUtils.debugDev(
+        'ArchiveOrchestratorService',
+        `Screenshot queue drain started with concurrency=${drainConcurrency}, batchSize=${drainBatchSize}`,
+      );
+
       for (;;) {
         const queue = await this.getScreenshotQueue();
         if (queue.length === 0) break;
 
-        const notice = queue[0];
-        const rest = queue.slice(1);
+        const batch = queue.slice(0, drainBatchSize);
+        const rest = queue.slice(batch.length);
 
         const dequeued = await this.setScreenshotQueue(rest);
         if (!dequeued) {
@@ -140,44 +151,60 @@ export class ArchiveOrchestratorScreenshotCoordinator {
           break;
         }
 
+        const palBatch = batch.filter((notice) => !notice.nsmBillNo);
+        const nsmBatch = batch.filter((notice) => notice.nsmBillNo);
+
+        LoggerUtils.debugDev(
+          'ArchiveOrchestratorService',
+          `Screenshot drain batch: total=${batch.length}, pal=${palBatch.length}, nsm=${nsmBatch.length}`,
+        );
+
         try {
-          if (notice.retryCount > 0) {
-            await delayMs(APP_CONSTANTS.SCREENSHOT.RETRY_DELAY_MS);
-          }
+          const [palRetryQueue, nsmRetryQueue] = await Promise.all([
+            this.processPalScreenshotBatch(palBatch, drainConcurrency),
+            this.processNsmScreenshotBatch(nsmBatch),
+          ]);
 
-          const screenshot = notice.nsmBillNo
-            ? await this.options.crawlingCoreService.captureNsmDetailScreenshot(
-                notice.nsmBillNo,
-              )
-            : await this.options.crawlingCoreService.captureContentScreenshot(
-                notice.contentId,
-                notice.isDone,
+          const retryQueue = [...palRetryQueue, ...nsmRetryQueue];
+
+          if (retryQueue.length > 0) {
+            const currentQueue = await this.getScreenshotQueue();
+            const merged = [...retryQueue, ...currentQueue];
+            const written = await this.setScreenshotQueue(merged);
+            if (!written) {
+              this.options.logger.warn(
+                `Failed to persist ${retryQueue.length} re-queued screenshot item(s) - restoring full batch`,
               );
-
-          if (screenshot) {
-            await this.options.noticeArchiveService.updateScreenshot(
-              notice.num,
-              screenshot,
-              'jpeg',
-            );
-            LoggerUtils.debug(
-              'ArchiveOrchestratorService',
-              `Screenshot stored for notice ${notice.num} (${screenshot.length.toLocaleString()} Bytes)`,
-            );
-          } else {
-            this.options.logger.warn(
-              `Screenshot permanently skipped for notice ${notice.num}: ` +
-                `content exceeds size limit after all compression strategies`,
-            );
+              const restored = await this.setScreenshotQueue([
+                ...batch,
+                ...currentQueue,
+              ]);
+              if (!restored) {
+                this.options.logger.warn(
+                  'Failed to restore screenshot batch after re-queue persistence failure',
+                );
+              }
+              break;
+            }
           }
         } catch (error) {
           const message =
             error instanceof Error ? error.message : String(error);
-          await this.requeueOrSkip(notice, message);
-        }
+          this.options.logger.warn(
+            `Screenshot batch processing failed: ${message} - restoring batch to queue`,
+          );
 
-        if (notice.nsmBillNo) {
-          await delayMs(APP_CONSTANTS.SCREENSHOT.NSM_INTER_CAPTURE_DELAY_MS);
+          const currentQueue = await this.getScreenshotQueue();
+          const restored = await this.setScreenshotQueue([
+            ...batch,
+            ...currentQueue,
+          ]);
+          if (!restored) {
+            this.options.logger.warn(
+              'Failed to restore screenshot batch after processing error',
+            );
+          }
+          break;
         }
       }
     } finally {
@@ -185,36 +212,90 @@ export class ArchiveOrchestratorScreenshotCoordinator {
     }
   }
 
-  private async requeueOrSkip(
+  private async processPalScreenshotBatch(
+    items: ScreenshotQueueItem[],
+    concurrency: number,
+  ): Promise<ScreenshotQueueItem[]> {
+    if (items.length === 0) return [];
+
+    const results = await mapConcurrently(items, concurrency, async (notice) =>
+      this.captureAndPersistScreenshot(notice),
+    );
+
+    return results.flatMap((item) => item ?? []);
+  }
+
+  private async processNsmScreenshotBatch(
+    items: ScreenshotQueueItem[],
+  ): Promise<ScreenshotQueueItem[]> {
+    if (items.length === 0) return [];
+
+    const retryQueue: ScreenshotQueueItem[] = [];
+
+    for (const notice of items) {
+      const retryItem = await this.captureAndPersistScreenshot(notice, true);
+      if (retryItem) {
+        retryQueue.push(retryItem);
+      }
+    }
+
+    return retryQueue;
+  }
+
+  private async captureAndPersistScreenshot(
     notice: ScreenshotQueueItem,
-    reason: string,
-  ): Promise<void> {
-    const max = APP_CONSTANTS.SCREENSHOT.MAX_RETRIES;
-    const nextAttempt = notice.retryCount + 1;
+    forceNsmSpacing = false,
+  ): Promise<ScreenshotQueueItem | null> {
+    try {
+      if (notice.retryCount > 0) {
+        await delayMs(APP_CONSTANTS.SCREENSHOT.RETRY_DELAY_MS);
+      }
 
-    if (notice.retryCount < max) {
-      const queue = await this.getScreenshotQueue();
-      queue.push({ ...notice, retryCount: nextAttempt });
-      const queued = await this.setScreenshotQueue(queue);
+      const screenshot = notice.nsmBillNo
+        ? await this.options.crawlingCoreService.captureNsmDetailScreenshot(
+            notice.nsmBillNo,
+          )
+        : await this.options.crawlingCoreService.captureContentScreenshot(
+            notice.contentId,
+            notice.isDone,
+          );
 
-      if (!queued) {
-        this.options.logger.warn(
-          `Screenshot retry enqueue failed for notice ${notice.num}: ${reason}`,
+      if (screenshot) {
+        await this.options.noticeArchiveService.updateScreenshot(
+          notice.num,
+          screenshot,
+          'jpeg',
         );
-        return;
+        LoggerUtils.debug(
+          'ArchiveOrchestratorService',
+          `Screenshot stored for notice ${notice.num} (${screenshot.length.toLocaleString()} Bytes)`,
+        );
+      } else {
+        this.options.logger.warn(
+          `Screenshot permanently skipped for notice ${notice.num}: ` +
+            `content exceeds size limit after all compression strategies`,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const max = APP_CONSTANTS.SCREENSHOT.MAX_RETRIES;
+      if (notice.retryCount < max) {
+        this.options.logger.warn(
+          `Screenshot failed for notice ${notice.num} (attempt ${notice.retryCount + 1}/${max + 1}): ${message} - re-queued`,
+        );
+        return { ...notice, retryCount: notice.retryCount + 1 };
       }
 
       this.options.logger.warn(
-        `Screenshot failed for notice ${notice.num} ` +
-          `(attempt ${nextAttempt}/${max + 1}): ${reason} - re-queued`,
+        `Screenshot permanently skipped for notice ${notice.num} after ${max + 1} attempt(s): ${message} - will retry on next backfill`,
       );
-      return;
+    } finally {
+      if (forceNsmSpacing && notice.nsmBillNo) {
+        await delayMs(APP_CONSTANTS.SCREENSHOT.NSM_INTER_CAPTURE_DELAY_MS);
+      }
     }
 
-    this.options.logger.warn(
-      `Screenshot permanently skipped for notice ${notice.num} ` +
-        `after ${max + 1} attempt(s): ${reason} - will retry on next backfill`,
-    );
+    return null;
   }
 
   private async enqueueScreenshots(

@@ -29,8 +29,12 @@ import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { WebhookService } from '../webhook/webhook.service';
 import { NotificationService } from '../notification/notification.service';
 import { BatchProcessingService } from '../shared/batch-processing.service';
+import { WebPushSubscriptionService } from '../notification/web-push-subscription.service';
+import { WebPushNotificationService } from '../notification/web-push-notification.service';
 import { type CachedNotice } from '../../types/cache.types';
+import { APP_CONSTANTS } from '../../config/app.config';
 import { type ITableData, type ISearchResult } from 'pal-crawl';
+import { NsmArchiveReason } from './archive-orchestrator.service';
 
 // ─── Shared test fixtures ─────────────────────────────────────────────────────
 
@@ -542,6 +546,41 @@ describe('[Fault Isolation] NotificationBatchService', () => {
             updateRecentJobMetadata: jest.fn(),
           },
         },
+        {
+          provide: WebPushSubscriptionService,
+          useValue: {
+            findAllActive: jest.fn().mockResolvedValue([]),
+          },
+        },
+        {
+          provide: WebPushNotificationService,
+          useValue: {
+            sendNewNoticeDigestBatch: jest.fn().mockResolvedValue({
+              sent: 0,
+              failed: 0,
+              deactivated: 0,
+              temporaryFailures: 0,
+            }),
+            sendNewNoticeBatch: jest.fn().mockResolvedValue({
+              sent: 0,
+              failed: 0,
+              deactivated: 0,
+              temporaryFailures: 0,
+            }),
+            sendChangeDigestBatch: jest.fn().mockResolvedValue({
+              sent: 0,
+              failed: 0,
+              deactivated: 0,
+              temporaryFailures: 0,
+            }),
+            sendChangeBatch: jest.fn().mockResolvedValue({
+              sent: 0,
+              failed: 0,
+              deactivated: 0,
+              temporaryFailures: 0,
+            }),
+          },
+        },
       ],
     }).compile();
 
@@ -600,6 +639,8 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     ]);
 
   beforeEach(async () => {
+    const objectStore = new Map<string, unknown>();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ArchiveSyncService,
@@ -607,6 +648,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
           provide: CrawlingCoreService,
           useValue: {
             getAllPages: jest.fn().mockImplementation(twoPageGen),
+            getAllNsmPages: jest.fn().mockImplementation(async function* () {}),
             getAllNsmPendingPages: jest
               .fn()
               .mockImplementation(async function* () {}),
@@ -667,8 +709,18 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
           provide: CacheService,
           useValue: {
             updateCache: jest.fn().mockResolvedValue(undefined),
-            getObject: jest.fn().mockResolvedValue(null),
-            setObject: jest.fn().mockResolvedValue(true),
+            getObject: jest
+              .fn()
+              .mockImplementation(async (key: string) =>
+                objectStore.has(key) ? objectStore.get(key) : null,
+              ),
+            setObject: jest
+              .fn()
+              .mockImplementation(async (key: string, value: unknown) => {
+                objectStore.set(key, value);
+                return true;
+              }),
+            deleteKey: jest.fn().mockResolvedValue(true),
           },
         },
       ],
@@ -709,6 +761,100 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     const result = await service.runFullSync('fault-test');
     expect(result).not.toBeNull();
     expect(result!.totalNoticesScanned).toBe(0);
+  });
+
+  it('runPendingSync re-compares archived NSM pending bills while scanning full pending pages', async () => {
+    const existingPendingItem = {
+      billNo: '2200001',
+      billName: '기존 발의안',
+      proposer: '홍길동의원',
+      progressStatus: '발의',
+      committee: '',
+      ministry: '법무부',
+      link: 'https://example.com/2200001',
+    };
+    const newPendingItem = {
+      billNo: '2200002',
+      billName: '신규 발의안',
+      proposer: '김철수의원',
+      progressStatus: '발의',
+      committee: '',
+      ministry: '행정안전부',
+      link: 'https://example.com/2200002',
+    };
+
+    crawlingCoreService.getAllNsmPages.mockImplementation(async function* () {
+      yield {
+        currentPage: 1,
+        totalPages: 1,
+        items: [existingPendingItem, newPendingItem],
+      } as any;
+    });
+    crawlingCoreService.getAllNsmPendingPages.mockImplementation(
+      async function* () {
+        yield {
+          currentPage: 1,
+          totalPages: 1,
+          items: [newPendingItem],
+        } as any;
+      },
+    );
+    archiveOrchestratorService.filterAlreadyArchivedNotices.mockResolvedValue([
+      {
+        num: 2200002,
+        subject: '신규 발의안',
+        proposerCategory: '의원',
+        committee: '행정안전부',
+        link: 'https://example.com/2200002',
+        contentId: null,
+        attachments: { pdfFile: null, hwpFile: null },
+        aiSummary: null,
+        aiSummaryStatus: 'not_requested',
+      } as any,
+    ]);
+
+    const result = await service.runPendingSync('fault-test');
+    const sharedNsmConcurrency =
+      APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_CONCURRENCY;
+    const allStreamConcurrency = Math.max(
+      1,
+      Math.floor(sharedNsmConcurrency / 2),
+    );
+    const pendingStreamConcurrency = Math.max(
+      1,
+      sharedNsmConcurrency - allStreamConcurrency,
+    );
+
+    expect(result).not.toBeNull();
+    expect(crawlingCoreService.getAllNsmPages).toHaveBeenCalledWith(
+      { pageSize: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_PAGE_UNIT },
+      {
+        delayMs: APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS,
+        concurrency: allStreamConcurrency,
+      },
+    );
+    expect(crawlingCoreService.getAllNsmPendingPages).toHaveBeenCalledWith(
+      { pageSize: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_PAGE_UNIT },
+      {
+        delayMs: APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS,
+        concurrency: pendingStreamConcurrency,
+      },
+    );
+    expect(
+      archiveOrchestratorService.archiveNsmBillItems,
+    ).toHaveBeenNthCalledWith(1, [newPendingItem], {
+      reason: NsmArchiveReason.NEW_PENDING_BILLS,
+    });
+    expect(cacheService.setObject).toHaveBeenCalledWith(
+      APP_CONSTANTS.ARCHIVE_SYNC.PENDING_RECOMPARE_APPLY_QUEUE_KEY,
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'billNo:2200001',
+          item: existingPendingItem,
+        }),
+      ]),
+      APP_CONSTANTS.ARCHIVE_SYNC.ASYNC_APPLY_QUEUE_TTL_SECONDS,
+    );
   });
 
   it('pal-crawl streams one valid page then throws → safeRun swallows error in bootstrap, next phase runs', async () => {
@@ -789,13 +935,20 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
 
     const result = await service.runSummaryBackfill('fault-test');
     expect(result).not.toBeNull();
-    // 1 threw → counted as failed; 2 succeeded → generated
-    expect(result!.failed).toBe(1);
-    expect(result!.generated).toBe(2);
+    // Summary generation is now async-staged; sync phase returns staging counts only.
+    expect(result!.failed).toBe(0);
+    expect(result!.generated).toBe(0);
     expect(result!.scanned).toBe(3);
-    expect(
-      noticeArchiveService.updateSummaryStateByNoticeNum,
-    ).toHaveBeenCalledWith(10, null, 'unavailable');
+    expect(cacheService.setObject).toHaveBeenCalledWith(
+      APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_APPLY_QUEUE_KEY,
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'pending:10',
+          phase: 'summary-backfill',
+        }),
+      ]),
+      APP_CONSTANTS.ARCHIVE_SYNC.ASYNC_APPLY_QUEUE_TTL_SECONDS,
+    );
   });
 
   it('DB updateSummaryStateByNoticeNum throws for one item → other items in batch still updated, phase completes', async () => {
@@ -819,10 +972,9 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
 
     const result = await service.runSummaryBackfill('fault-test');
     expect(result).not.toBeNull();
-    // First item's DB write failed → counted as 'unavailable'
-    expect(result!.failed).toBe(1);
-    // Second item succeeded
-    expect(result!.generated).toBe(1);
+    expect(result!.failed).toBe(0);
+    expect(result!.generated).toBe(0);
+    expect(result!.scanned).toBe(2);
   });
 
   it('Summary backfill persists unavailable status on DB failure and reflects it in cache update payload', async () => {
@@ -846,15 +998,16 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     const result = await service.runSummaryBackfill('fault-test');
 
     expect(result).not.toBeNull();
-    expect(result!.failed).toBe(1);
-    expect(cacheService.updateCache).toHaveBeenCalledWith(
+    expect(result!.failed).toBe(0);
+    expect(cacheService.setObject).toHaveBeenCalledWith(
+      APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_APPLY_QUEUE_KEY,
       expect.arrayContaining([
         expect.objectContaining({
-          num: 22,
-          aiSummary: null,
-          aiSummaryStatus: 'unavailable',
+          key: 'pending:22',
+          phase: 'summary-backfill',
         }),
       ]),
+      APP_CONSTANTS.ARCHIVE_SYNC.ASYNC_APPLY_QUEUE_TTL_SECONDS,
     );
   });
 
@@ -900,8 +1053,18 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     const result = await service.runSummaryBackfill('fault-test');
     expect(result).not.toBeNull();
     expect(result!.retryScanned).toBe(2);
-    expect(result!.stillFailed).toBe(1);
-    expect(result!.recovered).toBe(1);
+    expect(result!.stillFailed).toBe(0);
+    expect(result!.recovered).toBe(0);
+    expect(cacheService.setObject).toHaveBeenCalledWith(
+      APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_APPLY_QUEUE_KEY,
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'retry:30',
+          phase: 'summary-backfill-retry',
+        }),
+      ]),
+      APP_CONSTANTS.ARCHIVE_SYNC.ASYNC_APPLY_QUEUE_TTL_SECONDS,
+    );
   });
 
   it('DB updateSummaryStateByNoticeNum throws in unavailable-retry branch → unified phase still completes', async () => {
@@ -927,7 +1090,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     const result = await service.runSummaryBackfill('fault-test');
     expect(result).not.toBeNull();
     expect(result!.retryScanned).toBe(1);
-    expect(result!.stillFailed).toBe(1);
+    expect(result!.stillFailed).toBe(0);
     expect(result!.recovered).toBe(0);
   });
 
@@ -970,13 +1133,13 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
 
     expect(result).not.toBeNull();
     expect(result!.retryScanned).toBe(capturedTake + 1);
-    expect(result!.recovered).toBe(capturedTake + 1);
+    expect(result!.recovered).toBe(0);
     expect(
       noticeArchiveService.getUnavailableSummaryPage,
     ).toHaveBeenNthCalledWith(1, 0, capturedTake);
     expect(
       noticeArchiveService.getUnavailableSummaryPage,
-    ).toHaveBeenNthCalledWith(2, 0, capturedTake);
+    ).toHaveBeenNthCalledWith(2, capturedTake, capturedTake);
   });
 
   // ── Concurrent phase guard ────────────────────────────────────────────────
@@ -1014,15 +1177,27 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
       resolveFirst = resolve;
     });
 
-    noticeArchiveService.getPendingSummaryPage.mockImplementationOnce(
-      async () => {
+    crawlingCoreService.getAllNsmPages.mockImplementationOnce(
+      async function* () {
         await firstCallBlocker;
-        return [] as any;
+        yield {
+          currentPage: 1,
+          totalPages: 1,
+          items: [],
+        } as any;
       },
     );
-    noticeArchiveService.getUnavailableSummaryPage.mockResolvedValue([]);
+    crawlingCoreService.getAllNsmPendingPages.mockImplementationOnce(
+      async function* () {
+        yield {
+          currentPage: 1,
+          totalPages: 1,
+          items: [],
+        } as any;
+      },
+    );
 
-    const firstCall = service.runSummaryBackfill('first');
+    const firstCall = service.runPendingSync('first');
 
     const secondResult = await service.runFullSync('second');
     expect(secondResult).toBeNull();

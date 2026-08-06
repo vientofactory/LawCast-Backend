@@ -108,10 +108,16 @@ export class CronJobsService {
    * @returns A boolean indicating whether the cron job should be skipped.
    */
   private shouldSkipCrawlingCron(taskName: string): boolean {
+    const archiveState = this.archiveSyncService.getExecutionState();
+    const runningWriteHeavy =
+      archiveState.runningWriteHeavyPhases.length > 0
+        ? archiveState.runningWriteHeavyPhases.join(', ')
+        : 'none';
+
     return this.shouldSkipCron(
       taskName,
-      this.archiveSyncService.isAnyPhaseRunning(),
-      'archive sync phase is currently running',
+      archiveState.isWriteHeavyPhaseRunning,
+      `archive sync write-heavy phase is currently running (runningWriteHeavyPhases=${runningWriteHeavy})`,
     );
   }
 
@@ -133,11 +139,17 @@ export class CronJobsService {
    * archive sync phases or active crawling background workloads.
    */
   private shouldSkipProposalReasonBackfillCron(taskName: string): boolean {
+    const archiveState = this.archiveSyncService.getExecutionState();
+    const runningWriteHeavy =
+      archiveState.runningWriteHeavyPhases.length > 0
+        ? archiveState.runningWriteHeavyPhases.join(', ')
+        : 'none';
+
     if (
       this.shouldSkipCron(
         taskName,
-        this.archiveSyncService.isAnyPhaseRunning(),
-        'archive sync phase is currently running',
+        archiveState.isWriteHeavyPhaseRunning,
+        `archive sync write-heavy phase is currently running (runningWriteHeavyPhases=${runningWriteHeavy})`,
       )
     ) {
       return true;
@@ -156,11 +168,17 @@ export class CronJobsService {
    * @returns A boolean indicating whether the cron job should be skipped.
    */
   private shouldSkipDatabaseMaintenanceCron(taskName: string): boolean {
+    const archiveState = this.archiveSyncService.getExecutionState();
+    const runningWriteHeavy =
+      archiveState.runningWriteHeavyPhases.length > 0
+        ? archiveState.runningWriteHeavyPhases.join(', ')
+        : 'none';
+
     if (
       this.shouldSkipCron(
         taskName,
-        this.archiveSyncService.isAnyPhaseRunning(),
-        'archive sync phase is currently running',
+        archiveState.isWriteHeavyPhaseRunning,
+        `archive sync write-heavy phase is currently running (runningWriteHeavyPhases=${runningWriteHeavy})`,
       )
     ) {
       return true;

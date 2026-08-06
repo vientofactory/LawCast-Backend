@@ -39,6 +39,7 @@ interface ArchiveRunOptions {
 }
 
 export enum NsmArchiveReason {
+  NEW_SYNC_ONLY_BILLS = 'new-sync-only-bills',
   NEW_PENDING_BILLS = 'new-pending-bills',
   EXISTING_PENDING_RECOMPARE = 'existing-pending-recompare',
 }
@@ -117,6 +118,11 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     reason: NsmPendingArchiveReason,
   ): { level: BridgeLogLevel; message: string } {
     switch (reason) {
+      case NsmArchiveReason.NEW_SYNC_ONLY_BILLS:
+        return {
+          level: BridgeLogLevel.DEBUG,
+          message: `Archiving **${count}** NSM bill(s) for sync without pending notification`,
+        };
       case NsmArchiveReason.EXISTING_PENDING_RECOMPARE:
         return {
           level: BridgeLogLevel.DEBUG,

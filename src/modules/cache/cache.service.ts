@@ -121,7 +121,7 @@ export class CacheService implements OnModuleDestroy {
         this.cacheManager.set(this.CACHE_KEYS.LAST_UPDATED, new Date(), 0),
       ]);
 
-      LoggerUtils.logDev(
+      LoggerUtils.debugDev(
         CacheService.name,
         `Cache updated: ${uniqueNotices.length} notices stored`,
       );

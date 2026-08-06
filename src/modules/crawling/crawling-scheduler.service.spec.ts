@@ -8,7 +8,10 @@ import { NotificationOrchestratorService } from '../notification/notification-or
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type ITableData } from 'pal-crawl';
-import { ArchiveReason } from './archive-orchestrator.service';
+import {
+  ArchiveReason,
+  NsmArchiveReason,
+} from './archive-orchestrator.service';
 
 describe('CrawlingSchedulerService', () => {
   let service: CrawlingSchedulerService;
@@ -76,6 +79,7 @@ describe('CrawlingSchedulerService', () => {
           provide: CrawlingCoreService,
           useValue: {
             crawlAllPages: jest.fn(),
+            getAllNsmPages: jest.fn(),
             getAllNsmPendingPages: jest.fn(),
           },
         },
@@ -90,6 +94,7 @@ describe('CrawlingSchedulerService', () => {
           provide: ArchiveOrchestratorService,
           useValue: {
             archiveNotices: jest.fn(),
+            archiveNsmBillItems: jest.fn(),
             filterAlreadyArchivedNotices: jest.fn(),
           },
         },
@@ -373,12 +378,15 @@ describe('CrawlingSchedulerService', () => {
         .mockResolvedValueOnce(comparePage)
         .mockResolvedValueOnce(comparePage);
       (cacheService.findNewNotices as jest.Mock).mockResolvedValue([]);
-      (archiveOrchestratorService.filterAlreadyArchivedNotices as jest.Mock)
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce(comparePage);
+      (
+        archiveOrchestratorService.filterAlreadyArchivedNotices as jest.Mock
+      ).mockResolvedValueOnce([]);
       (
         noticeArchiveService.getArchivedNullContentIdNums as jest.Mock
       ).mockResolvedValue(new Set<number>());
+      (
+        noticeArchiveService.getExistingNoticeNumSet as jest.Mock
+      ).mockResolvedValue(new Set(comparePage.map((item) => item.num)));
       (cacheService.updateCache as jest.Mock).mockResolvedValue(undefined);
 
       await service.handleCron();
@@ -404,7 +412,6 @@ describe('CrawlingSchedulerService', () => {
       }
 
       expect(crawlingCoreService.crawlAllPages).toHaveBeenNthCalledWith(1, {
-        stopBelowNum: comparePage[0].num,
         delayMs: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_CRON_DELAY_MS,
       });
       expect(crawlingCoreService.crawlAllPages).toHaveBeenNthCalledWith(2, {
@@ -530,6 +537,7 @@ describe('CrawlingSchedulerService', () => {
 
       await service.handlePendingCron();
 
+      expect(crawlingCoreService.getAllNsmPages).not.toHaveBeenCalled();
       expect(crawlingCoreService.getAllNsmPendingPages).not.toHaveBeenCalled();
     });
 
@@ -538,6 +546,7 @@ describe('CrawlingSchedulerService', () => {
 
       await service.handlePendingCron();
 
+      expect(crawlingCoreService.getAllNsmPages).not.toHaveBeenCalled();
       expect(crawlingCoreService.getAllNsmPendingPages).not.toHaveBeenCalled();
     });
 
@@ -547,15 +556,18 @@ describe('CrawlingSchedulerService', () => {
       });
       let callCount = 0;
 
+      (crawlingCoreService.getAllNsmPages as jest.Mock).mockImplementation(
+        () => {
+          callCount += 1;
+          if (callCount <= 2) {
+            return mockRejectingPendingPages(econnreset);
+          }
+          return mockEmptyPendingPages();
+        },
+      );
       (
         crawlingCoreService.getAllNsmPendingPages as jest.Mock
-      ).mockImplementation(() => {
-        callCount += 1;
-        if (callCount <= 2) {
-          return mockRejectingPendingPages(econnreset);
-        }
-        return mockEmptyPendingPages();
-      });
+      ).mockImplementation(() => mockEmptyPendingPages());
 
       jest.useFakeTimers();
       const pendingCronPromise = service.handlePendingCron();
@@ -567,17 +579,16 @@ describe('CrawlingSchedulerService', () => {
     });
 
     it('should not retry on non-network errors', async () => {
-      (
-        crawlingCoreService.getAllNsmPendingPages as jest.Mock
-      ).mockImplementation(() =>
+      (crawlingCoreService.getAllNsmPages as jest.Mock).mockImplementation(() =>
         mockRejectingPendingPages(new Error('Database unavailable')),
       );
+      (
+        crawlingCoreService.getAllNsmPendingPages as jest.Mock
+      ).mockImplementation(() => mockEmptyPendingPages());
 
       await service.handlePendingCron();
 
-      expect(crawlingCoreService.getAllNsmPendingPages).toHaveBeenCalledTimes(
-        1,
-      );
+      expect(crawlingCoreService.getAllNsmPages).toHaveBeenCalledTimes(1);
     });
 
     it('should stop after exhausting retry budget on persistent ECONNRESET', async () => {
@@ -587,9 +598,12 @@ describe('CrawlingSchedulerService', () => {
       const expectedAttempts =
         APP_CONSTANTS.ARCHIVE_SYNC.PENDING_CRAWL_MAX_RETRIES + 1;
 
+      (crawlingCoreService.getAllNsmPages as jest.Mock).mockImplementation(() =>
+        mockRejectingPendingPages(econnreset),
+      );
       (
         crawlingCoreService.getAllNsmPendingPages as jest.Mock
-      ).mockImplementation(() => mockRejectingPendingPages(econnreset));
+      ).mockImplementation(() => mockEmptyPendingPages());
 
       jest.useFakeTimers();
       const pendingCronPromise = service.handlePendingCron();
@@ -597,7 +611,7 @@ describe('CrawlingSchedulerService', () => {
       await pendingCronPromise;
       jest.useRealTimers();
 
-      expect(crawlingCoreService.getAllNsmPendingPages).toHaveBeenCalledTimes(
+      expect(crawlingCoreService.getAllNsmPages).toHaveBeenCalledTimes(
         expectedAttempts,
       );
     });
@@ -607,9 +621,12 @@ describe('CrawlingSchedulerService', () => {
         code: 'ECONNRESET',
       });
 
+      (crawlingCoreService.getAllNsmPages as jest.Mock).mockImplementation(() =>
+        mockRejectingPendingPages(econnreset),
+      );
       (
         crawlingCoreService.getAllNsmPendingPages as jest.Mock
-      ).mockImplementation(() => mockRejectingPendingPages(econnreset));
+      ).mockImplementation(() => mockEmptyPendingPages());
 
       jest.useFakeTimers();
       const pendingCronPromise = service.handlePendingCron();
@@ -618,6 +635,200 @@ describe('CrawlingSchedulerService', () => {
       jest.useRealTimers();
 
       expect((service as any).isPendingProcessing).toBe(false);
+    });
+
+    it('should recompare all existing pending bills across full NSM pages', async () => {
+      const existingNonPendingItem = {
+        billNo: '2200000',
+        billName: '기존 비발의 법안',
+        proposer: '정부',
+        progressStatus: '위원회 회부',
+        committee: '법제사법위원회',
+        ministry: '법무부',
+        link: 'https://example.com/2200000',
+      };
+      const existingPendingItems = [
+        {
+          billNo: '2200001',
+          billName: '기존 발의안 1',
+          proposer: '홍길동의원',
+          progressStatus: '발의',
+          committee: '',
+          ministry: '법무부',
+          link: 'https://example.com/2200001',
+        },
+        {
+          billNo: '2200002',
+          billName: '기존 발의안 2',
+          proposer: '김철수의원',
+          progressStatus: '발의',
+          committee: '',
+          ministry: '행정안전부',
+          link: 'https://example.com/2200002',
+        },
+      ];
+      const newPendingItem = {
+        billNo: '2200003',
+        billName: '신규 발의안',
+        proposer: '박영희의원',
+        progressStatus: '발의',
+        committee: '',
+        ministry: '기획재정부',
+        link: 'https://example.com/2200003',
+      };
+
+      (crawlingCoreService.getAllNsmPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {
+          yield {
+            items: [existingNonPendingItem, ...existingPendingItems],
+            currentPage: 1,
+            totalPages: 2,
+          };
+          yield {
+            items: [newPendingItem],
+            currentPage: 2,
+            totalPages: 2,
+          };
+        },
+      });
+      (crawlingCoreService.getAllNsmPendingPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {
+          yield {
+            items: [...existingPendingItems, newPendingItem],
+            currentPage: 1,
+            totalPages: 1,
+          };
+        },
+      });
+      (
+        archiveOrchestratorService.filterAlreadyArchivedNotices as jest.Mock
+      ).mockResolvedValue([
+        {
+          num: 2200003,
+          subject: '신규 발의안',
+          proposerCategory: '의원',
+          committee: '기획재정부',
+          link: 'https://example.com/2200003',
+          contentId: null,
+          attachments: { pdfFile: null, hwpFile: null },
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested',
+        },
+      ]);
+      (
+        archiveOrchestratorService.archiveNsmBillItems as jest.Mock
+      ).mockResolvedValue([]);
+
+      await service.handlePendingCron();
+
+      expect(crawlingCoreService.getAllNsmPages).toHaveBeenCalledWith(
+        { pageSize: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_PAGE_UNIT },
+        {
+          delayMs: APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS,
+          concurrency: APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_CONCURRENCY,
+        },
+      );
+      expect(crawlingCoreService.getAllNsmPendingPages).toHaveBeenCalledWith(
+        { pageSize: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_PAGE_UNIT },
+        {
+          delayMs: APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS,
+          concurrency: APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_CONCURRENCY,
+        },
+      );
+      expect(
+        archiveOrchestratorService.archiveNsmBillItems,
+      ).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ billNo: '2200000' }),
+          expect.objectContaining({ billNo: '2200001' }),
+          expect.objectContaining({ billNo: '2200002' }),
+        ]),
+        { reason: NsmArchiveReason.EXISTING_PENDING_RECOMPARE },
+      );
+    });
+
+    it('should sync new non-pending NSM bills without classifying them as pending notifications', async () => {
+      const newNonPendingItem = {
+        billNo: '2200010',
+        billName: '신규 비발의 법안',
+        proposer: '정부',
+        progressStatus: '위원회 회부',
+        committee: '법제사법위원회',
+        ministry: '법무부',
+        link: 'https://example.com/2200010',
+      };
+      const newPendingItem = {
+        billNo: '2200011',
+        billName: '신규 발의안',
+        proposer: '박영희의원',
+        progressStatus: '발의',
+        committee: '',
+        ministry: '기획재정부',
+        link: 'https://example.com/2200011',
+      };
+
+      (crawlingCoreService.getAllNsmPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {
+          yield {
+            items: [newNonPendingItem, newPendingItem],
+            currentPage: 1,
+            totalPages: 1,
+          };
+        },
+      });
+      (crawlingCoreService.getAllNsmPendingPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {
+          yield {
+            items: [newPendingItem],
+            currentPage: 1,
+            totalPages: 1,
+          };
+        },
+      });
+      (
+        archiveOrchestratorService.filterAlreadyArchivedNotices as jest.Mock
+      ).mockResolvedValue([
+        {
+          num: 2200010,
+          subject: '신규 비발의 법안',
+          proposerCategory: '정부',
+          committee: '법제사법위원회',
+          link: 'https://example.com/2200010',
+          contentId: null,
+          attachments: { pdfFile: null, hwpFile: null },
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested',
+        },
+        {
+          num: 2200011,
+          subject: '신규 발의안',
+          proposerCategory: '의원',
+          committee: '기획재정부',
+          link: 'https://example.com/2200011',
+          contentId: null,
+          attachments: { pdfFile: null, hwpFile: null },
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested',
+        },
+      ]);
+      (
+        archiveOrchestratorService.archiveNsmBillItems as jest.Mock
+      ).mockResolvedValue([]);
+      (cacheService.getRecentNotices as jest.Mock).mockResolvedValue([]);
+      (cacheService.updateCache as jest.Mock).mockResolvedValue(undefined);
+
+      await service.handlePendingCron();
+
+      expect(
+        archiveOrchestratorService.archiveNsmBillItems,
+      ).toHaveBeenCalledWith([newNonPendingItem], {
+        reason: NsmArchiveReason.NEW_SYNC_ONLY_BILLS,
+      });
+      expect(
+        archiveOrchestratorService.archiveNsmBillItems,
+      ).toHaveBeenCalledWith([newPendingItem], {
+        reason: NsmArchiveReason.NEW_PENDING_BILLS,
+      });
     });
   });
 });

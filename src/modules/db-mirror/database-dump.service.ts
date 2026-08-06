@@ -1,4 +1,5 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { DataSource } from 'typeorm';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -29,9 +30,9 @@ export class DatabaseDumpService {
   ];
 
   constructor(
+    private readonly moduleRef: ModuleRef,
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
-    @Optional() private readonly discordBridge?: DiscordBridgeService,
   ) {}
 
   async createSanitizedDump(): Promise<DatabaseDumpArtifact> {
@@ -55,7 +56,7 @@ export class DatabaseDumpService {
       message: `Created sanitized SQLite dump (${dumpFileName}, ${stat.size} bytes, tables=${retainedTables.join(', ')})`,
       logger: this.logger,
       context: DatabaseDumpService.name,
-      discordBridge: this.discordBridge,
+      discordBridge: this.resolveDiscordBridge(),
       bridgeMessage: `DB dump created: ${dumpFileName} (${stat.size} bytes)`,
       metadata: {
         dumpFileName,
@@ -81,8 +82,18 @@ export class DatabaseDumpService {
         message: `Failed to remove local dump file (${dumpPath}): ${(error as Error).message}`,
         logger: this.logger,
         context: DatabaseDumpService.name,
-        discordBridge: this.discordBridge,
+        discordBridge: this.resolveDiscordBridge(),
       });
+    }
+  }
+
+  private resolveDiscordBridge(): DiscordBridgeService | undefined {
+    try {
+      return this.moduleRef.get(DiscordBridgeService, {
+        strict: false,
+      });
+    } catch {
+      return undefined;
     }
   }
 

@@ -1053,6 +1053,37 @@ export class NoticeArchiveService {
   }
 
   /**
+   * Returns one page of `not_requested` rows for offset-based staging scans.
+   * Unlike getPendingSummaryPage, this never falls back to not_supported.
+   */
+  async getPendingSummaryPageByOffset(
+    skip: number,
+    take: number,
+  ): Promise<CachedNotice[]> {
+    return this.collectSummaryBackfillCandidates(
+      AI_SUMMARY_STATUS.NOT_REQUESTED,
+      skip,
+      take,
+    );
+  }
+
+  /**
+   * Returns one page of NSM recovery candidates (`not_supported` + contentId IS NULL)
+   * for offset-based staging scans.
+   */
+  async getNotSupportedSummaryRecoveryPage(
+    skip: number,
+    take: number,
+  ): Promise<CachedNotice[]> {
+    return this.collectSummaryBackfillCandidates(
+      AI_SUMMARY_STATUS.NOT_SUPPORTED,
+      skip,
+      take,
+      (row) => !row.contentId,
+    );
+  }
+
+  /**
    * Returns one page of archive rows whose `aiSummaryStatus` is `'unavailable'`,
    * ordered by `noticeNum` ascending.
    *

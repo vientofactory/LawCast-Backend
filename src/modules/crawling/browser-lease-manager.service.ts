@@ -1,6 +1,7 @@
 import { Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { APP_CONSTANTS } from '../../config/app.config';
 import { delayMs } from '../../utils/async-delay.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 
@@ -23,6 +24,10 @@ interface ProcessSnapshotRow {
 export class BrowserLeaseManagerService implements OnApplicationShutdown {
   private readonly logger = LoggerUtils.getContextLogger(
     BrowserLeaseManagerService.name,
+  );
+  private readonly maxConcurrentLeases = Math.max(
+    1,
+    APP_CONSTANTS.CRAWLING.BROWSER_MAX_CONCURRENCY,
   );
 
   private activeLeases = 0;
@@ -62,8 +67,8 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
         throw new Error(`${label}: browser lease manager is shutting down`);
       }
 
-      if (this.activeLeases === 0) {
-        this.activeLeases = 1;
+      if (this.activeLeases < this.maxConcurrentLeases) {
+        this.activeLeases += 1;
 
         const waitedMs = Date.now() - waitStartedAt;
         if (waitedMs >= 1000) {
@@ -78,7 +83,7 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
       if (!warned && Date.now() - waitStartedAt >= 5000) {
         warned = true;
         this.logger.warn(
-          `${label}: waiting for browser lease >5s (active=${this.activeLeases}, queue=${this.leaseWaitQueue.length})`,
+          `${label}: waiting for browser lease >5s (active=${this.activeLeases}/${this.maxConcurrentLeases}, queue=${this.leaseWaitQueue.length})`,
         );
       }
 
@@ -422,6 +427,7 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
 
   async getDebugState(): Promise<{
     activeLeases: number;
+    maxConcurrentLeases: number;
     queuedWaiters: number;
     trackedBrowserPids: number[];
     discoveredBrowserDescendants: Array<{
@@ -439,6 +445,7 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
 
     return {
       activeLeases: this.activeLeases,
+      maxConcurrentLeases: this.maxConcurrentLeases,
       queuedWaiters: this.leaseWaitQueue.length,
       trackedBrowserPids: [...this.trackedBrowserPids].sort((a, b) => a - b),
       discoveredBrowserDescendants: descendants

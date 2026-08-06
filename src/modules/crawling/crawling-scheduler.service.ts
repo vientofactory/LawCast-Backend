@@ -484,16 +484,13 @@ export class CrawlingSchedulerService implements OnModuleInit {
   private async performCrawlingAndNotification(): Promise<ITableData[]> {
     // Fetch the current cache first.
     // - existingNoticeMap: used to preserve existing summary states
-    // - maxCachedNum: early-exit threshold for crawlAllPages (skips pages below the latest cached num)
     const existingNotices = await this.cacheService.getRecentNotices(
       APP_CONSTANTS.CACHE.MAX_SIZE,
     );
     const existingNoticeMap =
       this.summarySupport.buildNoticeMap(existingNotices);
-    const maxCachedNum = existingNotices[0]?.num;
 
     const crawledData = await this.crawlingCoreService.crawlAllPages({
-      stopBelowNum: maxCachedNum,
       delayMs: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_CRON_DELAY_MS,
     });
 
@@ -901,13 +898,14 @@ export class CrawlingSchedulerService implements OnModuleInit {
       }
     }
 
-    const archivedCandidates =
-      await this.archiveOrchestratorService.filterAlreadyArchivedNotices(
-        fullCrawledData,
+    const existingNoticeNums =
+      await this.noticeArchiveService.getExistingNoticeNumSet(
+        fullCrawledData.map((item) => item.num),
       );
 
-    const toRecompare = archivedCandidates.filter(
-      (item) => !nullContentIdNums.has(item.num),
+    const toRecompare = fullCrawledData.filter(
+      (item) =>
+        existingNoticeNums.has(item.num) && !nullContentIdNums.has(item.num),
     );
 
     if (toRecompare.length > 0) {
