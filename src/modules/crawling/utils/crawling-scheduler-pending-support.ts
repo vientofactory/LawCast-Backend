@@ -1,5 +1,5 @@
 import { type INsmBillItem } from 'pal-crawl';
-import { type CachedNotice } from '../../../types/cache.types';
+import { AISummaryStatus, type CachedNotice } from '../../../types/cache.types';
 import { APP_CONSTANTS } from '../../../config/app.config';
 import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
 import { mapConcurrently } from '../../../utils/concurrency.utils';
@@ -485,24 +485,88 @@ export async function processPendingBillsInBackgroundInternal(
         })
       : [];
 
+  let visibleNoticesWithSummary = noticesWithSummary;
+
   if (noticesWithReason.length > 0 && noticesWithSummary.length > 0) {
-    await Promise.allSettled(
-      noticesWithSummary
-        .filter(
-          (n) => (n.aiSummaryStatus ?? 'not_requested') !== 'not_requested',
-        )
-        .map((n) =>
-          deps.noticeArchiveService.updateSummaryStateByNoticeNum(
-            n.num,
-            n.aiSummary ?? null,
-            n.aiSummaryStatus ?? 'not_requested',
-          ),
-        ),
+    const persistTargets = noticesWithSummary.filter(
+      (n) => (n.aiSummaryStatus ?? 'not_requested') !== 'not_requested',
     );
+
+    if (persistTargets.length > 0) {
+      const svcCompat = deps.noticeArchiveService as {
+        updateSummaryStatesByNoticeNums?: (
+          updates: Array<{
+            noticeNum: number;
+            summary: string | null;
+            status: AISummaryStatus;
+          }>,
+        ) => Promise<Set<number>>;
+        updateSummaryStateByNoticeNum: (
+          noticeNum: number,
+          summary: string | null,
+          status: AISummaryStatus,
+        ) => Promise<void>;
+      };
+
+      let persistedNoticeNums = new Set<number>();
+      let needsSingleFallback = !svcCompat.updateSummaryStatesByNoticeNums;
+
+      if (svcCompat.updateSummaryStatesByNoticeNums) {
+        try {
+          persistedNoticeNums = await svcCompat.updateSummaryStatesByNoticeNums(
+            persistTargets.map((notice) => ({
+              noticeNum: notice.num,
+              summary: notice.aiSummary ?? null,
+              status: notice.aiSummaryStatus ?? 'not_requested',
+            })),
+          );
+        } catch (error) {
+          deps.logger.warn(
+            `Batch summary persistence failed for pending bills: ${(error as Error).message}; retrying with single-row writes`,
+          );
+          needsSingleFallback = true;
+          persistedNoticeNums = new Set<number>();
+        }
+      }
+
+      if (needsSingleFallback) {
+        const fallbackResults = await Promise.allSettled(
+          persistTargets.map((notice) =>
+            svcCompat.updateSummaryStateByNoticeNum(
+              notice.num,
+              notice.aiSummary ?? null,
+              notice.aiSummaryStatus ?? 'not_requested',
+            ),
+          ),
+        );
+
+        for (let index = 0; index < fallbackResults.length; index += 1) {
+          if (fallbackResults[index].status === 'fulfilled') {
+            persistedNoticeNums.add(persistTargets[index].num);
+          }
+        }
+      }
+
+      const persistFailed = persistTargets.length - persistedNoticeNums.size;
+      if (persistFailed > 0) {
+        deps.logger.warn(
+          `Failed to persist ${persistFailed}/${persistTargets.length} pending-bill summary states`,
+        );
+      }
+
+      const requiredPersistNums = new Set(
+        persistTargets.map((notice) => notice.num),
+      );
+      visibleNoticesWithSummary = noticesWithSummary.filter(
+        (notice) =>
+          !requiredPersistNums.has(notice.num) ||
+          persistedNoticeNums.has(notice.num),
+      );
+    }
   }
 
   const allForCache: CachedNotice[] = [
-    ...noticesWithSummary,
+    ...visibleNoticesWithSummary,
     ...noticesWithoutReasonForNotification,
   ];
 
@@ -524,9 +588,9 @@ export async function processPendingBillsInBackgroundInternal(
     }
   }
 
-  if (noticesWithSummary.length > 0 && noticesWithReason.length > 0) {
+  if (visibleNoticesWithSummary.length > 0 && noticesWithReason.length > 0) {
     void deps.notificationOrchestratorService
-      .sendNotifications(noticesWithSummary)
+      .sendNotifications(visibleNoticesWithSummary)
       .catch((error) => {
         deps.logger.error(
           'Notification dispatch for pending bills failed:',

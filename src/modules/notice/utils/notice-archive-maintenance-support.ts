@@ -24,6 +24,12 @@ export interface NoticeArchiveMaintenanceDeps {
   logger: { warn(message: string): void };
 }
 
+export interface SummaryStateBulkUpdateInput {
+  noticeNum: number;
+  summary: string | null;
+  status: AISummaryStatus;
+}
+
 export async function getNsmProposalReasonRetryCandidates(
   deps: NoticeArchiveMaintenanceDeps,
   limit: number,
@@ -334,4 +340,36 @@ export async function updateSummaryStateByNoticeNum(
       );
     }
   }
+}
+
+export async function updateSummaryStatesByNoticeNums(
+  deps: NoticeArchiveMaintenanceDeps,
+  updates: SummaryStateBulkUpdateInput[],
+): Promise<Set<number>> {
+  if (!deps.summaryStateRepository || updates.length === 0) {
+    return new Set();
+  }
+
+  const deduped = new Map<number, SummaryStateBulkUpdateInput>();
+  for (const update of updates) {
+    deduped.set(update.noticeNum, update);
+  }
+
+  const values = Array.from(deduped.values()).map((update) => ({
+    noticeNum: update.noticeNum,
+    isDone: false,
+    aiSummary: update.summary?.trim() ? update.summary : null,
+    aiSummaryStatus: update.status,
+  }));
+
+  await deps.summaryStateRepository
+    .createQueryBuilder()
+    .insert()
+    .into(NoticeArchiveSnapshotState)
+    .values(values)
+    // Use physical DB column names for SQLite ON CONFLICT compatibility.
+    .orUpdate(['ai_summary', 'ai_summary_status'], ['notice_num'])
+    .execute();
+
+  return new Set(values.map((value) => value.noticeNum));
 }

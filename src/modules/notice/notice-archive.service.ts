@@ -48,6 +48,8 @@ import {
   getSummaryStateByNoticeNums,
   runIntegrityScan,
   updateSummaryStateByNoticeNum,
+  updateSummaryStatesByNoticeNums,
+  type SummaryStateBulkUpdateInput,
 } from './utils/notice-archive-maintenance-support';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 import {
@@ -3099,5 +3101,11 @@ export class NoticeArchiveService {
       summary,
       status,
     );
+  }
+
+  async updateSummaryStatesByNoticeNums(
+    updates: SummaryStateBulkUpdateInput[],
+  ): Promise<Set<number>> {
+    return updateSummaryStatesByNoticeNums(this.getMaintenanceDeps(), updates);
   }
 }

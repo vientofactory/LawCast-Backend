@@ -3,7 +3,7 @@ import {
   type ISearchResult,
   type ITableData,
 } from 'pal-crawl';
-import { type CachedNotice } from '../../../types/cache.types';
+import { AISummaryStatus, type CachedNotice } from '../../../types/cache.types';
 import { APP_CONSTANTS } from '../../../config/app.config';
 import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../../utils/logger.utils';
@@ -500,22 +500,50 @@ async function runPendingRecompareApplyWorker(
       const batch = queue.slice(0, options.pendingRecompareApplyBatchSize);
       const batchKeys = new Set(batch.map((task) => task.key));
 
-      try {
-        const archived = await withChangeNotificationCollection(
-          deps,
-          async () =>
-            deps.archiveOrchestratorService.archiveNsmBillItems(
-              batch.map((task) => task.item),
-              { reason: NsmArchiveReason.EXISTING_PENDING_RECOMPARE },
-            ),
+      const batchTaskNums = new Map<string, number>();
+      for (const task of batch) {
+        batchTaskNums.set(
+          task.key,
+          CrawlingCoreService.nsmBillToCachedNotice(task.item).num,
         );
+      }
 
-        const archivedNums = new Set(archived.map((notice) => notice.num));
-        const succeededKeys = new Set<string>();
-        for (const task of batch) {
-          const num = CrawlingCoreService.nsmBillToCachedNotice(task.item).num;
-          if (archivedNums.has(num)) {
-            succeededKeys.add(task.key);
+      const recompareEligibleNums =
+        await deps.noticeArchiveService.getArchivedNullContentIdNums(
+          Array.from(batchTaskNums.values()),
+        );
+      const eligibleBatch = batch.filter((task) =>
+        recompareEligibleNums.has(batchTaskNums.get(task.key) ?? -1),
+      );
+
+      // Queue can contain stale items across restarts. If a notice is already
+      // PAL-enriched (contentId != null), drop it from pending-recompare queue.
+      const succeededKeys = new Set<string>(
+        batch
+          .filter(
+            (task) =>
+              !recompareEligibleNums.has(batchTaskNums.get(task.key) ?? -1),
+          )
+          .map((task) => task.key),
+      );
+
+      try {
+        if (eligibleBatch.length > 0) {
+          const archived = await withChangeNotificationCollection(
+            deps,
+            async () =>
+              deps.archiveOrchestratorService.archiveNsmBillItems(
+                eligibleBatch.map((task) => task.item),
+                { reason: NsmArchiveReason.EXISTING_PENDING_RECOMPARE },
+              ),
+          );
+
+          const archivedNums = new Set(archived.map((notice) => notice.num));
+          for (const task of eligibleBatch) {
+            const num = batchTaskNums.get(task.key);
+            if (num !== undefined && archivedNums.has(num)) {
+              succeededKeys.add(task.key);
+            }
           }
         }
 
@@ -530,7 +558,7 @@ async function runPendingRecompareApplyWorker(
         pendingRecompareLastBatchAt = new Date().toISOString();
         LoggerUtils.debugDev(
           'ArchiveSyncService',
-          `Pending recompare apply batch: requested=${batch.length}, archived=${archived.length}, removed=${succeededKeys.size}, queueRemaining=${queue.length}`,
+          `Pending recompare apply batch: requested=${batch.length}, eligible=${eligibleBatch.length}, removed=${succeededKeys.size}, queueRemaining=${queue.length}`,
         );
 
         if (batchKeys.size > 0 && succeededKeys.size === 0) {
@@ -601,10 +629,16 @@ async function runSummaryBackfillApplyWorker(
       const batch = queue.slice(0, options.summaryBackfillBatchSize);
       const batchKeys = new Set(batch.map((task) => task.key));
       const succeededKeys = new Set<string>();
+      const summaryStateUpdates: Array<{
+        key: string;
+        noticeNum: number;
+        summary: string | null;
+        status: AISummaryStatus;
+      }> = [];
+      const batchCacheUpdatesByKey = new Map<string, CachedNotice>();
 
       try {
         await withChangeNotificationCollection(deps, async () => {
-          const batchCacheUpdates: CachedNotice[] = [];
           await mapConcurrently(
             batch,
             options.summaryBackfillConcurrency,
@@ -615,18 +649,17 @@ async function runSummaryBackfillApplyWorker(
                     task.notice,
                     { phase: task.phase },
                   );
-                await deps.noticeArchiveService.updateSummaryStateByNoticeNum(
-                  task.notice.num,
-                  result.aiSummary,
-                  result.aiSummaryStatus,
-                );
-
-                batchCacheUpdates.push({
+                summaryStateUpdates.push({
+                  key: task.key,
+                  noticeNum: task.notice.num,
+                  summary: result.aiSummary,
+                  status: result.aiSummaryStatus,
+                });
+                batchCacheUpdatesByKey.set(task.key, {
                   ...task.notice,
                   aiSummary: result.aiSummary,
                   aiSummaryStatus: result.aiSummaryStatus,
                 });
-                succeededKeys.add(task.key);
               } catch (error) {
                 LoggerUtils.error(
                   'ArchiveSyncService',
@@ -634,25 +667,17 @@ async function runSummaryBackfillApplyWorker(
                 );
 
                 if (task.phase === 'summary-backfill') {
-                  try {
-                    await deps.noticeArchiveService.updateSummaryStateByNoticeNum(
-                      task.notice.num,
-                      null,
-                      AI_SUMMARY_STATUS.UNAVAILABLE,
-                    );
-
-                    batchCacheUpdates.push({
-                      ...task.notice,
-                      aiSummary: null,
-                      aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
-                    });
-                    succeededKeys.add(task.key);
-                  } catch (persistError) {
-                    LoggerUtils.warn(
-                      'ArchiveSyncService',
-                      `Failed to persist unavailable summary state for notice ${task.notice.num}: ${(persistError as Error).message}`,
-                    );
-                  }
+                  summaryStateUpdates.push({
+                    key: task.key,
+                    noticeNum: task.notice.num,
+                    summary: null,
+                    status: AI_SUMMARY_STATUS.UNAVAILABLE,
+                  });
+                  batchCacheUpdatesByKey.set(task.key, {
+                    ...task.notice,
+                    aiSummary: null,
+                    aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
+                  });
                 } else {
                   // Retry phase rows are already UNAVAILABLE in DB.
                   // Keep queue progress for generation/network failures, but do not
@@ -663,8 +688,59 @@ async function runSummaryBackfillApplyWorker(
             },
           );
 
-          if (batchCacheUpdates.length > 0) {
-            await deps.cacheService.updateCache(batchCacheUpdates);
+          if (summaryStateUpdates.length > 0) {
+            const svcCompat = deps.noticeArchiveService as {
+              updateSummaryStatesByNoticeNums?: (
+                updates: Array<{
+                  noticeNum: number;
+                  summary: string | null;
+                  status: AISummaryStatus;
+                }>,
+              ) => Promise<Set<number>>;
+              updateSummaryStateByNoticeNum: (
+                noticeNum: number,
+                summary: string | null,
+                status: AISummaryStatus,
+              ) => Promise<void>;
+            };
+
+            const persistedNoticeNums =
+              svcCompat.updateSummaryStatesByNoticeNums
+                ? await svcCompat.updateSummaryStatesByNoticeNums(
+                    summaryStateUpdates.map((update) => ({
+                      noticeNum: update.noticeNum,
+                      summary: update.summary,
+                      status: update.status,
+                    })),
+                  )
+                : new Set<number>();
+
+            if (!svcCompat.updateSummaryStatesByNoticeNums) {
+              for (const update of summaryStateUpdates) {
+                await svcCompat.updateSummaryStateByNoticeNum(
+                  update.noticeNum,
+                  update.summary,
+                  update.status,
+                );
+                persistedNoticeNums.add(update.noticeNum);
+              }
+            }
+
+            const batchCacheUpdates: CachedNotice[] = [];
+            for (const update of summaryStateUpdates) {
+              if (!persistedNoticeNums.has(update.noticeNum)) {
+                continue;
+              }
+              succeededKeys.add(update.key);
+              const cacheUpdate = batchCacheUpdatesByKey.get(update.key);
+              if (cacheUpdate) {
+                batchCacheUpdates.push(cacheUpdate);
+              }
+            }
+
+            if (batchCacheUpdates.length > 0) {
+              await deps.cacheService.updateCache(batchCacheUpdates);
+            }
           }
         });
 
@@ -996,15 +1072,30 @@ export async function executePendingSyncPhase(
       .filter((notice) => !pendingCandidateNums.has(notice.num))
       .map((notice) => rawItemMap.get(notice.num))
       .filter((item): item is INsmBillItem => item !== undefined);
-    const existingPendingItems = nsmNotices
+    const existingPendingCandidates = nsmNotices
       .filter((notice) => !newNsmNumSet.has(notice.num))
       .map((notice) => rawItemMap.get(notice.num))
       .filter((item): item is INsmBillItem => item !== undefined);
+    const existingPendingCandidateNums = existingPendingCandidates.map(
+      (item) => CrawlingCoreService.nsmBillToCachedNotice(item).num,
+    );
+
+    const existingPendingEligibleNums =
+      existingPendingCandidates.length > 0
+        ? await deps.noticeArchiveService.getArchivedNullContentIdNums(
+            existingPendingCandidateNums,
+          )
+        : new Set<number>();
+    const existingPendingItems = existingPendingCandidates.filter((item) =>
+      existingPendingEligibleNums.has(
+        CrawlingCoreService.nsmBillToCachedNotice(item).num,
+      ),
+    );
     const classifyElapsedMs = Date.now() - classifyStartedAt;
 
     LoggerUtils.debugDev(
       'ArchiveSyncService',
-      `Pending sync classify: scanned=${totalScanned}, newAll=${newNsmNotices.length}, newPending=${newPendingNotices.length}, newSyncOnly=${newSyncOnlyItems.length}, existingRecompare=${existingPendingItems.length}, classifyMs=${classifyElapsedMs}`,
+      `Pending sync classify: scanned=${totalScanned}, newAll=${newNsmNotices.length}, newPending=${newPendingNotices.length}, newSyncOnly=${newSyncOnlyItems.length}, existingRecompareCandidates=${existingPendingCandidates.length}, existingRecompareEligible=${existingPendingItems.length}, classifyMs=${classifyElapsedMs}`,
     );
 
     const archiveStartedAt = Date.now();

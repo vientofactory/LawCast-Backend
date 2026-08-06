@@ -1,4 +1,4 @@
-import { type CachedNotice } from '../../../types/cache.types';
+import { AISummaryStatus, type CachedNotice } from '../../../types/cache.types';
 import { APP_CONSTANTS } from '../../../config/app.config';
 import { CacheService } from '../../cache/cache.service';
 import { ArchiveOrchestratorService } from '../archive-orchestrator.service';
@@ -234,6 +234,10 @@ export class CrawlingSchedulerProposalRetry {
     );
 
     const resolved: CachedNotice[] = [];
+    const resolvedCandidates: Array<{
+      item: ProposalReasonRetryItem;
+      noticeWithSummary: CachedNotice;
+    }> = [];
 
     for (let idx = 0; idx < queue.length; idx++) {
       const item = queue[idx];
@@ -289,36 +293,111 @@ export class CrawlingSchedulerProposalRetry {
         };
       }
 
-      await this.options.noticeArchiveService
-        .updateSummaryStateByNoticeNum(
-          noticeWithSummary.num,
-          noticeWithSummary.aiSummary ?? null,
-          noticeWithSummary.aiSummaryStatus ?? 'not_requested',
-        )
-        .catch((error) => {
-          this.options.logger.warn(
-            `Failed to persist summary for bill ${item.billNo}: ${(error as Error).message}`,
-          );
-        });
-
-      resolved.push(noticeWithSummary);
-      queue.splice(idx, 1);
-      queueDirty = true;
-      idx--;
-
-      this.options.logger.log(
-        `proposalReason retry: resolved bill ${item.billNo} after ${item.retryCount + 1} attempt(s)`,
-      );
-      logAndBridge({
-        logger: this.options.logger,
-        method: 'log',
-        message: `proposalReason retry: resolved bill ${item.billNo} after ${item.retryCount + 1} attempt(s)`,
-        context: 'CrawlingSchedulerService',
-        discordBridge: this.options.discordBridge,
-        bridgeLevel: BridgeLogLevel.LOG,
-        bridgeMessage: `proposalReason retry: resolved bill **${item.billNo}**`,
-        metadata: { billNo: item.billNo, attempts: item.retryCount + 1 },
+      resolvedCandidates.push({
+        item,
+        noticeWithSummary,
       });
+    }
+
+    if (resolvedCandidates.length > 0) {
+      const svcCompat = this.options.noticeArchiveService as {
+        updateSummaryStatesByNoticeNums?: (
+          updates: Array<{
+            noticeNum: number;
+            summary: string | null;
+            status: AISummaryStatus;
+          }>,
+        ) => Promise<Set<number>>;
+        updateSummaryStateByNoticeNum: (
+          noticeNum: number,
+          summary: string | null,
+          status: AISummaryStatus,
+        ) => Promise<void>;
+      };
+
+      let persistedNoticeNums = new Set<number>();
+      let needsSingleFallback = !svcCompat.updateSummaryStatesByNoticeNums;
+
+      if (svcCompat.updateSummaryStatesByNoticeNums) {
+        try {
+          persistedNoticeNums = await svcCompat.updateSummaryStatesByNoticeNums(
+            resolvedCandidates.map(({ noticeWithSummary }) => ({
+              noticeNum: noticeWithSummary.num,
+              summary: noticeWithSummary.aiSummary ?? null,
+              status: noticeWithSummary.aiSummaryStatus ?? 'not_requested',
+            })),
+          );
+        } catch (error) {
+          this.options.logger.warn(
+            `proposalReason retry: bulk summary persistence failed: ${(error as Error).message}; retrying single-row writes`,
+          );
+          needsSingleFallback = true;
+          persistedNoticeNums = new Set<number>();
+        }
+      }
+
+      if (needsSingleFallback) {
+        for (const { item, noticeWithSummary } of resolvedCandidates) {
+          try {
+            await svcCompat.updateSummaryStateByNoticeNum(
+              noticeWithSummary.num,
+              noticeWithSummary.aiSummary ?? null,
+              noticeWithSummary.aiSummaryStatus ?? 'not_requested',
+            );
+            persistedNoticeNums.add(noticeWithSummary.num);
+          } catch (error) {
+            this.options.logger.warn(
+              `Failed to persist summary for bill ${item.billNo}: ${(error as Error).message}`,
+            );
+          }
+        }
+      }
+
+      const persistFailed =
+        resolvedCandidates.length - persistedNoticeNums.size;
+      if (persistFailed > 0) {
+        this.options.logger.warn(
+          `proposalReason retry: failed to persist ${persistFailed}/${resolvedCandidates.length} summary state(s); keeping failed items in queue`,
+        );
+      }
+
+      const persistedCandidates = resolvedCandidates.filter(
+        ({ noticeWithSummary }) =>
+          persistedNoticeNums.has(noticeWithSummary.num),
+      );
+
+      if (persistedCandidates.length > 0) {
+        const persistedNums = new Set(
+          persistedCandidates.map(
+            ({ noticeWithSummary }) => noticeWithSummary.num,
+          ),
+        );
+
+        let indexToRemove = queue.length;
+        while (indexToRemove--) {
+          if (persistedNums.has(queue[indexToRemove].notice.num)) {
+            queue.splice(indexToRemove, 1);
+            queueDirty = true;
+          }
+        }
+
+        for (const { item, noticeWithSummary } of persistedCandidates) {
+          resolved.push(noticeWithSummary);
+          this.options.logger.log(
+            `proposalReason retry: resolved bill ${item.billNo} after ${item.retryCount + 1} attempt(s)`,
+          );
+          logAndBridge({
+            logger: this.options.logger,
+            method: 'log',
+            message: `proposalReason retry: resolved bill ${item.billNo} after ${item.retryCount + 1} attempt(s)`,
+            context: 'CrawlingSchedulerService',
+            discordBridge: this.options.discordBridge,
+            bridgeLevel: BridgeLogLevel.LOG,
+            bridgeMessage: `proposalReason retry: resolved bill **${item.billNo}**`,
+            metadata: { billNo: item.billNo, attempts: item.retryCount + 1 },
+          });
+        }
+      }
     }
 
     if (queueDirty) {
