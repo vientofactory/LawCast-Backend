@@ -380,7 +380,7 @@ async function runFullSyncApplyWorker(
                   reason,
                 });
               savedTotal += saved;
-              LoggerUtils.debugDev(
+              LoggerUtils.log(
                 'ArchiveSyncService',
                 `Full sync apply batch: reason=${reason}, requested=${notices.length}, saved=${saved}, queueRemaining=${queue.length}`,
               );
@@ -600,6 +600,7 @@ async function runSummaryBackfillApplyWorker(
 
       const batch = queue.slice(0, options.summaryBackfillBatchSize);
       const batchKeys = new Set(batch.map((task) => task.key));
+      const succeededKeys = new Set<string>();
 
       try {
         await withChangeNotificationCollection(deps, async () => {
@@ -625,6 +626,7 @@ async function runSummaryBackfillApplyWorker(
                   aiSummary: result.aiSummary,
                   aiSummaryStatus: result.aiSummaryStatus,
                 });
+                succeededKeys.add(task.key);
               } catch (error) {
                 LoggerUtils.error(
                   'ArchiveSyncService',
@@ -632,24 +634,30 @@ async function runSummaryBackfillApplyWorker(
                 );
 
                 if (task.phase === 'summary-backfill') {
-                  await deps.noticeArchiveService
-                    .updateSummaryStateByNoticeNum(
+                  try {
+                    await deps.noticeArchiveService.updateSummaryStateByNoticeNum(
                       task.notice.num,
                       null,
                       AI_SUMMARY_STATUS.UNAVAILABLE,
-                    )
-                    .catch((persistError) => {
-                      LoggerUtils.warn(
-                        'ArchiveSyncService',
-                        `Failed to persist unavailable summary state for notice ${task.notice.num}: ${(persistError as Error).message}`,
-                      );
-                    });
+                    );
 
-                  batchCacheUpdates.push({
-                    ...task.notice,
-                    aiSummary: null,
-                    aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
-                  });
+                    batchCacheUpdates.push({
+                      ...task.notice,
+                      aiSummary: null,
+                      aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
+                    });
+                    succeededKeys.add(task.key);
+                  } catch (persistError) {
+                    LoggerUtils.warn(
+                      'ArchiveSyncService',
+                      `Failed to persist unavailable summary state for notice ${task.notice.num}: ${(persistError as Error).message}`,
+                    );
+                  }
+                } else {
+                  // Retry phase rows are already UNAVAILABLE in DB.
+                  // Keep queue progress for generation/network failures, but do not
+                  // drop rows when DB persistence failed.
+                  succeededKeys.add(task.key);
                 }
               }
             },
@@ -663,17 +671,26 @@ async function runSummaryBackfillApplyWorker(
         await removeApplyTasksByKeys<SummaryBackfillApplyTask>(
           deps,
           SUMMARY_BACKFILL_APPLY_QUEUE_KEY,
-          batchKeys,
+          succeededKeys,
         );
 
-        summaryBackfillProcessedTotal += batch.length;
-        summaryBackfillLastBatchProcessed = batch.length;
+        summaryBackfillProcessedTotal += succeededKeys.size;
+        summaryBackfillLastBatchProcessed = succeededKeys.size;
         summaryBackfillLastBatchAt = new Date().toISOString();
 
         LoggerUtils.log(
           'ArchiveSyncService',
-          `Summary backfill apply batch done: requested=${batch.length}, queueRemaining=${queue.length}`,
+          `Summary backfill apply batch done: requested=${batch.length}, removed=${succeededKeys.size}, failed=${batchKeys.size - succeededKeys.size}, queueRemaining=${queue.length}`,
         );
+
+        if (batchKeys.size > 0 && succeededKeys.size === 0) {
+          hadError = true;
+          LoggerUtils.warn(
+            'ArchiveSyncService',
+            `Summary backfill apply made no progress for batch of ${batch.length}; scheduling delayed retry`,
+          );
+          break;
+        }
       } catch (error) {
         hadError = true;
         LoggerUtils.error(
@@ -815,7 +832,7 @@ export async function executeFullSyncPhase(
         }
       }
 
-      LoggerUtils.debugDev(
+      LoggerUtils.log(
         'ArchiveSyncService',
         `Page ${page.currentPage}/${page.totalPages}: total=${pageItems.length} new=${newNotices.length}`,
       );
@@ -835,7 +852,7 @@ export async function executeFullSyncPhase(
     await enqueueFullSyncApplyTasks(deps, applyTasks);
     void runFullSyncApplyWorker(deps, options);
 
-    LoggerUtils.debugDev(
+    LoggerUtils.log(
       'ArchiveSyncService',
       `Full sync progress done: pages=${totalPagesScanned}, scanned=${totalNoticesScanned}, newlyArchived=${newlyArchivedCount}, stagedApply=${stagedApplyCount}, stagedUpgrade=${stagedUpgradeCount}, applyQueue=${fullSyncQueueLengthSnapshot}, palSeen=${seenPalActiveNums.size}, sourceDeleted=${sourceDeletedCount}`,
     );
@@ -1240,7 +1257,7 @@ export async function executeSummaryBackfillPhase(
 
     stagedPending += staged;
     scanned += batch.length;
-    LoggerUtils.debugDev(
+    LoggerUtils.log(
       'ArchiveSyncService',
       `Summary backfill staged batch ${summaryBatchIndex}: batchSize=${batch.length}, scannedAccum=${scanned}, stagedAccum=${stagedPending}`,
     );
