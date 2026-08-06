@@ -1195,7 +1195,6 @@ export async function executeSummaryBackfillPhase(
   let summaryBatchIndex = 0;
   let summaryRecoveryBatchIndex = 0;
   let retryBatchIndex = 0;
-  const maxNoProgressBatches = 5;
 
   LoggerUtils.debugDev(
     'ArchiveSyncService',
@@ -1218,7 +1217,6 @@ export async function executeSummaryBackfillPhase(
   await runSummaryBackfillApplyWorker(deps, options);
 
   let pendingSkip = 0;
-  let pendingNoProgressBatches = 0;
   for (;;) {
     const batch = archiveSvcCompat.getPendingSummaryPageByOffset
       ? await archiveSvcCompat.getPendingSummaryPageByOffset(
@@ -1246,29 +1244,11 @@ export async function executeSummaryBackfillPhase(
       'ArchiveSyncService',
       `Summary backfill staged batch ${summaryBatchIndex}: batchSize=${batch.length}, scannedAccum=${scanned}, stagedAccum=${stagedPending}`,
     );
-    if (staged === 0 && batch.length >= options.summaryBackfillBatchSize) {
-      pendingNoProgressBatches += 1;
-      if (pendingNoProgressBatches >= maxNoProgressBatches) {
-        LoggerUtils.debugDev(
-          'ArchiveSyncService',
-          `Summary backfill staging halted early after ${pendingNoProgressBatches} no-progress batches: fetched=${batch.length} staged=0 skip=${pendingSkip}. Preventing infinite staging loop.`,
-        );
-        break;
-      }
-
-      LoggerUtils.debugDev(
-        'ArchiveSyncService',
-        `Summary backfill encountered no-progress batch ${pendingNoProgressBatches}/${maxNoProgressBatches}: fetched=${batch.length} staged=0 skip=${pendingSkip}. Continuing scan.`,
-      );
-    } else {
-      pendingNoProgressBatches = 0;
-    }
     pendingSkip += options.summaryBackfillBatchSize;
     if (batch.length < options.summaryBackfillBatchSize) break;
   }
 
   let recoverySkip = 0;
-  let recoveryNoProgressBatches = 0;
   for (;;) {
     const batch = archiveSvcCompat.getNotSupportedSummaryRecoveryPage
       ? await archiveSvcCompat.getNotSupportedSummaryRecoveryPage(
@@ -1295,30 +1275,11 @@ export async function executeSummaryBackfillPhase(
       `Summary recovery staged batch ${summaryRecoveryBatchIndex}: batchSize=${batch.length}, scannedAccum=${scanned}, stagedAccum=${stagedPending}`,
     );
 
-    if (staged === 0 && batch.length >= options.summaryBackfillBatchSize) {
-      recoveryNoProgressBatches += 1;
-      if (recoveryNoProgressBatches >= maxNoProgressBatches) {
-        LoggerUtils.debugDev(
-          'ArchiveSyncService',
-          `Summary recovery staging halted early after ${recoveryNoProgressBatches} no-progress batches: fetched=${batch.length} staged=0 skip=${recoverySkip}. Preventing infinite staging loop.`,
-        );
-        break;
-      }
-
-      LoggerUtils.debugDev(
-        'ArchiveSyncService',
-        `Summary recovery encountered no-progress batch ${recoveryNoProgressBatches}/${maxNoProgressBatches}: fetched=${batch.length} staged=0 skip=${recoverySkip}. Continuing scan.`,
-      );
-    } else {
-      recoveryNoProgressBatches = 0;
-    }
-
     recoverySkip += options.summaryBackfillBatchSize;
     if (batch.length < options.summaryBackfillBatchSize) break;
   }
 
   let unavailableSkip = 0;
-  let unavailableNoProgressBatches = 0;
   for (;;) {
     const batch = await deps.noticeArchiveService.getUnavailableSummaryPage(
       unavailableSkip,
@@ -1343,23 +1304,6 @@ export async function executeSummaryBackfillPhase(
       'ArchiveSyncService',
       `Summary backfill retry staged batch ${retryBatchIndex}: batchSize=${batch.length}, retryScannedAccum=${retryScanned}, stagedRetryAccum=${stagedRetry}`,
     );
-    if (staged === 0 && batch.length >= options.summaryBackfillBatchSize) {
-      unavailableNoProgressBatches += 1;
-      if (unavailableNoProgressBatches >= maxNoProgressBatches) {
-        LoggerUtils.debugDev(
-          'ArchiveSyncService',
-          `Summary backfill retry staging halted early after ${unavailableNoProgressBatches} no-progress batches: fetched=${batch.length} staged=0 skip=${unavailableSkip}. Preventing infinite staging loop.`,
-        );
-        break;
-      }
-
-      LoggerUtils.debugDev(
-        'ArchiveSyncService',
-        `Summary backfill retry encountered no-progress batch ${unavailableNoProgressBatches}/${maxNoProgressBatches}: fetched=${batch.length} staged=0 skip=${unavailableSkip}. Continuing scan.`,
-      );
-    } else {
-      unavailableNoProgressBatches = 0;
-    }
     unavailableSkip += options.summaryBackfillBatchSize;
     if (batch.length < options.summaryBackfillBatchSize) break;
   }
