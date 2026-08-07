@@ -91,9 +91,23 @@ WEB_PUSH_SUBJECT=mailto:lawcast@example.com
 
 # Ollama (optional)
 OLLAMA_ENABLED=false
+OLLAMA_CPU_MODE=false
 OLLAMA_API_URL=http://localhost:11434
 OLLAMA_MODEL=gemma3:1b
 OLLAMA_TIMEOUT=10000
+
+# Archive sync tuning
+ARCHIVE_SYNC_CRAWLER_CONCURRENCY=4
+ARCHIVE_SYNC_NSM_CRAWLER_CONCURRENCY=3
+ARCHIVE_SYNC_DONE_CRAWLER_CONCURRENCY=3
+ARCHIVE_SYNC_FULL_SYNC_APPLY_BATCH_SIZE=100
+ARCHIVE_SYNC_FULL_SYNC_APPLY_BATCH_DELAY_MS=100
+ARCHIVE_SYNC_PENDING_RECOMPARE_APPLY_BATCH_SIZE=100
+ARCHIVE_SYNC_PENDING_RECOMPARE_APPLY_BATCH_DELAY_MS=150
+ARCHIVE_SYNC_ASYNC_APPLY_QUEUE_TTL_SECONDS=604800
+ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_SIZE=5
+ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS=250
+ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_CONCURRENCY=1
 
 # CORS origins (comma-separated)
 FRONTEND_URL=http://localhost:5173
@@ -126,6 +140,28 @@ DISCORD_BRIDGE_ADMIN_USER_IDS=
 - `OLLAMA_ENABLED=true`: 항상 활성화 시도
 - `OLLAMA_ENABLED=false`: 항상 비활성화
 - `OLLAMA_ENABLED` 미설정: `OLLAMA_API_URL` + `OLLAMA_MODEL`이 모두 있을 때만 활성화
+
+### Ollama CPU 모드
+
+`OLLAMA_CPU_MODE=true`로 설정하면 summary backfill이 CPU 친화 모드로 동작합니다.
+
+- summary backfill 스캔 배치 크기를 일반 모드 기본값(20) 대신 `ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_SIZE`로 낮춥니다.
+- 요약 생성 동시성을 `ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_CONCURRENCY`로 강제 제한합니다.
+- apply worker가 각 요약 배치를 처리한 뒤 `ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS`만큼 쉬면서 CPU 스파이크를 완화합니다.
+- 부트스트랩 중 summary backfill은 먼저 대상 notice를 큐에 staging한 뒤 apply worker가 순차 처리하므로, offset 기반 스캔 중간에 큐를 비워서 후보를 건너뛰는 문제가 생기지 않도록 설계되어 있습니다.
+
+권장값 예시:
+
+```env
+OLLAMA_ENABLED=true
+OLLAMA_CPU_MODE=true
+OLLAMA_API_URL=http://localhost:11434
+OLLAMA_MODEL=gemma3:1b
+OLLAMA_TIMEOUT=30000
+ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_SIZE=5
+ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS=250
+ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_CONCURRENCY=1
+```
 
 ### Web Push 활성화 규칙
 
@@ -160,15 +196,67 @@ WEB_PUSH_SUBJECT=mailto:lawcast@example.com
 
 ## 아카이브 동기화 파이프라인
 
+LawCast의 법률안 전체 동기화는 단일 대량 트랜잭션이 아니라, 단계별 phase와 비동기 apply worker를 조합한 파이프라인으로 동작합니다. 목적은 다음 세 가지입니다.
+
+- NSM에서 먼저 보이는 발의안과 PAL 본문 수집을 같은 번호 기준으로 점진적으로 합치기
+- 무거운 DB 쓰기와 요약 생성을 큐 기반 background apply로 분리해 크롤링 phase의 실패 범위를 줄이기
+- 부트스트랩과 정기 크론이 서로 충돌하지 않도록 phase lock과 queue drain을 분리하기
+
+### 부트스트랩 전체 동기화 순서
+
 서버 시작 시 백그라운드에서 아래 순서로 bootstrap 파이프라인이 실행됩니다.
 
 1. Pending sync (NSM)
-2. Legacy genesis seed (Diffchain baseline)
-3. Full sync (PAL)
-4. Summary backfill
-5. Unavailable summary retry
-6. isDone sync
-7. Integrity check
+2. Pending recompare async apply drain
+3. Legacy genesis seed (Diffchain baseline)
+4. Full sync (PAL)
+5. Full sync async apply drain
+6. Summary backfill
+7. Summary backfill async apply drain
+8. isDone sync
+9. Integrity check
+
+설명:
+
+- Pending sync는 NSM의 발의 단계 목록을 수집해 새 의안을 우선 아카이브하고, 이미 존재하는 NSM 의안 중 PAL 본문이 아직 없는 항목은 pending recompare 큐로 보냅니다.
+- Legacy genesis seed는 기존 아카이브를 diffchain 기준선으로 시드합니다.
+- Full sync는 PAL 전체 페이지를 순회하며 새 notice를 수집하고, 실제 아카이브 저장은 full sync apply queue를 통해 배치 처리합니다.
+- Summary backfill은 `not_requested`, recovery 대상, `unavailable` 재시도 대상을 한 phase에서 함께 스캔해 summary backfill queue로 적재합니다.
+- `Unavailable summary retry`는 별도 phase가 아니라 현재는 summary backfill phase 내부에 통합되어 있습니다.
+- 각 async apply drain은 해당 phase에 필요한 worker만 기다립니다. 예를 들어 summary drain이 pending/full queue까지 같이 기다리지는 않습니다.
+
+### 비동기 apply worker 구조
+
+아카이브 동기화는 다음 세 개의 Redis 기반 queue를 사용합니다.
+
+- full sync apply queue: PAL full sync가 적재한 notice를 배치 저장
+- pending recompare apply queue: NSM 선감지 후 PAL 본문이 비어 있는 기존 notice 재비교
+- summary backfill apply queue: Ollama 요약 생성 및 상태 저장
+
+이 구조 덕분에 크롤링/스캔 phase는 빠르게 끝내고, 저장/요약 같은 무거운 작업은 별도 drain으로 안정적으로 재시도할 수 있습니다.
+
+### 전체 동기화 흐름 요약
+
+```mermaid
+flowchart TD
+	A[Bootstrap start] --> B[Pending sync from NSM]
+	B --> C[Pending recompare apply drain]
+	C --> D[Legacy genesis seed]
+	D --> E[Full sync from PAL]
+	E --> F[Full sync apply drain]
+	F --> G[Summary backfill staging]
+	G --> H[Summary backfill apply drain]
+	H --> I[isDone sync]
+	I --> J[Integrity check]
+```
+
+### 운영 튜닝 포인트
+
+- 크롤링 HTTP 병렬도: `ARCHIVE_SYNC_CRAWLER_CONCURRENCY`, `ARCHIVE_SYNC_NSM_CRAWLER_CONCURRENCY`, `ARCHIVE_SYNC_DONE_CRAWLER_CONCURRENCY`
+- background apply 배치: `ARCHIVE_SYNC_FULL_SYNC_APPLY_BATCH_SIZE`, `ARCHIVE_SYNC_PENDING_RECOMPARE_APPLY_BATCH_SIZE`
+- background apply 간격: `ARCHIVE_SYNC_FULL_SYNC_APPLY_BATCH_DELAY_MS`, `ARCHIVE_SYNC_PENDING_RECOMPARE_APPLY_BATCH_DELAY_MS`
+- Redis queue 유지 기간: `ARCHIVE_SYNC_ASYNC_APPLY_QUEUE_TTL_SECONDS`
+- CPU 기반 요약 제어: `OLLAMA_CPU_MODE`, `ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_SIZE`, `ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS`, `ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_CONCURRENCY`
 
 추가로 정기 크론으로 보강 작업이 실행됩니다.
 
