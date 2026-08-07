@@ -465,6 +465,61 @@ describe('NoticeArchiveService', () => {
       expect(changeTrackingService.getLatestFieldValue).not.toHaveBeenCalled();
     });
 
+    it('keeps NSM pending rows even when latest chain proposalReason is empty so backfill can advance state', async () => {
+      const pendingRows: NoticeArchive[] = [
+        buildRow({
+          noticeNum: 1411,
+          subject: '체인 미복구 NSM A',
+          contentId: null,
+          proposalReason: '',
+          aiSummaryStatus: 'not_requested',
+        }),
+        buildRow({
+          noticeNum: 1412,
+          subject: '체인 미복구 NSM B',
+          contentId: null,
+          proposalReason: '',
+          aiSummaryStatus: 'not_requested',
+        }),
+      ];
+
+      const findMock = jest
+        .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+        .mockResolvedValue(pendingRows);
+      const repoMock = { ...createRepositoryMock(), find: findMock };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldValues.mockResolvedValue(
+        new Map([
+          [1411, null],
+          [1412, '   '],
+        ]),
+      );
+
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.getPendingSummaryPageByOffset(0, 20);
+
+      expect(result).toHaveLength(2);
+      expect(result.map((row) => row.num).sort((a, b) => a - b)).toEqual([
+        1411, 1412,
+      ]);
+      expect(
+        result.every(
+          (row) =>
+            row.proposalReason === null ||
+            row.proposalReason?.trim().length === 0,
+        ),
+      ).toBe(true);
+      expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledWith(
+        [1411, 1412],
+        'proposalReason',
+      );
+    });
+
     it('falls back to recoverable NSM not_supported rows when not_requested is empty', async () => {
       const findMock = jest
         .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()

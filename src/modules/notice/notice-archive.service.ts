@@ -1351,9 +1351,16 @@ export class NoticeArchiveService {
     );
 
     const resolvedFromChain: CachedNotice[] = [];
+    const unresolvedRows: CachedNotice[] = [];
     for (const row of needChainReasonRows) {
       const latestProposalReason = latestProposalReasons.get(row.num) ?? null;
       if (!latestProposalReason) {
+        // Keep unresolved NSM rows in the candidate set so the backfill worker
+        // can transition them to UNAVAILABLE instead of starving staging.
+        unresolvedRows.push({
+          ...row,
+          proposalReason: null,
+        });
         continue;
       }
 
@@ -1363,7 +1370,7 @@ export class NoticeArchiveService {
       });
     }
 
-    return [...passthroughRows, ...resolvedFromChain];
+    return [...passthroughRows, ...resolvedFromChain, ...unresolvedRows];
   }
 
   private async getLatestProposalReasonsForNotices(

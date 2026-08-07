@@ -814,6 +814,10 @@ async function runSummaryBackfillApplyWorker(
           SUMMARY_BACKFILL_APPLY_QUEUE_KEY,
           succeededKeys,
         );
+        const remainingQueue = await readApplyQueue<SummaryBackfillApplyTask>(
+          deps,
+          SUMMARY_BACKFILL_APPLY_QUEUE_KEY,
+        );
 
         summaryBackfillProcessedTotal += succeededKeys.size;
         summaryBackfillLastBatchProcessed = succeededKeys.size;
@@ -821,7 +825,7 @@ async function runSummaryBackfillApplyWorker(
 
         LoggerUtils.log(
           'ArchiveSyncService',
-          `Summary backfill apply batch done: requested=${batch.length}, removed=${succeededKeys.size}, failed=${batchKeys.size - succeededKeys.size}, queueRemaining=${queue.length}`,
+          `Summary backfill apply batch done: requested=${batch.length}, removed=${succeededKeys.size}, failed=${batchKeys.size - succeededKeys.size}, queueRemaining=${remainingQueue.length}`,
         );
 
         if (batchKeys.size > 0 && succeededKeys.size === 0) {
