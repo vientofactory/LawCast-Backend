@@ -121,6 +121,18 @@ export interface ArchiveSyncAsyncApplyMetrics {
   pendingRecompareLastStageEnqueued: number;
   pendingRecompareLastStageQueueBefore: number;
   pendingRecompareLastStageQueueAfter: number;
+  nsmDetailCrawlQueueLength: number;
+  nsmDetailCrawlWorkerRunning: boolean;
+  nsmDetailCrawlProcessedTotal: number;
+  nsmDetailCrawlLastBatchProcessed: number;
+  nsmDetailCrawlLastBatchAt: string | null;
+  nsmDetailCrawlLastStageAt: string | null;
+  nsmDetailCrawlLastStageTrigger: string | null;
+  nsmDetailCrawlLastStageRequested: number;
+  nsmDetailCrawlLastStageEligible: number;
+  nsmDetailCrawlLastStageEnqueued: number;
+  nsmDetailCrawlLastStageQueueBefore: number;
+  nsmDetailCrawlLastStageQueueAfter: number;
   summaryBackfillQueueLength: number;
   summaryBackfillWorkerRunning: boolean;
   summaryBackfillProcessedTotal: number;
@@ -283,6 +295,18 @@ export function getArchiveSyncAsyncApplyMetrics(): ArchiveSyncAsyncApplyMetrics 
     pendingRecompareLastStageEnqueued,
     pendingRecompareLastStageQueueBefore,
     pendingRecompareLastStageQueueAfter,
+    nsmDetailCrawlQueueLength: pendingRecompareQueueLengthSnapshot,
+    nsmDetailCrawlWorkerRunning: isPendingRecompareApplyWorkerRunning,
+    nsmDetailCrawlProcessedTotal: pendingRecompareProcessedTotal,
+    nsmDetailCrawlLastBatchProcessed: pendingRecompareLastBatchProcessed,
+    nsmDetailCrawlLastBatchAt: pendingRecompareLastBatchAt,
+    nsmDetailCrawlLastStageAt: pendingRecompareLastStageAt,
+    nsmDetailCrawlLastStageTrigger: pendingRecompareLastStageTrigger,
+    nsmDetailCrawlLastStageRequested: pendingRecompareLastStageRequested,
+    nsmDetailCrawlLastStageEligible: pendingRecompareLastStageEligible,
+    nsmDetailCrawlLastStageEnqueued: pendingRecompareLastStageEnqueued,
+    nsmDetailCrawlLastStageQueueBefore: pendingRecompareLastStageQueueBefore,
+    nsmDetailCrawlLastStageQueueAfter: pendingRecompareLastStageQueueAfter,
     summaryBackfillQueueLength: summaryBackfillQueueLengthSnapshot,
     summaryBackfillWorkerRunning: isSummaryBackfillApplyWorkerRunning,
     summaryBackfillProcessedTotal,

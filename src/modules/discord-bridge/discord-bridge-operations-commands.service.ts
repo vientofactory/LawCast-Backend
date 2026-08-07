@@ -6,7 +6,6 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { loadavg } from 'node:os';
-import { APP_CONSTANTS } from '../../config/app.config';
 import {
   BridgeLogLevel,
   BRIDGE_LOG_LEVEL_LABELS,
@@ -445,120 +444,52 @@ export class DiscordBridgeOperationsCommandsService {
       strict: false,
     });
 
-    const scheduler = crawlingService.getSchedulerExecutionState();
     const archive = archiveSyncService.getExecutionState();
 
     const runningPhases =
       archive.runningPhases.length > 0
         ? archive.runningPhases.join(', ')
         : 'none';
-    const runningWriteHeavyPhases =
-      archive.runningWriteHeavyPhases.length > 0
-        ? archive.runningWriteHeavyPhases.join(', ')
-        : 'none';
     const fmtTs = (value: string | null) => value ?? 'none';
-    const backgroundTasks =
-      scheduler.activeBackgroundTasks.length > 0
-        ? scheduler.activeBackgroundTasks.join(', ')
-        : 'none';
-
-    const recentPhaseStates = archive.phases
-      .map(
-        (phase) =>
-          `${phase.name}: ${phase.status}` +
-          (phase.lastError ? ` (err=${phase.lastError})` : ''),
-      )
-      .join('\n');
-
-    const cronLayout = APP_CONSTANTS.CRON.EXPRESSIONS;
+    const pendingSyncPhase = archive.phases.find(
+      (phase) => phase.name === 'pending sync',
+    );
+    const pendingSyncPhaseStatus = pendingSyncPhase?.status ?? 'unknown';
+    const pendingSyncLastRunAt = fmtTs(pendingSyncPhase?.lastRunAt ?? null);
 
     const embed = new EmbedBuilder()
       .setColor(0xf59e0b)
       .setTitle('🔒 Lock / Phase Debug')
       .addFields(
         {
-          name: 'Scheduler',
+          name: 'Scheduler / Phases',
           value:
-            `initialized=${scheduler.isInitialized} ` +
-            `processing=${scheduler.isProcessing} ` +
-            `busy(no-bg)=${crawlingService.isSchedulerBusy({ includeBackground: false })} ` +
-            `busy(with-bg)=${crawlingService.isSchedulerBusy({ includeBackground: true })}`,
+            `scheduler.busy=${crawlingService.isSchedulerBusy({ includeBackground: true })} ` +
+            `archive.anyRunning=${archive.isAnyPhaseRunning}\n` +
+            `runningPhases=${runningPhases}`,
           inline: false,
         },
         {
-          name: 'Background Tasks',
-          value: `count=${scheduler.activeBackgroundTaskCount}\n${backgroundTasks}`,
-          inline: true,
-        },
-        {
-          name: 'Archive Sync Phases',
-          value: `anyRunning=${archive.isAnyPhaseRunning}\nrunning=${runningPhases}`,
-          inline: true,
-        },
-        {
-          name: 'Archive Sync Write-Heavy',
+          name: 'Pending Sync State',
           value:
-            `anyRunning=${archive.isWriteHeavyPhaseRunning}\n` +
-            `running=${runningWriteHeavyPhases}`,
-          inline: true,
-        },
-        {
-          name: 'Full Sync Apply Queue',
-          value:
-            `queue=${archive.asyncApply.fullSyncQueueLength} ` +
-            `worker=${archive.asyncApply.fullSyncWorkerRunning}\n` +
-            `processedTotal=${archive.asyncApply.fullSyncProcessedTotal} ` +
-            `lastBatch=${archive.asyncApply.fullSyncLastBatchProcessed}\n` +
-            `lastBatchAt=${fmtTs(archive.asyncApply.fullSyncLastBatchAt)}`,
-          inline: true,
-        },
-        {
-          name: 'Summary Backfill Queue',
-          value:
-            `queue=${archive.asyncApply.summaryBackfillQueueLength} ` +
-            `worker=${archive.asyncApply.summaryBackfillWorkerRunning}\n` +
-            `processedTotal=${archive.asyncApply.summaryBackfillProcessedTotal} ` +
-            `lastBatch=${archive.asyncApply.summaryBackfillLastBatchProcessed}\n` +
-            `lastBatchAt=${fmtTs(archive.asyncApply.summaryBackfillLastBatchAt)}`,
-          inline: true,
-        },
-        {
-          name: 'Phase States',
-          value:
-            recentPhaseStates.length > 0
-              ? recentPhaseStates.slice(0, 1024)
-              : 'none',
-          inline: true,
-        },
-        {
-          name: 'Recompare Queue Throughput',
-          value:
-            `queue=${archive.asyncApply.pendingRecompareQueueLength} ` +
-            `worker=${archive.asyncApply.pendingRecompareWorkerRunning}\n` +
-            `processedTotal=${archive.asyncApply.pendingRecompareProcessedTotal} ` +
-            `lastBatch=${archive.asyncApply.pendingRecompareLastBatchProcessed}\n` +
-            `lastBatchAt=${fmtTs(archive.asyncApply.pendingRecompareLastBatchAt)}\n` +
-            `lastStageAt=${fmtTs(archive.asyncApply.pendingRecompareLastStageAt)} ` +
-            `trigger=${archive.asyncApply.pendingRecompareLastStageTrigger ?? 'none'}\n` +
-            `lastStage requested=${archive.asyncApply.pendingRecompareLastStageRequested} ` +
-            `eligible=${archive.asyncApply.pendingRecompareLastStageEligible} ` +
-            `staged=${archive.asyncApply.pendingRecompareLastStageEnqueued}\n` +
-            `lastStage queueBefore=${archive.asyncApply.pendingRecompareLastStageQueueBefore} ` +
-            `queueAfter=${archive.asyncApply.pendingRecompareLastStageQueueAfter}`,
-          inline: true,
+            `pendingSync.status=${pendingSyncPhaseStatus} pendingSync.lastRunAt=${pendingSyncLastRunAt}\n` +
+            `queue=${archive.asyncApply.nsmDetailCrawlQueueLength} ` +
+            `worker=${archive.asyncApply.nsmDetailCrawlWorkerRunning}\n` +
+            `processedTotal=${archive.asyncApply.nsmDetailCrawlProcessedTotal} ` +
+            `lastBatch=${archive.asyncApply.nsmDetailCrawlLastBatchProcessed}\n` +
+            `lastBatchAt=${fmtTs(archive.asyncApply.nsmDetailCrawlLastBatchAt)}\n` +
+            `lastStageAt=${fmtTs(archive.asyncApply.nsmDetailCrawlLastStageAt)} ` +
+            `trigger=${archive.asyncApply.nsmDetailCrawlLastStageTrigger ?? 'none'}\n` +
+            `lastStage requested=${archive.asyncApply.nsmDetailCrawlLastStageRequested} ` +
+            `eligible=${archive.asyncApply.nsmDetailCrawlLastStageEligible} ` +
+            `staged=${archive.asyncApply.nsmDetailCrawlLastStageEnqueued}\n` +
+            `lastStage queueBefore=${archive.asyncApply.nsmDetailCrawlLastStageQueueBefore} ` +
+            `queueAfter=${archive.asyncApply.nsmDetailCrawlLastStageQueueAfter}`,
+          inline: false,
         },
       )
       .setTimestamp()
       .setFooter({ text: 'LawCast Debug Bridge' });
-
-    const cronRaw = JSON.stringify(cronLayout, null, 2);
-    const cronSnippet =
-      cronRaw.length > 1000 ? cronRaw.slice(0, 997) + '…' : cronRaw;
-    embed.addFields({
-      name: 'Cron Layout',
-      value: `\`\`\`json\n${cronSnippet}\n\`\`\``,
-      inline: false,
-    });
 
     await interaction.reply({ embeds: [embed] }).catch(() => {});
   }

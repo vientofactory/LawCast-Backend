@@ -146,6 +146,18 @@ export interface ArchiveSyncExecutionState {
     pendingRecompareLastStageEnqueued: number;
     pendingRecompareLastStageQueueBefore: number;
     pendingRecompareLastStageQueueAfter: number;
+    nsmDetailCrawlQueueLength: number;
+    nsmDetailCrawlWorkerRunning: boolean;
+    nsmDetailCrawlProcessedTotal: number;
+    nsmDetailCrawlLastBatchProcessed: number;
+    nsmDetailCrawlLastBatchAt: string | null;
+    nsmDetailCrawlLastStageAt: string | null;
+    nsmDetailCrawlLastStageTrigger: string | null;
+    nsmDetailCrawlLastStageRequested: number;
+    nsmDetailCrawlLastStageEligible: number;
+    nsmDetailCrawlLastStageEnqueued: number;
+    nsmDetailCrawlLastStageQueueBefore: number;
+    nsmDetailCrawlLastStageQueueAfter: number;
     summaryBackfillQueueLength: number;
     summaryBackfillWorkerRunning: boolean;
     summaryBackfillProcessedTotal: number;
