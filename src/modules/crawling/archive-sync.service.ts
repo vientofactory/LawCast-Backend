@@ -277,7 +277,11 @@ export class ArchiveSyncService implements OnModuleInit {
         this.runPendingSync('bootstrap'),
       );
       await this.safeRun('async apply drain', () =>
-        this.waitForAsyncApplyIdle('pending sync'),
+        this.waitForAsyncApplyIdle('pending sync', undefined, undefined, {
+          fullSync: false,
+          pendingRecompare: true,
+          summaryBackfill: false,
+        }),
       );
 
       // Timestamp for legacy genesis seed boundary
@@ -288,14 +292,22 @@ export class ArchiveSyncService implements OnModuleInit {
 
       await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
       await this.safeRun('async apply drain', () =>
-        this.waitForAsyncApplyIdle('full sync'),
+        this.waitForAsyncApplyIdle('full sync', undefined, undefined, {
+          fullSync: true,
+          pendingRecompare: false,
+          summaryBackfill: false,
+        }),
       );
 
       await this.safeRun('summary backfill', () =>
         this.runSummaryBackfill('bootstrap'),
       );
       await this.safeRun('async apply drain', () =>
-        this.waitForAsyncApplyIdle('summary backfill'),
+        this.waitForAsyncApplyIdle('summary backfill', undefined, undefined, {
+          fullSync: false,
+          pendingRecompare: false,
+          summaryBackfill: true,
+        }),
       );
 
       await this.safeRun('integrity rescan', () =>

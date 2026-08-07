@@ -67,6 +67,15 @@ const SUMMARY_BACKFILL_APPLY_QUEUE_KEY =
   APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_APPLY_QUEUE_KEY;
 const ASYNC_APPLY_QUEUE_TTL_SECONDS =
   APP_CONSTANTS.ARCHIVE_SYNC.ASYNC_APPLY_QUEUE_TTL_SECONDS;
+const ENABLE_ERROR_AUTO_RETRY = process.env.NODE_ENV !== 'test';
+const MAX_ERROR_AUTO_RETRY_ATTEMPTS = (() => {
+  const parsed = Number.parseInt(
+    process.env.ARCHIVE_SYNC_MAX_ERROR_AUTO_RETRY_ATTEMPTS ?? '8',
+    10,
+  );
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 8;
+})();
+const MAX_ERROR_AUTO_RETRY_DELAY_MS = 60_000;
 
 export interface ArchiveSyncExecutorDeps {
   crawlingCoreService: CrawlingCoreService;
@@ -124,6 +133,19 @@ let summaryBackfillQueueLengthSnapshot = 0;
 let summaryBackfillProcessedTotal = 0;
 let summaryBackfillLastBatchProcessed = 0;
 let summaryBackfillLastBatchAt: string | null = null;
+let fullSyncErrorRetryCount = 0;
+let pendingRecompareErrorRetryCount = 0;
+let summaryBackfillErrorRetryCount = 0;
+
+function computeErrorRetryDelayMs(
+  baseDelayMs: number,
+  attempt: number,
+): number {
+  const normalizedBaseDelay = Math.max(baseDelayMs, 1000);
+  const exponent = Math.min(Math.max(attempt - 1, 0), 6);
+  const exponentialDelay = normalizedBaseDelay * 2 ** exponent;
+  return Math.min(exponentialDelay, MAX_ERROR_AUTO_RETRY_DELAY_MS);
+}
 
 function setQueueLengthSnapshot(queueKey: string, length: number): void {
   if (queueKey === FULL_SYNC_APPLY_QUEUE_KEY) {
@@ -463,15 +485,38 @@ async function runFullSyncApplyWorker(
       deps,
       FULL_SYNC_APPLY_QUEUE_KEY,
     );
-    if (remainingQueue.length > 0) {
-      if (hadError) {
-        const retryDelay = Math.max(options.fullSyncApplyBatchDelayMs, 1000);
-        void delayMs(retryDelay).then(() =>
-          runFullSyncApplyWorker(deps, options),
-        );
+    if (remainingQueue.length === 0) {
+      fullSyncErrorRetryCount = 0;
+    } else if (hadError) {
+      if (ENABLE_ERROR_AUTO_RETRY) {
+        fullSyncErrorRetryCount += 1;
+        if (fullSyncErrorRetryCount > MAX_ERROR_AUTO_RETRY_ATTEMPTS) {
+          LoggerUtils.error(
+            'ArchiveSyncService',
+            `Full sync apply auto-retry exhausted (attempts=${fullSyncErrorRetryCount}, max=${MAX_ERROR_AUTO_RETRY_ATTEMPTS}, queueRemaining=${remainingQueue.length})`,
+          );
+        } else {
+          const retryDelay = computeErrorRetryDelayMs(
+            options.fullSyncApplyBatchDelayMs,
+            fullSyncErrorRetryCount,
+          );
+          LoggerUtils.warn(
+            'ArchiveSyncService',
+            `Full sync apply scheduling retry ${fullSyncErrorRetryCount}/${MAX_ERROR_AUTO_RETRY_ATTEMPTS} in ${retryDelay}ms (queueRemaining=${remainingQueue.length})`,
+          );
+          void delayMs(retryDelay).then(() =>
+            runFullSyncApplyWorker(deps, options),
+          );
+        }
       } else {
-        void runFullSyncApplyWorker(deps, options);
+        LoggerUtils.warn(
+          'ArchiveSyncService',
+          `Full sync apply retry halted in test mode with queueRemaining=${remainingQueue.length}`,
+        );
       }
+    } else {
+      fullSyncErrorRetryCount = 0;
+      void runFullSyncApplyWorker(deps, options);
     }
   }
 }
@@ -589,18 +634,38 @@ async function runPendingRecompareApplyWorker(
       deps,
       PENDING_RECOMPARE_APPLY_QUEUE_KEY,
     );
-    if (remainingQueue.length > 0) {
-      if (hadError) {
-        const retryDelay = Math.max(
-          options.pendingRecompareApplyBatchDelayMs,
-          1000,
-        );
-        void delayMs(retryDelay).then(() =>
-          runPendingRecompareApplyWorker(deps, options),
-        );
+    if (remainingQueue.length === 0) {
+      pendingRecompareErrorRetryCount = 0;
+    } else if (hadError) {
+      if (ENABLE_ERROR_AUTO_RETRY) {
+        pendingRecompareErrorRetryCount += 1;
+        if (pendingRecompareErrorRetryCount > MAX_ERROR_AUTO_RETRY_ATTEMPTS) {
+          LoggerUtils.error(
+            'ArchiveSyncService',
+            `Pending recompare apply auto-retry exhausted (attempts=${pendingRecompareErrorRetryCount}, max=${MAX_ERROR_AUTO_RETRY_ATTEMPTS}, queueRemaining=${remainingQueue.length})`,
+          );
+        } else {
+          const retryDelay = computeErrorRetryDelayMs(
+            options.pendingRecompareApplyBatchDelayMs,
+            pendingRecompareErrorRetryCount,
+          );
+          LoggerUtils.warn(
+            'ArchiveSyncService',
+            `Pending recompare apply scheduling retry ${pendingRecompareErrorRetryCount}/${MAX_ERROR_AUTO_RETRY_ATTEMPTS} in ${retryDelay}ms (queueRemaining=${remainingQueue.length})`,
+          );
+          void delayMs(retryDelay).then(() =>
+            runPendingRecompareApplyWorker(deps, options),
+          );
+        }
       } else {
-        void runPendingRecompareApplyWorker(deps, options);
+        LoggerUtils.warn(
+          'ArchiveSyncService',
+          `Pending recompare apply retry halted in test mode with queueRemaining=${remainingQueue.length}`,
+        );
       }
+    } else {
+      pendingRecompareErrorRetryCount = 0;
+      void runPendingRecompareApplyWorker(deps, options);
     }
   }
 }
@@ -783,15 +848,38 @@ async function runSummaryBackfillApplyWorker(
       deps,
       SUMMARY_BACKFILL_APPLY_QUEUE_KEY,
     );
-    if (remainingQueue.length > 0) {
-      if (hadError) {
-        const retryDelay = 1000;
-        void delayMs(retryDelay).then(() =>
-          runSummaryBackfillApplyWorker(deps, options),
-        );
+    if (remainingQueue.length === 0) {
+      summaryBackfillErrorRetryCount = 0;
+    } else if (hadError) {
+      if (ENABLE_ERROR_AUTO_RETRY) {
+        summaryBackfillErrorRetryCount += 1;
+        if (summaryBackfillErrorRetryCount > MAX_ERROR_AUTO_RETRY_ATTEMPTS) {
+          LoggerUtils.error(
+            'ArchiveSyncService',
+            `Summary backfill apply auto-retry exhausted (attempts=${summaryBackfillErrorRetryCount}, max=${MAX_ERROR_AUTO_RETRY_ATTEMPTS}, queueRemaining=${remainingQueue.length})`,
+          );
+        } else {
+          const retryDelay = computeErrorRetryDelayMs(
+            1000,
+            summaryBackfillErrorRetryCount,
+          );
+          LoggerUtils.warn(
+            'ArchiveSyncService',
+            `Summary backfill apply scheduling retry ${summaryBackfillErrorRetryCount}/${MAX_ERROR_AUTO_RETRY_ATTEMPTS} in ${retryDelay}ms (queueRemaining=${remainingQueue.length})`,
+          );
+          void delayMs(retryDelay).then(() =>
+            runSummaryBackfillApplyWorker(deps, options),
+          );
+        }
       } else {
-        void runSummaryBackfillApplyWorker(deps, options);
+        LoggerUtils.warn(
+          'ArchiveSyncService',
+          `Summary backfill apply retry halted in test mode with queueRemaining=${remainingQueue.length}`,
+        );
       }
+    } else {
+      summaryBackfillErrorRetryCount = 0;
+      void runSummaryBackfillApplyWorker(deps, options);
     }
   }
 }

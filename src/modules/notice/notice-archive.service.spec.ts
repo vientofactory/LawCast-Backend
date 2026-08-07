@@ -38,6 +38,9 @@ describe('NoticeArchiveService', () => {
     getLatestFieldValue: jest
       .fn<(...args: any[]) => Promise<string | null>>()
       .mockResolvedValue(null),
+    getLatestFieldValues: jest
+      .fn<(...args: any[]) => Promise<Map<number, string | null>>>()
+      .mockResolvedValue(new Map()),
     getLatestFieldAfterValue: jest
       .fn<(...args: any[]) => Promise<string | null>>()
       .mockResolvedValue(null),
@@ -390,8 +393,8 @@ describe('NoticeArchiveService', () => {
         .mockResolvedValue(pendingRows);
       const repoMock = { ...createRepositoryMock(), find: findMock };
       const changeTrackingService = createChangeTrackingServiceMock();
-      changeTrackingService.getLatestFieldValue.mockResolvedValue(
-        '변경 체인 최신 제안이유',
+      changeTrackingService.getLatestFieldValues.mockResolvedValue(
+        new Map([[1002, '변경 체인 최신 제안이유']]),
       );
       const service = new NoticeArchiveService(
         repoMock as any,
@@ -407,10 +410,59 @@ describe('NoticeArchiveService', () => {
         proposalReason: '변경 체인 최신 제안이유',
         aiSummaryStatus: 'not_requested',
       });
-      expect(changeTrackingService.getLatestFieldValue).toHaveBeenCalledWith(
-        1002,
+      expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledWith(
+        [1002],
         'proposalReason',
       );
+    });
+
+    it('resolves multiple NSM empty-proposalReason rows with one batched change-chain lookup', async () => {
+      const pendingRows: NoticeArchive[] = [
+        buildRow({
+          noticeNum: 1401,
+          subject: '배치 조회 대상 A',
+          contentId: null,
+          proposalReason: '',
+          aiSummaryStatus: 'not_requested',
+        }),
+        buildRow({
+          noticeNum: 1402,
+          subject: '배치 조회 대상 B',
+          contentId: null,
+          proposalReason: '',
+          aiSummaryStatus: 'not_requested',
+        }),
+      ];
+
+      const findMock = jest
+        .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+        .mockResolvedValue(pendingRows);
+      const repoMock = { ...createRepositoryMock(), find: findMock };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldValues.mockResolvedValue(
+        new Map([
+          [1401, '체인 제안이유 A'],
+          [1402, '체인 제안이유 B'],
+        ]),
+      );
+
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.getPendingSummaryPage(50);
+
+      expect(result).toHaveLength(2);
+      expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledWith(
+        [1401, 1402],
+        'proposalReason',
+      );
+      expect(changeTrackingService.getLatestFieldValue).not.toHaveBeenCalled();
     });
 
     it('falls back to recoverable NSM not_supported rows when not_requested is empty', async () => {
@@ -429,8 +481,8 @@ describe('NoticeArchiveService', () => {
         ]);
       const repoMock = { ...createRepositoryMock(), find: findMock };
       const changeTrackingService = createChangeTrackingServiceMock();
-      changeTrackingService.getLatestFieldValue.mockResolvedValue(
-        '체인 보정 사유',
+      changeTrackingService.getLatestFieldValues.mockResolvedValue(
+        new Map([[1301, '체인 보정 사유']]),
       );
 
       const service = new NoticeArchiveService(
@@ -461,6 +513,10 @@ describe('NoticeArchiveService', () => {
           unknown
         >,
       ).toMatchObject({ aiSummaryStatus: 'not_supported' });
+      expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledWith(
+        [1301],
+        'proposalReason',
+      );
     });
   });
 
@@ -559,8 +615,8 @@ describe('NoticeArchiveService', () => {
       const result = await service.getUnavailableSummaryPage(0, 50);
 
       expect(result).toEqual([]);
-      expect(changeTrackingService.getLatestFieldValue).toHaveBeenCalledWith(
-        2003,
+      expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledWith(
+        [2003],
         'proposalReason',
       );
     });
@@ -1053,6 +1109,144 @@ describe('NoticeArchiveService', () => {
         changeTrackingService.appendChangeEventWithDetails,
       ).not.toHaveBeenCalled();
       expect(repositoryMock.save).not.toHaveBeenCalled();
+    });
+
+    it('canonicalizes PAL/NSM format drift for subject/proposalDate/proposalSession to avoid startup oscillation events', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219159,
+          subject:
+            '이러닝(전자학습)산업 발전 및 이러닝 활용 촉진에 관한 법률 전부개정법률안',
+          committee: '산업통상부',
+          proposalReason: '제안이유',
+          contentProposalDate: '2026. 6. 10.',
+          contentProposalSession: '제436회 국회(임시회)',
+          contentId: null,
+        }),
+      );
+
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 1,
+          details: [
+            {
+              fieldPath: 'subject',
+              afterValue:
+                '이러닝(전자학습)산업 발전 및 이러닝 활용 촉진에 관한 법률 전부개정법률안 (정진욱의원 등 15인)',
+            },
+            {
+              fieldPath: 'proposalDate',
+              afterValue: '2026-06-10',
+            },
+            {
+              fieldPath: 'proposalSession',
+              afterValue: '제22대(2024~2028) 제436회',
+            },
+          ],
+        },
+      ]);
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219159,
+          subject:
+            '이러닝(전자학습)산업 발전 및 이러닝 활용 촉진에 관한 법률 전부개정법률안',
+          proposerCategory: '정부',
+          committee: '산업통상부',
+          link: 'https://example.com/2219159',
+          contentId: null,
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          proposalReason: '제안이유',
+          proposalDate: '2026. 6. 10.',
+          proposalSession: '제436회 국회(임시회)',
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getArchivedNullContentIdNums', () => {
+    it('excludes DB-null rows that are already PAL-enriched in latest change chain', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<any[]>>()
+          .mockResolvedValue([
+            { noticeNum: 3101 },
+            { noticeNum: 3102 },
+            { noticeNum: 3103 },
+          ]),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldValues.mockResolvedValue(
+        new Map<number, string | null>([
+          [3101, null],
+          [3102, 'PRC_3102'],
+          [3103, '   '],
+        ]),
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.getArchivedNullContentIdNums([
+        3101, 3102, 3103, 9999,
+      ]);
+
+      expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledWith(
+        [3101, 3102, 3103],
+        'contentId',
+      );
+      expect(result).toEqual(new Set([3101, 3103]));
+    });
+
+    it('falls back to DB-null result when change-chain contentId lookup fails', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<any[]>>()
+          .mockResolvedValue([{ noticeNum: 3201 }]),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldValues.mockRejectedValue(
+        new Error('chain read failed'),
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.getArchivedNullContentIdNums([3201]);
+
+      expect(result).toEqual(new Set([3201]));
+      expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledWith(
+        [3201],
+        'contentId',
+      );
     });
   });
 

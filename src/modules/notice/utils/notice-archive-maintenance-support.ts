@@ -362,14 +362,41 @@ export async function updateSummaryStatesByNoticeNums(
     aiSummaryStatus: update.status,
   }));
 
-  await deps.summaryStateRepository
-    .createQueryBuilder()
-    .insert()
-    .into(NoticeArchiveSnapshotState)
-    .values(values)
-    // Use physical DB column names for SQLite ON CONFLICT compatibility.
-    .orUpdate(['ai_summary', 'ai_summary_status'], ['notice_num'])
-    .execute();
+  try {
+    await deps.summaryStateRepository
+      .createQueryBuilder()
+      .insert()
+      .into(NoticeArchiveSnapshotState)
+      .values(values)
+      // Avoid entity-return mapping on SQLite upsert path where id may not be returned.
+      .updateEntity(false)
+      // Use physical DB column names for SQLite ON CONFLICT compatibility.
+      .orUpdate(['ai_summary', 'ai_summary_status'], ['notice_num'])
+      .execute();
 
-  return new Set(values.map((value) => value.noticeNum));
+    return new Set(values.map((value) => value.noticeNum));
+  } catch (error) {
+    deps.logger.warn(
+      `Bulk summary-state upsert failed, falling back to per-row update: ${(error as Error).message}`,
+    );
+
+    const persistedNoticeNums = new Set<number>();
+    for (const update of deduped.values()) {
+      try {
+        await updateSummaryStateByNoticeNum(
+          deps,
+          update.noticeNum,
+          update.summary,
+          update.status,
+        );
+        persistedNoticeNums.add(update.noticeNum);
+      } catch (itemError) {
+        deps.logger.warn(
+          `Summary-state fallback update failed for notice ${update.noticeNum}: ${(itemError as Error).message}`,
+        );
+      }
+    }
+
+    return persistedNoticeNums;
+  }
 }

@@ -307,6 +307,87 @@ export class NoticeArchiveService {
     return normalized && normalized.length > 0 ? normalized : null;
   }
 
+  private canonicalizeTrackedSubject(
+    value: string | null | undefined,
+  ): string | null {
+    const normalized = value?.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return null;
+    }
+
+    // Suppress PAL/NSM presentation variance only (e.g., "(홍길동의원 등 15인)").
+    const withoutSponsorSuffix = normalized.replace(
+      /\s*\([^()]*의원\s+등\s+\d+인\)\s*$/u,
+      '',
+    );
+    const trimmed = withoutSponsorSuffix.trim();
+    return trimmed.length > 0 ? trimmed : normalized;
+  }
+
+  private canonicalizeTrackedProposalDate(
+    value: string | null | undefined,
+  ): string | null {
+    const normalized = value?.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const dotted = normalized.match(/^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.$/);
+    if (dotted) {
+      const [, year, month, day] = dotted;
+      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+
+    const dashed = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (dashed) {
+      const [, year, month, day] = dashed;
+      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+
+    return normalized;
+  }
+
+  private canonicalizeTrackedProposalSession(
+    value: string | null | undefined,
+  ): string | null {
+    const normalized = value?.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const sessionMatch = normalized.match(/제\s*(\d+)\s*회/u);
+    if (sessionMatch) {
+      return `제${sessionMatch[1]}회`;
+    }
+
+    return normalized;
+  }
+
+  private canonicalizeOscillationProneTrackedFields(
+    snapshot: Record<string, unknown> | null,
+  ): Record<string, unknown> | null {
+    if (!snapshot) {
+      return snapshot;
+    }
+
+    const normalized = { ...snapshot };
+    normalized.subject = this.canonicalizeTrackedSubject(
+      typeof normalized.subject === 'string' ? normalized.subject : null,
+    );
+    normalized.proposalDate = this.canonicalizeTrackedProposalDate(
+      typeof normalized.proposalDate === 'string'
+        ? normalized.proposalDate
+        : null,
+    );
+    normalized.proposalSession = this.canonicalizeTrackedProposalSession(
+      typeof normalized.proposalSession === 'string'
+        ? normalized.proposalSession
+        : null,
+    );
+
+    return normalized;
+  }
+
   private preferIncomingTrackedValue<T>(
     incoming: T | null | undefined,
     existing: T | null | undefined,
@@ -1245,32 +1326,100 @@ export class NoticeArchiveService {
   private async resolveSummaryBackfillCandidates(
     rows: CachedNotice[],
   ): Promise<CachedNotice[]> {
-    const resolved: Array<CachedNotice | null> = await Promise.all(
-      rows.map(async (row): Promise<CachedNotice | null> => {
-        const snapshotProposalReason = row.proposalReason?.trim() || null;
+    const passthroughRows: CachedNotice[] = [];
+    const needChainReasonRows: CachedNotice[] = [];
 
-        if (row.contentId || snapshotProposalReason) {
-          return {
-            ...row,
-            proposalReason: snapshotProposalReason,
-          };
-        }
-
-        const latestProposalReason =
-          await this.getLatestProposalReasonForNotice(row.num);
-
-        if (!latestProposalReason) {
-          return null;
-        }
-
-        return {
+    for (const row of rows) {
+      const snapshotProposalReason = row.proposalReason?.trim() || null;
+      if (row.contentId || snapshotProposalReason) {
+        passthroughRows.push({
           ...row,
-          proposalReason: latestProposalReason,
-        };
+          proposalReason: snapshotProposalReason,
+        });
+        continue;
+      }
+
+      needChainReasonRows.push(row);
+    }
+
+    if (needChainReasonRows.length === 0) {
+      return passthroughRows;
+    }
+
+    const latestProposalReasons = await this.getLatestProposalReasonsForNotices(
+      needChainReasonRows.map((row) => row.num),
+    );
+
+    const resolvedFromChain: CachedNotice[] = [];
+    for (const row of needChainReasonRows) {
+      const latestProposalReason = latestProposalReasons.get(row.num) ?? null;
+      if (!latestProposalReason) {
+        continue;
+      }
+
+      resolvedFromChain.push({
+        ...row,
+        proposalReason: latestProposalReason,
+      });
+    }
+
+    return [...passthroughRows, ...resolvedFromChain];
+  }
+
+  private async getLatestProposalReasonsForNotices(
+    noticeNums: number[],
+  ): Promise<Map<number, string | null>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+    const result = new Map<number, string | null>();
+
+    for (const noticeNum of uniqueNums) {
+      result.set(noticeNum, null);
+    }
+
+    if (uniqueNums.length === 0 || !this.changeTrackingService) {
+      return result;
+    }
+
+    const svcCompat = this.changeTrackingService as {
+      getLatestFieldValues?: (
+        nums: number[],
+        fieldPath: string,
+      ) => Promise<Map<number, string | null>>;
+      getLatestFieldValue: (
+        num: number,
+        fieldPath: string,
+      ) => Promise<string | null>;
+    };
+
+    if (svcCompat.getLatestFieldValues) {
+      try {
+        return await svcCompat.getLatestFieldValues(
+          uniqueNums,
+          'proposalReason',
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Failed to load batched proposalReason values from change chain: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    await Promise.all(
+      uniqueNums.map(async (noticeNum) => {
+        try {
+          result.set(
+            noticeNum,
+            await svcCompat.getLatestFieldValue(noticeNum, 'proposalReason'),
+          );
+        } catch (error) {
+          this.logger.warn(
+            `Failed to load latest proposalReason from change chain for notice ${noticeNum}: ${(error as Error).message}`,
+          );
+        }
       }),
     );
 
-    return resolved.filter((row): row is CachedNotice => row !== null);
+    return result;
   }
 
   private applyArchiveSearchFilters(
@@ -2549,10 +2698,15 @@ export class NoticeArchiveService {
       const afterSnapshot = this.buildTrackedSnapshot(afterRow);
       if (!afterSnapshot) return;
 
+      const canonicalBeforeSnapshot =
+        this.canonicalizeOscillationProneTrackedFields(beforeSnapshot);
+      const canonicalAfterSnapshot =
+        this.canonicalizeOscillationProneTrackedFields(afterSnapshot);
+
       const built = this.changeTrackingService.buildDiffEvent({
         noticeNum,
-        beforeSnapshot,
-        afterSnapshot,
+        beforeSnapshot: canonicalBeforeSnapshot,
+        afterSnapshot: canonicalAfterSnapshot ?? afterSnapshot,
         source,
       });
 
@@ -2952,7 +3106,35 @@ export class NoticeArchiveService {
       where: { noticeNum: In(uniqueNums), contentId: IsNull() },
       select: { noticeNum: true },
     });
-    return new Set(rows.map((row) => row.noticeNum));
+
+    const nullContentIdNums = new Set(rows.map((row) => row.noticeNum));
+
+    if (nullContentIdNums.size === 0 || !this.changeTrackingService) {
+      return nullContentIdNums;
+    }
+
+    try {
+      const latestContentIds =
+        await this.changeTrackingService.getLatestFieldValues(
+          Array.from(nullContentIdNums),
+          'contentId',
+        );
+
+      for (const noticeNum of Array.from(nullContentIdNums)) {
+        const latestContentId = latestContentIds.get(noticeNum)?.trim();
+        if (latestContentId) {
+          // Diffchain already knows this notice is PAL-enriched.
+          // Treat it as non-NSM for recompare/upgrade routing.
+          nullContentIdNums.delete(noticeNum);
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to resolve latest contentId from change chain for NSM eligibility filter: ${(error as Error).message}`,
+      );
+    }
+
+    return nullContentIdNums;
   }
 
   async getSourceDeletedNoticeNumSet(

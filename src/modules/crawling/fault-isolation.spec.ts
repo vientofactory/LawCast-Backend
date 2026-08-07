@@ -875,6 +875,35 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(safeRunSpy).toHaveBeenCalled();
   });
 
+  it('bootstrap async-apply drains are phase-scoped so summary drain does not wait on unrelated queues', async () => {
+    const waitSpy = jest
+      .spyOn(service, 'waitForAsyncApplyIdle')
+      .mockResolvedValue(undefined);
+
+    await (service as any).runBootstrapPipeline();
+
+    expect(waitSpy).toHaveBeenCalledWith('pending sync', undefined, undefined, {
+      fullSync: false,
+      pendingRecompare: true,
+      summaryBackfill: false,
+    });
+    expect(waitSpy).toHaveBeenCalledWith('full sync', undefined, undefined, {
+      fullSync: true,
+      pendingRecompare: false,
+      summaryBackfill: false,
+    });
+    expect(waitSpy).toHaveBeenCalledWith(
+      'summary backfill',
+      undefined,
+      undefined,
+      {
+        fullSync: false,
+        pendingRecompare: false,
+        summaryBackfill: true,
+      },
+    );
+  });
+
   // ── reconcileIsDone (Phase 2) ─────────────────────────────────────────────
 
   it('pal-crawl searchDone throws on first page → runIsDoneSync throws (phase tracker set to failed)', async () => {

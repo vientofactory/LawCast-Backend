@@ -1091,6 +1091,77 @@ export class ChangeTrackingService {
     return value ? value : null;
   }
 
+  async getLatestFieldValues(
+    noticeNums: number[],
+    fieldPath: string,
+  ): Promise<Map<number, string | null>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+    const result = new Map<number, string | null>();
+
+    for (const noticeNum of uniqueNums) {
+      result.set(noticeNum, null);
+    }
+
+    if (uniqueNums.length === 0) {
+      return result;
+    }
+
+    try {
+      const placeholders = uniqueNums.map(() => '?').join(', ');
+      const sql = `
+        SELECT ranked.noticeNum AS noticeNum, ranked.afterValue AS afterValue
+        FROM (
+          SELECT
+            event.notice_num AS noticeNum,
+            detail.after_value AS afterValue,
+            ROW_NUMBER() OVER (
+              PARTITION BY event.notice_num
+              ORDER BY event.detected_at DESC, event.event_height DESC, detail.id DESC
+            ) AS rn
+          FROM notice_change_details detail
+          INNER JOIN notice_change_events event
+            ON event.id = detail.event_id
+          WHERE detail.field_path = ?
+            AND event.notice_num IN (${placeholders})
+        ) ranked
+        WHERE ranked.rn = 1
+      `;
+
+      const rows = await this.changeDetailRepository.manager.query(sql, [
+        fieldPath,
+        ...uniqueNums,
+      ]);
+
+      for (const row of rows as Array<{
+        noticeNum: unknown;
+        afterValue: unknown;
+      }>) {
+        const rawNoticeNum = row.noticeNum;
+        const noticeNum =
+          typeof rawNoticeNum === 'number'
+            ? rawNoticeNum
+            : Number.parseInt(String(rawNoticeNum), 10);
+        if (!Number.isFinite(noticeNum)) {
+          continue;
+        }
+
+        const value =
+          typeof row.afterValue === 'string' ? row.afterValue.trim() : '';
+        result.set(noticeNum, value.length > 0 ? value : null);
+      }
+
+      return result;
+    } catch {
+      for (const noticeNum of uniqueNums) {
+        result.set(
+          noticeNum,
+          await this.getLatestFieldValue(noticeNum, fieldPath),
+        );
+      }
+      return result;
+    }
+  }
+
   async getRecentChanges(
     query: RecentChangesQuery,
   ): Promise<RecentChangesResult> {
