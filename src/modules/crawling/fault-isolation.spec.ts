@@ -35,6 +35,8 @@ import { type CachedNotice } from '../../types/cache.types';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type ITableData, type ISearchResult } from 'pal-crawl';
 import { NsmArchiveReason } from './archive-orchestrator.service';
+import { executeSummaryBackfillPhase } from './utils/archive-sync-phase-executors';
+import * as phaseExecutors from './utils/archive-sync-phase-executors';
 
 // ─── Shared test fixtures ─────────────────────────────────────────────────────
 
@@ -812,6 +814,9 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
         aiSummaryStatus: 'not_requested',
       } as any,
     ]);
+    noticeArchiveService.getArchivedNullContentIdNums.mockResolvedValue(
+      new Set([2200001]),
+    );
 
     const result = await service.runPendingSync('fault-test');
     const sharedNsmConcurrency =
@@ -904,6 +909,25 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     );
   });
 
+  it('bootstrap does not pre-kick full/summarize apply workers before pending sync safeRun step', async () => {
+    const kickSpy = jest.spyOn(
+      phaseExecutors,
+      'kickArchiveSyncAsyncApplyWorkers',
+    );
+
+    await (service as any).runBootstrapPipeline();
+
+    expect(kickSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      {
+        fullSync: true,
+        pendingRecompare: false,
+        summaryBackfill: true,
+      },
+    );
+  });
+
   // ── reconcileIsDone (Phase 2) ─────────────────────────────────────────────
 
   it('pal-crawl searchDone throws on first page → runIsDoneSync throws (phase tracker set to failed)', async () => {
@@ -978,6 +1002,71 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
       ]),
       APP_CONSTANTS.ARCHIVE_SYNC.ASYNC_APPLY_QUEUE_TTL_SECONDS,
     );
+  });
+
+  it('CPU-friendly summary backfill stages all offset pages before starting apply', async () => {
+    const timeline: string[] = [];
+    noticeArchiveService.getPendingSummaryPageByOffset = jest
+      .fn()
+      .mockImplementation(async (skip: number) => {
+        timeline.push(`fetch:${skip}`);
+        if (skip === 0) return [{ ...makeCachedNotice(21) } as any];
+        if (skip === 1) return [{ ...makeCachedNotice(22) } as any];
+        return [];
+      });
+    noticeArchiveService.getNotSupportedSummaryRecoveryPage = jest
+      .fn()
+      .mockResolvedValue([]);
+    noticeArchiveService.getUnavailableSummaryPage.mockResolvedValue([]);
+
+    summaryGenerationService.generateSummaryForNotice.mockImplementation(
+      async () => {
+        timeline.push('gen');
+        return {
+          aiSummary: '요약',
+          aiSummaryStatus: 'ready',
+        } as any;
+      },
+    );
+
+    const deps = (service as any).getExecutorDeps();
+    const options = {
+      ...(service as any).executorOptions,
+      summaryBackfillBatchSize: 1,
+      summaryBackfillConcurrency: 1,
+      summaryBackfillCpuFriendlyMode: true,
+      summaryBackfillCpuBatchDelayMs: 0,
+    };
+
+    await executeSummaryBackfillPhase(deps, options);
+
+    const firstGenIndex = timeline.indexOf('gen');
+    const lastFetchIndex = Math.max(
+      timeline.lastIndexOf('fetch:0'),
+      timeline.lastIndexOf('fetch:1'),
+      timeline.lastIndexOf('fetch:2'),
+    );
+    expect(firstGenIndex).toBeGreaterThan(lastFetchIndex);
+  });
+
+  it('full-sync partial apply does not immediately replay each item as single-item archive call', async () => {
+    crawlingCoreService.getAllPages.mockImplementation(() =>
+      makePageGenerator([makeSearchResult([1])]),
+    );
+    archiveOrchestratorService.filterAlreadyArchivedNotices.mockResolvedValue([
+      makeTableData(1),
+    ]);
+    archiveOrchestratorService.archiveNotices.mockResolvedValue(0);
+
+    await service.runFullSync('fault-test');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(archiveOrchestratorService.archiveNotices).toHaveBeenCalledTimes(1);
+    const queue = (await cacheService.getObject(
+      APP_CONSTANTS.ARCHIVE_SYNC.FULL_SYNC_APPLY_QUEUE_KEY,
+    )) as Array<unknown> | null;
+    expect(Array.isArray(queue)).toBe(true);
+    expect(queue).toHaveLength(1);
   });
 
   it('DB updateSummaryStateByNoticeNum throws for one item → other items in batch still updated, phase completes', async () => {

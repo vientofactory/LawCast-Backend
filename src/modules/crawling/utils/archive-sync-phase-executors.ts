@@ -421,13 +421,11 @@ async function runFullSyncApplyWorker(
       const batch = queue.slice(0, options.fullSyncApplyBatchSize);
       const grouped = new Map<ArchiveReason, CachedNotice[]>();
       const batchKeys = new Set(batch.map((task) => task.key));
-      const keyByReasonAndNum = new Map<string, string>();
 
       for (const task of batch) {
         const existing = grouped.get(task.reason) ?? [];
         existing.push(task.notice);
         grouped.set(task.reason, existing);
-        keyByReasonAndNum.set(`${task.reason}:${task.notice.num}`, task.key);
       }
 
       let batchSavedTotal = 0;
@@ -459,41 +457,10 @@ async function runFullSyncApplyWorker(
             batchKeys,
           );
         } else {
-          // Partial success means archiveNotices swallowed per-item failures.
-          // Re-probe per item to remove only confirmed successes.
-          const succeededKeys = new Set<string>();
-          await withChangeNotificationCollection(deps, async () => {
-            for (const task of batch) {
-              const saved =
-                await deps.archiveOrchestratorService.archiveNotices(
-                  [task.notice],
-                  {
-                    reason: task.reason,
-                  },
-                );
-              if (saved > 0) {
-                const mappedKey = keyByReasonAndNum.get(
-                  `${task.reason}:${task.notice.num}`,
-                );
-                if (mappedKey) {
-                  succeededKeys.add(mappedKey);
-                }
-              }
-            }
-          });
-
-          if (succeededKeys.size > 0) {
-            await removeApplyTasksByKeys<FullSyncApplyTask>(
-              deps,
-              FULL_SYNC_APPLY_QUEUE_KEY,
-              succeededKeys,
-            );
-          }
-
-          const failedCount = batch.length - succeededKeys.size;
+          const failedCount = batch.length - batchSavedTotal;
           LoggerUtils.warn(
             'ArchiveSyncService',
-            `Full sync apply partial batch: requested=${batch.length}, removed=${succeededKeys.size}, failed=${failedCount}`,
+            `Full sync apply partial batch: requested=${batch.length}, removed=0, failed=${failedCount}`,
           );
 
           if (failedCount > 0) {
@@ -879,6 +846,13 @@ async function runSummaryBackfillApplyWorker(
             `Summary backfill apply made no progress for batch of ${batch.length}; scheduling delayed retry`,
           );
           break;
+        }
+
+        if (
+          options.summaryBackfillCpuFriendlyMode &&
+          options.summaryBackfillCpuBatchDelayMs > 0
+        ) {
+          await delayMs(options.summaryBackfillCpuBatchDelayMs);
         }
       } catch (error) {
         hadError = true;
@@ -1497,25 +1471,6 @@ export async function executeSummaryBackfillPhase(
     `Summary backfill config: batchSize=${options.summaryBackfillBatchSize}, concurrency=${options.summaryBackfillConcurrency}, cpuFriendlyMode=${cpuFriendlyMode}, cpuBatchDelayMs=${cpuFriendlyBatchDelayMs}`,
   );
 
-  const drainCpuFriendlyBatch = async (
-    phase: 'pending' | 'recovery' | 'retry',
-    batchIndex: number,
-  ): Promise<void> => {
-    if (!cpuFriendlyMode) {
-      return;
-    }
-
-    await runSummaryBackfillApplyWorker(deps, options);
-
-    if (cpuFriendlyBatchDelayMs > 0) {
-      LoggerUtils.debugDev(
-        'ArchiveSyncService',
-        `Summary backfill cpu-friendly drain complete (${phase} batch ${batchIndex}) - sleeping ${cpuFriendlyBatchDelayMs}ms`,
-      );
-      await delayMs(cpuFriendlyBatchDelayMs);
-    }
-  };
-
   const archiveSvcCompat = deps.noticeArchiveService as {
     getPendingSummaryPageByOffset?: (
       skip: number,
@@ -1559,7 +1514,6 @@ export async function executeSummaryBackfillPhase(
       'ArchiveSyncService',
       `Summary backfill staged batch ${summaryBatchIndex}: batchSize=${batch.length}, scannedAccum=${scanned}, stagedAccum=${stagedPending}`,
     );
-    await drainCpuFriendlyBatch('pending', summaryBatchIndex);
     pendingSkip += options.summaryBackfillBatchSize;
     if (batch.length < options.summaryBackfillBatchSize) break;
   }
@@ -1591,8 +1545,6 @@ export async function executeSummaryBackfillPhase(
       `Summary recovery staged batch ${summaryRecoveryBatchIndex}: batchSize=${batch.length}, scannedAccum=${scanned}, stagedAccum=${stagedPending}`,
     );
 
-    await drainCpuFriendlyBatch('recovery', summaryRecoveryBatchIndex);
-
     recoverySkip += options.summaryBackfillBatchSize;
     if (batch.length < options.summaryBackfillBatchSize) break;
   }
@@ -1622,7 +1574,6 @@ export async function executeSummaryBackfillPhase(
       'ArchiveSyncService',
       `Summary backfill retry staged batch ${retryBatchIndex}: batchSize=${batch.length}, retryScannedAccum=${retryScanned}, stagedRetryAccum=${stagedRetry}`,
     );
-    await drainCpuFriendlyBatch('retry', retryBatchIndex);
     unavailableSkip += options.summaryBackfillBatchSize;
     if (batch.length < options.summaryBackfillBatchSize) break;
   }

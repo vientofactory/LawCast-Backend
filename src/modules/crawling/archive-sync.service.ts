@@ -271,15 +271,6 @@ export class ArchiveSyncService implements OnModuleInit {
   private async runBootstrapPipeline(): Promise<void> {
     try {
       this.noticeArchiveService.beginChangeNotificationSuppression();
-      kickArchiveSyncAsyncApplyWorkers(
-        this.getExecutorDeps(),
-        this.executorOptions,
-        {
-          fullSync: true,
-          pendingRecompare: false,
-          summaryBackfill: true,
-        },
-      );
       const archiveSyncLogger = {
         log: (message: string) =>
           LoggerUtils.log(ArchiveSyncService.name, message),
