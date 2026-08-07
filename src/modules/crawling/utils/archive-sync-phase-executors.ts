@@ -114,6 +114,13 @@ export interface ArchiveSyncAsyncApplyMetrics {
   pendingRecompareProcessedTotal: number;
   pendingRecompareLastBatchProcessed: number;
   pendingRecompareLastBatchAt: string | null;
+  pendingRecompareLastStageAt: string | null;
+  pendingRecompareLastStageTrigger: string | null;
+  pendingRecompareLastStageRequested: number;
+  pendingRecompareLastStageEligible: number;
+  pendingRecompareLastStageEnqueued: number;
+  pendingRecompareLastStageQueueBefore: number;
+  pendingRecompareLastStageQueueAfter: number;
   summaryBackfillQueueLength: number;
   summaryBackfillWorkerRunning: boolean;
   summaryBackfillProcessedTotal: number;
@@ -129,6 +136,13 @@ let pendingRecompareQueueLengthSnapshot = 0;
 let pendingRecompareProcessedTotal = 0;
 let pendingRecompareLastBatchProcessed = 0;
 let pendingRecompareLastBatchAt: string | null = null;
+let pendingRecompareLastStageAt: string | null = null;
+let pendingRecompareLastStageTrigger: string | null = null;
+let pendingRecompareLastStageRequested = 0;
+let pendingRecompareLastStageEligible = 0;
+let pendingRecompareLastStageEnqueued = 0;
+let pendingRecompareLastStageQueueBefore = 0;
+let pendingRecompareLastStageQueueAfter = 0;
 let summaryBackfillQueueLengthSnapshot = 0;
 let summaryBackfillProcessedTotal = 0;
 let summaryBackfillLastBatchProcessed = 0;
@@ -262,12 +276,36 @@ export function getArchiveSyncAsyncApplyMetrics(): ArchiveSyncAsyncApplyMetrics 
     pendingRecompareProcessedTotal,
     pendingRecompareLastBatchProcessed,
     pendingRecompareLastBatchAt,
+    pendingRecompareLastStageAt,
+    pendingRecompareLastStageTrigger,
+    pendingRecompareLastStageRequested,
+    pendingRecompareLastStageEligible,
+    pendingRecompareLastStageEnqueued,
+    pendingRecompareLastStageQueueBefore,
+    pendingRecompareLastStageQueueAfter,
     summaryBackfillQueueLength: summaryBackfillQueueLengthSnapshot,
     summaryBackfillWorkerRunning: isSummaryBackfillApplyWorkerRunning,
     summaryBackfillProcessedTotal,
     summaryBackfillLastBatchProcessed,
     summaryBackfillLastBatchAt,
   };
+}
+
+function recordPendingRecompareStage(metrics: {
+  trigger: string;
+  requested: number;
+  eligible: number;
+  enqueued: number;
+  queueBefore: number;
+  queueAfter: number;
+}): void {
+  pendingRecompareLastStageAt = new Date().toISOString();
+  pendingRecompareLastStageTrigger = metrics.trigger;
+  pendingRecompareLastStageRequested = metrics.requested;
+  pendingRecompareLastStageEligible = metrics.eligible;
+  pendingRecompareLastStageEnqueued = metrics.enqueued;
+  pendingRecompareLastStageQueueBefore = metrics.queueBefore;
+  pendingRecompareLastStageQueueAfter = metrics.queueAfter;
 }
 
 export async function refreshArchiveSyncAsyncApplyMetrics(
@@ -597,13 +635,17 @@ async function runPendingRecompareApplyWorker(
           PENDING_RECOMPARE_APPLY_QUEUE_KEY,
           succeededKeys,
         );
+        const remainingQueue = await readApplyQueue<PendingRecompareApplyTask>(
+          deps,
+          PENDING_RECOMPARE_APPLY_QUEUE_KEY,
+        );
 
         pendingRecompareProcessedTotal += succeededKeys.size;
         pendingRecompareLastBatchProcessed = succeededKeys.size;
         pendingRecompareLastBatchAt = new Date().toISOString();
-        LoggerUtils.debugDev(
+        LoggerUtils.log(
           'ArchiveSyncService',
-          `Pending recompare apply batch: requested=${batch.length}, eligible=${eligibleBatch.length}, removed=${succeededKeys.size}, queueRemaining=${queue.length}`,
+          `Pending recompare apply batch done: requested=${batch.length}, eligible=${eligibleBatch.length}, removed=${succeededKeys.size}, failed=${batchKeys.size - succeededKeys.size}, queueRemaining=${remainingQueue.length}, processedTotal=${pendingRecompareProcessedTotal}`,
         );
 
         if (batchKeys.size > 0 && succeededKeys.size === 0) {
@@ -1223,7 +1265,26 @@ export async function executePendingSyncPhase(
 
     let stagedRecompareCount = 0;
     if (existingPendingItems.length > 0) {
+      const queueBefore = (
+        await readApplyQueue<PendingRecompareApplyTask>(
+          deps,
+          PENDING_RECOMPARE_APPLY_QUEUE_KEY,
+        )
+      ).length;
+      LoggerUtils.log(
+        'ArchiveSyncService',
+        `Pending sync transition: NSM list scan complete -> per-notice recompare stage (trigger=${runtime?.trigger ?? 'manual'}, requested=${existingPendingCandidates.length}, eligible=${existingPendingItems.length}, queueBefore=${queueBefore})`,
+      );
+
       if (runtime?.trigger === 'bootstrap') {
+        recordPendingRecompareStage({
+          trigger: runtime.trigger,
+          requested: existingPendingCandidates.length,
+          eligible: existingPendingItems.length,
+          enqueued: 0,
+          queueBefore,
+          queueAfter: queueBefore,
+        });
         LoggerUtils.logDev(
           'ArchiveSyncService',
           `Pending sync recompare staging skipped during bootstrap: requested=${existingPendingItems.length}`,
@@ -1233,12 +1294,39 @@ export async function executePendingSyncPhase(
           deps,
           existingPendingItems,
         );
+        const queueAfter = (
+          await readApplyQueue<PendingRecompareApplyTask>(
+            deps,
+            PENDING_RECOMPARE_APPLY_QUEUE_KEY,
+          )
+        ).length;
+        recordPendingRecompareStage({
+          trigger: runtime?.trigger ?? 'manual',
+          requested: existingPendingCandidates.length,
+          eligible: existingPendingItems.length,
+          enqueued: stagedRecompareCount,
+          queueBefore,
+          queueAfter,
+        });
         void runPendingRecompareApplyWorker(deps, options);
-        LoggerUtils.debugDev(
+        LoggerUtils.log(
           'ArchiveSyncService',
-          `Pending sync recompare staged: requested=${existingPendingItems.length}, staged=${stagedRecompareCount}, queue=${pendingRecompareQueueLengthSnapshot}`,
+          `Pending sync recompare staged: trigger=${runtime?.trigger ?? 'manual'}, requested=${existingPendingCandidates.length}, eligible=${existingPendingItems.length}, staged=${stagedRecompareCount}, queueBefore=${queueBefore}, queueAfter=${queueAfter}`,
         );
       }
+    } else {
+      recordPendingRecompareStage({
+        trigger: runtime?.trigger ?? 'manual',
+        requested: existingPendingCandidates.length,
+        eligible: 0,
+        enqueued: 0,
+        queueBefore: pendingRecompareQueueLengthSnapshot,
+        queueAfter: pendingRecompareQueueLengthSnapshot,
+      });
+      LoggerUtils.log(
+        'ArchiveSyncService',
+        `Pending sync transition: NSM list scan complete -> per-notice recompare stage skipped (trigger=${runtime?.trigger ?? 'manual'}, requested=${existingPendingCandidates.length}, eligible=0)`,
+      );
     }
     const archiveElapsedMs = Date.now() - archiveStartedAt;
     const totalElapsedMs = Date.now() - pendingPhaseStartedAt;

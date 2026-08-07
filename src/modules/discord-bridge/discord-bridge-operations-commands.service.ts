@@ -488,29 +488,19 @@ export class DiscordBridgeOperationsCommandsService {
         {
           name: 'Background Tasks',
           value: `count=${scheduler.activeBackgroundTaskCount}\n${backgroundTasks}`,
-          inline: false,
+          inline: true,
         },
         {
           name: 'Archive Sync Phases',
           value: `anyRunning=${archive.isAnyPhaseRunning}\nrunning=${runningPhases}`,
-          inline: false,
+          inline: true,
         },
         {
           name: 'Archive Sync Write-Heavy',
           value:
             `anyRunning=${archive.isWriteHeavyPhaseRunning}\n` +
             `running=${runningWriteHeavyPhases}`,
-          inline: false,
-        },
-        {
-          name: 'Recompare Queue Throughput',
-          value:
-            `queue=${archive.asyncApply.pendingRecompareQueueLength} ` +
-            `worker=${archive.asyncApply.pendingRecompareWorkerRunning}\n` +
-            `processedTotal=${archive.asyncApply.pendingRecompareProcessedTotal} ` +
-            `lastBatch=${archive.asyncApply.pendingRecompareLastBatchProcessed}\n` +
-            `lastBatchAt=${fmtTs(archive.asyncApply.pendingRecompareLastBatchAt)}`,
-          inline: false,
+          inline: true,
         },
         {
           name: 'Full Sync Apply Queue',
@@ -520,7 +510,7 @@ export class DiscordBridgeOperationsCommandsService {
             `processedTotal=${archive.asyncApply.fullSyncProcessedTotal} ` +
             `lastBatch=${archive.asyncApply.fullSyncLastBatchProcessed}\n` +
             `lastBatchAt=${fmtTs(archive.asyncApply.fullSyncLastBatchAt)}`,
-          inline: false,
+          inline: true,
         },
         {
           name: 'Summary Backfill Queue',
@@ -530,7 +520,7 @@ export class DiscordBridgeOperationsCommandsService {
             `processedTotal=${archive.asyncApply.summaryBackfillProcessedTotal} ` +
             `lastBatch=${archive.asyncApply.summaryBackfillLastBatchProcessed}\n` +
             `lastBatchAt=${fmtTs(archive.asyncApply.summaryBackfillLastBatchAt)}`,
-          inline: false,
+          inline: true,
         },
         {
           name: 'Phase States',
@@ -538,7 +528,24 @@ export class DiscordBridgeOperationsCommandsService {
             recentPhaseStates.length > 0
               ? recentPhaseStates.slice(0, 1024)
               : 'none',
-          inline: false,
+          inline: true,
+        },
+        {
+          name: 'Recompare Queue Throughput',
+          value:
+            `queue=${archive.asyncApply.pendingRecompareQueueLength} ` +
+            `worker=${archive.asyncApply.pendingRecompareWorkerRunning}\n` +
+            `processedTotal=${archive.asyncApply.pendingRecompareProcessedTotal} ` +
+            `lastBatch=${archive.asyncApply.pendingRecompareLastBatchProcessed}\n` +
+            `lastBatchAt=${fmtTs(archive.asyncApply.pendingRecompareLastBatchAt)}\n` +
+            `lastStageAt=${fmtTs(archive.asyncApply.pendingRecompareLastStageAt)} ` +
+            `trigger=${archive.asyncApply.pendingRecompareLastStageTrigger ?? 'none'}\n` +
+            `lastStage requested=${archive.asyncApply.pendingRecompareLastStageRequested} ` +
+            `eligible=${archive.asyncApply.pendingRecompareLastStageEligible} ` +
+            `staged=${archive.asyncApply.pendingRecompareLastStageEnqueued}\n` +
+            `lastStage queueBefore=${archive.asyncApply.pendingRecompareLastStageQueueBefore} ` +
+            `queueAfter=${archive.asyncApply.pendingRecompareLastStageQueueAfter}`,
+          inline: true,
         },
       )
       .setTimestamp()

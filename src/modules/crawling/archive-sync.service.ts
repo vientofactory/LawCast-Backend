@@ -139,6 +139,13 @@ export interface ArchiveSyncExecutionState {
     pendingRecompareProcessedTotal: number;
     pendingRecompareLastBatchProcessed: number;
     pendingRecompareLastBatchAt: string | null;
+    pendingRecompareLastStageAt: string | null;
+    pendingRecompareLastStageTrigger: string | null;
+    pendingRecompareLastStageRequested: number;
+    pendingRecompareLastStageEligible: number;
+    pendingRecompareLastStageEnqueued: number;
+    pendingRecompareLastStageQueueBefore: number;
+    pendingRecompareLastStageQueueAfter: number;
     summaryBackfillQueueLength: number;
     summaryBackfillWorkerRunning: boolean;
     summaryBackfillProcessedTotal: number;
