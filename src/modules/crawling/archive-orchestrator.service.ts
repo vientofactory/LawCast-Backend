@@ -51,12 +51,41 @@ interface NsmPendingArchiveOptions {
   reason?: NsmPendingArchiveReason;
 }
 
+export interface NsmDetailCrawlProgressState {
+  status: 'idle' | 'running';
+  reason: NsmPendingArchiveReason | null;
+  startedAt: string | null;
+  lastUpdatedAt: string | null;
+  lastCompletedAt: string | null;
+  totalItems: number;
+  processedItems: number;
+  succeededItems: number;
+  failedItems: number;
+  currentIndex: number;
+  currentNoticeNum: number | null;
+  currentBillNo: string | null;
+}
+
 @Injectable()
 export class ArchiveOrchestratorService implements OnApplicationShutdown {
   private readonly logger = LoggerUtils.getContextLogger(
     ArchiveOrchestratorService.name,
   );
   private readonly screenshotCoordinator: ArchiveOrchestratorScreenshotCoordinator;
+  private readonly nsmDetailCrawlProgressState: NsmDetailCrawlProgressState = {
+    status: 'idle',
+    reason: null,
+    startedAt: null,
+    lastUpdatedAt: null,
+    lastCompletedAt: null,
+    totalItems: 0,
+    processedItems: 0,
+    succeededItems: 0,
+    failedItems: 0,
+    currentIndex: 0,
+    currentNoticeNum: null,
+    currentBillNo: null,
+  };
 
   constructor(
     private readonly cacheService: CacheService,
@@ -135,6 +164,60 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
           message: `Archiving **${count}** pending bill(s) from NsmLmSts`,
         };
     }
+  }
+
+  getNsmDetailCrawlProgressState(): NsmDetailCrawlProgressState {
+    return { ...this.nsmDetailCrawlProgressState };
+  }
+
+  private startNsmDetailCrawlRun(
+    reason: NsmPendingArchiveReason,
+    totalItems: number,
+  ): void {
+    const now = new Date().toISOString();
+    this.nsmDetailCrawlProgressState.status = 'running';
+    this.nsmDetailCrawlProgressState.reason = reason;
+    this.nsmDetailCrawlProgressState.startedAt = now;
+    this.nsmDetailCrawlProgressState.lastUpdatedAt = now;
+    this.nsmDetailCrawlProgressState.lastCompletedAt = null;
+    this.nsmDetailCrawlProgressState.totalItems = totalItems;
+    this.nsmDetailCrawlProgressState.processedItems = 0;
+    this.nsmDetailCrawlProgressState.succeededItems = 0;
+    this.nsmDetailCrawlProgressState.failedItems = 0;
+    this.nsmDetailCrawlProgressState.currentIndex = 0;
+    this.nsmDetailCrawlProgressState.currentNoticeNum = null;
+    this.nsmDetailCrawlProgressState.currentBillNo = null;
+  }
+
+  private markNsmDetailCrawlCurrent(
+    index: number,
+    noticeNum: number,
+    billNo: string | null | undefined,
+  ): void {
+    this.nsmDetailCrawlProgressState.currentIndex = index;
+    this.nsmDetailCrawlProgressState.currentNoticeNum = noticeNum;
+    this.nsmDetailCrawlProgressState.currentBillNo = billNo?.trim() || null;
+    this.nsmDetailCrawlProgressState.lastUpdatedAt = new Date().toISOString();
+  }
+
+  private finishNsmDetailCrawlItem(success: boolean): void {
+    this.nsmDetailCrawlProgressState.processedItems += 1;
+    if (success) {
+      this.nsmDetailCrawlProgressState.succeededItems += 1;
+    } else {
+      this.nsmDetailCrawlProgressState.failedItems += 1;
+    }
+    this.nsmDetailCrawlProgressState.lastUpdatedAt = new Date().toISOString();
+  }
+
+  private endNsmDetailCrawlRun(): void {
+    const now = new Date().toISOString();
+    this.nsmDetailCrawlProgressState.status = 'idle';
+    this.nsmDetailCrawlProgressState.currentIndex = 0;
+    this.nsmDetailCrawlProgressState.currentNoticeNum = null;
+    this.nsmDetailCrawlProgressState.currentBillNo = null;
+    this.nsmDetailCrawlProgressState.lastUpdatedAt = now;
+    this.nsmDetailCrawlProgressState.lastCompletedAt = now;
   }
 
   /**
@@ -344,10 +427,11 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       return [];
     }
 
+    const reason = options?.reason ?? NsmArchiveReason.NEW_PENDING_BILLS;
+    this.startNsmDetailCrawlRun(reason, items.length);
     this.noticeArchiveService.beginChangeNotificationCollection();
 
     try {
-      const reason = options?.reason ?? NsmArchiveReason.NEW_PENDING_BILLS;
       const startLog = this.getNsmPendingArchiveStartLog(items.length, reason);
       logAndBridge({
         method: 'log',
@@ -369,15 +453,17 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       // items (matching the same guard used in drainScreenshotQueue).
       for (let idx = 0; idx < items.length; idx++) {
         const item = items[idx];
+        const notice = CrawlingCoreService.nsmBillToCachedNotice(item);
 
         // Inter-item delay for every item after the first.
         if (idx > 0) {
           await delayMs(APP_CONSTANTS.SCREENSHOT.NSM_INTER_CAPTURE_DELAY_MS);
         }
 
+        this.markNsmDetailCrawlCurrent(idx + 1, notice.num, item.billNo);
+
         const result = await (async (): Promise<CachedNotice | null> => {
           try {
-            const notice = CrawlingCoreService.nsmBillToCachedNotice(item);
             const archivedAt = new Date();
 
             // Single Puppeteer session: HTML capture + screenshot + detail parse.
@@ -495,6 +581,8 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
           }
         })();
 
+        this.finishNsmDetailCrawlItem(result !== null);
+
         if (result !== null) {
           allArchived.push(result);
         }
@@ -504,6 +592,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
 
       return allArchived;
     } finally {
+      this.endNsmDetailCrawlRun();
       await this.noticeArchiveService.endChangeNotificationCollection();
     }
   }

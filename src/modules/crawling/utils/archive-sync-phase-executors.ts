@@ -99,6 +99,8 @@ export interface ArchiveSyncExecutorOptions {
   pendingRecompareApplyBatchDelayMs: number;
   summaryBackfillBatchSize: number;
   summaryBackfillConcurrency: number;
+  summaryBackfillCpuFriendlyMode: boolean;
+  summaryBackfillCpuBatchDelayMs: number;
   donePageMaxRetries: number;
   donePageRetryBaseMs: number;
 }
@@ -121,18 +123,6 @@ export interface ArchiveSyncAsyncApplyMetrics {
   pendingRecompareLastStageEnqueued: number;
   pendingRecompareLastStageQueueBefore: number;
   pendingRecompareLastStageQueueAfter: number;
-  nsmDetailCrawlQueueLength: number;
-  nsmDetailCrawlWorkerRunning: boolean;
-  nsmDetailCrawlProcessedTotal: number;
-  nsmDetailCrawlLastBatchProcessed: number;
-  nsmDetailCrawlLastBatchAt: string | null;
-  nsmDetailCrawlLastStageAt: string | null;
-  nsmDetailCrawlLastStageTrigger: string | null;
-  nsmDetailCrawlLastStageRequested: number;
-  nsmDetailCrawlLastStageEligible: number;
-  nsmDetailCrawlLastStageEnqueued: number;
-  nsmDetailCrawlLastStageQueueBefore: number;
-  nsmDetailCrawlLastStageQueueAfter: number;
   summaryBackfillQueueLength: number;
   summaryBackfillWorkerRunning: boolean;
   summaryBackfillProcessedTotal: number;
@@ -295,18 +285,6 @@ export function getArchiveSyncAsyncApplyMetrics(): ArchiveSyncAsyncApplyMetrics 
     pendingRecompareLastStageEnqueued,
     pendingRecompareLastStageQueueBefore,
     pendingRecompareLastStageQueueAfter,
-    nsmDetailCrawlQueueLength: pendingRecompareQueueLengthSnapshot,
-    nsmDetailCrawlWorkerRunning: isPendingRecompareApplyWorkerRunning,
-    nsmDetailCrawlProcessedTotal: pendingRecompareProcessedTotal,
-    nsmDetailCrawlLastBatchProcessed: pendingRecompareLastBatchProcessed,
-    nsmDetailCrawlLastBatchAt: pendingRecompareLastBatchAt,
-    nsmDetailCrawlLastStageAt: pendingRecompareLastStageAt,
-    nsmDetailCrawlLastStageTrigger: pendingRecompareLastStageTrigger,
-    nsmDetailCrawlLastStageRequested: pendingRecompareLastStageRequested,
-    nsmDetailCrawlLastStageEligible: pendingRecompareLastStageEligible,
-    nsmDetailCrawlLastStageEnqueued: pendingRecompareLastStageEnqueued,
-    nsmDetailCrawlLastStageQueueBefore: pendingRecompareLastStageQueueBefore,
-    nsmDetailCrawlLastStageQueueAfter: pendingRecompareLastStageQueueAfter,
     summaryBackfillQueueLength: summaryBackfillQueueLengthSnapshot,
     summaryBackfillWorkerRunning: isSummaryBackfillApplyWorkerRunning,
     summaryBackfillProcessedTotal,
@@ -1508,10 +1486,35 @@ export async function executeSummaryBackfillPhase(
   let summaryRecoveryBatchIndex = 0;
   let retryBatchIndex = 0;
 
+  const cpuFriendlyMode = options.summaryBackfillCpuFriendlyMode;
+  const cpuFriendlyBatchDelayMs = Math.max(
+    0,
+    options.summaryBackfillCpuBatchDelayMs,
+  );
+
   LoggerUtils.debugDev(
     'ArchiveSyncService',
-    `Summary backfill config: batchSize=${options.summaryBackfillBatchSize}, concurrency=${options.summaryBackfillConcurrency}`,
+    `Summary backfill config: batchSize=${options.summaryBackfillBatchSize}, concurrency=${options.summaryBackfillConcurrency}, cpuFriendlyMode=${cpuFriendlyMode}, cpuBatchDelayMs=${cpuFriendlyBatchDelayMs}`,
   );
+
+  const drainCpuFriendlyBatch = async (
+    phase: 'pending' | 'recovery' | 'retry',
+    batchIndex: number,
+  ): Promise<void> => {
+    if (!cpuFriendlyMode) {
+      return;
+    }
+
+    await runSummaryBackfillApplyWorker(deps, options);
+
+    if (cpuFriendlyBatchDelayMs > 0) {
+      LoggerUtils.debugDev(
+        'ArchiveSyncService',
+        `Summary backfill cpu-friendly drain complete (${phase} batch ${batchIndex}) - sleeping ${cpuFriendlyBatchDelayMs}ms`,
+      );
+      await delayMs(cpuFriendlyBatchDelayMs);
+    }
+  };
 
   const archiveSvcCompat = deps.noticeArchiveService as {
     getPendingSummaryPageByOffset?: (
@@ -1556,6 +1559,7 @@ export async function executeSummaryBackfillPhase(
       'ArchiveSyncService',
       `Summary backfill staged batch ${summaryBatchIndex}: batchSize=${batch.length}, scannedAccum=${scanned}, stagedAccum=${stagedPending}`,
     );
+    await drainCpuFriendlyBatch('pending', summaryBatchIndex);
     pendingSkip += options.summaryBackfillBatchSize;
     if (batch.length < options.summaryBackfillBatchSize) break;
   }
@@ -1587,6 +1591,8 @@ export async function executeSummaryBackfillPhase(
       `Summary recovery staged batch ${summaryRecoveryBatchIndex}: batchSize=${batch.length}, scannedAccum=${scanned}, stagedAccum=${stagedPending}`,
     );
 
+    await drainCpuFriendlyBatch('recovery', summaryRecoveryBatchIndex);
+
     recoverySkip += options.summaryBackfillBatchSize;
     if (batch.length < options.summaryBackfillBatchSize) break;
   }
@@ -1616,12 +1622,17 @@ export async function executeSummaryBackfillPhase(
       'ArchiveSyncService',
       `Summary backfill retry staged batch ${retryBatchIndex}: batchSize=${batch.length}, retryScannedAccum=${retryScanned}, stagedRetryAccum=${stagedRetry}`,
     );
+    await drainCpuFriendlyBatch('retry', retryBatchIndex);
     unavailableSkip += options.summaryBackfillBatchSize;
     if (batch.length < options.summaryBackfillBatchSize) break;
   }
 
   // Start the worker only after staging is complete to avoid skip/offset races.
-  void runSummaryBackfillApplyWorker(deps, options);
+  if (cpuFriendlyMode) {
+    await runSummaryBackfillApplyWorker(deps, options);
+  } else {
+    void runSummaryBackfillApplyWorker(deps, options);
+  }
 
   LoggerUtils.log(
     'ArchiveSyncService',

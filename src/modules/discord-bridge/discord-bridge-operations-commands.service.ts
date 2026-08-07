@@ -49,6 +49,9 @@ export class DiscordBridgeOperationsCommandsService {
       case 'locks':
         await this.cmdLocks(interaction);
         return true;
+      case 'pending-sync':
+        await this.cmdPendingSync(interaction);
+        return true;
       case 'browser-lease':
         await this.cmdBrowserGuard(interaction);
         return true;
@@ -451,11 +454,10 @@ export class DiscordBridgeOperationsCommandsService {
         ? archive.runningPhases.join(', ')
         : 'none';
     const fmtTs = (value: string | null) => value ?? 'none';
-    const pendingSyncPhase = archive.phases.find(
-      (phase) => phase.name === 'pending sync',
-    );
-    const pendingSyncPhaseStatus = pendingSyncPhase?.status ?? 'unknown';
-    const pendingSyncLastRunAt = fmtTs(pendingSyncPhase?.lastRunAt ?? null);
+    const runningWriteHeavyPhases =
+      archive.runningWriteHeavyPhases.length > 0
+        ? archive.runningWriteHeavyPhases.join(', ')
+        : 'none';
 
     const embed = new EmbedBuilder()
       .setColor(0xf59e0b)
@@ -470,24 +472,75 @@ export class DiscordBridgeOperationsCommandsService {
           inline: false,
         },
         {
-          name: 'Pending Sync State',
+          name: 'Write-Heavy',
           value:
-            `pendingSync.status=${pendingSyncPhaseStatus} pendingSync.lastRunAt=${pendingSyncLastRunAt}\n` +
-            `queue=${archive.asyncApply.nsmDetailCrawlQueueLength} ` +
-            `worker=${archive.asyncApply.nsmDetailCrawlWorkerRunning}\n` +
-            `processedTotal=${archive.asyncApply.nsmDetailCrawlProcessedTotal} ` +
-            `lastBatch=${archive.asyncApply.nsmDetailCrawlLastBatchProcessed}\n` +
-            `lastBatchAt=${fmtTs(archive.asyncApply.nsmDetailCrawlLastBatchAt)}\n` +
-            `lastStageAt=${fmtTs(archive.asyncApply.nsmDetailCrawlLastStageAt)} ` +
-            `trigger=${archive.asyncApply.nsmDetailCrawlLastStageTrigger ?? 'none'}\n` +
-            `lastStage requested=${archive.asyncApply.nsmDetailCrawlLastStageRequested} ` +
-            `eligible=${archive.asyncApply.nsmDetailCrawlLastStageEligible} ` +
-            `staged=${archive.asyncApply.nsmDetailCrawlLastStageEnqueued}\n` +
-            `lastStage queueBefore=${archive.asyncApply.nsmDetailCrawlLastStageQueueBefore} ` +
-            `queueAfter=${archive.asyncApply.nsmDetailCrawlLastStageQueueAfter}`,
+            `archive.writeHeavy=${archive.isWriteHeavyPhaseRunning}\n` +
+            `running=${runningWriteHeavyPhases}\n` +
+            `fullSyncApply.queue=${archive.asyncApply.fullSyncQueueLength} worker=${archive.asyncApply.fullSyncWorkerRunning}\n` +
+            `pendingRecompare.queue=${archive.asyncApply.pendingRecompareQueueLength} worker=${archive.asyncApply.pendingRecompareWorkerRunning}\n` +
+            `summaryBackfill.queue=${archive.asyncApply.summaryBackfillQueueLength} worker=${archive.asyncApply.summaryBackfillWorkerRunning}`,
+          inline: false,
+        },
+        {
+          name: 'Recent Activity',
+          value:
+            `fullSync.lastBatch=${archive.asyncApply.fullSyncLastBatchProcessed} at ${fmtTs(archive.asyncApply.fullSyncLastBatchAt)}\n` +
+            `pendingRecompare.lastBatch=${archive.asyncApply.pendingRecompareLastBatchProcessed} at ${fmtTs(archive.asyncApply.pendingRecompareLastBatchAt)}\n` +
+            `summaryBackfill.lastBatch=${archive.asyncApply.summaryBackfillLastBatchProcessed} at ${fmtTs(archive.asyncApply.summaryBackfillLastBatchAt)}`,
           inline: false,
         },
       )
+      .setTimestamp()
+      .setFooter({ text: 'LawCast Debug Bridge' });
+
+    await interaction.reply({ embeds: [embed] }).catch(() => {});
+  }
+
+  private async cmdPendingSync(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const { ArchiveSyncService } =
+      await import('../crawling/archive-sync.service');
+    const { ArchiveOrchestratorService } =
+      await import('../crawling/archive-orchestrator.service');
+
+    const archiveSyncService = this.moduleRef.get(ArchiveSyncService, {
+      strict: false,
+    });
+    const archiveOrchestratorService = this.moduleRef.get(
+      ArchiveOrchestratorService,
+      {
+        strict: false,
+      },
+    );
+
+    const archive = archiveSyncService.getExecutionState();
+    const detailCrawl =
+      archiveOrchestratorService.getNsmDetailCrawlProgressState();
+    const fmtTs = (value: string | null) => value ?? 'none';
+    const pendingSyncPhase = archive.phases.find(
+      (phase) => phase.name === 'pending sync',
+    );
+    const pendingSyncPhaseStatus = pendingSyncPhase?.status ?? 'unknown';
+    const pendingSyncLastRunAt = fmtTs(pendingSyncPhase?.lastRunAt ?? null);
+
+    const embed = new EmbedBuilder()
+      .setColor(0x3b82f6)
+      .setTitle('🧾 Pending Sync State')
+      .addFields({
+        name: 'NSM Detail Crawl',
+        value:
+          `pendingSync.status=${pendingSyncPhaseStatus} pendingSync.lastRunAt=${pendingSyncLastRunAt}\n` +
+          `detailCrawl.status=${detailCrawl.status} reason=${detailCrawl.reason ?? 'none'}\n` +
+          `progress=${detailCrawl.processedItems}/${detailCrawl.totalItems} ` +
+          `success=${detailCrawl.succeededItems} failed=${detailCrawl.failedItems}\n` +
+          `current=${detailCrawl.currentIndex}/${detailCrawl.totalItems} ` +
+          `notice=${detailCrawl.currentNoticeNum ?? 'none'} billNo=${detailCrawl.currentBillNo ?? 'none'}\n` +
+          `startedAt=${fmtTs(detailCrawl.startedAt)} ` +
+          `updatedAt=${fmtTs(detailCrawl.lastUpdatedAt)}\n` +
+          `completedAt=${fmtTs(detailCrawl.lastCompletedAt)}`,
+        inline: false,
+      })
       .setTimestamp()
       .setFooter({ text: 'LawCast Debug Bridge' });
 

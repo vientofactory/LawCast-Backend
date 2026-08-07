@@ -41,13 +41,19 @@ const {
   DONE_CRAWLER_CONCURRENCY,
   INTEGRITY_BATCH_SIZE,
   SUMMARY_BACKFILL_BATCH_SIZE,
+  SUMMARY_BACKFILL_CPU_BATCH_SIZE,
   FULL_SYNC_APPLY_BATCH_SIZE,
   FULL_SYNC_APPLY_BATCH_DELAY_MS,
   PENDING_RECOMPARE_APPLY_BATCH_SIZE,
   PENDING_RECOMPARE_APPLY_BATCH_DELAY_MS,
+  SUMMARY_BACKFILL_CPU_FRIENDLY_MODE,
+  SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS,
+  SUMMARY_BACKFILL_CPU_CONCURRENCY,
 } = APP_CONSTANTS.ARCHIVE_SYNC;
 
-const SUMMARY_BACKFILL_CONCURRENCY = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
+const SUMMARY_BACKFILL_CONCURRENCY = SUMMARY_BACKFILL_CPU_FRIENDLY_MODE
+  ? Math.max(1, SUMMARY_BACKFILL_CPU_CONCURRENCY)
+  : APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
 
 /**
  * Application-level per-page retry budget for the isDone done-page crawler.
@@ -146,18 +152,6 @@ export interface ArchiveSyncExecutionState {
     pendingRecompareLastStageEnqueued: number;
     pendingRecompareLastStageQueueBefore: number;
     pendingRecompareLastStageQueueAfter: number;
-    nsmDetailCrawlQueueLength: number;
-    nsmDetailCrawlWorkerRunning: boolean;
-    nsmDetailCrawlProcessedTotal: number;
-    nsmDetailCrawlLastBatchProcessed: number;
-    nsmDetailCrawlLastBatchAt: string | null;
-    nsmDetailCrawlLastStageAt: string | null;
-    nsmDetailCrawlLastStageTrigger: string | null;
-    nsmDetailCrawlLastStageRequested: number;
-    nsmDetailCrawlLastStageEligible: number;
-    nsmDetailCrawlLastStageEnqueued: number;
-    nsmDetailCrawlLastStageQueueBefore: number;
-    nsmDetailCrawlLastStageQueueAfter: number;
     summaryBackfillQueueLength: number;
     summaryBackfillWorkerRunning: boolean;
     summaryBackfillProcessedTotal: number;
@@ -219,8 +213,15 @@ export class ArchiveSyncService implements OnModuleInit {
     fullSyncApplyBatchDelayMs: FULL_SYNC_APPLY_BATCH_DELAY_MS,
     pendingRecompareApplyBatchSize: PENDING_RECOMPARE_APPLY_BATCH_SIZE,
     pendingRecompareApplyBatchDelayMs: PENDING_RECOMPARE_APPLY_BATCH_DELAY_MS,
-    summaryBackfillBatchSize: SUMMARY_BACKFILL_BATCH_SIZE,
+    summaryBackfillBatchSize: SUMMARY_BACKFILL_CPU_FRIENDLY_MODE
+      ? Math.max(1, SUMMARY_BACKFILL_CPU_BATCH_SIZE)
+      : SUMMARY_BACKFILL_BATCH_SIZE,
     summaryBackfillConcurrency: SUMMARY_BACKFILL_CONCURRENCY,
+    summaryBackfillCpuFriendlyMode: SUMMARY_BACKFILL_CPU_FRIENDLY_MODE,
+    summaryBackfillCpuBatchDelayMs: Math.max(
+      0,
+      SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS,
+    ),
     donePageMaxRetries: DONE_PAGE_MAX_RETRIES,
     donePageRetryBaseMs: DONE_PAGE_RETRY_BASE_MS,
   };

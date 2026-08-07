@@ -294,6 +294,29 @@ export const APP_CONSTANTS = {
     INTEGRITY_BATCH_SIZE: 200,
     /** Archive rows fetched per summary-backfill / retry batch. */
     SUMMARY_BACKFILL_BATCH_SIZE: 20,
+    /** Summary-backfill batch size cap used only in CPU-friendly mode. */
+    SUMMARY_BACKFILL_CPU_BATCH_SIZE: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_SIZE,
+      5,
+    ),
+    /**
+     * When true, summary-backfill avoids building a large queue and instead
+     * drains staged items incrementally to reduce Ollama CPU overload/timeouts.
+     */
+    SUMMARY_BACKFILL_CPU_FRIENDLY_MODE: parseBooleanWithDefault(
+      process.env.OLLAMA_CPU_MODE,
+      false,
+    ),
+    /** Inter-batch pause (ms) used only in SUMMARY_BACKFILL_CPU_FRIENDLY_MODE. */
+    SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS,
+      250,
+    ),
+    /** Summary generation concurrency cap used in CPU-friendly mode. */
+    SUMMARY_BACKFILL_CPU_CONCURRENCY: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_CONCURRENCY,
+      1,
+    ),
     /** Max notices per full-sync background apply batch. */
     FULL_SYNC_APPLY_BATCH_SIZE: parseIntWithDefault(
       process.env.ARCHIVE_SYNC_FULL_SYNC_APPLY_BATCH_SIZE,
