@@ -42,6 +42,22 @@ function normalizeString(input: string): string {
   return input.replace(/\s+/g, ' ').trim();
 }
 
+function normalizeMultilineString(input: string): string {
+  return input
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t\f\v]+/g, ' ').trim())
+    .join('\n')
+    .trim();
+}
+
+function normalizeTrackedString(fieldPath: string, input: string): string {
+  if (fieldPath === 'proposalReason') {
+    return normalizeMultilineString(input);
+  }
+  return normalizeString(input);
+}
+
 function normalizeValue(value: unknown): unknown {
   if (value === undefined) return null;
   if (value === null) return null;
@@ -128,13 +144,13 @@ function getPathValue(source: Record<string, unknown>, path: string): unknown {
   return current ?? null;
 }
 
-function toComparableString(value: unknown): string | null {
+function toComparableString(value: unknown, fieldPath: string): string | null {
   if (value === null || value === undefined) {
     return null;
   }
 
   if (typeof value === 'string') {
-    return normalizeString(value);
+    return normalizeTrackedString(fieldPath, value);
   }
 
   return canonicalStringify(value);
@@ -162,13 +178,11 @@ export function computeDiff(
   const details: DiffDetail[] = [];
 
   for (const fieldPath of trackedFields) {
-    const beforeRaw = normalizedBefore
-      ? getPathValue(normalizedBefore, fieldPath)
-      : null;
-    const afterRaw = getPathValue(normalizedAfter, fieldPath);
+    const beforeRaw = before ? getPathValue(before, fieldPath) : null;
+    const afterRaw = getPathValue(after, fieldPath);
 
-    const beforeValue = toComparableString(beforeRaw);
-    const afterValue = toComparableString(afterRaw);
+    const beforeValue = toComparableString(beforeRaw, fieldPath);
+    const afterValue = toComparableString(afterRaw, fieldPath);
 
     if (beforeValue === afterValue) {
       continue;

@@ -22,6 +22,9 @@ import {
 import {
   executeFullSyncPhase,
   executePendingSyncPhase,
+  getArchiveSyncAsyncApplyMetrics,
+  refreshArchiveSyncAsyncApplyMetrics,
+  kickArchiveSyncAsyncApplyWorkers,
   executeSummaryBackfillPhase,
   executeChainIntegrityAuditPhase,
   reconcileIsDonePhase,
@@ -32,12 +35,25 @@ import { delayMs } from '../../utils/async-delay.utils';
 
 const {
   CRAWLER_PAGE_UNIT,
+  CRAWLER_CONCURRENCY,
   CRAWLER_DELAY_MS,
+  NSM_CRAWLER_CONCURRENCY,
+  DONE_CRAWLER_CONCURRENCY,
   INTEGRITY_BATCH_SIZE,
   SUMMARY_BACKFILL_BATCH_SIZE,
+  SUMMARY_BACKFILL_CPU_BATCH_SIZE,
+  FULL_SYNC_APPLY_BATCH_SIZE,
+  FULL_SYNC_APPLY_BATCH_DELAY_MS,
+  PENDING_RECOMPARE_APPLY_BATCH_SIZE,
+  PENDING_RECOMPARE_APPLY_BATCH_DELAY_MS,
+  SUMMARY_BACKFILL_CPU_FRIENDLY_MODE,
+  SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS,
+  SUMMARY_BACKFILL_CPU_CONCURRENCY,
 } = APP_CONSTANTS.ARCHIVE_SYNC;
 
-const SUMMARY_BACKFILL_CONCURRENCY = APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
+const SUMMARY_BACKFILL_CONCURRENCY = SUMMARY_BACKFILL_CPU_FRIENDLY_MODE
+  ? Math.max(1, SUMMARY_BACKFILL_CPU_CONCURRENCY)
+  : APP_CONSTANTS.CRAWLING.SUMMARY_CONCURRENCY;
 
 /**
  * Application-level per-page retry budget for the isDone done-page crawler.
@@ -113,7 +129,35 @@ export type LegacyGenesisSeedStatus = PhaseStatus<LegacyGenesisSeedResult>;
 
 export interface ArchiveSyncExecutionState {
   isAnyPhaseRunning: boolean;
+  isWriteHeavyPhaseRunning: boolean;
+  isAsyncApplyRunning: boolean;
   runningPhases: string[];
+  runningWriteHeavyPhases: string[];
+  runningAsyncApplyWorkers: string[];
+  asyncApply: {
+    fullSyncQueueLength: number;
+    fullSyncWorkerRunning: boolean;
+    fullSyncProcessedTotal: number;
+    fullSyncLastBatchProcessed: number;
+    fullSyncLastBatchAt: string | null;
+    pendingRecompareQueueLength: number;
+    pendingRecompareWorkerRunning: boolean;
+    pendingRecompareProcessedTotal: number;
+    pendingRecompareLastBatchProcessed: number;
+    pendingRecompareLastBatchAt: string | null;
+    pendingRecompareLastStageAt: string | null;
+    pendingRecompareLastStageTrigger: string | null;
+    pendingRecompareLastStageRequested: number;
+    pendingRecompareLastStageEligible: number;
+    pendingRecompareLastStageEnqueued: number;
+    pendingRecompareLastStageQueueBefore: number;
+    pendingRecompareLastStageQueueAfter: number;
+    summaryBackfillQueueLength: number;
+    summaryBackfillWorkerRunning: boolean;
+    summaryBackfillProcessedTotal: number;
+    summaryBackfillLastBatchProcessed: number;
+    summaryBackfillLastBatchAt: string | null;
+  };
   phases: Array<{
     name: string;
     status: SyncPhaseStatus;
@@ -161,9 +205,23 @@ export class ArchiveSyncService implements OnModuleInit {
 
   private readonly executorOptions: ArchiveSyncExecutorOptions = {
     crawlerPageUnit: CRAWLER_PAGE_UNIT,
+    crawlerConcurrency: CRAWLER_CONCURRENCY,
+    nsmCrawlerConcurrency: NSM_CRAWLER_CONCURRENCY,
+    doneCrawlerConcurrency: DONE_CRAWLER_CONCURRENCY,
     crawlerDelayMs: CRAWLER_DELAY_MS,
-    summaryBackfillBatchSize: SUMMARY_BACKFILL_BATCH_SIZE,
+    fullSyncApplyBatchSize: FULL_SYNC_APPLY_BATCH_SIZE,
+    fullSyncApplyBatchDelayMs: FULL_SYNC_APPLY_BATCH_DELAY_MS,
+    pendingRecompareApplyBatchSize: PENDING_RECOMPARE_APPLY_BATCH_SIZE,
+    pendingRecompareApplyBatchDelayMs: PENDING_RECOMPARE_APPLY_BATCH_DELAY_MS,
+    summaryBackfillBatchSize: SUMMARY_BACKFILL_CPU_FRIENDLY_MODE
+      ? Math.max(1, SUMMARY_BACKFILL_CPU_BATCH_SIZE)
+      : SUMMARY_BACKFILL_BATCH_SIZE,
     summaryBackfillConcurrency: SUMMARY_BACKFILL_CONCURRENCY,
+    summaryBackfillCpuFriendlyMode: SUMMARY_BACKFILL_CPU_FRIENDLY_MODE,
+    summaryBackfillCpuBatchDelayMs: Math.max(
+      0,
+      SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS,
+    ),
     donePageMaxRetries: DONE_PAGE_MAX_RETRIES,
     donePageRetryBaseMs: DONE_PAGE_RETRY_BASE_MS,
   };
@@ -229,6 +287,13 @@ export class ArchiveSyncService implements OnModuleInit {
       await this.safeRun('pending sync', () =>
         this.runPendingSync('bootstrap'),
       );
+      await this.safeRun('async apply drain', () =>
+        this.waitForAsyncApplyIdle('pending sync', undefined, undefined, {
+          fullSync: false,
+          pendingRecompare: true,
+          summaryBackfill: false,
+        }),
+      );
 
       // Timestamp for legacy genesis seed boundary
       const bootstrapBoundaryAt = new Date();
@@ -237,9 +302,23 @@ export class ArchiveSyncService implements OnModuleInit {
       );
 
       await this.safeRun('full sync', () => this.runFullSync('bootstrap'));
+      await this.safeRun('async apply drain', () =>
+        this.waitForAsyncApplyIdle('full sync', undefined, undefined, {
+          fullSync: true,
+          pendingRecompare: false,
+          summaryBackfill: false,
+        }),
+      );
 
       await this.safeRun('summary backfill', () =>
         this.runSummaryBackfill('bootstrap'),
+      );
+      await this.safeRun('async apply drain', () =>
+        this.waitForAsyncApplyIdle('summary backfill', undefined, undefined, {
+          fullSync: false,
+          pendingRecompare: false,
+          summaryBackfill: true,
+        }),
       );
 
       await this.safeRun('integrity rescan', () =>
@@ -294,6 +373,15 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   /**
+   * Returns true when any write-heavy phase is currently executing.
+   * Used by cron skip guards to avoid write-write contention while allowing
+   * non-conflicting read/audit work to continue.
+   */
+  isWriteHeavyPhaseRunning(): boolean {
+    return this.phaseRunner.isAnyPhaseRunning(this.getWriteHeavyPhaseEntries());
+  }
+
+  /**
    * Waits until all archive-sync phases are idle.
    * Throws when timeout is exceeded.
    */
@@ -313,6 +401,109 @@ export class ArchiveSyncService implements OnModuleInit {
     }
   }
 
+  private getRunningAsyncApplyWorkers(
+    asyncApply: ArchiveSyncExecutionState['asyncApply'],
+  ): string[] {
+    const workers: string[] = [];
+
+    if (asyncApply.fullSyncWorkerRunning) {
+      workers.push('full-sync-apply');
+    }
+    if (asyncApply.pendingRecompareWorkerRunning) {
+      workers.push('pending-recompare-apply');
+    }
+    if (asyncApply.summaryBackfillWorkerRunning) {
+      workers.push('summary-backfill-apply');
+    }
+
+    return workers;
+  }
+
+  async waitForAsyncApplyIdle(
+    gateName: string,
+    timeoutMs = 180000,
+    pollMs = 500,
+    workerSelection: {
+      fullSync?: boolean;
+      pendingRecompare?: boolean;
+      summaryBackfill?: boolean;
+    } = {
+      fullSync: true,
+      pendingRecompare: false,
+      summaryBackfill: true,
+    },
+  ): Promise<void> {
+    const startedAt = Date.now();
+    const {
+      fullSync = true,
+      pendingRecompare = false,
+      summaryBackfill = true,
+    } = workerSelection;
+
+    kickArchiveSyncAsyncApplyWorkers(
+      this.getExecutorDeps(),
+      this.executorOptions,
+      {
+        fullSync,
+        pendingRecompare,
+        summaryBackfill,
+      },
+    );
+
+    while (true) {
+      const asyncApply = await refreshArchiveSyncAsyncApplyMetrics(
+        this.getExecutorDeps(),
+      );
+      const runningWorkers = this.getRunningAsyncApplyWorkers(asyncApply);
+      const selectedRunningWorkers = runningWorkers.filter((worker) => {
+        if (worker === 'full-sync-apply') return fullSync;
+        if (worker === 'pending-recompare-apply') return pendingRecompare;
+        if (worker === 'summary-backfill-apply') return summaryBackfill;
+        return false;
+      });
+
+      const selectedQueuePending =
+        (fullSync && asyncApply.fullSyncQueueLength > 0) ||
+        (pendingRecompare && asyncApply.pendingRecompareQueueLength > 0) ||
+        (summaryBackfill && asyncApply.summaryBackfillQueueLength > 0);
+
+      if (!selectedQueuePending && selectedRunningWorkers.length === 0) {
+        return;
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        const selectedQueueState = [
+          fullSync ? `full=${asyncApply.fullSyncQueueLength}` : null,
+          pendingRecompare
+            ? `pendingRecompare=${asyncApply.pendingRecompareQueueLength}`
+            : null,
+          summaryBackfill
+            ? `summaryBackfill=${asyncApply.summaryBackfillQueueLength}`
+            : null,
+        ]
+          .filter((value): value is string => value !== null)
+          .join(', ');
+        throw new Error(
+          `async apply workers still running after ${timeoutMs}ms at ${gateName} (workers=${selectedRunningWorkers.join(', ') || 'none'}, queues=${selectedQueueState})`,
+        );
+      }
+
+      if (selectedQueuePending && selectedRunningWorkers.length === 0) {
+        kickArchiveSyncAsyncApplyWorkers(
+          this.getExecutorDeps(),
+          this.executorOptions,
+          {
+            fullSync,
+            pendingRecompare,
+            summaryBackfill,
+          },
+        );
+      }
+
+      await delayMs(pollMs);
+    }
+  }
+
   /**
    * Returns a full execution snapshot for lock/phase debugging.
    */
@@ -321,10 +512,26 @@ export class ArchiveSyncService implements OnModuleInit {
     const runningPhases = entries
       .filter(({ tracker }) => tracker.isRunning)
       .map(({ name }) => name);
+    const writeHeavyEntries = this.getWriteHeavyPhaseEntries();
+    const runningWriteHeavyPhases = writeHeavyEntries
+      .filter(({ tracker }) => tracker.isRunning)
+      .map(({ name }) => name);
+    const asyncApply = getArchiveSyncAsyncApplyMetrics();
+    const runningAsyncApplyWorkers =
+      this.getRunningAsyncApplyWorkers(asyncApply);
+    const runningWriteHeavyActivities = [
+      ...runningWriteHeavyPhases,
+      ...runningAsyncApplyWorkers,
+    ];
 
     return {
       isAnyPhaseRunning: runningPhases.length > 0,
+      isWriteHeavyPhaseRunning: runningWriteHeavyActivities.length > 0,
+      isAsyncApplyRunning: runningAsyncApplyWorkers.length > 0,
       runningPhases,
+      runningWriteHeavyPhases: runningWriteHeavyActivities,
+      runningAsyncApplyWorkers,
+      asyncApply,
       phases: entries.map(({ name, tracker }) => ({
         name,
         status: tracker.status,
@@ -350,6 +557,7 @@ export class ArchiveSyncService implements OnModuleInit {
     task: () => Promise<T>,
     formatResult?: (result: T) => string,
     crossPhaseGuard = false,
+    guardEntries?: PhaseEntry[],
   ): Promise<T | null> {
     return this.phaseRunner.runPhase({
       phaseName,
@@ -358,7 +566,7 @@ export class ArchiveSyncService implements OnModuleInit {
       task,
       formatResult,
       crossPhaseGuard,
-      phaseEntries: this.getPhaseEntries(),
+      phaseEntries: guardEntries ?? this.getPhaseEntries(),
       serviceName: ArchiveSyncService.name,
       discordLogger: (level, serviceName, message) => {
         logAndBridge({
@@ -390,6 +598,21 @@ export class ArchiveSyncService implements OnModuleInit {
     ];
   }
 
+  /**
+   * Write-heavy phases that should not overlap with other write-heavy phases.
+   * `chain integrity audit` is intentionally excluded because it is read/audit oriented.
+   */
+  private getWriteHeavyPhaseEntries(): PhaseEntry[] {
+    return [
+      { name: 'full sync', tracker: this.fullSync },
+      { name: 'isDone sync', tracker: this.isDoneSync },
+      { name: 'integrity check', tracker: this.integrityCheck },
+      { name: 'pending sync', tracker: this.pendingSync },
+      { name: 'legacy genesis seed', tracker: this.legacyGenesisSeed },
+      // { name: 'summary backfill', tracker: this.summaryBackfill },
+    ];
+  }
+
   async runLegacyGenesisSeed(
     trigger: string,
     boundaryAt = new Date(),
@@ -402,6 +625,7 @@ export class ArchiveSyncService implements OnModuleInit {
       (r) =>
         `boundaryAt=${r.boundaryAt} scanned=${r.scanned} seeded=${r.seeded} skipped=${r.skipped}`,
       /* crossPhaseGuard */ true,
+      this.getWriteHeavyPhaseEntries(),
     );
   }
 
@@ -418,6 +642,7 @@ export class ArchiveSyncService implements OnModuleInit {
       (r) =>
         `pages=${r.totalPagesScanned} scanned=${r.totalNoticesScanned} archived=${r.newlyArchivedCount}`,
       /* crossPhaseGuard */ true,
+      this.getWriteHeavyPhaseEntries(),
     );
   }
 
@@ -445,9 +670,10 @@ export class ArchiveSyncService implements OnModuleInit {
       'Pending sync',
       this.pendingSync,
       trigger,
-      () => this.executePendingSync(),
+      () => this.executePendingSync(trigger),
       (r) => `scanned=${r.totalScanned} archived=${r.newlyArchivedCount}`,
       /* crossPhaseGuard */ true,
+      this.getWriteHeavyPhaseEntries(),
     );
   }
 
@@ -455,10 +681,15 @@ export class ArchiveSyncService implements OnModuleInit {
     return this.toStatus(this.pendingSync);
   }
 
-  private async executePendingSync(): Promise<PendingSyncResult> {
+  private async executePendingSync(
+    trigger: string,
+  ): Promise<PendingSyncResult> {
     return executePendingSyncPhase(
       this.getExecutorDeps(),
       this.executorOptions,
+      {
+        trigger,
+      },
     );
   }
 
@@ -474,6 +705,7 @@ export class ArchiveSyncService implements OnModuleInit {
       () => this.reconcileIsDone(),
       (r) => `fetched=${r.fetchedDoneCount} marked=${r.markedDoneCount}`,
       /* crossPhaseGuard */ true,
+      this.getWriteHeavyPhaseEntries(),
     );
   }
 
@@ -506,6 +738,8 @@ export class ArchiveSyncService implements OnModuleInit {
       () => this.noticeArchiveService.runIntegrityScan(INTEGRITY_BATCH_SIZE),
       (r) =>
         `scanned=${r.scanned} passed=${r.passed} failed=${r.failed} skipped=${r.skipped}`,
+      /* crossPhaseGuard */ true,
+      this.getWriteHeavyPhaseEntries(),
     );
   }
 
@@ -525,6 +759,7 @@ export class ArchiveSyncService implements OnModuleInit {
       (r) =>
         `scanned=${r.scanned} passed=${r.passed} failed=${r.failed} skipped=${r.skipped}`,
       /* crossPhaseGuard */ true,
+      this.getWriteHeavyPhaseEntries(),
     );
 
     if (result !== null && result.failed > 0) {
@@ -583,6 +818,7 @@ export class ArchiveSyncService implements OnModuleInit {
       (r) =>
         `scanned=${r.scanned} generated=${r.generated} skipped=${r.skipped} failed=${r.failed} retryScanned=${r.retryScanned} recovered=${r.recovered} stillFailed=${r.stillFailed}`,
       /* crossPhaseGuard */ true,
+      this.getWriteHeavyPhaseEntries(),
     );
   }
 

@@ -190,6 +190,7 @@ export class ChangeTrackingService {
   private isFlushingQueuedNotifications = false;
   private notificationCollectionDepth = 0;
   private notificationSuppressionDepth = 0;
+  private sqliteAppendQueue: Promise<void> = Promise.resolve();
 
   constructor(
     @InjectRepository(NoticeChangeEvent)
@@ -326,6 +327,18 @@ export class ChangeTrackingService {
   async appendChangeEventWithDetails(
     input: AppendChangeEventWithDetailsInput,
   ): Promise<NoticeChangeEvent> {
+    if (this.isSqliteDriver()) {
+      return this.runSqliteAppendSerialized(() =>
+        this.appendChangeEventWithDetailsCore(input),
+      );
+    }
+
+    return this.appendChangeEventWithDetailsCore(input);
+  }
+
+  private async appendChangeEventWithDetailsCore(
+    input: AppendChangeEventWithDetailsInput,
+  ): Promise<NoticeChangeEvent> {
     const details = input.details ?? [];
 
     const duplicated = await this.findLatestDuplicateEvent(input, details);
@@ -415,6 +428,26 @@ export class ChangeTrackingService {
           }
         }
 
+        if (this.isSqliteTransactionStateConflictError(error)) {
+          if (attempt < maxRetries) {
+            const sqliteStateConflictMessage = `SQLite transaction state conflict for notice=${input.noticeNum}, retrying (${attempt}/${maxRetries})`;
+            logAndBridge({
+              logger: this.logger,
+              method: 'warn',
+              message: sqliteStateConflictMessage,
+              context: ChangeTrackingService.name,
+              discordBridge: this.discordBridge,
+              metadata: {
+                noticeNum: input.noticeNum,
+                attempt,
+                maxRetries,
+              },
+            });
+            await this.delayBeforeRetry(attempt);
+            continue;
+          }
+        }
+
         throw error;
       }
     }
@@ -422,6 +455,40 @@ export class ChangeTrackingService {
     throw new Error(
       `Failed to append change event after ${maxRetries} attempts for notice=${input.noticeNum}`,
     );
+  }
+
+  private async runSqliteAppendSerialized<T>(
+    task: () => Promise<T>,
+  ): Promise<T> {
+    let release: (() => void) | null = null;
+    const waitForTurn = this.sqliteAppendQueue;
+    const nextTurn = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    this.sqliteAppendQueue = waitForTurn.then(
+      () => nextTurn,
+      () => nextTurn,
+    );
+
+    await waitForTurn;
+    try {
+      return await task();
+    } finally {
+      release?.();
+    }
+  }
+
+  private isSqliteDriver(): boolean {
+    const manager = this.changeEventRepository.manager as {
+      connection?: { options?: { type?: unknown } };
+      dataSource?: { options?: { type?: unknown } };
+    };
+    const rawType =
+      manager.connection?.options?.type ?? manager.dataSource?.options?.type;
+    const type = String(rawType ?? '').toLowerCase();
+
+    return type === 'sqlite' || type === 'better-sqlite3' || type === 'sqljs';
   }
 
   private async findLatestDuplicateEvent(
@@ -580,6 +647,43 @@ export class ChangeTrackingService {
       (driverCode === 'sqlite_error' &&
         (driverMessage.includes('begin transaction') ||
           driverMessage.includes(targetMessage)))
+    );
+  }
+
+  private isSqliteTransactionStateConflictError(error: unknown): boolean {
+    const message = String(
+      (error as { message?: string } | undefined)?.message ?? '',
+    ).toLowerCase();
+    const code = String(
+      (error as { code?: string } | undefined)?.code ?? '',
+    ).toLowerCase();
+    const driverError = (
+      error as { driverError?: { message?: string; code?: string } } | undefined
+    )?.driverError;
+    const driverMessage = String(driverError?.message ?? '').toLowerCase();
+    const driverCode = String(driverError?.code ?? '').toLowerCase();
+
+    const stateTargets = [
+      'cannot commit - no transaction is active',
+      'no such savepoint',
+      'release savepoint',
+      'cannot rollback - no transaction is active',
+    ];
+
+    const hasStateConflictMessage = stateTargets.some(
+      (target) => message.includes(target) || driverMessage.includes(target),
+    );
+
+    return (
+      hasStateConflictMessage ||
+      (code === 'sqlite_error' &&
+        (message.includes('commit') ||
+          message.includes('savepoint') ||
+          message.includes('rollback'))) ||
+      (driverCode === 'sqlite_error' &&
+        (driverMessage.includes('commit') ||
+          driverMessage.includes('savepoint') ||
+          driverMessage.includes('rollback')))
     );
   }
 
@@ -957,8 +1061,7 @@ export class ChangeTrackingService {
       .andWhere(
         "detail.after_value IS NOT NULL AND TRIM(detail.after_value) != ''",
       )
-      .orderBy('event.detected_at', 'DESC')
-      .addOrderBy('event.event_height', 'DESC')
+      .orderBy('event.event_height', 'DESC')
       .addOrderBy('detail.id', 'DESC')
       .limit(1)
       .getRawOne<{ afterValue: string | null }>();
@@ -977,14 +1080,84 @@ export class ChangeTrackingService {
       .select('detail.after_value', 'afterValue')
       .where('event.notice_num = :noticeNum', { noticeNum })
       .andWhere('detail.field_path = :fieldPath', { fieldPath })
-      .orderBy('event.detected_at', 'DESC')
-      .addOrderBy('event.event_height', 'DESC')
+      .orderBy('event.event_height', 'DESC')
       .addOrderBy('detail.id', 'DESC')
       .limit(1)
       .getRawOne<{ afterValue: string | null }>();
 
     const value = row?.afterValue?.trim();
     return value ? value : null;
+  }
+
+  async getLatestFieldValues(
+    noticeNums: number[],
+    fieldPath: string,
+  ): Promise<Map<number, string | null>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+    const result = new Map<number, string | null>();
+
+    for (const noticeNum of uniqueNums) {
+      result.set(noticeNum, null);
+    }
+
+    if (uniqueNums.length === 0) {
+      return result;
+    }
+
+    try {
+      const placeholders = uniqueNums.map(() => '?').join(', ');
+      const sql = `
+        SELECT ranked.noticeNum AS noticeNum, ranked.afterValue AS afterValue
+        FROM (
+          SELECT
+            event.notice_num AS noticeNum,
+            detail.after_value AS afterValue,
+            ROW_NUMBER() OVER (
+              PARTITION BY event.notice_num
+              ORDER BY event.event_height DESC, detail.id DESC
+            ) AS rn
+          FROM notice_change_details detail
+          INNER JOIN notice_change_events event
+            ON event.id = detail.event_id
+          WHERE detail.field_path = ?
+            AND event.notice_num IN (${placeholders})
+        ) ranked
+        WHERE ranked.rn = 1
+      `;
+
+      const rows = await this.changeDetailRepository.manager.query(sql, [
+        fieldPath,
+        ...uniqueNums,
+      ]);
+
+      for (const row of rows as Array<{
+        noticeNum: unknown;
+        afterValue: unknown;
+      }>) {
+        const rawNoticeNum = row.noticeNum;
+        const noticeNum =
+          typeof rawNoticeNum === 'number'
+            ? rawNoticeNum
+            : Number.parseInt(String(rawNoticeNum), 10);
+        if (!Number.isFinite(noticeNum)) {
+          continue;
+        }
+
+        const value =
+          typeof row.afterValue === 'string' ? row.afterValue.trim() : '';
+        result.set(noticeNum, value.length > 0 ? value : null);
+      }
+
+      return result;
+    } catch {
+      for (const noticeNum of uniqueNums) {
+        result.set(
+          noticeNum,
+          await this.getLatestFieldValue(noticeNum, fieldPath),
+        );
+      }
+      return result;
+    }
   }
 
   async getRecentChanges(

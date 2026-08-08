@@ -48,6 +48,8 @@ import {
   getSummaryStateByNoticeNums,
   runIntegrityScan,
   updateSummaryStateByNoticeNum,
+  updateSummaryStatesByNoticeNums,
+  type SummaryStateBulkUpdateInput,
 } from './utils/notice-archive-maintenance-support';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 import {
@@ -301,8 +303,94 @@ export class NoticeArchiveService {
   private normalizeProposalReasonText(
     value: string | null | undefined,
   ): string | null {
-    const normalized = value?.replace(/\s+/g, ' ').trim();
+    const normalized = value
+      ?.replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((line) => line.replace(/[ \t\f\v]+/g, ' ').trim())
+      .join('\n')
+      .trim();
     return normalized && normalized.length > 0 ? normalized : null;
+  }
+
+  private canonicalizeTrackedSubject(
+    value: string | null | undefined,
+  ): string | null {
+    const normalized = value?.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return null;
+    }
+
+    // Suppress PAL/NSM presentation variance only (e.g., "(홍길동의원 등 15인)").
+    const withoutSponsorSuffix = normalized.replace(
+      /\s*\([^()]*의원\s+등\s+\d+인\)\s*$/u,
+      '',
+    );
+    const trimmed = withoutSponsorSuffix.trim();
+    return trimmed.length > 0 ? trimmed : normalized;
+  }
+
+  private canonicalizeTrackedProposalDate(
+    value: string | null | undefined,
+  ): string | null {
+    const normalized = value?.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const dotted = normalized.match(/^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.$/);
+    if (dotted) {
+      const [, year, month, day] = dotted;
+      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+
+    const dashed = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (dashed) {
+      const [, year, month, day] = dashed;
+      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+
+    return normalized;
+  }
+
+  private canonicalizeTrackedProposalSession(
+    value: string | null | undefined,
+  ): string | null {
+    const normalized = value?.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const sessionMatch = normalized.match(/제\s*(\d+)\s*회/u);
+    if (sessionMatch) {
+      return `제${sessionMatch[1]}회`;
+    }
+
+    return normalized;
+  }
+
+  private canonicalizeOscillationProneTrackedFields(
+    snapshot: Record<string, unknown> | null,
+  ): Record<string, unknown> | null {
+    if (!snapshot) {
+      return snapshot;
+    }
+
+    const normalized = { ...snapshot };
+    normalized.subject = this.canonicalizeTrackedSubject(
+      typeof normalized.subject === 'string' ? normalized.subject : null,
+    );
+    normalized.proposalDate = this.canonicalizeTrackedProposalDate(
+      typeof normalized.proposalDate === 'string'
+        ? normalized.proposalDate
+        : null,
+    );
+    normalized.proposalSession = this.canonicalizeTrackedProposalSession(
+      typeof normalized.proposalSession === 'string'
+        ? normalized.proposalSession
+        : null,
+    );
+
+    return normalized;
   }
 
   private preferIncomingTrackedValue<T>(
@@ -311,6 +399,7 @@ export class NoticeArchiveService {
     options?: {
       preserveExistingWhenIncomingNull?: boolean;
       normalizeText?: boolean;
+      normalizeTextValue?: (value: string) => string | null;
     },
   ): T | null {
     const preserve = options?.preserveExistingWhenIncomingNull ?? false;
@@ -322,8 +411,12 @@ export class NoticeArchiveService {
           return (value ?? null) as T | null;
         }
 
-        const normalized = value.replace(/\s+/g, ' ').trim();
-        return (normalized.length > 0 ? normalized : null) as T | null;
+        const normalized = options?.normalizeTextValue
+          ? options.normalizeTextValue(value)
+          : value.replace(/\s+/g, ' ').trim();
+        return (
+          normalized && normalized.length > 0 ? normalized : null
+        ) as T | null;
       };
 
       const normalizedIncoming = normalize(incoming);
@@ -557,7 +650,9 @@ export class NoticeArchiveService {
     };
 
     const fallbackProposalReason =
-      baselineText('proposalReason') ?? beforeRow?.proposalReason ?? null;
+      this.normalizeProposalReasonText(baselineText('proposalReason')) ??
+      this.normalizeProposalReasonText(beforeRow?.proposalReason) ??
+      null;
     const fallbackBillNumber =
       this.normalizeStableId(baselineText('billNumber')) ??
       this.normalizeStableId(beforeRow?.contentBillNumber);
@@ -582,6 +677,7 @@ export class NoticeArchiveService {
       {
         preserveExistingWhenIncomingNull: existing,
         normalizeText: true,
+        normalizeTextValue: (value) => this.normalizeProposalReasonText(value),
       },
     );
 
@@ -1053,6 +1149,37 @@ export class NoticeArchiveService {
   }
 
   /**
+   * Returns one page of `not_requested` rows for offset-based staging scans.
+   * Unlike getPendingSummaryPage, this never falls back to not_supported.
+   */
+  async getPendingSummaryPageByOffset(
+    skip: number,
+    take: number,
+  ): Promise<CachedNotice[]> {
+    return this.collectSummaryBackfillCandidates(
+      AI_SUMMARY_STATUS.NOT_REQUESTED,
+      skip,
+      take,
+    );
+  }
+
+  /**
+   * Returns one page of NSM recovery candidates (`not_supported` + contentId IS NULL)
+   * for offset-based staging scans.
+   */
+  async getNotSupportedSummaryRecoveryPage(
+    skip: number,
+    take: number,
+  ): Promise<CachedNotice[]> {
+    return this.collectSummaryBackfillCandidates(
+      AI_SUMMARY_STATUS.NOT_SUPPORTED,
+      skip,
+      take,
+      (row) => !row.contentId,
+    );
+  }
+
+  /**
    * Returns one page of archive rows whose `aiSummaryStatus` is `'unavailable'`,
    * ordered by `noticeNum` ascending.
    *
@@ -1212,32 +1339,107 @@ export class NoticeArchiveService {
   private async resolveSummaryBackfillCandidates(
     rows: CachedNotice[],
   ): Promise<CachedNotice[]> {
-    const resolved: Array<CachedNotice | null> = await Promise.all(
-      rows.map(async (row): Promise<CachedNotice | null> => {
-        const snapshotProposalReason = row.proposalReason?.trim() || null;
+    const passthroughRows: CachedNotice[] = [];
+    const needChainReasonRows: CachedNotice[] = [];
 
-        if (row.contentId || snapshotProposalReason) {
-          return {
-            ...row,
-            proposalReason: snapshotProposalReason,
-          };
-        }
-
-        const latestProposalReason =
-          await this.getLatestProposalReasonForNotice(row.num);
-
-        if (!latestProposalReason) {
-          return null;
-        }
-
-        return {
+    for (const row of rows) {
+      const snapshotProposalReason = row.proposalReason?.trim() || null;
+      if (row.contentId || snapshotProposalReason) {
+        passthroughRows.push({
           ...row,
-          proposalReason: latestProposalReason,
-        };
+          proposalReason: snapshotProposalReason,
+        });
+        continue;
+      }
+
+      needChainReasonRows.push(row);
+    }
+
+    if (needChainReasonRows.length === 0) {
+      return passthroughRows;
+    }
+
+    const latestProposalReasons = await this.getLatestProposalReasonsForNotices(
+      needChainReasonRows.map((row) => row.num),
+    );
+
+    const resolvedFromChain: CachedNotice[] = [];
+    const unresolvedRows: CachedNotice[] = [];
+    for (const row of needChainReasonRows) {
+      const latestProposalReason = latestProposalReasons.get(row.num) ?? null;
+      if (!latestProposalReason) {
+        // Keep unresolved NSM rows in the candidate set so the backfill worker
+        // can transition them to UNAVAILABLE instead of starving staging.
+        unresolvedRows.push({
+          ...row,
+          proposalReason: null,
+        });
+        continue;
+      }
+
+      resolvedFromChain.push({
+        ...row,
+        proposalReason: latestProposalReason,
+      });
+    }
+
+    return [...passthroughRows, ...resolvedFromChain, ...unresolvedRows];
+  }
+
+  private async getLatestProposalReasonsForNotices(
+    noticeNums: number[],
+  ): Promise<Map<number, string | null>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+    const result = new Map<number, string | null>();
+
+    for (const noticeNum of uniqueNums) {
+      result.set(noticeNum, null);
+    }
+
+    if (uniqueNums.length === 0 || !this.changeTrackingService) {
+      return result;
+    }
+
+    const svcCompat = this.changeTrackingService as {
+      getLatestFieldValues?: (
+        nums: number[],
+        fieldPath: string,
+      ) => Promise<Map<number, string | null>>;
+      getLatestFieldValue: (
+        num: number,
+        fieldPath: string,
+      ) => Promise<string | null>;
+    };
+
+    if (svcCompat.getLatestFieldValues) {
+      try {
+        return await svcCompat.getLatestFieldValues(
+          uniqueNums,
+          'proposalReason',
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Failed to load batched proposalReason values from change chain: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    await Promise.all(
+      uniqueNums.map(async (noticeNum) => {
+        try {
+          result.set(
+            noticeNum,
+            await svcCompat.getLatestFieldValue(noticeNum, 'proposalReason'),
+          );
+        } catch (error) {
+          this.logger.warn(
+            `Failed to load latest proposalReason from change chain for notice ${noticeNum}: ${(error as Error).message}`,
+          );
+        }
       }),
     );
 
-    return resolved.filter((row): row is CachedNotice => row !== null);
+    return result;
   }
 
   private applyArchiveSearchFilters(
@@ -1277,6 +1479,8 @@ export class NoticeArchiveService {
       return;
     }
 
+    const ftsQuery = params.fullText ? this.buildFtsMatchQuery(search) : null;
+
     qb.andWhere(
       new Brackets((query) => {
         query
@@ -1288,12 +1492,40 @@ export class NoticeArchiveService {
           });
 
         if (params.fullText) {
-          query.orWhere('archive.proposalReason LIKE :search', {
-            search: `%${search}%`,
-          });
+          if (ftsQuery) {
+            query.orWhere(
+              'archive.rowid IN (SELECT rowid FROM notice_archives_fts WHERE notice_archives_fts MATCH :ftsQuery)',
+              { ftsQuery },
+            );
+          } else {
+            // Fallback for symbols-only queries that cannot form an FTS MATCH string.
+            query.orWhere('archive.proposalReason LIKE :search', {
+              search: `%${search}%`,
+            });
+          }
         }
       }),
     );
+  }
+
+  private buildFtsMatchQuery(search: string): string | null {
+    const terms = search
+      .trim()
+      .split(/\s+/)
+      .map((term) =>
+        term
+          .replace(/["'`]/g, ' ')
+          .replace(/[^\p{L}\p{N}_-]/gu, ' ')
+          .trim(),
+      )
+      .filter((term) => term.length > 0)
+      .map((term) => `"${term}"*`);
+
+    if (terms.length === 0) {
+      return null;
+    }
+
+    return terms.join(' AND ');
   }
 
   private async queryArchiveNoticeNumsByIsDoneFilter(params: {
@@ -1305,25 +1537,30 @@ export class NoticeArchiveService {
     sortOrder: 'asc' | 'desc';
     skip: number;
     take: number;
+    knownTotal?: number;
   }): Promise<{ total: number; noticeNums: number[] }> {
     if (!this.summaryStateRepository) {
       return { total: 0, noticeNums: [] };
     }
 
-    const baseQb = this.archiveRepository
-      .createQueryBuilder('archive')
-      .innerJoin(
-        NoticeArchiveSnapshotState,
-        'summary',
-        'summary.notice_num = archive.noticeNum',
-      )
-      .where('summary.is_done = :isDone', {
+    const baseQb = this.archiveRepository.createQueryBuilder('archive').where(
+      `EXISTS (
+          SELECT 1
+          FROM notice_archive_snapshot_states summary
+          WHERE summary.notice_num = archive.noticeNum
+            AND summary.is_done = :isDone
+        )`,
+      {
         isDone: params.isDone ? 1 : 0,
-      });
+      },
+    );
 
     this.applyArchiveSearchFilters(baseQb, params);
 
-    const total = await baseQb.clone().getCount();
+    const total =
+      params.knownTotal !== undefined
+        ? params.knownTotal
+        : await baseQb.clone().getCount();
     if (params.take <= 0) {
       return { total, noticeNums: [] };
     }
@@ -1332,10 +1569,6 @@ export class NoticeArchiveService {
       .clone()
       .select('archive.noticeNum', 'noticeNum')
       .orderBy('archive.noticeNum', params.sortOrder === 'asc' ? 'ASC' : 'DESC')
-      .addOrderBy(
-        'archive.archive_started_at',
-        params.sortOrder === 'asc' ? 'ASC' : 'DESC',
-      )
       .offset(params.skip)
       .limit(params.take)
       .getRawMany<{ noticeNum: number }>();
@@ -1344,6 +1577,26 @@ export class NoticeArchiveService {
       total,
       noticeNums: rows.map((row) => Number(row.noticeNum)),
     };
+  }
+
+  private createArchiveNoticeItemQueryBuilder(
+    alias = 'archive',
+  ): SelectQueryBuilder<NoticeArchive> {
+    return this.archiveRepository
+      .createQueryBuilder(alias)
+      .select([
+        `${alias}.noticeNum`,
+        `${alias}.subject`,
+        `${alias}.proposerCategory`,
+        `${alias}.committee`,
+        `${alias}.assemblyLink`,
+        `${alias}.contentId`,
+        `${alias}.attachmentPdfFile`,
+        `${alias}.attachmentHwpFile`,
+        `${alias}.lifecycleStatus`,
+        `${alias}.sourceDeletedAt`,
+        `${alias}.archiveStartedAt`,
+      ]);
   }
 
   private async getTrackedRowsByNoticeNums(
@@ -1391,36 +1644,46 @@ export class NoticeArchiveService {
       return;
     }
 
-    await Promise.all(
-      rows.map(async (row) => {
-        const [latestLifecycleStatus, latestSourceDeletedAt] =
-          await Promise.all([
-            this.changeTrackingService.getLatestFieldAfterValue(
-              row.noticeNum,
-              'lifecycleStatus',
-            ),
-            this.changeTrackingService.getLatestFieldAfterValue(
-              row.noticeNum,
-              'sourceDeletedAt',
-            ),
-          ]);
+    const noticeNums = rows
+      .map((row) => row.noticeNum)
+      .filter((num) => Number.isInteger(num) && num > 0);
 
-        if (
-          latestLifecycleStatus === 'active' ||
-          latestLifecycleStatus === 'source_deleted' ||
-          latestLifecycleStatus === 'renumbered'
-        ) {
-          row.lifecycleStatus = latestLifecycleStatus;
-        }
+    if (noticeNums.length === 0) {
+      return;
+    }
 
-        if (latestSourceDeletedAt) {
-          const parsed = new Date(latestSourceDeletedAt);
-          if (!Number.isNaN(parsed.getTime())) {
-            row.sourceDeletedAt = parsed;
-          }
+    const [lifecycleByNoticeNum, sourceDeletedAtByNoticeNum] =
+      await Promise.all([
+        this.changeTrackingService.getLatestFieldValues(
+          noticeNums,
+          'lifecycleStatus',
+        ),
+        this.changeTrackingService.getLatestFieldValues(
+          noticeNums,
+          'sourceDeletedAt',
+        ),
+      ]);
+
+    for (const row of rows) {
+      const latestLifecycleStatus =
+        lifecycleByNoticeNum.get(row.noticeNum) ?? null;
+      if (
+        latestLifecycleStatus === 'active' ||
+        latestLifecycleStatus === 'source_deleted' ||
+        latestLifecycleStatus === 'renumbered'
+      ) {
+        row.lifecycleStatus = latestLifecycleStatus;
+      }
+
+      const latestSourceDeletedAt =
+        sourceDeletedAtByNoticeNum.get(row.noticeNum) ?? null;
+      if (latestSourceDeletedAt) {
+        const parsed = new Date(latestSourceDeletedAt);
+        if (!Number.isNaN(parsed.getTime())) {
+          row.sourceDeletedAt = parsed;
         }
-      }),
-    );
+      }
+    }
   }
 
   async getArchiveNotices(query: ArchiveListQuery): Promise<{
@@ -1435,12 +1698,6 @@ export class NoticeArchiveService {
     const limit = Math.min(50, Math.max(1, query.limit || 10));
     const skip = (page - 1) * limit;
     const search = (query.search || '').trim();
-    const where = buildArchiveWhereConditions({
-      search,
-      startDate: query.startDate,
-      endDate: query.endDate,
-      fullText: query.fullText,
-    });
     const sortOrder = normalizeSortOrder(query.sortOrder);
 
     let rows: NoticeArchive[] = [];
@@ -1472,18 +1729,23 @@ export class NoticeArchiveService {
         );
       }
     } else {
-      const result = await this.archiveRepository.findAndCount({
-        where,
-        select: NOTICE_ITEM_SELECT,
-        order: {
-          noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',
-          archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
-        },
-        skip,
-        take: limit,
+      const baseQb = this.createArchiveNoticeItemQueryBuilder('archive');
+      this.applyArchiveSearchFilters(baseQb, {
+        search,
+        startDate: query.startDate,
+        endDate: query.endDate,
+        fullText: query.fullText,
       });
-      rows = result[0];
-      total = result[1];
+
+      const [fetchedRows, fetchedTotal] = await baseQb
+        .clone()
+        .orderBy('archive.noticeNum', sortOrder === 'asc' ? 'ASC' : 'DESC')
+        .offset(skip)
+        .limit(limit)
+        .getManyAndCount();
+
+      rows = fetchedRows;
+      total = fetchedTotal;
     }
 
     if (this.summaryStateRepository && rows.length > 0) {
@@ -1598,34 +1860,48 @@ export class NoticeArchiveService {
     const skip = Math.max(0, query.skip || 0);
     const take = Math.max(0, query.take || 0);
     const search = (query.search || '').trim();
-    const where = buildArchiveWhereConditions({
+    const sortOrder = normalizeSortOrder(query.sortOrder);
+    const nonDoneBaseQb = this.createArchiveNoticeItemQueryBuilder('archive');
+    this.applyArchiveSearchFilters(nonDoneBaseQb, {
       search,
       startDate: query.startDate,
       endDate: query.endDate,
       fullText: query.fullText,
     });
-    const sortOrder = normalizeSortOrder(query.sortOrder);
 
     let total: number;
+    let rows: NoticeArchive[] = [];
 
     // Use knownTotal when provided to avoid a redundant COUNT query.
     if (query.knownTotal !== undefined) {
       total = query.knownTotal;
     } else if (query.isDone !== undefined && this.summaryStateRepository) {
-      total = (
-        await this.queryArchiveNoticeNumsByIsDoneFilter({
-          isDone: query.isDone,
-          search,
-          startDate: query.startDate,
-          endDate: query.endDate,
-          fullText: query.fullText,
-          sortOrder,
-          skip: 0,
-          take: 0,
-        })
-      ).total;
+      const paged = await this.queryArchiveNoticeNumsByIsDoneFilter({
+        isDone: query.isDone,
+        search,
+        startDate: query.startDate,
+        endDate: query.endDate,
+        fullText: query.fullText,
+        sortOrder,
+        skip,
+        take,
+      });
+      total = paged.total;
+
+      if (paged.noticeNums.length > 0) {
+        const fetched = await this.archiveRepository.find({
+          where: { noticeNum: In(paged.noticeNums) },
+          select: NOTICE_ITEM_SELECT,
+        });
+        const rank = new Map(
+          paged.noticeNums.map((num, idx) => [num, idx] as const),
+        );
+        rows = fetched.sort(
+          (a, b) => (rank.get(a.noticeNum) ?? 0) - (rank.get(b.noticeNum) ?? 0),
+        );
+      }
     } else {
-      total = await this.archiveRepository.count({ where });
+      total = await nonDoneBaseQb.clone().getCount();
     }
 
     if (take === 0) {
@@ -1636,8 +1912,11 @@ export class NoticeArchiveService {
       };
     }
 
-    let rows: NoticeArchive[] = [];
-    if (query.isDone !== undefined && this.summaryStateRepository) {
+    if (
+      rows.length === 0 &&
+      query.isDone !== undefined &&
+      this.summaryStateRepository
+    ) {
       const paged = await this.queryArchiveNoticeNumsByIsDoneFilter({
         isDone: query.isDone,
         search,
@@ -1647,6 +1926,7 @@ export class NoticeArchiveService {
         sortOrder,
         skip,
         take,
+        knownTotal: total,
       });
 
       if (paged.noticeNums.length > 0) {
@@ -1662,16 +1942,12 @@ export class NoticeArchiveService {
         );
       }
     } else {
-      rows = await this.archiveRepository.find({
-        where,
-        select: NOTICE_ITEM_SELECT,
-        order: {
-          noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',
-          archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
-        },
-        skip,
-        take,
-      });
+      rows = await nonDoneBaseQb
+        .clone()
+        .orderBy('archive.noticeNum', sortOrder === 'asc' ? 'ASC' : 'DESC')
+        .offset(skip)
+        .limit(take)
+        .getMany();
     }
 
     if (this.summaryStateRepository && rows.length > 0) {
@@ -2301,6 +2577,7 @@ export class NoticeArchiveService {
       {
         preserveExistingWhenIncomingNull: true,
         normalizeText: true,
+        normalizeTextValue: (value) => this.normalizeProposalReasonText(value),
       },
     );
 
@@ -2516,10 +2793,15 @@ export class NoticeArchiveService {
       const afterSnapshot = this.buildTrackedSnapshot(afterRow);
       if (!afterSnapshot) return;
 
+      const canonicalBeforeSnapshot =
+        this.canonicalizeOscillationProneTrackedFields(beforeSnapshot);
+      const canonicalAfterSnapshot =
+        this.canonicalizeOscillationProneTrackedFields(afterSnapshot);
+
       const built = this.changeTrackingService.buildDiffEvent({
         noticeNum,
-        beforeSnapshot,
-        afterSnapshot,
+        beforeSnapshot: canonicalBeforeSnapshot,
+        afterSnapshot: canonicalAfterSnapshot ?? afterSnapshot,
         source,
       });
 
@@ -2919,7 +3201,35 @@ export class NoticeArchiveService {
       where: { noticeNum: In(uniqueNums), contentId: IsNull() },
       select: { noticeNum: true },
     });
-    return new Set(rows.map((row) => row.noticeNum));
+
+    const nullContentIdNums = new Set(rows.map((row) => row.noticeNum));
+
+    if (nullContentIdNums.size === 0 || !this.changeTrackingService) {
+      return nullContentIdNums;
+    }
+
+    try {
+      const latestContentIds =
+        await this.changeTrackingService.getLatestFieldValues(
+          Array.from(nullContentIdNums),
+          'contentId',
+        );
+
+      for (const noticeNum of Array.from(nullContentIdNums)) {
+        const latestContentId = latestContentIds.get(noticeNum)?.trim();
+        if (latestContentId) {
+          // Diffchain already knows this notice is PAL-enriched.
+          // Treat it as non-NSM for recompare/upgrade routing.
+          nullContentIdNums.delete(noticeNum);
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to resolve latest contentId from change chain for NSM eligibility filter: ${(error as Error).message}`,
+      );
+    }
+
+    return nullContentIdNums;
   }
 
   async getSourceDeletedNoticeNumSet(
@@ -3068,5 +3378,11 @@ export class NoticeArchiveService {
       summary,
       status,
     );
+  }
+
+  async updateSummaryStatesByNoticeNums(
+    updates: SummaryStateBulkUpdateInput[],
+  ): Promise<Set<number>> {
+    return updateSummaryStatesByNoticeNums(this.getMaintenanceDeps(), updates);
   }
 }

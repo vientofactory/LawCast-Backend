@@ -44,7 +44,11 @@ const SLASH_COMMAND_DEFINITIONS = [
   { name: 'webhooks', description: 'Webhook statistics' },
   {
     name: 'locks',
-    description: 'Lock/phase execution state and cron layout for debugging',
+    description: 'Lock/phase execution state for debugging',
+  },
+  {
+    name: 'pending-sync',
+    description: 'Pending sync NSM detail-crawl progress and phase state',
   },
   {
     name: 'browser-lease',

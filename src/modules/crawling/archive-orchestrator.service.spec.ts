@@ -777,6 +777,82 @@ describe('ArchiveOrchestratorService', () => {
   });
 
   describe('archiveNsmBillItems', () => {
+    it('exposes real NSM detail crawl progress while archiveNsmBillItems is running', async () => {
+      let resolveCapture:
+        | ((value: {
+            html: string;
+            screenshot: null;
+            detail: {
+              proposalReason: string;
+              proposalInfo: string;
+              billNo: string;
+              proposer: string;
+              proposalDate: string;
+              session: string;
+            };
+            responseUrl: string;
+            statusCode: number;
+          }) => void)
+        | null = null;
+
+      (
+        crawlingCoreService.captureNsmDetailFull as jest.Mock
+      ).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveCapture = resolve;
+          }),
+      );
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+
+      const runPromise = service.archiveNsmBillItems([mockNsmBillItem]);
+
+      expect(service.getNsmDetailCrawlProgressState()).toMatchObject({
+        status: 'running',
+        reason: NsmArchiveReason.NEW_PENDING_BILLS,
+        totalItems: 1,
+        processedItems: 0,
+        succeededItems: 0,
+        failedItems: 0,
+        currentIndex: 1,
+        currentBillNo: '2219776',
+      });
+
+      resolveCapture?.({
+        html: '<html>nsm detail</html>',
+        screenshot: null,
+        detail: {
+          proposalReason: '사유 본문',
+          proposalInfo: '테스트 NSM 법률안',
+          billNo: '2219776',
+          proposer: '홍길동의원',
+          proposalDate: '2026-07-01',
+          session: '제418회',
+        },
+        responseUrl:
+          'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219776/detailRP',
+        statusCode: 200,
+      });
+
+      await runPromise;
+
+      expect(service.getNsmDetailCrawlProgressState()).toMatchObject({
+        status: 'idle',
+        reason: NsmArchiveReason.NEW_PENDING_BILLS,
+        totalItems: 1,
+        processedItems: 1,
+        succeededItems: 1,
+        failedItems: 0,
+        currentIndex: 0,
+        currentBillNo: null,
+      });
+      expect(service.getNsmDetailCrawlProgressState().lastCompletedAt).not.toBe(
+        null,
+      );
+    });
+
     it('logs default message for new pending bills', async () => {
       (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
         {

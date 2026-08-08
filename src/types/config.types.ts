@@ -11,9 +11,13 @@ declare global {
       CRON_TIMEZONE?: string;
       FRONTEND_URL?: string;
       OLLAMA_ENABLED?: string;
+      OLLAMA_CPU_MODE?: string;
       OLLAMA_API_URL?: string;
       OLLAMA_MODEL?: string;
       OLLAMA_TIMEOUT?: string;
+      ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_SIZE?: string;
+      ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS?: string;
+      ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_CONCURRENCY?: string;
       FILE_MIRROR_ENABLED?: string;
       FILE_MIRROR_CRON?: string;
       FILE_MIRROR_API_BASE_URL?: string;

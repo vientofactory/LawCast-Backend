@@ -1,4 +1,5 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -53,8 +54,8 @@ export class FileKiwiClientService {
   private readonly apiBase: string;
 
   constructor(
+    private readonly moduleRef: ModuleRef,
     private readonly configService: ConfigService,
-    @Optional() private readonly discordBridge?: DiscordBridgeService,
   ) {
     this.apiBase =
       this.configService.get<string>('fileMirror.apiBaseUrl') ||
@@ -111,7 +112,7 @@ export class FileKiwiClientService {
       message: `file.kiwi v2 upload complete (folderId=${created.folderId}, fileId=${fileMeta.fileId})`,
       logger: this.logger,
       context: FileKiwiClientService.name,
-      discordBridge: this.discordBridge,
+      discordBridge: this.resolveDiscordBridge(),
       bridgeMessage: `file.kiwi upload complete: folder=${created.folderId}, file=${fileMeta.fileId}`,
       metadata: {
         folderId: created.folderId,
@@ -235,7 +236,7 @@ export class FileKiwiClientService {
         message: `file.kiwi folder creation failed: ${details}`,
         logger: this.logger,
         context: FileKiwiClientService.name,
-        discordBridge: this.discordBridge,
+        discordBridge: this.resolveDiscordBridge(),
         bridgeLevel: BridgeLogLevel.ERROR,
         bridgeMessage: `file.kiwi folder creation failed`,
         metadata: { details },
@@ -327,5 +328,15 @@ export class FileKiwiClientService {
       order.push(index);
     }
     return order;
+  }
+
+  private resolveDiscordBridge(): DiscordBridgeService | undefined {
+    try {
+      return this.moduleRef.get(DiscordBridgeService, {
+        strict: false,
+      });
+    } catch {
+      return undefined;
+    }
   }
 }

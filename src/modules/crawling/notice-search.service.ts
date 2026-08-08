@@ -12,6 +12,7 @@ export interface SearchNoticesQuery {
   page: number;
   limit: number;
   includeDone?: boolean;
+  fullText?: boolean;
 }
 
 export interface SearchNoticesItem {
@@ -53,7 +54,7 @@ export class NoticeSearchService {
   ) {}
 
   async searchNotices(query: SearchNoticesQuery): Promise<SearchNoticesResult> {
-    const key = `${query.keyword.trim()}|${query.page}|${query.limit}|${query.includeDone ?? true}`;
+    const key = `${query.keyword.trim()}|${query.page}|${query.limit}|${query.includeDone ?? true}|${query.fullText ?? false}`;
 
     const existing = this.inFlight.get(key);
     if (existing) {
@@ -71,21 +72,32 @@ export class NoticeSearchService {
   private async executeSearch(
     query: SearchNoticesQuery,
   ): Promise<SearchNoticesResult> {
-    const { page, limit, includeDone = true } = query;
+    const { page, limit, includeDone = true, fullText = false } = query;
     const keyword = query.keyword.trim();
+    const safeLimit = Math.min(
+      APP_CONSTANTS.API.PAGINATION.MAX_LIMIT,
+      Math.max(APP_CONSTANTS.API.PAGINATION.MIN_LIMIT, limit),
+    );
+    const dbFetchLimit = Math.min(
+      150,
+      Math.max(safeLimit * Math.max(page, 1), 30),
+    );
+    const shouldQueryCrawler = page === 1;
     const crawlerQuery: ISearchQuery = { billName: keyword, pageUnit: 100 };
 
     const [dbResult, crawlerActiveResult, crawlerDoneResult] =
       await Promise.allSettled([
         this.noticeArchiveService.getArchiveNotices({
           page: 1,
-          limit: 200,
+          limit: dbFetchLimit,
           search: keyword,
           sortOrder: 'desc',
-          fullText: true,
+          fullText,
         }),
-        this.crawlingCoreService.search(crawlerQuery),
-        includeDone
+        shouldQueryCrawler
+          ? this.crawlingCoreService.search(crawlerQuery)
+          : Promise.resolve({ items: [] }),
+        shouldQueryCrawler && includeDone
           ? this.crawlingCoreService.searchDone(crawlerQuery)
           : Promise.resolve({
               items: [],
@@ -187,10 +199,6 @@ export class NoticeSearchService {
     const crawlerOnlyCount = items.filter((i) => !i.isArchived).length;
     const total = dbActualTotal + crawlerOnlyCount;
 
-    const safeLimit = Math.min(
-      APP_CONSTANTS.API.PAGINATION.MAX_LIMIT,
-      Math.max(APP_CONSTANTS.API.PAGINATION.MIN_LIMIT, limit),
-    );
     const startIdx = (page - 1) * safeLimit;
     const pageItems = items.slice(startIdx, startIdx + safeLimit);
 

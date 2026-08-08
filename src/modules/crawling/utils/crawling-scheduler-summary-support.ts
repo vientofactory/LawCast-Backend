@@ -1,4 +1,4 @@
-import { type CachedNotice } from '../../../types/cache.types';
+import { AISummaryStatus, type CachedNotice } from '../../../types/cache.types';
 import { CacheService } from '../../cache/cache.service';
 import {
   NoticeArchiveService,
@@ -24,6 +24,73 @@ interface SummarySupportOptions {
 
 export class CrawlingSchedulerSummarySupport {
   constructor(private readonly options: SummarySupportOptions) {}
+
+  private async persistSummaryStateBatch(
+    notices: CachedNotice[],
+  ): Promise<{ persistedNoticeNums: Set<number>; failedCount: number }> {
+    if (notices.length === 0) {
+      return { persistedNoticeNums: new Set<number>(), failedCount: 0 };
+    }
+
+    const svcCompat = this.options.noticeArchiveService as {
+      updateSummaryStatesByNoticeNums?: (
+        updates: Array<{
+          noticeNum: number;
+          summary: string | null;
+          status: AISummaryStatus;
+        }>,
+      ) => Promise<Set<number>>;
+      updateSummaryStateByNoticeNum: (
+        noticeNum: number,
+        summary: string | null,
+        status: AISummaryStatus,
+      ) => Promise<void>;
+    };
+
+    if (svcCompat.updateSummaryStatesByNoticeNums) {
+      try {
+        const persistedNoticeNums =
+          await svcCompat.updateSummaryStatesByNoticeNums(
+            notices.map((notice) => ({
+              noticeNum: notice.num,
+              summary: notice.aiSummary ?? null,
+              status: notice.aiSummaryStatus ?? 'not_requested',
+            })),
+          );
+
+        return {
+          persistedNoticeNums,
+          failedCount: notices.length - persistedNoticeNums.size,
+        };
+      } catch (error) {
+        this.options.logger.warn(
+          `Bulk summary state persistence failed: ${(error as Error).message}; retrying single-row writes`,
+        );
+      }
+    }
+
+    const persistResults = await Promise.allSettled(
+      notices.map((notice) =>
+        svcCompat.updateSummaryStateByNoticeNum(
+          notice.num,
+          notice.aiSummary ?? null,
+          notice.aiSummaryStatus ?? 'not_requested',
+        ),
+      ),
+    );
+
+    const persistedNoticeNums = new Set<number>();
+    for (let index = 0; index < persistResults.length; index += 1) {
+      if (persistResults[index].status === 'fulfilled') {
+        persistedNoticeNums.add(notices[index].num);
+      }
+    }
+
+    return {
+      persistedNoticeNums,
+      failedCount: notices.length - persistedNoticeNums.size,
+    };
+  }
 
   buildNoticeMap(notices: CachedNotice[]): Map<number, CachedNotice> {
     return new Map(notices.map((notice) => [notice.num, notice]));
@@ -77,27 +144,9 @@ export class CrawlingSchedulerSummarySupport {
       return;
     }
 
-    const persistResults = await Promise.allSettled(
-      changedRetriedNotices.map(async (notice) => {
-        await this.options.noticeArchiveService.updateSummaryStateByNoticeNum(
-          notice.num,
-          notice.aiSummary ?? null,
-          notice.aiSummaryStatus ?? 'not_requested',
-        );
-      }),
+    const { failedCount: persistFailed } = await this.persistSummaryStateBatch(
+      changedRetriedNotices,
     );
-
-    const persistedNoticeNums = new Set<number>();
-    for (let index = 0; index < persistResults.length; index += 1) {
-      const result = persistResults[index];
-      if (result.status === 'fulfilled') {
-        persistedNoticeNums.add(changedRetriedNotices[index].num);
-      }
-    }
-
-    const persistFailed = persistResults.filter(
-      (result) => result.status === 'rejected',
-    ).length;
     if (persistFailed > 0) {
       this.options.logger.warn(
         `Failed to persist ${persistFailed}/${changedRetriedNotices.length} retried summary states`,
@@ -218,27 +267,8 @@ export class CrawlingSchedulerSummarySupport {
       return mergedNotices;
     }
 
-    const persistResults = await Promise.allSettled(
-      changedRetriedNotices.map(async (notice) => {
-        await this.options.noticeArchiveService.updateSummaryStateByNoticeNum(
-          notice.num,
-          notice.aiSummary ?? null,
-          notice.aiSummaryStatus ?? 'not_requested',
-        );
-      }),
-    );
-
-    const persistedNoticeNums = new Set<number>();
-    for (let index = 0; index < persistResults.length; index += 1) {
-      const result = persistResults[index];
-      if (result.status === 'fulfilled') {
-        persistedNoticeNums.add(changedRetriedNotices[index].num);
-      }
-    }
-
-    const persistFailed = persistResults.filter(
-      (result) => result.status === 'rejected',
-    ).length;
+    const { persistedNoticeNums, failedCount: persistFailed } =
+      await this.persistSummaryStateBatch(changedRetriedNotices);
     if (persistFailed > 0) {
       this.options.logger.warn(
         `Failed to persist ${persistFailed}/${changedRetriedNotices.length} cron retried summary states`,

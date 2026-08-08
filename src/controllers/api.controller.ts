@@ -190,6 +190,7 @@ export class ApiController {
     )
     limit: number,
     @Query('includeDone') includeDoneRaw?: string,
+    @Query('fullText') fullTextRaw?: string,
   ) {
     const keyword = (q || '').trim();
     if (!keyword) {
@@ -204,11 +205,13 @@ export class ApiController {
       });
     }
     const includeDone = includeDoneRaw !== 'false';
+    const fullText = fullTextRaw === 'true';
     const result = await this.noticeSearchService.searchNotices({
       keyword,
       page,
       limit,
       includeDone,
+      fullText,
     });
     return ApiResponseUtils.success(result);
   }

@@ -1,5 +1,5 @@
 import { type INsmBillItem } from 'pal-crawl';
-import { type CachedNotice } from '../../../types/cache.types';
+import { AISummaryStatus, type CachedNotice } from '../../../types/cache.types';
 import { APP_CONSTANTS } from '../../../config/app.config';
 import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
 import { mapConcurrently } from '../../../utils/concurrency.utils';
@@ -195,40 +195,79 @@ export async function performPendingBillsCrawlInternal(
   deps: PendingWorkflowDeps,
 ): Promise<void> {
   const rawItemMap = new Map<number, INsmBillItem>();
-  const pendingNotices: CachedNotice[] = [];
-
-  for await (const page of deps.crawlingCoreService.getAllNsmPendingPages(
-    {},
-    { delayMs: APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS },
-  )) {
-    for (const item of page.items ?? []) {
+  const nsmNotices: CachedNotice[] = [];
+  const pendingCandidateNums = new Set<number>();
+  const query = { pageSize: APP_CONSTANTS.ARCHIVE_SYNC.CRAWLER_PAGE_UNIT };
+  const crawlOptions = {
+    delayMs: APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS,
+    concurrency: APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_CONCURRENCY,
+  };
+  const isPendingLike = (item: INsmBillItem): boolean =>
+    item.progressStatus?.trim() === '발의';
+  const collectPageItems = (
+    items: INsmBillItem[] | null | undefined,
+    source: 'all' | 'pending',
+  ) => {
+    for (const item of items ?? []) {
       const notice = CrawlingCoreService.nsmBillToCachedNotice(item);
       if (!rawItemMap.has(notice.num)) {
         rawItemMap.set(notice.num, item);
-        pendingNotices.push(notice);
+        nsmNotices.push(notice);
+      }
+      if (source === 'pending' || isPendingLike(item)) {
+        pendingCandidateNums.add(notice.num);
       }
     }
+  };
+
+  for await (const page of deps.crawlingCoreService.getAllNsmPages(
+    query,
+    crawlOptions,
+  )) {
+    collectPageItems(page.items ?? [], 'all');
   }
 
-  if (pendingNotices.length === 0) return;
+  for await (const page of deps.crawlingCoreService.getAllNsmPendingPages(
+    query,
+    crawlOptions,
+  )) {
+    collectPageItems(page.items ?? [], 'pending');
+  }
 
-  const newPendingNotices =
+  if (nsmNotices.length === 0) return;
+
+  const newNsmNotices =
     await deps.archiveOrchestratorService.filterAlreadyArchivedNotices(
-      pendingNotices,
+      nsmNotices,
     );
 
-  const newPendingNumSet = new Set(newPendingNotices.map((n) => n.num));
-  const existingPendingItems = pendingNotices
-    .filter((notice) => !newPendingNumSet.has(notice.num))
+  const newNsmNumSet = new Set(newNsmNotices.map((n) => n.num));
+  const newPendingNotices = newNsmNotices.filter((notice) =>
+    pendingCandidateNums.has(notice.num),
+  );
+  const newSyncOnlyItems = newNsmNotices
+    .filter((notice) => !pendingCandidateNums.has(notice.num))
     .map((notice) => rawItemMap.get(notice.num))
-    .filter((item): item is INsmBillItem => item !== undefined)
-    .slice(0, APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_BATCH_SIZE);
+    .filter((item): item is INsmBillItem => item !== undefined);
+  const existingPendingItems = nsmNotices
+    .filter((notice) => !newNsmNumSet.has(notice.num))
+    .map((notice) => rawItemMap.get(notice.num))
+    .filter((item): item is INsmBillItem => item !== undefined);
 
   if (existingPendingItems.length > 0) {
     deps.runBackgroundTask('refresh-existing-pending-bills', async () => {
       await refreshExistingPendingBillsInBackgroundInternal(
         deps,
         existingPendingItems,
+      );
+    });
+  }
+
+  if (newSyncOnlyItems.length > 0) {
+    deps.runBackgroundTask('process-new-nsm-sync-only-bills', async () => {
+      await processNewNsmSyncOnlyBillsInBackgroundInternal(
+        deps,
+        newSyncOnlyItems,
       );
     });
   }
@@ -285,6 +324,41 @@ export async function refreshExistingPendingBillsInBackgroundInternal(
   if (refreshed.length > 0) {
     deps.logger.log(
       `Periodic NSM re-compare scanned ${refreshed.length} archived pending bill(s)`,
+    );
+  }
+}
+
+export async function processNewNsmSyncOnlyBillsInBackgroundInternal(
+  deps: PendingWorkflowDeps,
+  items: INsmBillItem[],
+): Promise<void> {
+  const archivedNotices =
+    await deps.archiveOrchestratorService.archiveNsmBillItems(items, {
+      reason: NsmArchiveReason.NEW_SYNC_ONLY_BILLS,
+    });
+
+  if (archivedNotices.length === 0) {
+    return;
+  }
+
+  const cachePayload = archivedNotices.map((notice) => ({
+    ...notice,
+    aiSummary: null,
+    aiSummaryStatus: 'not_requested' as const,
+  }));
+
+  try {
+    const freshCache = await deps.cacheService.getRecentNotices(
+      APP_CONSTANTS.CACHE.MAX_SIZE,
+    );
+    const syncedNums = new Set(cachePayload.map((notice) => notice.num));
+    await deps.cacheService.updateCache([
+      ...cachePayload,
+      ...freshCache.filter((notice) => !syncedNums.has(notice.num)),
+    ]);
+  } catch (error) {
+    deps.logger.warn(
+      `Cache update for sync-only NSM bills failed: ${(error as Error).message}`,
     );
   }
 }
@@ -411,24 +485,88 @@ export async function processPendingBillsInBackgroundInternal(
         })
       : [];
 
+  let visibleNoticesWithSummary = noticesWithSummary;
+
   if (noticesWithReason.length > 0 && noticesWithSummary.length > 0) {
-    await Promise.allSettled(
-      noticesWithSummary
-        .filter(
-          (n) => (n.aiSummaryStatus ?? 'not_requested') !== 'not_requested',
-        )
-        .map((n) =>
-          deps.noticeArchiveService.updateSummaryStateByNoticeNum(
-            n.num,
-            n.aiSummary ?? null,
-            n.aiSummaryStatus ?? 'not_requested',
-          ),
-        ),
+    const persistTargets = noticesWithSummary.filter(
+      (n) => (n.aiSummaryStatus ?? 'not_requested') !== 'not_requested',
     );
+
+    if (persistTargets.length > 0) {
+      const svcCompat = deps.noticeArchiveService as {
+        updateSummaryStatesByNoticeNums?: (
+          updates: Array<{
+            noticeNum: number;
+            summary: string | null;
+            status: AISummaryStatus;
+          }>,
+        ) => Promise<Set<number>>;
+        updateSummaryStateByNoticeNum: (
+          noticeNum: number,
+          summary: string | null,
+          status: AISummaryStatus,
+        ) => Promise<void>;
+      };
+
+      let persistedNoticeNums = new Set<number>();
+      let needsSingleFallback = !svcCompat.updateSummaryStatesByNoticeNums;
+
+      if (svcCompat.updateSummaryStatesByNoticeNums) {
+        try {
+          persistedNoticeNums = await svcCompat.updateSummaryStatesByNoticeNums(
+            persistTargets.map((notice) => ({
+              noticeNum: notice.num,
+              summary: notice.aiSummary ?? null,
+              status: notice.aiSummaryStatus ?? 'not_requested',
+            })),
+          );
+        } catch (error) {
+          deps.logger.warn(
+            `Batch summary persistence failed for pending bills: ${(error as Error).message}; retrying with single-row writes`,
+          );
+          needsSingleFallback = true;
+          persistedNoticeNums = new Set<number>();
+        }
+      }
+
+      if (needsSingleFallback) {
+        const fallbackResults = await Promise.allSettled(
+          persistTargets.map((notice) =>
+            svcCompat.updateSummaryStateByNoticeNum(
+              notice.num,
+              notice.aiSummary ?? null,
+              notice.aiSummaryStatus ?? 'not_requested',
+            ),
+          ),
+        );
+
+        for (let index = 0; index < fallbackResults.length; index += 1) {
+          if (fallbackResults[index].status === 'fulfilled') {
+            persistedNoticeNums.add(persistTargets[index].num);
+          }
+        }
+      }
+
+      const persistFailed = persistTargets.length - persistedNoticeNums.size;
+      if (persistFailed > 0) {
+        deps.logger.warn(
+          `Failed to persist ${persistFailed}/${persistTargets.length} pending-bill summary states`,
+        );
+      }
+
+      const requiredPersistNums = new Set(
+        persistTargets.map((notice) => notice.num),
+      );
+      visibleNoticesWithSummary = noticesWithSummary.filter(
+        (notice) =>
+          !requiredPersistNums.has(notice.num) ||
+          persistedNoticeNums.has(notice.num),
+      );
+    }
   }
 
   const allForCache: CachedNotice[] = [
-    ...noticesWithSummary,
+    ...visibleNoticesWithSummary,
     ...noticesWithoutReasonForNotification,
   ];
 
@@ -450,9 +588,9 @@ export async function processPendingBillsInBackgroundInternal(
     }
   }
 
-  if (noticesWithSummary.length > 0 && noticesWithReason.length > 0) {
+  if (visibleNoticesWithSummary.length > 0 && noticesWithReason.length > 0) {
     void deps.notificationOrchestratorService
-      .sendNotifications(noticesWithSummary)
+      .sendNotifications(visibleNoticesWithSummary)
       .catch((error) => {
         deps.logger.error(
           'Notification dispatch for pending bills failed:',

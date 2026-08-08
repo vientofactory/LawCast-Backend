@@ -6,7 +6,6 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { loadavg } from 'node:os';
-import { APP_CONSTANTS } from '../../config/app.config';
 import {
   BridgeLogLevel,
   BRIDGE_LOG_LEVEL_LABELS,
@@ -49,6 +48,9 @@ export class DiscordBridgeOperationsCommandsService {
         return true;
       case 'locks':
         await this.cmdLocks(interaction);
+        return true;
+      case 'pending-sync':
+        await this.cmdPendingSync(interaction);
         return true;
       case 'browser-lease':
         await this.cmdBrowserGuard(interaction);
@@ -445,71 +447,102 @@ export class DiscordBridgeOperationsCommandsService {
       strict: false,
     });
 
-    const scheduler = crawlingService.getSchedulerExecutionState();
     const archive = archiveSyncService.getExecutionState();
 
     const runningPhases =
       archive.runningPhases.length > 0
         ? archive.runningPhases.join(', ')
         : 'none';
-    const backgroundTasks =
-      scheduler.activeBackgroundTasks.length > 0
-        ? scheduler.activeBackgroundTasks.join(', ')
+    const fmtTs = (value: string | null) => value ?? 'none';
+    const runningWriteHeavyPhases =
+      archive.runningWriteHeavyPhases.length > 0
+        ? archive.runningWriteHeavyPhases.join(', ')
         : 'none';
-
-    const recentPhaseStates = archive.phases
-      .map(
-        (phase) =>
-          `${phase.name}: ${phase.status}` +
-          (phase.lastError ? ` (err=${phase.lastError})` : ''),
-      )
-      .join('\n');
-
-    const cronLayout = APP_CONSTANTS.CRON.EXPRESSIONS;
 
     const embed = new EmbedBuilder()
       .setColor(0xf59e0b)
       .setTitle('🔒 Lock / Phase Debug')
       .addFields(
         {
-          name: 'Scheduler',
+          name: 'Scheduler / Phases',
           value:
-            `initialized=${scheduler.isInitialized} ` +
-            `processing=${scheduler.isProcessing} ` +
-            `busy(no-bg)=${crawlingService.isSchedulerBusy({ includeBackground: false })} ` +
-            `busy(with-bg)=${crawlingService.isSchedulerBusy({ includeBackground: true })}`,
+            `scheduler.busy=${crawlingService.isSchedulerBusy({ includeBackground: true })} ` +
+            `archive.anyRunning=${archive.isAnyPhaseRunning}\n` +
+            `runningPhases=${runningPhases}`,
           inline: false,
         },
         {
-          name: 'Background Tasks',
-          value: `count=${scheduler.activeBackgroundTaskCount}\n${backgroundTasks}`,
-          inline: false,
-        },
-        {
-          name: 'Archive Sync Phases',
-          value: `anyRunning=${archive.isAnyPhaseRunning}\nrunning=${runningPhases}`,
-          inline: false,
-        },
-        {
-          name: 'Phase States',
+          name: 'Write-Heavy',
           value:
-            recentPhaseStates.length > 0
-              ? recentPhaseStates.slice(0, 1024)
-              : 'none',
+            `archive.writeHeavy=${archive.isWriteHeavyPhaseRunning}\n` +
+            `running=${runningWriteHeavyPhases}\n` +
+            `fullSyncApply.queue=${archive.asyncApply.fullSyncQueueLength} worker=${archive.asyncApply.fullSyncWorkerRunning}\n` +
+            `pendingRecompare.queue=${archive.asyncApply.pendingRecompareQueueLength} worker=${archive.asyncApply.pendingRecompareWorkerRunning}\n` +
+            `summaryBackfill.queue=${archive.asyncApply.summaryBackfillQueueLength} worker=${archive.asyncApply.summaryBackfillWorkerRunning}`,
+          inline: false,
+        },
+        {
+          name: 'Recent Activity',
+          value:
+            `fullSync.lastBatch=${archive.asyncApply.fullSyncLastBatchProcessed} at ${fmtTs(archive.asyncApply.fullSyncLastBatchAt)}\n` +
+            `pendingRecompare.lastBatch=${archive.asyncApply.pendingRecompareLastBatchProcessed} at ${fmtTs(archive.asyncApply.pendingRecompareLastBatchAt)}\n` +
+            `summaryBackfill.lastBatch=${archive.asyncApply.summaryBackfillLastBatchProcessed} at ${fmtTs(archive.asyncApply.summaryBackfillLastBatchAt)}`,
           inline: false,
         },
       )
       .setTimestamp()
       .setFooter({ text: 'LawCast Debug Bridge' });
 
-    const cronRaw = JSON.stringify(cronLayout, null, 2);
-    const cronSnippet =
-      cronRaw.length > 1000 ? cronRaw.slice(0, 997) + '…' : cronRaw;
-    embed.addFields({
-      name: 'Cron Layout',
-      value: `\`\`\`json\n${cronSnippet}\n\`\`\``,
-      inline: false,
+    await interaction.reply({ embeds: [embed] }).catch(() => {});
+  }
+
+  private async cmdPendingSync(
+    interaction: ChatInputCommandInteraction,
+  ): Promise<void> {
+    const { ArchiveSyncService } =
+      await import('../crawling/archive-sync.service');
+    const { ArchiveOrchestratorService } =
+      await import('../crawling/archive-orchestrator.service');
+
+    const archiveSyncService = this.moduleRef.get(ArchiveSyncService, {
+      strict: false,
     });
+    const archiveOrchestratorService = this.moduleRef.get(
+      ArchiveOrchestratorService,
+      {
+        strict: false,
+      },
+    );
+
+    const archive = archiveSyncService.getExecutionState();
+    const detailCrawl =
+      archiveOrchestratorService.getNsmDetailCrawlProgressState();
+    const fmtTs = (value: string | null) => value ?? 'none';
+    const pendingSyncPhase = archive.phases.find(
+      (phase) => phase.name === 'pending sync',
+    );
+    const pendingSyncPhaseStatus = pendingSyncPhase?.status ?? 'unknown';
+    const pendingSyncLastRunAt = fmtTs(pendingSyncPhase?.lastRunAt ?? null);
+
+    const embed = new EmbedBuilder()
+      .setColor(0x3b82f6)
+      .setTitle('🧾 Pending Sync State')
+      .addFields({
+        name: 'NSM Detail Crawl',
+        value:
+          `pendingSync.status=${pendingSyncPhaseStatus} pendingSync.lastRunAt=${pendingSyncLastRunAt}\n` +
+          `detailCrawl.status=${detailCrawl.status} reason=${detailCrawl.reason ?? 'none'}\n` +
+          `progress=${detailCrawl.processedItems}/${detailCrawl.totalItems} ` +
+          `success=${detailCrawl.succeededItems} failed=${detailCrawl.failedItems}\n` +
+          `current=${detailCrawl.currentIndex}/${detailCrawl.totalItems} ` +
+          `notice=${detailCrawl.currentNoticeNum ?? 'none'} billNo=${detailCrawl.currentBillNo ?? 'none'}\n` +
+          `startedAt=${fmtTs(detailCrawl.startedAt)} ` +
+          `updatedAt=${fmtTs(detailCrawl.lastUpdatedAt)}\n` +
+          `completedAt=${fmtTs(detailCrawl.lastCompletedAt)}`,
+        inline: false,
+      })
+      .setTimestamp()
+      .setFooter({ text: 'LawCast Debug Bridge' });
 
     await interaction.reply({ embeds: [embed] }).catch(() => {});
   }

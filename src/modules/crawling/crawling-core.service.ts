@@ -284,6 +284,13 @@ export class CrawlingCoreService {
     yield* this.createClient().getAllDonePages(query, options);
   }
 
+  async *getAllNsmPages(
+    query?: Omit<INsmSearchQuery, 'pageIndex'>,
+    options?: IBulkOptions,
+  ): AsyncGenerator<INsmSearchResult> {
+    yield* this.createNsmClient().getAllPages(query, options);
+  }
+
   async crawlAllPages(options?: {
     stopBelowNum?: number;
     delayMs?: number;

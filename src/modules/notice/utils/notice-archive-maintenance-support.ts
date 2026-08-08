@@ -24,6 +24,12 @@ export interface NoticeArchiveMaintenanceDeps {
   logger: { warn(message: string): void };
 }
 
+export interface SummaryStateBulkUpdateInput {
+  noticeNum: number;
+  summary: string | null;
+  status: AISummaryStatus;
+}
+
 export async function getNsmProposalReasonRetryCandidates(
   deps: NoticeArchiveMaintenanceDeps,
   limit: number,
@@ -333,5 +339,64 @@ export async function updateSummaryStateByNoticeNum(
         },
       );
     }
+  }
+}
+
+export async function updateSummaryStatesByNoticeNums(
+  deps: NoticeArchiveMaintenanceDeps,
+  updates: SummaryStateBulkUpdateInput[],
+): Promise<Set<number>> {
+  if (!deps.summaryStateRepository || updates.length === 0) {
+    return new Set();
+  }
+
+  const deduped = new Map<number, SummaryStateBulkUpdateInput>();
+  for (const update of updates) {
+    deduped.set(update.noticeNum, update);
+  }
+
+  const values = Array.from(deduped.values()).map((update) => ({
+    noticeNum: update.noticeNum,
+    isDone: false,
+    aiSummary: update.summary?.trim() ? update.summary : null,
+    aiSummaryStatus: update.status,
+  }));
+
+  try {
+    await deps.summaryStateRepository
+      .createQueryBuilder()
+      .insert()
+      .into(NoticeArchiveSnapshotState)
+      .values(values)
+      // Avoid entity-return mapping on SQLite upsert path where id may not be returned.
+      .updateEntity(false)
+      // Use physical DB column names for SQLite ON CONFLICT compatibility.
+      .orUpdate(['ai_summary', 'ai_summary_status'], ['notice_num'])
+      .execute();
+
+    return new Set(values.map((value) => value.noticeNum));
+  } catch (error) {
+    deps.logger.warn(
+      `Bulk summary-state upsert failed, falling back to per-row update: ${(error as Error).message}`,
+    );
+
+    const persistedNoticeNums = new Set<number>();
+    for (const update of deduped.values()) {
+      try {
+        await updateSummaryStateByNoticeNum(
+          deps,
+          update.noticeNum,
+          update.summary,
+          update.status,
+        );
+        persistedNoticeNums.add(update.noticeNum);
+      } catch (itemError) {
+        deps.logger.warn(
+          `Summary-state fallback update failed for notice ${update.noticeNum}: ${(itemError as Error).message}`,
+        );
+      }
+    }
+
+    return persistedNoticeNums;
   }
 }

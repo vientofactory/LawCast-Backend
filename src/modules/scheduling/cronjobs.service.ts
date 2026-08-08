@@ -108,10 +108,16 @@ export class CronJobsService {
    * @returns A boolean indicating whether the cron job should be skipped.
    */
   private shouldSkipCrawlingCron(taskName: string): boolean {
+    const archiveState = this.archiveSyncService.getExecutionState();
+    const runningWriteHeavy =
+      archiveState.runningWriteHeavyPhases.length > 0
+        ? archiveState.runningWriteHeavyPhases.join(', ')
+        : 'none';
+
     return this.shouldSkipCron(
       taskName,
-      this.archiveSyncService.isAnyPhaseRunning(),
-      'archive sync phase is currently running',
+      archiveState.isWriteHeavyPhaseRunning,
+      `archive sync write-heavy phase is currently running (runningWriteHeavyPhases=${runningWriteHeavy})`,
     );
   }
 
@@ -133,11 +139,17 @@ export class CronJobsService {
    * archive sync phases or active crawling background workloads.
    */
   private shouldSkipProposalReasonBackfillCron(taskName: string): boolean {
+    const archiveState = this.archiveSyncService.getExecutionState();
+    const runningWriteHeavy =
+      archiveState.runningWriteHeavyPhases.length > 0
+        ? archiveState.runningWriteHeavyPhases.join(', ')
+        : 'none';
+
     if (
       this.shouldSkipCron(
         taskName,
-        this.archiveSyncService.isAnyPhaseRunning(),
-        'archive sync phase is currently running',
+        archiveState.isWriteHeavyPhaseRunning,
+        `archive sync write-heavy phase is currently running (runningWriteHeavyPhases=${runningWriteHeavy})`,
       )
     ) {
       return true;
@@ -156,11 +168,17 @@ export class CronJobsService {
    * @returns A boolean indicating whether the cron job should be skipped.
    */
   private shouldSkipDatabaseMaintenanceCron(taskName: string): boolean {
+    const archiveState = this.archiveSyncService.getExecutionState();
+    const runningWriteHeavy =
+      archiveState.runningWriteHeavyPhases.length > 0
+        ? archiveState.runningWriteHeavyPhases.join(', ')
+        : 'none';
+
     if (
       this.shouldSkipCron(
         taskName,
-        this.archiveSyncService.isAnyPhaseRunning(),
-        'archive sync phase is currently running',
+        archiveState.isWriteHeavyPhaseRunning,
+        `archive sync write-heavy phase is currently running (runningWriteHeavyPhases=${runningWriteHeavy})`,
       )
     ) {
       return true;
@@ -244,8 +262,9 @@ export class CronJobsService {
     }
   }
 
-  // Cron job handlers
+  // Cronjob handlers
 
+  // Main PAL crawling + notification pipeline trigger.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK, {
     timeZone: CRON_TIMEZONE,
   })
@@ -258,6 +277,7 @@ export class CronJobsService {
     );
   }
 
+  // NSM pending-bills crawl + notification dispatch trigger.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK, {
     timeZone: CRON_TIMEZONE,
   })
@@ -270,6 +290,7 @@ export class CronJobsService {
     );
   }
 
+  // proposalReason retry/backfill drain + summary backfill follow-up trigger.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.PROPOSAL_REASON_BACKFILL_DRAIN, {
     timeZone: CRON_TIMEZONE,
   })
@@ -286,6 +307,7 @@ export class CronJobsService {
     });
   }
 
+  // Reconciles ended notices and updates isDone state.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC, {
     timeZone: CRON_TIMEZONE,
   })
@@ -298,6 +320,7 @@ export class CronJobsService {
     );
   }
 
+  // Cleans invalid/expired Discord webhook registrations.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP, {
     timeZone: CRON_TIMEZONE,
   })
@@ -307,6 +330,7 @@ export class CronJobsService {
     );
   }
 
+  // Runs periodic webhook health optimization.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION, {
     timeZone: CRON_TIMEZONE,
   })
@@ -316,6 +340,7 @@ export class CronJobsService {
     );
   }
 
+  // Performs hourly system monitoring and stale web-push cleanup.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING, {
     timeZone: CRON_TIMEZONE,
   })
@@ -341,6 +366,7 @@ export class CronJobsService {
     });
   }
 
+  // Executes full archive integrity re-scan.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN, {
     timeZone: CRON_TIMEZONE,
   })
@@ -355,6 +381,7 @@ export class CronJobsService {
     );
   }
 
+  // Enqueues daily change-tracking chain audit.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CHANGE_TRACKING_DAILY_AUDIT, {
     timeZone: CRON_TIMEZONE,
   })
@@ -362,6 +389,7 @@ export class CronJobsService {
     await this.enqueueChangeTrackingAudit('daily');
   }
 
+  // Enqueues weekly change-tracking chain audit.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.CHANGE_TRACKING_WEEKLY_AUDIT, {
     timeZone: CRON_TIMEZONE,
   })
@@ -369,6 +397,7 @@ export class CronJobsService {
     await this.enqueueChangeTrackingAudit('weekly');
   }
 
+  // Refreshes quick keyword suggestions used by the UI.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.QUICK_KEYWORDS_REFRESH, {
     timeZone: CRON_TIMEZONE,
   })
@@ -378,6 +407,7 @@ export class CronJobsService {
     );
   }
 
+  // Reclaims SQLite free pages via VACUUM maintenance.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SQLITE_VACUUM, {
     timeZone: CRON_TIMEZONE,
   })
@@ -420,6 +450,7 @@ export class CronJobsService {
     });
   }
 
+  // Uploads periodic sanitized DB mirror snapshot.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.DATABASE_MIRROR_UPLOAD, {
     timeZone: CRON_TIMEZONE,
   })

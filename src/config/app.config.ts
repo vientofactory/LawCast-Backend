@@ -147,7 +147,7 @@ export const APP_CONSTANTS = {
     /** Global max concurrent Chromium sessions across crawling/screenshot paths. */
     BROWSER_MAX_CONCURRENCY: parseIntWithDefault(
       process.env.CRAWLING_BROWSER_MAX_CONCURRENCY,
-      1,
+      2,
     ),
     /** Extra retries when browser launch fails due to process/resource pressure. */
     BROWSER_LAUNCH_RETRY_COUNT: parseIntWithDefault(
@@ -251,11 +251,26 @@ export const APP_CONSTANTS = {
   ARCHIVE_SYNC: {
     /** Items per crawler HTTP request (max 100). */
     CRAWLER_PAGE_UNIT: 100,
+    /** Concurrent PAL pages to fetch during full sync. */
+    CRAWLER_CONCURRENCY: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_CRAWLER_CONCURRENCY,
+      4,
+    ),
+    /** Concurrent NSM pages to fetch during pending sync. */
+    NSM_CRAWLER_CONCURRENCY: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_NSM_CRAWLER_CONCURRENCY,
+      3,
+    ),
+    /** Concurrent page requests for isDone reconciliation. */
+    DONE_CRAWLER_CONCURRENCY: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_DONE_CRAWLER_CONCURRENCY,
+      3,
+    ),
     /** Inter-page delay for bootstrap/full-sync crawls (ms). */
     CRAWLER_DELAY_MS: 500,
     /** Inter-page delay for hot-path cron crawls (ms). */
     CRAWLER_CRON_DELAY_MS: 100,
-    NSM_CRAWLER_DELAY_MS: 3000, // NsmLmSts requires a longer delay to avoid connection resets
+    NSM_CRAWLER_DELAY_MS: 1000, // NsmLmSts requires a longer delay to avoid connection resets
     /** Application-level retry budget for pending-bills cron (NsmLmSts). */
     PENDING_CRAWL_MAX_RETRIES: 5,
     /** Base delay (ms) for exponential backoff between pending-bills cron retries. */
@@ -279,6 +294,59 @@ export const APP_CONSTANTS = {
     INTEGRITY_BATCH_SIZE: 200,
     /** Archive rows fetched per summary-backfill / retry batch. */
     SUMMARY_BACKFILL_BATCH_SIZE: 20,
+    /** Summary-backfill batch size cap used only in CPU-friendly mode. */
+    SUMMARY_BACKFILL_CPU_BATCH_SIZE: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_SIZE,
+      5,
+    ),
+    /**
+     * When true, summary-backfill avoids building a large queue and instead
+     * drains staged items incrementally to reduce Ollama CPU overload/timeouts.
+     */
+    SUMMARY_BACKFILL_CPU_FRIENDLY_MODE: parseBooleanWithDefault(
+      process.env.OLLAMA_CPU_MODE,
+      false,
+    ),
+    /** Inter-batch pause (ms) used only in SUMMARY_BACKFILL_CPU_FRIENDLY_MODE. */
+    SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS,
+      250,
+    ),
+    /** Summary generation concurrency cap used in CPU-friendly mode. */
+    SUMMARY_BACKFILL_CPU_CONCURRENCY: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_CONCURRENCY,
+      1,
+    ),
+    /** Max notices per full-sync background apply batch. */
+    FULL_SYNC_APPLY_BATCH_SIZE: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_FULL_SYNC_APPLY_BATCH_SIZE,
+      100,
+    ),
+    /** Delay (ms) between full-sync background apply batches. */
+    FULL_SYNC_APPLY_BATCH_DELAY_MS: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_FULL_SYNC_APPLY_BATCH_DELAY_MS,
+      100,
+    ),
+    /** Max NSM items per pending-recompare background apply batch. */
+    PENDING_RECOMPARE_APPLY_BATCH_SIZE: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_PENDING_RECOMPARE_APPLY_BATCH_SIZE,
+      100,
+    ),
+    /** Delay (ms) between pending-recompare background apply batches. */
+    PENDING_RECOMPARE_APPLY_BATCH_DELAY_MS: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_PENDING_RECOMPARE_APPLY_BATCH_DELAY_MS,
+      150,
+    ),
+    /** Shared TTL (seconds) for archive-sync async apply queues stored in Redis. */
+    ASYNC_APPLY_QUEUE_TTL_SECONDS: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_ASYNC_APPLY_QUEUE_TTL_SECONDS,
+      7 * 24 * 60 * 60,
+    ),
+    FULL_SYNC_APPLY_QUEUE_KEY: 'crawling:archiveSync:fullSyncApplyQueue',
+    PENDING_RECOMPARE_APPLY_QUEUE_KEY:
+      'crawling:archiveSync:pendingRecompareApplyQueue',
+    SUMMARY_BACKFILL_APPLY_QUEUE_KEY:
+      'crawling:archiveSync:summaryBackfillApplyQueue',
   },
   CRON: {
     EXPRESSIONS: {
