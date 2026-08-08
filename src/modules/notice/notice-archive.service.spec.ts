@@ -796,6 +796,68 @@ describe('NoticeArchiveService', () => {
       ).not.toHaveBeenCalled();
     });
 
+    it('preserves line breaks in proposalReason detail when appending diffchain event', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219776,
+          subject: '멀티라인 제안이유 테스트',
+          proposalReason: '',
+          contentId: null,
+          contentBillNumber: '2219776',
+        }),
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219776,
+          subject: '멀티라인 제안이유 테스트',
+          proposerCategory: '의원',
+          committee: '법사위',
+          link: 'https://example.com/2219776',
+          contentId: null,
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          proposalReason: '첫 줄\n둘째 줄\n\n넷째 줄',
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).toHaveBeenCalledTimes(1);
+
+      const callArg = (
+        changeTrackingService.appendChangeEventWithDetails as jest.Mock
+      ).mock.calls[0][0] as {
+        details: Array<{
+          fieldPath: string;
+          afterValue: string | null;
+        }>;
+      };
+
+      const proposalReasonDetail = callArg.details.find(
+        (detail) => detail.fieldPath === 'proposalReason',
+      );
+      expect(proposalReasonDetail).toBeDefined();
+      expect(proposalReasonDetail?.afterValue).toBe(
+        '첫 줄\n둘째 줄\n\n넷째 줄',
+      );
+    });
+
     it('includes NOT EXISTS guard in retry-candidate query to skip already-resolved chain rows', async () => {
       const qb = {
         select: jest.fn().mockReturnThis(),
