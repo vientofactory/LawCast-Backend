@@ -644,7 +644,7 @@ describe('NoticeArchiveService', () => {
       expect(result).toEqual([]);
     });
 
-    it('filters out unavailable NSM rows until the latest change-chain proposalReason exists', async () => {
+    it('keeps unavailable NSM rows when latest change-chain proposalReason is missing', async () => {
       const unavailableRows: NoticeArchive[] = [
         buildRow({
           noticeNum: 2003,
@@ -669,7 +669,13 @@ describe('NoticeArchiveService', () => {
 
       const result = await service.getUnavailableSummaryPage(0, 50);
 
-      expect(result).toEqual([]);
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        num: 2003,
+        contentId: null,
+        proposalReason: null,
+        aiSummaryStatus: 'unavailable',
+      });
       expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledWith(
         [2003],
         'proposalReason',
