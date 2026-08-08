@@ -303,7 +303,12 @@ export class NoticeArchiveService {
   private normalizeProposalReasonText(
     value: string | null | undefined,
   ): string | null {
-    const normalized = value?.replace(/\s+/g, ' ').trim();
+    const normalized = value
+      ?.replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((line) => line.replace(/[ \t\f\v]+/g, ' ').trim())
+      .join('\n')
+      .trim();
     return normalized && normalized.length > 0 ? normalized : null;
   }
 
@@ -394,6 +399,7 @@ export class NoticeArchiveService {
     options?: {
       preserveExistingWhenIncomingNull?: boolean;
       normalizeText?: boolean;
+      normalizeTextValue?: (value: string) => string | null;
     },
   ): T | null {
     const preserve = options?.preserveExistingWhenIncomingNull ?? false;
@@ -405,8 +411,12 @@ export class NoticeArchiveService {
           return (value ?? null) as T | null;
         }
 
-        const normalized = value.replace(/\s+/g, ' ').trim();
-        return (normalized.length > 0 ? normalized : null) as T | null;
+        const normalized = options?.normalizeTextValue
+          ? options.normalizeTextValue(value)
+          : value.replace(/\s+/g, ' ').trim();
+        return (
+          normalized && normalized.length > 0 ? normalized : null
+        ) as T | null;
       };
 
       const normalizedIncoming = normalize(incoming);
@@ -640,7 +650,9 @@ export class NoticeArchiveService {
     };
 
     const fallbackProposalReason =
-      baselineText('proposalReason') ?? beforeRow?.proposalReason ?? null;
+      this.normalizeProposalReasonText(baselineText('proposalReason')) ??
+      this.normalizeProposalReasonText(beforeRow?.proposalReason) ??
+      null;
     const fallbackBillNumber =
       this.normalizeStableId(baselineText('billNumber')) ??
       this.normalizeStableId(beforeRow?.contentBillNumber);
@@ -665,6 +677,7 @@ export class NoticeArchiveService {
       {
         preserveExistingWhenIncomingNull: existing,
         normalizeText: true,
+        normalizeTextValue: (value) => this.normalizeProposalReasonText(value),
       },
     );
 
@@ -2490,6 +2503,7 @@ export class NoticeArchiveService {
       {
         preserveExistingWhenIncomingNull: true,
         normalizeText: true,
+        normalizeTextValue: (value) => this.normalizeProposalReasonText(value),
       },
     );
 

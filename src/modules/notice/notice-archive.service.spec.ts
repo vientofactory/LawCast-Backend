@@ -712,6 +712,44 @@ describe('NoticeArchiveService', () => {
   });
 
   describe('proposalReason no-op protections', () => {
+    it('preserves line breaks when normalizing proposalReason during insert upsert', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      repositoryMock.findOne.mockResolvedValue(null);
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219774,
+          subject: '개행 보존 테스트',
+          proposerCategory: '의원',
+          committee: '법사위',
+          link: 'https://example.com/2219774',
+          contentId: null,
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          proposalReason: '  첫 줄  \n 둘째   줄 \n\n  넷째 줄  ',
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(repositoryMock.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          proposalReason: '첫 줄\n둘째 줄\n\n넷째 줄',
+        }),
+      );
+    });
+
     it('does not append an event when proposalReason differs only by whitespace normalization', async () => {
       const repositoryMock = {
         ...createRepositoryMock(),
