@@ -159,10 +159,7 @@ export class NoticesQueryService {
         fullText,
       });
 
-    const totalArchiveCount =
-      normalizedSearch || hasDateFilter
-        ? await this.noticeArchiveService.getArchiveCount()
-        : archivePageResult.total;
+    const totalArchiveCount = archiveFilteredTotal.total;
 
     // DB is the source of truth for archived rows.
     // Keep archive items as-is to guarantee one-way DB -> cache semantics.

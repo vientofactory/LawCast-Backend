@@ -45,3 +45,6 @@ lerna-debug.log*
 .env.*.local
 .env.test.local
 .env.production.local
+
+*.db-shm
+*.db-wal

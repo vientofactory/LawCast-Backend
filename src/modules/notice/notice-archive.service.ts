@@ -1479,6 +1479,8 @@ export class NoticeArchiveService {
       return;
     }
 
+    const ftsQuery = params.fullText ? this.buildFtsMatchQuery(search) : null;
+
     qb.andWhere(
       new Brackets((query) => {
         query
@@ -1490,12 +1492,40 @@ export class NoticeArchiveService {
           });
 
         if (params.fullText) {
-          query.orWhere('archive.proposalReason LIKE :search', {
-            search: `%${search}%`,
-          });
+          if (ftsQuery) {
+            query.orWhere(
+              'archive.rowid IN (SELECT rowid FROM notice_archives_fts WHERE notice_archives_fts MATCH :ftsQuery)',
+              { ftsQuery },
+            );
+          } else {
+            // Fallback for symbols-only queries that cannot form an FTS MATCH string.
+            query.orWhere('archive.proposalReason LIKE :search', {
+              search: `%${search}%`,
+            });
+          }
         }
       }),
     );
+  }
+
+  private buildFtsMatchQuery(search: string): string | null {
+    const terms = search
+      .trim()
+      .split(/\s+/)
+      .map((term) =>
+        term
+          .replace(/["'`]/g, ' ')
+          .replace(/[^\p{L}\p{N}_-]/gu, ' ')
+          .trim(),
+      )
+      .filter((term) => term.length > 0)
+      .map((term) => `"${term}"*`);
+
+    if (terms.length === 0) {
+      return null;
+    }
+
+    return terms.join(' AND ');
   }
 
   private async queryArchiveNoticeNumsByIsDoneFilter(params: {
@@ -1507,25 +1537,30 @@ export class NoticeArchiveService {
     sortOrder: 'asc' | 'desc';
     skip: number;
     take: number;
+    knownTotal?: number;
   }): Promise<{ total: number; noticeNums: number[] }> {
     if (!this.summaryStateRepository) {
       return { total: 0, noticeNums: [] };
     }
 
-    const baseQb = this.archiveRepository
-      .createQueryBuilder('archive')
-      .innerJoin(
-        NoticeArchiveSnapshotState,
-        'summary',
-        'summary.notice_num = archive.noticeNum',
-      )
-      .where('summary.is_done = :isDone', {
+    const baseQb = this.archiveRepository.createQueryBuilder('archive').where(
+      `EXISTS (
+          SELECT 1
+          FROM notice_archive_snapshot_states summary
+          WHERE summary.notice_num = archive.noticeNum
+            AND summary.is_done = :isDone
+        )`,
+      {
         isDone: params.isDone ? 1 : 0,
-      });
+      },
+    );
 
     this.applyArchiveSearchFilters(baseQb, params);
 
-    const total = await baseQb.clone().getCount();
+    const total =
+      params.knownTotal !== undefined
+        ? params.knownTotal
+        : await baseQb.clone().getCount();
     if (params.take <= 0) {
       return { total, noticeNums: [] };
     }
@@ -1534,10 +1569,6 @@ export class NoticeArchiveService {
       .clone()
       .select('archive.noticeNum', 'noticeNum')
       .orderBy('archive.noticeNum', params.sortOrder === 'asc' ? 'ASC' : 'DESC')
-      .addOrderBy(
-        'archive.archive_started_at',
-        params.sortOrder === 'asc' ? 'ASC' : 'DESC',
-      )
       .offset(params.skip)
       .limit(params.take)
       .getRawMany<{ noticeNum: number }>();
@@ -1546,6 +1577,26 @@ export class NoticeArchiveService {
       total,
       noticeNums: rows.map((row) => Number(row.noticeNum)),
     };
+  }
+
+  private createArchiveNoticeItemQueryBuilder(
+    alias = 'archive',
+  ): SelectQueryBuilder<NoticeArchive> {
+    return this.archiveRepository
+      .createQueryBuilder(alias)
+      .select([
+        `${alias}.noticeNum`,
+        `${alias}.subject`,
+        `${alias}.proposerCategory`,
+        `${alias}.committee`,
+        `${alias}.assemblyLink`,
+        `${alias}.contentId`,
+        `${alias}.attachmentPdfFile`,
+        `${alias}.attachmentHwpFile`,
+        `${alias}.lifecycleStatus`,
+        `${alias}.sourceDeletedAt`,
+        `${alias}.archiveStartedAt`,
+      ]);
   }
 
   private async getTrackedRowsByNoticeNums(
@@ -1593,36 +1644,46 @@ export class NoticeArchiveService {
       return;
     }
 
-    await Promise.all(
-      rows.map(async (row) => {
-        const [latestLifecycleStatus, latestSourceDeletedAt] =
-          await Promise.all([
-            this.changeTrackingService.getLatestFieldAfterValue(
-              row.noticeNum,
-              'lifecycleStatus',
-            ),
-            this.changeTrackingService.getLatestFieldAfterValue(
-              row.noticeNum,
-              'sourceDeletedAt',
-            ),
-          ]);
+    const noticeNums = rows
+      .map((row) => row.noticeNum)
+      .filter((num) => Number.isInteger(num) && num > 0);
 
-        if (
-          latestLifecycleStatus === 'active' ||
-          latestLifecycleStatus === 'source_deleted' ||
-          latestLifecycleStatus === 'renumbered'
-        ) {
-          row.lifecycleStatus = latestLifecycleStatus;
-        }
+    if (noticeNums.length === 0) {
+      return;
+    }
 
-        if (latestSourceDeletedAt) {
-          const parsed = new Date(latestSourceDeletedAt);
-          if (!Number.isNaN(parsed.getTime())) {
-            row.sourceDeletedAt = parsed;
-          }
+    const [lifecycleByNoticeNum, sourceDeletedAtByNoticeNum] =
+      await Promise.all([
+        this.changeTrackingService.getLatestFieldValues(
+          noticeNums,
+          'lifecycleStatus',
+        ),
+        this.changeTrackingService.getLatestFieldValues(
+          noticeNums,
+          'sourceDeletedAt',
+        ),
+      ]);
+
+    for (const row of rows) {
+      const latestLifecycleStatus =
+        lifecycleByNoticeNum.get(row.noticeNum) ?? null;
+      if (
+        latestLifecycleStatus === 'active' ||
+        latestLifecycleStatus === 'source_deleted' ||
+        latestLifecycleStatus === 'renumbered'
+      ) {
+        row.lifecycleStatus = latestLifecycleStatus;
+      }
+
+      const latestSourceDeletedAt =
+        sourceDeletedAtByNoticeNum.get(row.noticeNum) ?? null;
+      if (latestSourceDeletedAt) {
+        const parsed = new Date(latestSourceDeletedAt);
+        if (!Number.isNaN(parsed.getTime())) {
+          row.sourceDeletedAt = parsed;
         }
-      }),
-    );
+      }
+    }
   }
 
   async getArchiveNotices(query: ArchiveListQuery): Promise<{
@@ -1637,12 +1698,6 @@ export class NoticeArchiveService {
     const limit = Math.min(50, Math.max(1, query.limit || 10));
     const skip = (page - 1) * limit;
     const search = (query.search || '').trim();
-    const where = buildArchiveWhereConditions({
-      search,
-      startDate: query.startDate,
-      endDate: query.endDate,
-      fullText: query.fullText,
-    });
     const sortOrder = normalizeSortOrder(query.sortOrder);
 
     let rows: NoticeArchive[] = [];
@@ -1674,18 +1729,23 @@ export class NoticeArchiveService {
         );
       }
     } else {
-      const result = await this.archiveRepository.findAndCount({
-        where,
-        select: NOTICE_ITEM_SELECT,
-        order: {
-          noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',
-          archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
-        },
-        skip,
-        take: limit,
+      const baseQb = this.createArchiveNoticeItemQueryBuilder('archive');
+      this.applyArchiveSearchFilters(baseQb, {
+        search,
+        startDate: query.startDate,
+        endDate: query.endDate,
+        fullText: query.fullText,
       });
-      rows = result[0];
-      total = result[1];
+
+      const [fetchedRows, fetchedTotal] = await baseQb
+        .clone()
+        .orderBy('archive.noticeNum', sortOrder === 'asc' ? 'ASC' : 'DESC')
+        .offset(skip)
+        .limit(limit)
+        .getManyAndCount();
+
+      rows = fetchedRows;
+      total = fetchedTotal;
     }
 
     if (this.summaryStateRepository && rows.length > 0) {
@@ -1800,34 +1860,48 @@ export class NoticeArchiveService {
     const skip = Math.max(0, query.skip || 0);
     const take = Math.max(0, query.take || 0);
     const search = (query.search || '').trim();
-    const where = buildArchiveWhereConditions({
+    const sortOrder = normalizeSortOrder(query.sortOrder);
+    const nonDoneBaseQb = this.createArchiveNoticeItemQueryBuilder('archive');
+    this.applyArchiveSearchFilters(nonDoneBaseQb, {
       search,
       startDate: query.startDate,
       endDate: query.endDate,
       fullText: query.fullText,
     });
-    const sortOrder = normalizeSortOrder(query.sortOrder);
 
     let total: number;
+    let rows: NoticeArchive[] = [];
 
     // Use knownTotal when provided to avoid a redundant COUNT query.
     if (query.knownTotal !== undefined) {
       total = query.knownTotal;
     } else if (query.isDone !== undefined && this.summaryStateRepository) {
-      total = (
-        await this.queryArchiveNoticeNumsByIsDoneFilter({
-          isDone: query.isDone,
-          search,
-          startDate: query.startDate,
-          endDate: query.endDate,
-          fullText: query.fullText,
-          sortOrder,
-          skip: 0,
-          take: 0,
-        })
-      ).total;
+      const paged = await this.queryArchiveNoticeNumsByIsDoneFilter({
+        isDone: query.isDone,
+        search,
+        startDate: query.startDate,
+        endDate: query.endDate,
+        fullText: query.fullText,
+        sortOrder,
+        skip,
+        take,
+      });
+      total = paged.total;
+
+      if (paged.noticeNums.length > 0) {
+        const fetched = await this.archiveRepository.find({
+          where: { noticeNum: In(paged.noticeNums) },
+          select: NOTICE_ITEM_SELECT,
+        });
+        const rank = new Map(
+          paged.noticeNums.map((num, idx) => [num, idx] as const),
+        );
+        rows = fetched.sort(
+          (a, b) => (rank.get(a.noticeNum) ?? 0) - (rank.get(b.noticeNum) ?? 0),
+        );
+      }
     } else {
-      total = await this.archiveRepository.count({ where });
+      total = await nonDoneBaseQb.clone().getCount();
     }
 
     if (take === 0) {
@@ -1838,8 +1912,11 @@ export class NoticeArchiveService {
       };
     }
 
-    let rows: NoticeArchive[] = [];
-    if (query.isDone !== undefined && this.summaryStateRepository) {
+    if (
+      rows.length === 0 &&
+      query.isDone !== undefined &&
+      this.summaryStateRepository
+    ) {
       const paged = await this.queryArchiveNoticeNumsByIsDoneFilter({
         isDone: query.isDone,
         search,
@@ -1849,6 +1926,7 @@ export class NoticeArchiveService {
         sortOrder,
         skip,
         take,
+        knownTotal: total,
       });
 
       if (paged.noticeNums.length > 0) {
@@ -1864,16 +1942,12 @@ export class NoticeArchiveService {
         );
       }
     } else {
-      rows = await this.archiveRepository.find({
-        where,
-        select: NOTICE_ITEM_SELECT,
-        order: {
-          noticeNum: sortOrder === 'asc' ? 'ASC' : 'DESC',
-          archiveStartedAt: sortOrder === 'asc' ? 'ASC' : 'DESC',
-        },
-        skip,
-        take,
-      });
+      rows = await nonDoneBaseQb
+        .clone()
+        .orderBy('archive.noticeNum', sortOrder === 'asc' ? 'ASC' : 'DESC')
+        .offset(skip)
+        .limit(take)
+        .getMany();
     }
 
     if (this.summaryStateRepository && rows.length > 0) {

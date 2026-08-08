@@ -1061,8 +1061,7 @@ export class ChangeTrackingService {
       .andWhere(
         "detail.after_value IS NOT NULL AND TRIM(detail.after_value) != ''",
       )
-      .orderBy('event.detected_at', 'DESC')
-      .addOrderBy('event.event_height', 'DESC')
+      .orderBy('event.event_height', 'DESC')
       .addOrderBy('detail.id', 'DESC')
       .limit(1)
       .getRawOne<{ afterValue: string | null }>();
@@ -1081,8 +1080,7 @@ export class ChangeTrackingService {
       .select('detail.after_value', 'afterValue')
       .where('event.notice_num = :noticeNum', { noticeNum })
       .andWhere('detail.field_path = :fieldPath', { fieldPath })
-      .orderBy('event.detected_at', 'DESC')
-      .addOrderBy('event.event_height', 'DESC')
+      .orderBy('event.event_height', 'DESC')
       .addOrderBy('detail.id', 'DESC')
       .limit(1)
       .getRawOne<{ afterValue: string | null }>();
@@ -1116,7 +1114,7 @@ export class ChangeTrackingService {
             detail.after_value AS afterValue,
             ROW_NUMBER() OVER (
               PARTITION BY event.notice_num
-              ORDER BY event.detected_at DESC, event.event_height DESC, detail.id DESC
+              ORDER BY event.event_height DESC, detail.id DESC
             ) AS rn
           FROM notice_change_details detail
           INNER JOIN notice_change_events event
