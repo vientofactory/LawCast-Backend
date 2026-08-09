@@ -28,6 +28,7 @@ export class DatabaseDumpService {
     'notice_change_events',
     'notice_change_details',
   ];
+  private readonly keptVirtualTables = new Set<string>();
 
   constructor(
     private readonly moduleRef: ModuleRef,
@@ -115,19 +116,59 @@ export class DatabaseDumpService {
       await dumpDataSource.query('PRAGMA foreign_keys = OFF;');
 
       const rows = (await dumpDataSource.query(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';",
-      )) as Array<{ name?: string }>;
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';",
+      )) as Array<{ name?: string; sql?: string | null }>;
 
-      const existingTableNames = rows
-        .map((row) => row.name)
-        .filter((name): name is string => typeof name === 'string');
+      const existingTables: Array<{
+        name: string;
+        sql: string | null | undefined;
+        isVirtual: boolean;
+      }> = rows
+        .map((row) => ({
+          name: row.name,
+          sql: row.sql,
+          isVirtual:
+            typeof row.sql === 'string' &&
+            /CREATE\s+VIRTUAL\s+TABLE/i.test(row.sql),
+        }))
+        .filter((row) => typeof row.name === 'string') as Array<{
+        name: string;
+        sql: string | null | undefined;
+        isVirtual: boolean;
+      }>;
+
+      const existingTableNames = existingTables.map((row) => row.name);
 
       const legalTableSet = new Set(this.legalDataTables);
+      const virtualTableNames = existingTables
+        .filter((table) => table.isVirtual)
+        .map((table) => table.name);
+
+      const nonLegalVirtualTableNames = virtualTableNames
+        .filter((tableName) => !legalTableSet.has(tableName))
+        .filter((tableName) => !this.keptVirtualTables.has(tableName));
+
+      for (const tableName of nonLegalVirtualTableNames) {
+        await dumpDataSource.query(
+          `DROP TABLE IF EXISTS ${this.escapeIdentifier(tableName)};`,
+        );
+      }
+
       const dropTargets = existingTableNames.filter(
         (tableName) => !legalTableSet.has(tableName),
       );
 
       for (const tableName of dropTargets) {
+        if (nonLegalVirtualTableNames.includes(tableName)) {
+          continue;
+        }
+
+        // Never drop virtual-table shadow tables directly; they are managed
+        // by the virtual table itself and dropping them first can corrupt schema.
+        if (this.isLikelyVirtualShadowTable(tableName, virtualTableNames)) {
+          continue;
+        }
+
         await dumpDataSource.query(
           `DROP TABLE IF EXISTS ${this.escapeIdentifier(tableName)};`,
         );
@@ -140,6 +181,30 @@ export class DatabaseDumpService {
     } finally {
       await dumpDataSource.destroy();
     }
+  }
+
+  private isLikelyVirtualShadowTable(
+    tableName: string,
+    virtualTableNames: string[],
+  ): boolean {
+    for (const baseName of virtualTableNames) {
+      if (!tableName.startsWith(`${baseName}_`)) {
+        continue;
+      }
+
+      const suffix = tableName.slice(baseName.length + 1);
+      if (
+        suffix === 'data' ||
+        suffix === 'idx' ||
+        suffix === 'docsize' ||
+        suffix === 'config' ||
+        suffix === 'content'
+      ) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private getTimestamp(): string {
