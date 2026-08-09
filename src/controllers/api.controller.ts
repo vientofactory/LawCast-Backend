@@ -38,6 +38,7 @@ import {
 import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
 import { WebPushSubscriptionService } from '../modules/notification/web-push-subscription.service';
 import { WebPushNotificationService } from '../modules/notification/web-push-notification.service';
+import { WebPushRegistrationService } from '../modules/notification/web-push-registration.service';
 import { CreateWebPushSubscriptionDto } from '../modules/notification/dto/create-web-push-subscription.dto';
 import { RemoveWebPushSubscriptionDto } from '../modules/notification/dto/remove-web-push-subscription.dto';
 import {
@@ -50,6 +51,7 @@ export class ApiController {
   constructor(
     private readonly configService: ConfigService,
     private readonly webhookRegistrationService: WebhookRegistrationService,
+    private readonly webPushRegistrationService: WebPushRegistrationService,
     private readonly webPushSubscriptionService: WebPushSubscriptionService,
     private readonly webPushNotificationService: WebPushNotificationService,
     private readonly webhookService: WebhookService,
@@ -92,18 +94,7 @@ export class ApiController {
     @Body() createDto: CreateWebPushSubscriptionDto,
     @Req() req: Request,
   ) {
-    const subscription =
-      await this.webPushSubscriptionService.createOrReactivate({
-        endpoint: createDto.endpoint,
-        p256dh: createDto.p256dh,
-        auth: createDto.auth,
-        userAgent: req.headers['user-agent'] ?? null,
-      });
-
-    return ApiResponseUtils.success(
-      { id: subscription.id },
-      '웹 푸시 알림 구독이 등록되었습니다.',
-    );
+    return this.webPushRegistrationService.registerSubscription(createDto, req);
   }
 
   @Delete('push/subscriptions')
@@ -111,11 +102,7 @@ export class ApiController {
   async removeWebPushSubscription(
     @Body() removeDto: RemoveWebPushSubscriptionDto,
   ) {
-    await this.webPushSubscriptionService.deleteByEndpoint(removeDto.endpoint);
-    return ApiResponseUtils.success(
-      { success: true },
-      '웹 푸시 알림 구독이 해지되었습니다.',
-    );
+    return this.webPushRegistrationService.unregisterSubscription(removeDto);
   }
 
   @Get('notices/recent')

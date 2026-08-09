@@ -11,6 +11,7 @@ import { WebhookRegistrationService } from './webhook-registration.service';
 import { WebPushSubscription } from './web-push-subscription.entity';
 import { WebPushSubscriptionService } from './web-push-subscription.service';
 import { WebPushNotificationService } from './web-push-notification.service';
+import { WebPushRegistrationService } from './web-push-registration.service';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { WebPushNotificationService } from './web-push-notification.service';
     NotificationBatchService,
     NotificationOrchestratorService,
     WebhookRegistrationService,
+    WebPushRegistrationService,
     WebPushSubscriptionService,
     WebPushNotificationService,
   ],
@@ -33,6 +35,7 @@ import { WebPushNotificationService } from './web-push-notification.service';
     NotificationBatchService,
     NotificationOrchestratorService,
     WebhookRegistrationService,
+    WebPushRegistrationService,
     WebPushSubscriptionService,
     WebPushNotificationService,
   ],

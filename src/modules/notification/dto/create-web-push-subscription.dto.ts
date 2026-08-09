@@ -19,4 +19,9 @@ export class CreateWebPushSubscriptionDto {
   @IsNotEmpty({ message: 'auth is required' })
   @MaxLength(256, { message: 'auth is too long' })
   auth: string;
+
+  @IsString({ message: 'Proof token must be a string' })
+  @IsNotEmpty({ message: 'Proof token is required' })
+  @MaxLength(3000, { message: 'Proof token is too long' })
+  proof: string;
 }
