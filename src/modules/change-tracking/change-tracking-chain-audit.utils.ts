@@ -48,6 +48,12 @@ interface BuildDiffEventInput {
   canonVersion?: number;
 }
 
+interface LegacyHashCompatibilityInput {
+  event: NoticeChangeEvent;
+  rebuilt: BuildDiffEventOutput;
+  eventDetails: NoticeChangeDetail[];
+}
+
 export interface ChangeTrackingChainAuditDeps {
   changeEventRepository: Repository<NoticeChangeEvent>;
   changeDetailRepository: Repository<NoticeChangeDetail>;
@@ -122,6 +128,49 @@ export async function runScheduledChainAuditInternal(
   }
 
   return result;
+}
+
+function isLegacyCanonicalHashCompatible(
+  input: LegacyHashCompatibilityInput,
+): boolean {
+  const canonVersion = input.event.canonVersion ?? 1;
+
+  // Legacy v1 events were hashed before canonical payload rules were fully
+  // stabilized. Accept hash drift only when all other invariants still match.
+  if (canonVersion > 1) {
+    return false;
+  }
+
+  if (input.event.eventType !== input.rebuilt.eventType) {
+    return false;
+  }
+
+  if (input.event.changedFieldCount !== input.rebuilt.diff.changedFieldCount) {
+    return false;
+  }
+
+  if (
+    (input.event.diffSummaryJson ?? null) !== input.rebuilt.diff.diffSummaryJson
+  ) {
+    return false;
+  }
+
+  for (const detail of input.eventDetails) {
+    const expectedBeforeHash =
+      detail.beforeValue === null ? null : sha256Hex(detail.beforeValue);
+    const expectedAfterHash =
+      detail.afterValue === null ? null : sha256Hex(detail.afterValue);
+
+    if ((detail.beforeHash ?? null) !== expectedBeforeHash) {
+      return false;
+    }
+
+    if ((detail.afterHash ?? null) !== expectedAfterHash) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 async function verifyAllChains(
@@ -206,7 +255,14 @@ async function verifyNoticeChain(
       });
     }
 
-    if (event.eventHash !== rebuilt.eventHash) {
+    if (
+      event.eventHash !== rebuilt.eventHash &&
+      !isLegacyCanonicalHashCompatible({
+        event,
+        rebuilt,
+        eventDetails,
+      })
+    ) {
       issues.push({
         noticeNum,
         eventId: event.id,

@@ -755,4 +755,167 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     expect(report.checkpointRootHash).toHaveLength(64);
     expect(changeEventRepository.createQueryBuilder).toHaveBeenCalled();
   });
+
+  it('accepts legacy canonVersion=1 hash drift when other invariants match', async () => {
+    const bootstrapService = new ChangeTrackingService(
+      {} as any,
+      {} as any,
+      undefined as any,
+    );
+    const detectedAt = new Date('2026-07-03T00:00:00.000Z');
+    const snapshot = {
+      num: 7001,
+      subject: '구버전 해시 검증',
+      proposerCategory: null,
+      committee: null,
+      proposalReason: '문단 1\n문단 2',
+      billNumber: null,
+      proposer: null,
+      proposalDate: null,
+      contentCommittee: null,
+      referralDate: null,
+      noticePeriod: null,
+      proposalSession: null,
+      isDone: false,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
+    };
+    const built = bootstrapService.buildDiffEvent({
+      noticeNum: 7001,
+      beforeSnapshot: null,
+      afterSnapshot: snapshot,
+      detectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+    });
+
+    const changeEventRepository = {
+      createQueryBuilder: jest.fn(() => ({
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn<(...args: any[]) => Promise<Array<{ noticeNum: number }>>>()
+          .mockResolvedValue([{ noticeNum: 7001 }]),
+      })),
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        {
+          id: 31,
+          noticeNum: 7001,
+          detectedAt,
+          eventType: CHANGE_EVENT_TYPE.CREATED,
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          eventHeight: 1,
+          prevEventHash: null,
+          eventHash: 'legacy-v1-hash-drift',
+          changedFieldCount: built.diff.changedFieldCount,
+          diffSummaryJson: built.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 1,
+        },
+      ]),
+    } as any;
+
+    const changeDetailRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue(
+        built.diff.details.map((detail, index) => ({
+          id: 301 + index,
+          eventId: 31,
+          ...detail,
+        })),
+      ),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      changeDetailRepository,
+      undefined as any,
+      undefined as any,
+    );
+
+    const report = await service.runScheduledChainAudit('daily');
+
+    expect(report.failureCount).toBe(0);
+    expect(report.noticeCount).toBe(1);
+    expect(report.eventCount).toBe(1);
+  });
+
+  it('keeps strict hash validation for canonVersion>1', async () => {
+    const bootstrapService = new ChangeTrackingService(
+      {} as any,
+      {} as any,
+      undefined as any,
+    );
+    const detectedAt = new Date('2026-07-03T00:00:00.000Z');
+    const snapshot = {
+      num: 7002,
+      subject: '신버전 해시 검증',
+      proposerCategory: null,
+      committee: null,
+      proposalReason: '문단 1\n문단 2',
+      billNumber: null,
+      proposer: null,
+      proposalDate: null,
+      contentCommittee: null,
+      referralDate: null,
+      noticePeriod: null,
+      proposalSession: null,
+      isDone: false,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
+    };
+    const built = bootstrapService.buildDiffEvent({
+      noticeNum: 7002,
+      beforeSnapshot: null,
+      afterSnapshot: snapshot,
+      detectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+    });
+
+    const changeEventRepository = {
+      createQueryBuilder: jest.fn(() => ({
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn<(...args: any[]) => Promise<Array<{ noticeNum: number }>>>()
+          .mockResolvedValue([{ noticeNum: 7002 }]),
+      })),
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        {
+          id: 41,
+          noticeNum: 7002,
+          detectedAt,
+          eventType: CHANGE_EVENT_TYPE.CREATED,
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          eventHeight: 1,
+          prevEventHash: null,
+          eventHash: 'canon-v2-hash-drift',
+          changedFieldCount: built.diff.changedFieldCount,
+          diffSummaryJson: built.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 2,
+        },
+      ]),
+    } as any;
+
+    const changeDetailRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue(
+        built.diff.details.map((detail, index) => ({
+          id: 401 + index,
+          eventId: 41,
+          ...detail,
+        })),
+      ),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      changeDetailRepository,
+      undefined as any,
+      undefined as any,
+    );
+
+    const report = await service.runScheduledChainAudit('daily');
+
+    expect(report.failureCount).toBe(1);
+    expect(report.failures[0]?.code).toBe('event_hash_mismatch');
+  });
 });
