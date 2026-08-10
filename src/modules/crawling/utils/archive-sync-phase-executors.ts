@@ -1209,14 +1209,12 @@ export async function executePendingSyncPhase(
       method: 'log',
       message:
         `Pending sync done - scanned=${totalScanned} new=${newNsmNotices.length} ` +
-        `newPending=${newPendingNotices.length} syncOnly=${newSyncOnlyItems.length} ` +
-        `archived=${newlyArchivedCount} recompareStaged=0`,
+        `newPending=${newPendingNotices.length} syncOnly=${newSyncOnlyItems.length} `,
       context: ARCHIVE_SYNC_CONTEXT,
       discordBridge: deps.discordBridge,
       bridgeMessage:
         `Pending sync complete - scanned=${totalScanned} new=${newNsmNotices.length} ` +
-        `newPending=${newPendingNotices.length} syncOnly=${newSyncOnlyItems.length} ` +
-        `archived=${newlyArchivedCount} recompareStaged=0`,
+        `newPending=${newPendingNotices.length} syncOnly=${newSyncOnlyItems.length} `,
     });
 
     LoggerUtils.debugDev(
