@@ -96,6 +96,7 @@ interface RecentChangesQuery {
   limit: number;
   eventType?: ChangeEventType;
   excludeLegacyGenesisSource?: boolean;
+  excludeIsDoneEvents?: boolean;
   comparableOnly?: boolean;
   fromEventId?: number;
   toEventId?: number;
@@ -1186,6 +1187,27 @@ export class ChangeTrackingService {
       baseQueryBuilder.setParameter(
         'legacyGenesisSource',
         this.LEGACY_GENESIS_SOURCE,
+      );
+    }
+
+    if (query.excludeIsDoneEvents) {
+      baseQueryBuilder.andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM notice_change_details detail
+          WHERE detail.event_id = event.id
+            AND detail.field_path = :isDoneFieldPath
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM notice_archive_snapshot_states summary
+          WHERE summary.notice_num = event.notice_num
+            AND summary.is_done = :isDoneTrue
+        )`,
+        {
+          isDoneFieldPath: 'isDone',
+          isDoneTrue: 1,
+        },
       );
     }
 

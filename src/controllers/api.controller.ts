@@ -245,6 +245,7 @@ export class ApiController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('eventType') eventTypeRaw?: string,
     @Query('excludeLegacyGenesisSource') excludeLegacyGenesisSourceRaw?: string,
+    @Query('excludeIsDoneEvents') excludeIsDoneEventsRaw?: string,
     @Query('comparableOnly') comparableOnlyRaw?: string,
     @Query('fromEventId') fromEventIdRaw?: string,
     @Query('toEventId') toEventIdRaw?: string,
@@ -264,6 +265,7 @@ export class ApiController {
       : undefined;
 
     const excludeLegacyGenesisSource = excludeLegacyGenesisSourceRaw === 'true';
+    const excludeIsDoneEvents = excludeIsDoneEventsRaw === 'true';
     const comparableOnly = comparableOnlyRaw === 'true';
     const fromEventId = parsePositiveInteger(fromEventIdRaw);
     const toEventId = parsePositiveInteger(toEventIdRaw);
@@ -276,6 +278,7 @@ export class ApiController {
       limit,
       eventType,
       excludeLegacyGenesisSource,
+      excludeIsDoneEvents,
       comparableOnly,
       fromEventId,
       toEventId,

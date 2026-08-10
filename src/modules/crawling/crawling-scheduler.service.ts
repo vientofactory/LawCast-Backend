@@ -323,16 +323,6 @@ export class CrawlingSchedulerService implements OnModuleInit {
   private async initializeCacheFromArchive(
     archivedCount: number,
   ): Promise<void> {
-    logAndBridge({
-      logger: this.logger,
-      method: 'log',
-      message: `Archive has ${archivedCount} notices - loading cache from DB (no external crawl)`,
-      context: CrawlingSchedulerService.name,
-      discordBridge: this.discordBridge,
-      bridgeLevel: BridgeLogLevel.LOG,
-      bridgeMessage: `Cache initialization: loading **${archivedCount}** notice(s) from archive DB`,
-    });
-
     let notices: CachedNotice[];
     try {
       notices = await this.noticeArchiveService.getRecentNoticesForCache(
@@ -365,12 +355,16 @@ export class CrawlingSchedulerService implements OnModuleInit {
     logAndBridge({
       logger: this.logger,
       method: 'log',
-      message: `Initialized Redis cache with ${notices.length} notices (from archive DB, no crawl)`,
+      message: `Initialized Redis cache with ${notices.length} notices (from archive DB, no crawl, archive total=${archivedCount})`,
       context: CrawlingSchedulerService.name,
       discordBridge: this.discordBridge,
-      bridgeLevel: BridgeLogLevel.VERBOSE,
-      bridgeMessage: `Bootstrap cache loaded: **${notices.length}** notice(s) from archive DB`,
-      metadata: { count: notices.length, source: 'archive' },
+      bridgeLevel: BridgeLogLevel.LOG,
+      bridgeMessage: `Cache initialization complete: loaded **${notices.length}** notice(s) into cache from archive DB`,
+      metadata: {
+        count: notices.length,
+        archiveTotal: archivedCount,
+        source: 'archive',
+      },
     });
   }
 
