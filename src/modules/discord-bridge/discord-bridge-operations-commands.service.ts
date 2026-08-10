@@ -454,10 +454,24 @@ export class DiscordBridgeOperationsCommandsService {
         ? archive.runningPhases.join(', ')
         : 'none';
     const fmtTs = (value: string | null) => value ?? 'none';
+    const fmtErr = (value: string | null | undefined) => {
+      if (!value) return 'none';
+      return value.length > 60 ? `${value.slice(0, 57)}...` : value;
+    };
     const runningWriteHeavyPhases =
       archive.runningWriteHeavyPhases.length > 0
         ? archive.runningWriteHeavyPhases.join(', ')
         : 'none';
+    const phaseByName = new Map(
+      archive.phases.map((phase) => [phase.name, phase]),
+    );
+    const formatPhase = (name: string) => {
+      const phase = phaseByName.get(name);
+      if (!phase) {
+        return `${name}: status=unknown lastRun=none lastError=none`;
+      }
+      return `${name}: status=${phase.status} lastRun=${fmtTs(phase.lastRunAt)} lastError=${fmtErr(phase.lastError)}`;
+    };
 
     const embed = new EmbedBuilder()
       .setColor(0xf59e0b)
@@ -477,7 +491,6 @@ export class DiscordBridgeOperationsCommandsService {
             `archive.writeHeavy=${archive.isWriteHeavyPhaseRunning}\n` +
             `running=${runningWriteHeavyPhases}\n` +
             `fullSyncApply.queue=${archive.asyncApply.fullSyncQueueLength} worker=${archive.asyncApply.fullSyncWorkerRunning}\n` +
-            `pendingRecompare.queue=${archive.asyncApply.pendingRecompareQueueLength} worker=${archive.asyncApply.pendingRecompareWorkerRunning}\n` +
             `summaryBackfill.queue=${archive.asyncApply.summaryBackfillQueueLength} worker=${archive.asyncApply.summaryBackfillWorkerRunning}`,
           inline: false,
         },
@@ -485,8 +498,11 @@ export class DiscordBridgeOperationsCommandsService {
           name: 'Recent Activity',
           value:
             `fullSync.lastBatch=${archive.asyncApply.fullSyncLastBatchProcessed} at ${fmtTs(archive.asyncApply.fullSyncLastBatchAt)}\n` +
-            `pendingRecompare.lastBatch=${archive.asyncApply.pendingRecompareLastBatchProcessed} at ${fmtTs(archive.asyncApply.pendingRecompareLastBatchAt)}\n` +
-            `summaryBackfill.lastBatch=${archive.asyncApply.summaryBackfillLastBatchProcessed} at ${fmtTs(archive.asyncApply.summaryBackfillLastBatchAt)}`,
+            `summaryBackfill.lastBatch=${archive.asyncApply.summaryBackfillLastBatchProcessed} at ${fmtTs(archive.asyncApply.summaryBackfillLastBatchAt)}\n` +
+            `${formatPhase('pending sync')}\n` +
+            `${formatPhase('isDone sync')}\n` +
+            `${formatPhase('integrity check')}\n` +
+            `${formatPhase('chain integrity audit')}`,
           inline: false,
         },
       )

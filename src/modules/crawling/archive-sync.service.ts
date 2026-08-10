@@ -166,27 +166,21 @@ export interface ArchiveSyncExecutionState {
   }>;
 }
 
-// ─── Internal tracker ─────────────────────────────────────────────────────────
-
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 /**
- * Unified service that manages the complete archive synchronisation pipeline:
+ * Manages the complete archive synchronisation pipeline with 7 phases:
  *
- *  1. **Full sync** - streams all active legislative notices via
- *     `CrawlingCoreService.getAllPages` and archives any records that are
- *     missing from the DB, including their source HTML and content metadata.
+ *  1. Full sync - Archives all active legislative notices from the crawler
+ *  2. isDone sync - Reconciles done-status flags with the crawler registry
+ *  3. Integrity check - Verifies SHA-256 hashes of archived HTML content
+ *  4. Summary backfill - Generates AI summaries via Ollama
+ *  5. Chain integrity audit - Verifies change-chain Merkle root hash
+ *  6. Pending sync - Archives bills in proposed state from 국민참여입법센터
+ *  7. Legacy genesis seed - Seeds genesis events for legacy notices
  *
- *  2. **isDone sync** - two-phase reconciliation that marks notices as done
- *     and reverts stale done-flags, keeping the `isDone` column consistent
- *     with the crawler's done-notice registry.
- *
- *  3. **Integrity check** - scans every archive record and re-verifies the
- *     stored SHA-256 hash against the raw `sourceHtml`, persisting results
- *     back to `integrityVerifiedAt` / `integrityCheckPassed`.
- *
- * On module init the three phases are executed sequentially as a bootstrap
- * pipeline so the DB is fully reconciled before the first scheduled cron tick.
+ * Phases execute sequentially on module init to ensure DB consistency
+ * before the first scheduled cron tick.
  */
 @Injectable()
 export class ArchiveSyncService implements OnModuleInit {
@@ -598,18 +592,17 @@ export class ArchiveSyncService implements OnModuleInit {
     ];
   }
 
-  /**
-   * Write-heavy phases that should not overlap with other write-heavy phases.
-   * `chain integrity audit` is intentionally excluded because it is read/audit oriented.
-   */
   private getWriteHeavyPhaseEntries(): PhaseEntry[] {
+    /**
+     * Write-heavy phases that should not overlap with other write-heavy phases.
+     * `chain integrity audit` is intentionally excluded because it is read/audit oriented.
+     */
     return [
       { name: 'full sync', tracker: this.fullSync },
       { name: 'isDone sync', tracker: this.isDoneSync },
       { name: 'integrity check', tracker: this.integrityCheck },
       { name: 'pending sync', tracker: this.pendingSync },
       { name: 'legacy genesis seed', tracker: this.legacyGenesisSeed },
-      // { name: 'summary backfill', tracker: this.summaryBackfill },
     ];
   }
 
