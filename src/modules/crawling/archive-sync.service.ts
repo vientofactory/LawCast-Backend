@@ -290,7 +290,7 @@ export class ArchiveSyncService implements OnModuleInit {
       await this.safeRun('async apply drain', () =>
         this.waitForAsyncApplyIdle('pending sync', undefined, undefined, {
           fullSync: false,
-          pendingRecompare: true,
+          pendingRecompare: false,
           summaryBackfill: false,
         }),
       );

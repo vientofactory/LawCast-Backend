@@ -354,41 +354,11 @@ export function kickArchiveSyncAsyncApplyWorkers(
   }
 }
 
-function makePendingRecompareTaskKey(item: INsmBillItem): string {
-  const billNo = item.billNo?.trim();
-  if (billNo) {
-    return `billNo:${billNo}`;
-  }
-
-  const link = item.link?.trim();
-  if (link) {
-    return `link:${link}`;
-  }
-
-  return `fallback:${item.billName?.trim() ?? ''}|${item.proposer?.trim() ?? ''}`;
-}
-
 async function enqueueFullSyncApplyTasks(
   deps: ArchiveSyncExecutorDeps,
   tasks: FullSyncApplyTask[],
 ): Promise<number> {
   return enqueueUniqueApplyTasks(deps, FULL_SYNC_APPLY_QUEUE_KEY, tasks);
-}
-
-async function enqueuePendingRecompareApplyTasks(
-  deps: ArchiveSyncExecutorDeps,
-  items: INsmBillItem[],
-): Promise<number> {
-  const tasks = items.map((item) => ({
-    key: makePendingRecompareTaskKey(item),
-    item,
-  }));
-
-  return enqueueUniqueApplyTasks(
-    deps,
-    PENDING_RECOMPARE_APPLY_QUEUE_KEY,
-    tasks,
-  );
 }
 
 async function enqueueSummaryBackfillApplyTasks(
@@ -1174,7 +1144,6 @@ export async function executePendingSyncPhase(
       await deps.archiveOrchestratorService.filterAlreadyArchivedNotices(
         nsmNotices,
       );
-    const newNsmNumSet = new Set(newNsmNotices.map((notice) => notice.num));
     const newPendingNotices = newNsmNotices.filter((notice) =>
       pendingCandidateNums.has(notice.num),
     );
@@ -1182,30 +1151,11 @@ export async function executePendingSyncPhase(
       .filter((notice) => !pendingCandidateNums.has(notice.num))
       .map((notice) => rawItemMap.get(notice.num))
       .filter((item): item is INsmBillItem => item !== undefined);
-    const existingPendingCandidates = nsmNotices
-      .filter((notice) => !newNsmNumSet.has(notice.num))
-      .map((notice) => rawItemMap.get(notice.num))
-      .filter((item): item is INsmBillItem => item !== undefined);
-    const existingPendingCandidateNums = existingPendingCandidates.map(
-      (item) => CrawlingCoreService.nsmBillToCachedNotice(item).num,
-    );
-
-    const existingPendingEligibleNums =
-      existingPendingCandidates.length > 0
-        ? await deps.noticeArchiveService.getArchivedNullContentIdNums(
-            existingPendingCandidateNums,
-          )
-        : new Set<number>();
-    const existingPendingItems = existingPendingCandidates.filter((item) =>
-      existingPendingEligibleNums.has(
-        CrawlingCoreService.nsmBillToCachedNotice(item).num,
-      ),
-    );
     const classifyElapsedMs = Date.now() - classifyStartedAt;
 
     LoggerUtils.debugDev(
       'ArchiveSyncService',
-      `Pending sync classify: scanned=${totalScanned}, newAll=${newNsmNotices.length}, newPending=${newPendingNotices.length}, newSyncOnly=${newSyncOnlyItems.length}, existingRecompareCandidates=${existingPendingCandidates.length}, existingRecompareEligible=${existingPendingItems.length}, classifyMs=${classifyElapsedMs}`,
+      `Pending sync classify: scanned=${totalScanned}, newAll=${newNsmNotices.length}, newPending=${newPendingNotices.length}, newSyncOnly=${newSyncOnlyItems.length}, classifyMs=${classifyElapsedMs}`,
     );
 
     const archiveStartedAt = Date.now();
@@ -1239,71 +1189,18 @@ export async function executePendingSyncPhase(
       );
     }
 
-    let stagedRecompareCount = 0;
-    if (existingPendingItems.length > 0) {
-      const queueBefore = (
-        await readApplyQueue<PendingRecompareApplyTask>(
-          deps,
-          PENDING_RECOMPARE_APPLY_QUEUE_KEY,
-        )
-      ).length;
-      LoggerUtils.log(
-        'ArchiveSyncService',
-        `Pending sync transition: NSM list scan complete -> per-notice recompare stage (trigger=${runtime?.trigger ?? 'manual'}, requested=${existingPendingCandidates.length}, eligible=${existingPendingItems.length}, queueBefore=${queueBefore})`,
-      );
-
-      if (runtime?.trigger === 'bootstrap') {
-        recordPendingRecompareStage({
-          trigger: runtime.trigger,
-          requested: existingPendingCandidates.length,
-          eligible: existingPendingItems.length,
-          enqueued: 0,
-          queueBefore,
-          queueAfter: queueBefore,
-        });
-        LoggerUtils.logDev(
-          'ArchiveSyncService',
-          `Pending sync recompare staging skipped during bootstrap: requested=${existingPendingItems.length}`,
-        );
-      } else {
-        stagedRecompareCount = await enqueuePendingRecompareApplyTasks(
-          deps,
-          existingPendingItems,
-        );
-        const queueAfter = (
-          await readApplyQueue<PendingRecompareApplyTask>(
-            deps,
-            PENDING_RECOMPARE_APPLY_QUEUE_KEY,
-          )
-        ).length;
-        recordPendingRecompareStage({
-          trigger: runtime?.trigger ?? 'manual',
-          requested: existingPendingCandidates.length,
-          eligible: existingPendingItems.length,
-          enqueued: stagedRecompareCount,
-          queueBefore,
-          queueAfter,
-        });
-        void runPendingRecompareApplyWorker(deps, options);
-        LoggerUtils.log(
-          'ArchiveSyncService',
-          `Pending sync recompare staged: trigger=${runtime?.trigger ?? 'manual'}, requested=${existingPendingCandidates.length}, eligible=${existingPendingItems.length}, staged=${stagedRecompareCount}, queueBefore=${queueBefore}, queueAfter=${queueAfter}`,
-        );
-      }
-    } else {
-      recordPendingRecompareStage({
-        trigger: runtime?.trigger ?? 'manual',
-        requested: existingPendingCandidates.length,
-        eligible: 0,
-        enqueued: 0,
-        queueBefore: pendingRecompareQueueLengthSnapshot,
-        queueAfter: pendingRecompareQueueLengthSnapshot,
-      });
-      LoggerUtils.log(
-        'ArchiveSyncService',
-        `Pending sync transition: NSM list scan complete -> per-notice recompare stage skipped (trigger=${runtime?.trigger ?? 'manual'}, requested=${existingPendingCandidates.length}, eligible=0)`,
-      );
-    }
+    recordPendingRecompareStage({
+      trigger: runtime?.trigger ?? 'manual',
+      requested: 0,
+      eligible: 0,
+      enqueued: 0,
+      queueBefore: pendingRecompareQueueLengthSnapshot,
+      queueAfter: pendingRecompareQueueLengthSnapshot,
+    });
+    LoggerUtils.logDev(
+      'ArchiveSyncService',
+      `Pending sync delegated recompare handling to pending change-detection workflow (trigger=${runtime?.trigger ?? 'manual'})`,
+    );
     const archiveElapsedMs = Date.now() - archiveStartedAt;
     const totalElapsedMs = Date.now() - pendingPhaseStartedAt;
 
@@ -1313,13 +1210,13 @@ export async function executePendingSyncPhase(
       message:
         `Pending sync done - scanned=${totalScanned} new=${newNsmNotices.length} ` +
         `newPending=${newPendingNotices.length} syncOnly=${newSyncOnlyItems.length} ` +
-        `archived=${newlyArchivedCount} recompareStaged=${stagedRecompareCount}`,
+        `archived=${newlyArchivedCount} recompareStaged=0`,
       context: ARCHIVE_SYNC_CONTEXT,
       discordBridge: deps.discordBridge,
       bridgeMessage:
         `Pending sync complete - scanned=${totalScanned} new=${newNsmNotices.length} ` +
         `newPending=${newPendingNotices.length} syncOnly=${newSyncOnlyItems.length} ` +
-        `archived=${newlyArchivedCount} recompareStaged=${stagedRecompareCount}`,
+        `archived=${newlyArchivedCount} recompareStaged=0`,
     });
 
     LoggerUtils.debugDev(

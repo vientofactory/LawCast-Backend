@@ -765,7 +765,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(result!.totalNoticesScanned).toBe(0);
   });
 
-  it('runPendingSync re-compares archived NSM pending bills while scanning full pending pages', async () => {
+  it('runPendingSync only archives new pending bills while recompare is delegated', async () => {
     const existingPendingItem = {
       billNo: '2200001',
       billName: '기존 발의안',
@@ -850,15 +850,10 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     ).toHaveBeenNthCalledWith(1, [newPendingItem], {
       reason: NsmArchiveReason.NEW_PENDING_BILLS,
     });
-    expect(cacheService.setObject).toHaveBeenCalledWith(
+    expect(cacheService.setObject).not.toHaveBeenCalledWith(
       APP_CONSTANTS.ARCHIVE_SYNC.PENDING_RECOMPARE_APPLY_QUEUE_KEY,
-      expect.arrayContaining([
-        expect.objectContaining({
-          key: 'billNo:2200001',
-          item: existingPendingItem,
-        }),
-      ]),
-      APP_CONSTANTS.ARCHIVE_SYNC.ASYNC_APPLY_QUEUE_TTL_SECONDS,
+      expect.anything(),
+      expect.anything(),
     );
   });
 
@@ -889,7 +884,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
 
     expect(waitSpy).toHaveBeenCalledWith('pending sync', undefined, undefined, {
       fullSync: false,
-      pendingRecompare: true,
+      pendingRecompare: false,
       summaryBackfill: false,
     });
     expect(waitSpy).toHaveBeenCalledWith('full sync', undefined, undefined, {
