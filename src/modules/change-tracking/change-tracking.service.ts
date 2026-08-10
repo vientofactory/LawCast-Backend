@@ -97,7 +97,6 @@ interface RecentChangesQuery {
   search?: string;
   noticeNum?: number;
   eventType?: ChangeEventType;
-  source?: string;
   sortOrder?: 'asc' | 'desc';
   excludeLegacyGenesisSource?: boolean;
   excludeIsDoneEvents?: boolean;
@@ -1211,12 +1210,6 @@ export class ChangeTrackingService {
     if (query.noticeNum && query.noticeNum > 0) {
       baseQueryBuilder.andWhere('event.noticeNum = :noticeNum', {
         noticeNum: query.noticeNum,
-      });
-    }
-
-    if (query.source?.trim()) {
-      baseQueryBuilder.andWhere('event.source = :source', {
-        source: query.source.trim(),
       });
     }
 
