@@ -243,7 +243,11 @@ export class ApiController {
   async getRecentNoticeChanges(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('search') search?: string,
+    @Query('noticeNum') noticeNumRaw?: string,
     @Query('eventType') eventTypeRaw?: string,
+    @Query('source') source?: string,
+    @Query('sortOrder') sortOrderRaw?: string,
     @Query('excludeLegacyGenesisSource') excludeLegacyGenesisSourceRaw?: string,
     @Query('excludeIsDoneEvents') excludeIsDoneEventsRaw?: string,
     @Query('comparableOnly') comparableOnlyRaw?: string,
@@ -263,6 +267,8 @@ export class ApiController {
     )
       ? (eventTypeRaw as ChangeEventType)
       : undefined;
+    const noticeNum = parsePositiveInteger(noticeNumRaw);
+    const sortOrder = sortOrderRaw === 'asc' ? 'asc' : 'desc';
 
     const excludeLegacyGenesisSource = excludeLegacyGenesisSourceRaw === 'true';
     const excludeIsDoneEvents = excludeIsDoneEventsRaw === 'true';
@@ -276,7 +282,11 @@ export class ApiController {
     const result = await this.changeTrackingService.getRecentChanges({
       page,
       limit,
+      search,
+      noticeNum,
       eventType,
+      source,
+      sortOrder,
       excludeLegacyGenesisSource,
       excludeIsDoneEvents,
       comparableOnly,

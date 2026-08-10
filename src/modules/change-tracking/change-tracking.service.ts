@@ -94,7 +94,11 @@ interface ChangeTimelineQuery {
 interface RecentChangesQuery {
   page: number;
   limit: number;
+  search?: string;
+  noticeNum?: number;
   eventType?: ChangeEventType;
+  source?: string;
+  sortOrder?: 'asc' | 'desc';
   excludeLegacyGenesisSource?: boolean;
   excludeIsDoneEvents?: boolean;
   comparableOnly?: boolean;
@@ -192,6 +196,26 @@ export class ChangeTrackingService {
   private notificationCollectionDepth = 0;
   private notificationSuppressionDepth = 0;
   private sqliteAppendQueue: Promise<void> = Promise.resolve();
+
+  private buildFtsMatchQuery(search: string): string | null {
+    const terms = search
+      .trim()
+      .split(/\s+/)
+      .map((term) =>
+        term
+          .replace(/["'`]/g, ' ')
+          .replace(/[^\p{L}\p{N}_-]/gu, ' ')
+          .trim(),
+      )
+      .filter((term) => term.length > 0)
+      .map((term) => `"${term}"*`);
+
+    if (terms.length === 0) {
+      return null;
+    }
+
+    return terms.join(' AND ');
+  }
 
   constructor(
     @InjectRepository(NoticeChangeEvent)
@@ -1166,6 +1190,10 @@ export class ChangeTrackingService {
   ): Promise<RecentChangesResult> {
     const page = Math.max(query.page, 1);
     const limit = Math.min(Math.max(query.limit, 1), 100);
+    const normalizedSearch = (query.search ?? '').trim().toLowerCase();
+    const normalizedSortOrder = query.sortOrder === 'asc' ? 'asc' : 'desc';
+    const sqlSortOrder: 'ASC' | 'DESC' =
+      normalizedSortOrder === 'asc' ? 'ASC' : 'DESC';
     const baseQueryBuilder =
       this.changeEventRepository.createQueryBuilder('event');
 
@@ -1180,6 +1208,62 @@ export class ChangeTrackingService {
       });
     }
 
+    if (query.noticeNum && query.noticeNum > 0) {
+      baseQueryBuilder.andWhere('event.noticeNum = :noticeNum', {
+        noticeNum: query.noticeNum,
+      });
+    }
+
+    if (query.source?.trim()) {
+      baseQueryBuilder.andWhere('event.source = :source', {
+        source: query.source.trim(),
+      });
+    }
+
+    if (normalizedSearch.length > 0) {
+      const searchPattern = `%${normalizedSearch}%`;
+      const ftsQuery = this.buildFtsMatchQuery(normalizedSearch);
+
+      if (this.noticeArchiveRepository) {
+        const subjectSubQuery = ftsQuery
+          ? this.noticeArchiveRepository
+              .createQueryBuilder('archive')
+              .select('archive.noticeNum')
+              .where(
+                `archive.rowid IN (
+                      SELECT rowid
+                      FROM notice_archives_fts
+                      WHERE notice_archives_fts MATCH :subjectFtsQuery
+                    )`,
+              )
+              .getQuery()
+          : this.noticeArchiveRepository
+              .createQueryBuilder('archive')
+              .select('archive.noticeNum')
+              .where('LOWER(archive.subject) LIKE :subjectSearchPattern')
+              .getQuery();
+
+        baseQueryBuilder
+          .andWhere(
+            `(CAST(event.noticeNum AS TEXT) LIKE :noticeNumSearchPattern OR event.noticeNum IN (${subjectSubQuery}))`,
+          )
+          .setParameter('noticeNumSearchPattern', searchPattern);
+
+        if (ftsQuery) {
+          baseQueryBuilder.setParameter('subjectFtsQuery', ftsQuery);
+        } else {
+          baseQueryBuilder.setParameter('subjectSearchPattern', searchPattern);
+        }
+      } else {
+        baseQueryBuilder.andWhere(
+          'CAST(event.noticeNum AS TEXT) LIKE :noticeNumSearchPattern',
+          {
+            noticeNumSearchPattern: searchPattern,
+          },
+        );
+      }
+    }
+
     if (query.excludeLegacyGenesisSource) {
       baseQueryBuilder.andWhere(
         '(event.source IS NULL OR event.source != :legacyGenesisSource)',
@@ -1192,17 +1276,15 @@ export class ChangeTrackingService {
 
     if (query.excludeIsDoneEvents) {
       baseQueryBuilder.andWhere(
-        `NOT EXISTS (
-          SELECT 1
+        `event.id NOT IN (
+          SELECT detail.event_id
           FROM notice_change_details detail
-          WHERE detail.event_id = event.id
-            AND detail.field_path = :isDoneFieldPath
+          WHERE detail.field_path = :isDoneFieldPath
         )
-        AND NOT EXISTS (
-          SELECT 1
+        AND event.notice_num NOT IN (
+          SELECT summary.notice_num
           FROM notice_archive_snapshot_states summary
-          WHERE summary.notice_num = event.notice_num
-            AND summary.is_done = :isDoneTrue
+          WHERE summary.is_done = :isDoneTrue
         )`,
         {
           isDoneFieldPath: 'isDone',
@@ -1212,21 +1294,10 @@ export class ChangeTrackingService {
     }
 
     if (query.comparableOnly) {
+      // eventHeight > baseline implies the parent notice has at least one comparable event.
       baseQueryBuilder.andWhere('event.eventHeight > :baselineEventHeight', {
         baselineEventHeight: this.BASELINE_EVENT_HEIGHT,
       });
-
-      const comparableNoticeSubQuery = this.changeEventRepository
-        .createQueryBuilder('ce')
-        .select('ce.noticeNum')
-        .groupBy('ce.noticeNum')
-        .having(
-          '(COUNT(*) - SUM(CASE WHEN ce.eventHeight = :baselineEventHeight THEN 1 ELSE 0 END)) >= 1',
-        );
-
-      baseQueryBuilder
-        .andWhere(`event.noticeNum IN (${comparableNoticeSubQuery.getQuery()})`)
-        .setParameter('baselineEventHeight', this.BASELINE_EVENT_HEIGHT);
     }
 
     if (query.fromEventId) {
@@ -1280,8 +1351,8 @@ export class ChangeTrackingService {
 
     const builder = baseQueryBuilder
       .clone()
-      .orderBy('event.detectedAt', 'DESC')
-      .addOrderBy('event.id', 'DESC');
+      .orderBy('event.detectedAt', sqlSortOrder)
+      .addOrderBy('event.id', sqlSortOrder);
 
     builder.skip((page - 1) * limit).take(limit);
 
@@ -1324,35 +1395,38 @@ export class ChangeTrackingService {
   }
 
   async getComparableChangeSummary(): Promise<ComparableChangeSummary> {
-    const rows = await this.changeEventRepository
+    const comparableEventTotalRaw = await this.changeEventRepository
       .createQueryBuilder('event')
-      .select('event.notice_num', 'noticeNum')
-      .addSelect(
-        '(COUNT(*) - SUM(CASE WHEN event.event_height = :baselineEventHeight THEN 1 ELSE 0 END))',
-        'comparableEventCount',
-      )
-      .groupBy('event.notice_num')
-      .having(
-        '(COUNT(*) - SUM(CASE WHEN event.event_height = :baselineEventHeight THEN 1 ELSE 0 END)) >= 1',
-      )
+      .select('COUNT(*)', 'count')
+      .where('event.event_height > :baselineEventHeight')
       .setParameter('baselineEventHeight', this.BASELINE_EVENT_HEIGHT)
-      .getRawMany<{
-        noticeNum: number | string;
-        comparableEventCount: number | string;
-      }>();
+      .getRawOne<{ count: number | string }>();
 
-    const comparableEventTotal = rows.reduce((sum, row) => {
-      const value = Number.parseInt(String(row.comparableEventCount), 10);
-      if (!Number.isInteger(value) || value <= 0) {
-        return sum;
-      }
+    const comparableNoticeCountRaw = await this.changeEventRepository
+      .createQueryBuilder('event')
+      .select('COUNT(DISTINCT event.notice_num)', 'count')
+      .where('event.event_height > :baselineEventHeight')
+      .setParameter('baselineEventHeight', this.BASELINE_EVENT_HEIGHT)
+      .getRawOne<{ count: number | string }>();
 
-      return sum + value;
-    }, 0);
+    const comparableEventTotal = Number.parseInt(
+      String(comparableEventTotalRaw?.count ?? 0),
+      10,
+    );
+    const comparableNoticeCount = Number.parseInt(
+      String(comparableNoticeCountRaw?.count ?? 0),
+      10,
+    );
 
     return {
-      comparableEventTotal,
-      comparableNoticeCount: rows.length,
+      comparableEventTotal:
+        Number.isInteger(comparableEventTotal) && comparableEventTotal > 0
+          ? comparableEventTotal
+          : 0,
+      comparableNoticeCount:
+        Number.isInteger(comparableNoticeCount) && comparableNoticeCount > 0
+          ? comparableNoticeCount
+          : 0,
     };
   }
 
