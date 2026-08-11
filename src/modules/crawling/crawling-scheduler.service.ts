@@ -267,7 +267,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
    */
   private runBackgroundTask(taskName: string, task: () => Promise<void>): void {
     if (this.activeBackgroundTasks.has(taskName)) {
-      LoggerUtils.debug(
+      LoggerUtils.debugDev(
         CrawlingSchedulerService.name,
         `Background task already running - skipping duplicate launch: ${taskName}`,
       );
