@@ -235,7 +235,29 @@ LawCast의 법률안 전체 동기화는 단일 대량 트랜잭션이 아니라
 
 이 구조 덕분에 크롤링/스캔 phase는 빠르게 끝내고, 저장/요약 같은 무거운 작업은 별도 drain으로 안정적으로 재시도할 수 있습니다.
 
-### 전체 동기화 흐름 요약
+### 백필과 snapshot artifact 복구 규칙
+
+아카이브는 한 번 저장된 snapshot row를 "완전 불변"으로 유지하면서도, 초기 캡처가 실패했더라도 이후 재시도에서 NULL 상태인 artifact만 채우는 복구 경로를 제공합니다.
+
+- `source_html`, `source_html_sha256`, `http_metadata_json`, `http_fetched_at`, `http_status_code`, `http_content_type`, `http_etag`, `http_last_modified`, `screenshot_blob`, `screenshot_format` 등 snapshot artifact는 기존 값이 있으면 절대 덮어쓰지 않습니다.
+- 각 컬럼이 `NULL`일 때만 `WHERE ... IS NULL` 조건으로 갱신을 시도합니다. 이미 값이 채워진 경우는 no-op입니다.
+- 이 규칙은 DB 레벨 trigger에도 반영되어 있어, 초기 첫 채움만 허용하고 이후 비NULL→다른 값 갱신을 막습니다.
+- source HTML이 채워지면 무결성 상태를 `pending_recheck`로 복구해, 새로 채운 artifact를 다시 검증 대상으로 돌립니다.
+- source snapshot이 없거나 검증 불가 상태인 notice를 별도 deficit로 남겨, 백필/재검증 queue에서 안전하게 재처리하도록 합니다.
+
+즉, "아예 스냅샷이 없던 row를 조용히 누락 상태로 둔 채 진행하는 것"과 "NULL인 artifact만 한 번 채우는 정당한 first-fill"을 구분합니다. 이는 proposalReason backfill, 재크롤링, integrity rescan이 모두 동일한 규칙 아래에서 동작하게 해줍니다.
+
+### 백필이 만드는 재시도 대상과 정합성
+
+다음 경로는 모두 핵심 데이터가 비어 있는 notice를 재시도 대상으로 유지합니다.
+
+- `proposalReason backfill drain`: NSM 상세 페이지가 비어 있거나 삭제 신호를 받은 건을 다시 확인해 `proposalReason`와 관련 상태를 보완합니다.
+- `summary backfill`: `not_requested`, recovery 대상, `unavailable` 상태의 summary를 함께 큐에 적재해 배치 생성/적용을 수행합니다.
+- integrity deficit seeding: source snapshot 또는 SHA-256가 비어 있으면 row를 시드하고, 이후 backfill/recheck 작업이 다시 채우도록 합니다.
+
+핵심은 "누락 상태를 감춰 버리지 않고 추적 가능한 retry target으로 남긴다"는 점입니다. 이렇게 해야 이전에는 전체 row가 저장돼도 어떤 artifact만 사라진 상태가 생기는 구멍이 운영 중에 조용히 남지 않습니다.
+
+### 전체 동기화 흐름 요급
 
 ```mermaid
 flowchart TD
