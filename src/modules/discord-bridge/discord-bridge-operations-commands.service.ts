@@ -448,10 +448,20 @@ export class DiscordBridgeOperationsCommandsService {
     });
 
     const archive = archiveSyncService.getExecutionState();
+    const scheduler = crawlingService.getSchedulerExecutionState();
 
     const runningPhases =
       archive.runningPhases.length > 0
         ? archive.runningPhases.join(', ')
+        : 'none';
+    const runningSchedulerTasks = [
+      ...(scheduler.isProcessing ? ['crawl'] : []),
+      ...(scheduler.isPendingProcessing ? ['pending crawl'] : []),
+      ...scheduler.activeBackgroundTasks,
+    ];
+    const schedulerTasks =
+      runningSchedulerTasks.length > 0
+        ? runningSchedulerTasks.join(', ')
         : 'none';
     const fmtTs = (value: string | null) => value ?? 'none';
     const fmtErr = (value: string | null | undefined) => {
@@ -481,8 +491,9 @@ export class DiscordBridgeOperationsCommandsService {
           name: 'Scheduler / Phases',
           value:
             `scheduler.busy=${crawlingService.isSchedulerBusy({ includeBackground: true })} ` +
+            `scheduler.active=${schedulerTasks}\n` +
             `archive.anyRunning=${archive.isAnyPhaseRunning}\n` +
-            `runningPhases=${runningPhases}`,
+            `archive.active=${runningPhases}`,
           inline: false,
         },
         {
