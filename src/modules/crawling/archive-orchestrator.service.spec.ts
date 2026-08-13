@@ -19,9 +19,14 @@ import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { type CachedNotice } from '../../types/cache.types';
 import { type INsmBillItem } from 'pal-crawl';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
+import { computeSha256 } from '../notice/notice-archive.helpers';
 
 jest.mock('../../utils/http-fetch.utils', () => ({
   fetchHtmlPage: jest.fn(),
+}));
+
+jest.mock('../../utils/async-delay.utils', () => ({
+  delayMs: jest.fn().mockResolvedValue(undefined),
 }));
 
 const mockFetchHtmlPage = fetchHtmlPage as jest.MockedFunction<
@@ -112,6 +117,10 @@ describe('ArchiveOrchestratorService', () => {
               .fn()
               .mockResolvedValue(undefined),
             updateScreenshot: jest.fn().mockResolvedValue(undefined),
+            updateSourceHtml: jest.fn().mockResolvedValue(undefined),
+            getNoticesWithMissingSnapshotArtifacts: jest
+              .fn()
+              .mockResolvedValue({ pal: [], nsm: [] }),
             getNoticesWithMissingScreenshots: jest.fn().mockResolvedValue([]),
             getNoticesWithMissingNsmScreenshots: jest
               .fn()
@@ -516,6 +525,212 @@ describe('ArchiveOrchestratorService', () => {
     });
   });
 
+  describe('backfillMissingSnapshotArtifacts', () => {
+    const palCaptureResponse = {
+      data: '<html>backfilled</html>',
+      statusText: 'OK',
+      config: { url: 'https://example.com/notice/7' },
+      request: { res: { responseUrl: 'https://example.com/notice/7' } },
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    };
+
+    const setTargets = (targets: {
+      pal?: Array<{ num: number; assemblyLink: string }>;
+      nsm?: Array<{ num: number }>;
+    }) => {
+      (
+        noticeArchiveService.getNoticesWithMissingSnapshotArtifacts as jest.Mock
+      ).mockResolvedValue({ pal: targets.pal ?? [], nsm: targets.nsm ?? [] });
+    };
+
+    it('returns zero counts and skips querying when nothing is deficient', async () => {
+      setTargets({});
+
+      const result = await service.backfillMissingSnapshotArtifacts();
+
+      expect(result).toEqual({
+        palScanned: 0,
+        palFilled: 0,
+        nsmScanned: 0,
+        nsmFilled: 0,
+        failed: 0,
+      });
+      expect(noticeArchiveService.updateSourceHtml).not.toHaveBeenCalled();
+      expect(
+        noticeArchiveService.updateNsmHtmlAndDetail,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('fills PAL source html for deficient rows', async () => {
+      setTargets({
+        pal: [{ num: 7, assemblyLink: 'https://example.com/notice/7' }],
+      });
+      mockFetchHtmlPage.mockResolvedValue(palCaptureResponse as any);
+
+      const result = await service.backfillMissingSnapshotArtifacts();
+
+      expect(result.palFilled).toBe(1);
+      expect(result.failed).toBe(0);
+      expect(noticeArchiveService.updateSourceHtml).toHaveBeenCalledWith(
+        7,
+        '<html>backfilled</html>',
+        computeSha256('<html>backfilled</html>'),
+        expect.objectContaining({
+          requestUrl: 'https://example.com/notice/7',
+          statusCode: 200,
+        }),
+      );
+    });
+
+    it('counts a failed PAL capture without aborting the remaining rows', async () => {
+      setTargets({
+        pal: [
+          { num: 7, assemblyLink: 'https://example.com/notice/7' },
+          { num: 8, assemblyLink: 'https://example.com/notice/8' },
+        ],
+      });
+      mockFetchHtmlPage
+        .mockRejectedValueOnce(new Error('timeout'))
+        .mockResolvedValueOnce(palCaptureResponse as any);
+
+      const result = await service.backfillMissingSnapshotArtifacts();
+
+      expect(result.palScanned).toBe(2);
+      expect(result.palFilled).toBe(1);
+      expect(result.failed).toBe(1);
+      expect(noticeArchiveService.updateSourceHtml).toHaveBeenCalledTimes(1);
+    });
+
+    it('fills NSM html, http metadata and screenshot from a single capture', async () => {
+      setTargets({ nsm: [{ num: 2220565 }] });
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '<html>nsm</html>',
+          screenshot: Buffer.from('shot'),
+          detail: { proposalReason: '사유', session: '제418회' },
+          responseUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2220565/detailRP',
+          statusCode: 200,
+        },
+      );
+
+      const result = await service.backfillMissingSnapshotArtifacts();
+
+      expect(result.nsmFilled).toBe(1);
+      expect(noticeArchiveService.updateNsmHtmlAndDetail).toHaveBeenCalledWith(
+        2220565,
+        expect.objectContaining({
+          html: '<html>nsm</html>',
+          sha256: computeSha256('<html>nsm</html>'),
+          screenshotBlob: Buffer.from('shot'),
+          screenshotFormat: 'jpeg',
+          httpMetadata: expect.objectContaining({
+            requestUrl:
+              'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2220565/detailRP',
+            statusCode: 200,
+          }),
+        }),
+      );
+    });
+
+    it('never writes a blank NSM capture to the snapshot', async () => {
+      setTargets({ nsm: [{ num: 2220565 }] });
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '   ',
+          screenshot: null,
+          detail: null,
+          responseUrl: 'https://opinion.lawmaking.go.kr/',
+          statusCode: 200,
+        },
+      );
+
+      const result = await service.backfillMissingSnapshotArtifacts();
+
+      expect(result.nsmFilled).toBe(0);
+      expect(result.failed).toBe(1);
+      expect(
+        noticeArchiveService.updateNsmHtmlAndDetail,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('does not count a deleted NSM source page as a backfill failure', async () => {
+      setTargets({ nsm: [{ num: 2219717 }] });
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new NsmBillDeletedError('2219717', '안건정보가 없습니다.'),
+      );
+
+      const result = await service.backfillMissingSnapshotArtifacts();
+
+      expect(result.nsmScanned).toBe(1);
+      expect(result.nsmFilled).toBe(0);
+      expect(result.failed).toBe(0);
+      expect(
+        noticeArchiveService.updateNsmHtmlAndDetail,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('caps browser-driven NSM captures per run', async () => {
+      setTargets({
+        nsm: Array.from({ length: 50 }, (_, idx) => ({ num: 2220000 + idx })),
+      });
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '<html>nsm</html>',
+          screenshot: null,
+          detail: { proposalReason: '사유' },
+          responseUrl: 'https://opinion.lawmaking.go.kr/',
+          statusCode: 200,
+        },
+      );
+
+      const result = await service.backfillMissingSnapshotArtifacts();
+
+      expect(result.nsmScanned).toBe(20);
+      expect(result.nsmFilled).toBe(20);
+      expect(crawlingCoreService.captureNsmDetailFull).toHaveBeenCalledTimes(
+        20,
+      );
+    });
+
+    it('forwards the requested limit to the deficiency query', async () => {
+      setTargets({});
+
+      await service.backfillMissingSnapshotArtifacts(30);
+
+      expect(
+        noticeArchiveService.getNoticesWithMissingSnapshotArtifacts,
+      ).toHaveBeenCalledWith(30);
+    });
+
+    it('ignores a concurrent run instead of double-capturing', async () => {
+      setTargets({
+        pal: [{ num: 7, assemblyLink: 'https://example.com/notice/7' }],
+      });
+
+      let releaseCapture: (() => void) | null = null;
+      mockFetchHtmlPage.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            releaseCapture = () => resolve(palCaptureResponse as any);
+          }),
+      );
+
+      const first = service.backfillMissingSnapshotArtifacts();
+      await Promise.resolve();
+      const second = await service.backfillMissingSnapshotArtifacts();
+
+      expect(second.palScanned).toBe(0);
+      expect(
+        noticeArchiveService.getNoticesWithMissingSnapshotArtifacts,
+      ).toHaveBeenCalledTimes(1);
+
+      releaseCapture!();
+      await expect(first).resolves.toMatchObject({ palFilled: 1 });
+    });
+  });
+
   describe('fetchAndUpdateProposalReason', () => {
     it('returns proposalReason and appends NSM detail update when capture succeeds', async () => {
       (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
@@ -542,9 +757,17 @@ describe('ArchiveOrchestratorService', () => {
         2219775,
         expect.objectContaining({
           proposalReason: '사유 본문',
-          html: '',
-          sha256: '',
-          httpMetadata: null,
+          html: '<html>nsm detail</html>',
+          sha256: computeSha256('<html>nsm detail</html>'),
+          screenshotBlob: Buffer.from('shot'),
+          screenshotFormat: 'jpeg',
+          httpMetadata: expect.objectContaining({
+            requestUrl:
+              'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219775/detailRP',
+            responseUrl:
+              'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219775/detailRP',
+            statusCode: 200,
+          }),
         }),
       );
     });
@@ -571,9 +794,67 @@ describe('ArchiveOrchestratorService', () => {
         2219777,
         expect.objectContaining({
           proposalReason: '',
+          html: '<html>nsm detail</html>',
+          sha256: computeSha256('<html>nsm detail</html>'),
+          screenshotBlob: undefined,
+          screenshotFormat: undefined,
+        }),
+      );
+    });
+
+    it('sends no html artifacts when the captured page is blank', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '   \n  ',
+          screenshot: Buffer.alloc(0),
+          detail: { proposalReason: '사유 본문', session: null },
+          responseUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219781/detailRP',
+          statusCode: 200,
+        },
+      );
+      (
+        noticeArchiveService.getLatestProposalReasonForNotice as jest.Mock
+      ).mockResolvedValue('사유 본문');
+
+      await service.fetchAndUpdateProposalReason(2219781, '2219781');
+
+      expect(noticeArchiveService.updateNsmHtmlAndDetail).toHaveBeenCalledWith(
+        2219781,
+        expect.objectContaining({
           html: '',
           sha256: '',
           httpMetadata: null,
+          screenshotBlob: undefined,
+          screenshotFormat: undefined,
+        }),
+      );
+    });
+
+    it('trims the billNo before building the request url', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '<html>nsm detail</html>',
+          screenshot: null,
+          detail: { proposalReason: '사유 본문', session: null },
+          responseUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219782/detailRP',
+          statusCode: 200,
+        },
+      );
+      (
+        noticeArchiveService.getLatestProposalReasonForNotice as jest.Mock
+      ).mockResolvedValue('사유 본문');
+
+      await service.fetchAndUpdateProposalReason(2219782, '  2219782  ');
+
+      expect(noticeArchiveService.updateNsmHtmlAndDetail).toHaveBeenCalledWith(
+        2219782,
+        expect.objectContaining({
+          httpMetadata: expect.objectContaining({
+            requestUrl:
+              'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219782/detailRP',
+          }),
         }),
       );
     });
@@ -603,9 +884,8 @@ describe('ArchiveOrchestratorService', () => {
         2219780,
         expect.objectContaining({
           proposalReason: '사유 본문',
-          html: '',
-          sha256: '',
-          httpMetadata: null,
+          html: '<html>nsm detail</html>',
+          sha256: computeSha256('<html>nsm detail</html>'),
         }),
       );
     });

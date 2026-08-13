@@ -32,6 +32,7 @@ import { NoticeArchiveSnapshotState } from './notice-archive-summary-state.entit
 import {
   NOTICE_ITEM_SELECT,
   buildArchiveWhereConditions,
+  computeSha256,
   mapArchiveEntityToCachedNotice,
   mapArchiveEntityToNoticeItem,
   normalizeSortOrder,
@@ -192,6 +193,15 @@ export interface ArchiveHttpMetadata {
   lastModified?: string;
   [key: string]: unknown;
 }
+
+/** Which NULL snapshot artifact groups were filled by a one-time backfill. */
+export interface SnapshotArtifactFillResult {
+  html: boolean;
+  httpMetadata: boolean;
+  screenshot: boolean;
+}
+
+export const INTEGRITY_SKIP_REASON_MISSING_SOURCE = 'missing_source_or_hash';
 
 type TrackedArchiveRow = Pick<
   NoticeArchive,
@@ -824,6 +834,15 @@ export class NoticeArchiveService {
     if (existing) {
       // Strict immutability: existing archive rows are never updated.
       // Any observed changes are represented only as appended diffchain events.
+      // Sole exception: snapshot artifact columns that are still NULL may be
+      // filled exactly once so a failed first capture is recoverable.
+      await this.fillMissingSnapshotArtifacts(notice.num, {
+        sourceHtml: originalContent.sourceHtml ?? null,
+        htmlSha256: originalContent.htmlSha256 ?? null,
+        httpMetadata: normalizedHttpMetadata,
+        screenshotBlob: originalContent.screenshotBlob ?? null,
+        screenshotFormat: originalContent.screenshotFormat ?? null,
+      });
     } else {
       await this.archiveRepository.save(
         this.archiveRepository.create({
@@ -832,6 +851,10 @@ export class NoticeArchiveService {
           screenshotFormat: originalContent.screenshotFormat ?? null,
         }),
       );
+
+      if (!coreFields.sourceHtml || !coreFields.sourceHtmlSha256) {
+        await this.seedIntegrityDeficit(notice.num);
+      }
     }
 
     if (this.summaryStateRepository) {
@@ -2447,53 +2470,177 @@ export class NoticeArchiveService {
     blob: Buffer,
     format: string,
   ): Promise<void> {
-    void noticeNum;
-    void blob;
-    void format;
+    await this.fillMissingSnapshotArtifacts(noticeNum, {
+      screenshotBlob: blob,
+      screenshotFormat: format,
+    });
   }
 
   /**
-   * Returns up to `limit` archived notices that need HTML/detail backfill,
-   * split by source:
-   *  - `pal`: pal.assembly.go.kr bills (contentId NOT NULL) with missing
-   *    `sourceHtml`.
-   *  - `nsm`: NsmLmSts bills (contentId IS NULL) with missing `sourceHtml`
-   *    OR missing/empty `proposalReason`.
-   *
-   * Rows are ordered oldest-first so early notices are backfilled first.
+   * Records that a row has no verifiable source snapshot yet, keeping it a
+   * retry target instead of an invisible gap.
    */
-  async getNoticesWithMissingHtml(limit: number): Promise<{
+  async seedIntegrityDeficit(
+    noticeNum: number,
+    skipReason: string = INTEGRITY_SKIP_REASON_MISSING_SOURCE,
+  ): Promise<void> {
+    try {
+      await this.artifactSupport.seedIntegrityDeficit(noticeNum, skipReason);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to seed integrity deficit for notice ${noticeNum}: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  private async applyGuardedArtifactFill(
+    criteria: FindOptionsWhere<NoticeArchive>,
+    patch: Partial<NoticeArchive>,
+    noticeNum: number,
+    group: string,
+  ): Promise<boolean> {
+    try {
+      const updateResult = (await this.archiveRepository.update(
+        criteria,
+        patch,
+      )) as { affected?: number | null } | undefined;
+
+      return (updateResult?.affected ?? 0) > 0;
+    } catch (error) {
+      this.logger.warn(
+        `Failed to fill ${group} snapshot artifact for notice ${noticeNum}: ${(error as Error).message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Immutability exception: snapshot artifact columns may be filled exactly
+   * once while still NULL. Non-null values are never overwritten, and the
+   * IS NULL criteria keeps the write race-safe against concurrent fills.
+   */
+  async fillMissingSnapshotArtifacts(
+    noticeNum: number,
+    artifacts: {
+      sourceHtml?: string | null;
+      htmlSha256?: string | null;
+      httpMetadata?: ArchiveHttpMetadata | null;
+      screenshotBlob?: Buffer | null;
+      screenshotFormat?: string | null;
+    },
+  ): Promise<SnapshotArtifactFillResult> {
+    const result: SnapshotArtifactFillResult = {
+      html: false,
+      httpMetadata: false,
+      screenshot: false,
+    };
+
+    const sourceHtml = artifacts.sourceHtml?.trim()
+      ? artifacts.sourceHtml
+      : null;
+
+    if (sourceHtml) {
+      const sha256 = artifacts.htmlSha256?.trim() || computeSha256(sourceHtml);
+      result.html = await this.applyGuardedArtifactFill(
+        { noticeNum, sourceHtml: IsNull() },
+        { sourceHtml, sourceHtmlSha256: sha256 },
+        noticeNum,
+        'html',
+      );
+    }
+
+    const httpMetadata = artifacts.httpMetadata ?? null;
+    if (httpMetadata) {
+      result.httpMetadata = await this.applyGuardedArtifactFill(
+        { noticeNum, httpMetadataJson: IsNull() },
+        {
+          httpMetadataJson: JSON.stringify(httpMetadata),
+          httpFetchedAt: parseOptionalDate(httpMetadata.fetchedAt),
+          httpStatusCode: httpMetadata.statusCode ?? null,
+          httpContentType: httpMetadata.contentType ?? null,
+          httpEtag: httpMetadata.etag ?? null,
+          httpLastModified: httpMetadata.lastModified ?? null,
+        },
+        noticeNum,
+        'httpMetadata',
+      );
+    }
+
+    const screenshotBlob = artifacts.screenshotBlob?.length
+      ? artifacts.screenshotBlob
+      : null;
+
+    if (screenshotBlob) {
+      result.screenshot = await this.applyGuardedArtifactFill(
+        { noticeNum, screenshotBlob: IsNull() },
+        {
+          screenshotBlob,
+          screenshotFormat: artifacts.screenshotFormat?.trim() || 'jpeg',
+        },
+        noticeNum,
+        'screenshot',
+      );
+    }
+
+    if (result.html) {
+      try {
+        await this.artifactSupport.markIntegrityStatePendingRecheck(noticeNum);
+      } catch (error) {
+        this.logger.warn(
+          `Failed to reset integrity state for notice ${noticeNum}: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Returns up to `limit` archived notices whose immutable snapshot is still
+   * missing its source HTML, split by source (`pal` = contentId NOT NULL,
+   * `nsm` = contentId IS NULL).
+   *
+   * Newest-first: recent notices are still listed on the source site, so they
+   * are the ones a re-capture can actually repair.
+   */
+  async getNoticesWithMissingSnapshotArtifacts(limit: number): Promise<{
     pal: Array<{ num: number; assemblyLink: string }>;
     nsm: Array<{ num: number }>;
   }> {
+    if (limit <= 0) {
+      return { pal: [], nsm: [] };
+    }
+
     const [palRows, nsmRows] = await Promise.all([
       this.archiveRepository.find({
         select: { noticeNum: true, assemblyLink: true },
-        where: { sourceHtml: IsNull(), contentId: Not(IsNull()) },
-        order: { noticeNum: 'ASC' },
+        where: {
+          sourceHtml: IsNull(),
+          contentId: Not(IsNull()),
+          lifecycleStatus: 'active',
+        },
+        order: { noticeNum: 'DESC' },
         take: limit,
       }),
-      this.archiveRepository
-        .createQueryBuilder('na')
-        .select('na.noticeNum', 'noticeNum')
-        .where('na.contentId IS NULL')
-        .andWhere(
-          new Brackets((qb) => {
-            qb.where('na.sourceHtml IS NULL')
-              .orWhere('na.proposalReason IS NULL')
-              .orWhere("TRIM(na.proposalReason) = ''");
-          }),
-        )
-        .orderBy('na.noticeNum', 'ASC')
-        .limit(limit)
-        .getRawMany<{ noticeNum: number }>(),
+      this.archiveRepository.find({
+        select: { noticeNum: true },
+        where: {
+          sourceHtml: IsNull(),
+          contentId: IsNull(),
+          lifecycleStatus: 'active',
+        },
+        order: { noticeNum: 'DESC' },
+        take: limit,
+      }),
     ]);
 
     return {
-      pal: palRows.map((row) => ({
-        num: row.noticeNum,
-        assemblyLink: row.assemblyLink,
-      })),
+      pal: palRows
+        .filter((row) => row.assemblyLink?.trim())
+        .map((row) => ({
+          num: row.noticeNum,
+          assemblyLink: row.assemblyLink,
+        })),
       nsm: nsmRows.map((row) => ({ num: row.noticeNum })),
     };
   }
@@ -2510,10 +2657,11 @@ export class NoticeArchiveService {
     sha256: string,
     httpMetadata: ArchiveHttpMetadata | null,
   ): Promise<void> {
-    void noticeNum;
-    void html;
-    void sha256;
-    void httpMetadata;
+    await this.fillMissingSnapshotArtifacts(noticeNum, {
+      sourceHtml: html,
+      htmlSha256: sha256,
+      httpMetadata,
+    });
   }
 
   /**
@@ -2546,6 +2694,14 @@ export class NoticeArchiveService {
     if (!beforeRow) {
       return;
     }
+
+    await this.fillMissingSnapshotArtifacts(noticeNum, {
+      sourceHtml: payload.html,
+      htmlSha256: payload.sha256,
+      httpMetadata: payload.httpMetadata,
+      screenshotBlob: payload.screenshotBlob ?? null,
+      screenshotFormat: payload.screenshotFormat ?? null,
+    });
 
     const beforeSnapshot = await this.buildDiffBaselineSnapshot(
       noticeNum,

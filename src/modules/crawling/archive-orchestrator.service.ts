@@ -9,6 +9,7 @@ import {
 } from '../notice/notice-archive.service';
 import { computeSha256 as computeSha256Hex } from '../notice/notice-archive.helpers';
 import {
+  buildNsmDetailUrl,
   CrawlingCoreService,
   NsmBillDeletedError,
 } from './crawling-core.service';
@@ -24,6 +25,10 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { normalizeNoticeNum } from '../../utils/notice-num.utils';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import { ArchiveOrchestratorScreenshotCoordinator } from './utils/archive-orchestrator-screenshot-coordinator';
+
+const SNAPSHOT_ARTIFACT_BACKFILL_LIMIT = 200;
+/** Browser-driven, so far smaller than the PAL cap to bound Chromium pressure. */
+const NSM_SNAPSHOT_ARTIFACT_BACKFILL_MAX_PER_RUN = 20;
 
 export enum ArchiveReason {
   NEW_NOTICES = 'new-notices',
@@ -72,6 +77,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     ArchiveOrchestratorService.name,
   );
   private readonly screenshotCoordinator: ArchiveOrchestratorScreenshotCoordinator;
+  private isSnapshotArtifactBackfillRunning = false;
   private readonly nsmDetailCrawlProgressState: NsmDetailCrawlProgressState = {
     status: 'idle',
     reason: null,
@@ -226,25 +232,174 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
   }
 
   /**
-   * Startup screenshot pipeline.
+   * Re-captures the source snapshot for archived rows whose `sourceHtml` is
+   * still NULL (first capture failed). Only NULL columns are filled, so the
+   * immutability guarantee for already-captured snapshots is preserved.
    *
-   * When `SCREENSHOT_REQUEUE_PAL=true` is set, every pal.assembly.go.kr notice
-   * (contentId NOT NULL) is queued for screenshot re-capture - including rows
-   * that already have a screenshot - before the normal missing-screenshot
-   * backfill runs.  The `scheduleScreenshots` deduplication means the normal
-   * backfill will then only add any NsmLmSts notices that were not already
-   * enqueued by the forced requeue.
-   *
-   * Without the flag this behaves identically to the previous single-call
-   * `backfillMissingScreenshots()` path.
+   * NSM rows are browser-driven, so they are processed serially and capped per
+   * run; PAL rows use plain HTTP and run with bounded concurrency.
    */
-  private async runStartupScreenshotBackfill(): Promise<void> {}
+  async backfillMissingSnapshotArtifacts(
+    limit: number = SNAPSHOT_ARTIFACT_BACKFILL_LIMIT,
+  ): Promise<{
+    palScanned: number;
+    palFilled: number;
+    nsmScanned: number;
+    nsmFilled: number;
+    failed: number;
+  }> {
+    const empty = {
+      palScanned: 0,
+      palFilled: 0,
+      nsmScanned: 0,
+      nsmFilled: 0,
+      failed: 0,
+    };
+
+    if (this.isSnapshotArtifactBackfillRunning) {
+      return empty;
+    }
+
+    this.isSnapshotArtifactBackfillRunning = true;
+    try {
+      const targets =
+        await this.noticeArchiveService.getNoticesWithMissingSnapshotArtifacts(
+          limit,
+        );
+      const nsmTargets = targets.nsm.slice(
+        0,
+        NSM_SNAPSHOT_ARTIFACT_BACKFILL_MAX_PER_RUN,
+      );
+
+      if (targets.pal.length === 0 && nsmTargets.length === 0) {
+        return empty;
+      }
+
+      const result = {
+        ...empty,
+        palScanned: targets.pal.length,
+        nsmScanned: nsmTargets.length,
+      };
+
+      const concurrency =
+        this.noticeArchiveService.getRecommendedWriteConcurrency?.(5) ?? 5;
+
+      for (let i = 0; i < targets.pal.length; i += concurrency) {
+        const chunk = targets.pal.slice(i, i + concurrency);
+        const filled = await Promise.all(
+          chunk.map(async (target) => {
+            try {
+              const capture = await this.captureNoticePageSource(
+                target.assemblyLink,
+              );
+              await this.noticeArchiveService.updateSourceHtml(
+                target.num,
+                capture.html,
+                capture.sha256,
+                capture.httpMetadata,
+              );
+              return true;
+            } catch (error) {
+              this.logger.warn(
+                `Snapshot artifact backfill failed for notice ${target.num}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+              return false;
+            }
+          }),
+        );
+
+        result.palFilled += filled.filter(Boolean).length;
+        result.failed += filled.filter((ok) => !ok).length;
+      }
+
+      for (let idx = 0; idx < nsmTargets.length; idx++) {
+        if (idx > 0) {
+          await delayMs(APP_CONSTANTS.SCREENSHOT.NSM_INTER_CAPTURE_DELAY_MS);
+        }
+
+        const billNo = nsmTargets[idx].num.toString();
+        try {
+          const full =
+            await this.crawlingCoreService.captureNsmDetailFull(billNo);
+          const html = full.html?.trim() ? full.html : '';
+
+          if (!html) {
+            result.failed += 1;
+            continue;
+          }
+
+          const screenshot = full.screenshot?.length
+            ? full.screenshot
+            : undefined;
+
+          await this.noticeArchiveService.updateNsmHtmlAndDetail(
+            nsmTargets[idx].num,
+            {
+              html,
+              sha256: this.computeSha256(html),
+              proposalReason: full.detail?.proposalReason?.trim() ?? '',
+              proposalSession: full.detail?.session?.trim() || null,
+              billNumber: full.detail?.billNo?.trim() || null,
+              proposer: full.detail?.proposer?.trim() || null,
+              proposalDate: full.detail?.proposalDate?.trim() || null,
+              httpMetadata: {
+                requestUrl: buildNsmDetailUrl(billNo),
+                responseUrl: full.responseUrl,
+                fetchedAt: new Date().toISOString(),
+                statusCode: full.statusCode,
+              },
+              screenshotBlob: screenshot,
+              screenshotFormat: screenshot ? 'jpeg' : undefined,
+            },
+          );
+
+          result.nsmFilled += 1;
+        } catch (error) {
+          // A deleted source page can never be re-captured; the lifecycle
+          // pipeline owns that transition, so it is not a backfill failure.
+          if (error instanceof NsmBillDeletedError) {
+            continue;
+          }
+
+          result.failed += 1;
+          this.logger.warn(
+            `Snapshot artifact backfill failed for NSM bill ${billNo}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+
+      logAndBridge({
+        logger: this.logger,
+        method: 'log',
+        message:
+          `Snapshot artifact backfill: pal ${result.palFilled}/${result.palScanned}, ` +
+          `nsm ${result.nsmFilled}/${result.nsmScanned}, failed=${result.failed}`,
+        context: ArchiveOrchestratorService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        bridgeMessage:
+          `Snapshot artifact backfill: PAL **${result.palFilled}/${result.palScanned}**, ` +
+          `NSM **${result.nsmFilled}/${result.nsmScanned}**, failed **${result.failed}**`,
+        metadata: result,
+      });
+
+      return result;
+    } finally {
+      this.isSnapshotArtifactBackfillRunning = false;
+    }
+  }
 
   /**
-   * Queues every pal.assembly.go.kr archived notice for screenshot (re-)capture.
-   * Called at startup when `SCREENSHOT_REQUEUE_PAL=true`.
+   * Queues archived notices that still have no screenshot for re-capture.
+   * The screenshot drain loop fills only NULL screenshot columns.
    */
-  private async requeueAllPalScreenshots(): Promise<void> {}
+  async backfillMissingScreenshots(): Promise<void> {
+    await this.screenshotCoordinator.backfillMissingScreenshots();
+  }
 
   /**
    * Archives the given notices by fetching their content and source HTML, then saving them to the archive database. This method processes notices in batches
@@ -673,9 +828,16 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       const referralDate = detail?.referralDate?.trim() || null;
       const noticePeriod = detail?.noticePeriod?.trim() || null;
 
+      // The retry already paid for a full capture, so hand every snapshot
+      // artifact to the archive; only still-NULL columns are actually filled.
+      const capturedHtml = full.html?.trim() ? full.html : '';
+      const capturedScreenshot = full.screenshot?.length
+        ? full.screenshot
+        : undefined;
+
       await this.noticeArchiveService.updateNsmHtmlAndDetail(num, {
-        html: '',
-        sha256: '',
+        html: capturedHtml,
+        sha256: capturedHtml ? this.computeSha256(capturedHtml) : '',
         proposalReason,
         billNumber,
         proposer,
@@ -684,7 +846,16 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         referralDate,
         noticePeriod,
         proposalSession,
-        httpMetadata: null,
+        httpMetadata: capturedHtml
+          ? {
+              requestUrl: buildNsmDetailUrl(normalizedBillNo),
+              responseUrl: full.responseUrl,
+              fetchedAt: new Date().toISOString(),
+              statusCode: full.statusCode,
+            }
+          : null,
+        screenshotBlob: capturedScreenshot,
+        screenshotFormat: capturedScreenshot ? 'jpeg' : undefined,
       });
 
       if (!proposalReason) {

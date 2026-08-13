@@ -1637,4 +1637,456 @@ describe('NoticeArchiveService', () => {
       });
     });
   });
+
+  describe('snapshot artifact one-time fill', () => {
+    const createIntegrityStateRepositoryMock = () => ({
+      findOne: jest
+        .fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValue(null),
+      update: jest
+        .fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValue({ affected: 1 }),
+      insert: jest
+        .fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValue(undefined),
+    });
+
+    const buildService = (
+      repositoryMock: any,
+      integrityStateRepositoryMock?: any,
+    ) =>
+      new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        createChangeTrackingServiceMock() as any,
+        undefined as any,
+        undefined as any,
+        integrityStateRepositoryMock as any,
+      );
+
+    const notice = {
+      num: 2220565,
+      subject: '무결성 결손 테스트',
+      proposerCategory: '의원',
+      committee: '법사위',
+      link: 'https://example.com/2220565',
+      contentId: null,
+      attachments: { pdfFile: '', hwpFile: '' },
+    };
+
+    it('fills NULL html/http/screenshot columns exactly once with IS NULL guards', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 1 }),
+      };
+
+      const service = buildService(repositoryMock);
+
+      const result = await service.fillMissingSnapshotArtifacts(2220565, {
+        sourceHtml: '<html>fresh</html>',
+        htmlSha256: null,
+        httpMetadata: {
+          requestUrl: 'https://example.com/2220565',
+          fetchedAt: '2026-08-13T00:00:00.000Z',
+          statusCode: 200,
+        },
+        screenshotBlob: Buffer.from([1, 2, 3]),
+        screenshotFormat: 'jpeg',
+      });
+
+      expect(result).toEqual({
+        html: true,
+        httpMetadata: true,
+        screenshot: true,
+      });
+      expect(repositoryMock.update).toHaveBeenCalledTimes(3);
+
+      const criteriaKeys = repositoryMock.update.mock.calls.map((call: any[]) =>
+        Object.keys(call[0] as Record<string, unknown>).sort(),
+      );
+      expect(criteriaKeys).toEqual([
+        ['noticeNum', 'sourceHtml'],
+        ['httpMetadataJson', 'noticeNum'],
+        ['noticeNum', 'screenshotBlob'],
+      ]);
+
+      // sha256 is derived when the caller omits it so stored hash always matches html.
+      expect(repositoryMock.update.mock.calls[0][1]).toMatchObject({
+        sourceHtml: '<html>fresh</html>',
+        sourceHtmlSha256: computeSha256('<html>fresh</html>'),
+      });
+    });
+
+    it('reports no fill when the columns are already populated', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 0 }),
+      };
+      const integrityStateRepositoryMock = createIntegrityStateRepositoryMock();
+
+      const service = buildService(
+        repositoryMock,
+        integrityStateRepositoryMock,
+      );
+
+      const result = await service.fillMissingSnapshotArtifacts(2220565, {
+        sourceHtml: '<html>later capture</html>',
+        htmlSha256: 'deadbeef',
+      });
+
+      expect(result.html).toBe(false);
+      expect(integrityStateRepositoryMock.update).not.toHaveBeenCalled();
+    });
+
+    it('skips writes for blank html, blank sha and empty screenshot payloads', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 1 }),
+      };
+
+      const service = buildService(repositoryMock);
+
+      const result = await service.fillMissingSnapshotArtifacts(2220565, {
+        sourceHtml: '   ',
+        htmlSha256: '',
+        httpMetadata: null,
+        screenshotBlob: Buffer.alloc(0),
+        screenshotFormat: 'jpeg',
+      });
+
+      expect(result).toEqual({
+        html: false,
+        httpMetadata: false,
+        screenshot: false,
+      });
+      expect(repositoryMock.update).not.toHaveBeenCalled();
+    });
+
+    it('resets a seeded integrity deficit to pending after html is filled', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 1 }),
+      };
+      const integrityStateRepositoryMock = createIntegrityStateRepositoryMock();
+      integrityStateRepositoryMock.findOne.mockResolvedValue({
+        id: 42,
+        latestResult: 'skipped',
+      });
+
+      const service = buildService(
+        repositoryMock,
+        integrityStateRepositoryMock,
+      );
+
+      await service.fillMissingSnapshotArtifacts(2220565, {
+        sourceHtml: '<html>recovered</html>',
+        htmlSha256: computeSha256('<html>recovered</html>'),
+      });
+
+      expect(integrityStateRepositoryMock.update).toHaveBeenCalledWith(
+        { id: 42 },
+        expect.objectContaining({
+          latestResult: null,
+          lastSkipReason: null,
+          failureStreak: 0,
+        }),
+      );
+    });
+
+    it('does not reset a passed integrity state when artifacts are re-supplied', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 1 }),
+      };
+      const integrityStateRepositoryMock = createIntegrityStateRepositoryMock();
+      integrityStateRepositoryMock.findOne.mockResolvedValue({
+        id: 7,
+        latestResult: 'passed',
+      });
+
+      const service = buildService(
+        repositoryMock,
+        integrityStateRepositoryMock,
+      );
+
+      await service.fillMissingSnapshotArtifacts(2220565, {
+        sourceHtml: '<html>recovered</html>',
+      });
+
+      expect(integrityStateRepositoryMock.update).not.toHaveBeenCalled();
+    });
+
+    it('keeps the fill non-fatal when the archive update throws', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockRejectedValue(new Error('SQLITE_BUSY')),
+      };
+
+      const service = buildService(repositoryMock);
+
+      await expect(
+        service.fillMissingSnapshotArtifacts(2220565, {
+          sourceHtml: '<html>x</html>',
+        }),
+      ).resolves.toMatchObject({ html: false });
+    });
+
+    it('seeds an integrity deficit when a new row is archived without source html', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 0 }),
+      };
+      repositoryMock.findOne.mockResolvedValue(null);
+      const integrityStateRepositoryMock = createIntegrityStateRepositoryMock();
+
+      const service = buildService(
+        repositoryMock,
+        integrityStateRepositoryMock,
+      );
+
+      await service.upsertNoticeArchive(notice, {
+        proposalReason: '캡처 실패 케이스',
+        sourceHtml: null,
+        htmlSha256: null,
+        httpMetadata: null,
+      });
+
+      expect(integrityStateRepositoryMock.insert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          noticeNum: 2220565,
+          latestResult: 'skipped',
+          lastSkipReason: 'missing_source_or_hash',
+        }),
+      );
+    });
+
+    it('does not seed a deficit when a new row is archived with source html', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 0 }),
+      };
+      repositoryMock.findOne.mockResolvedValue(null);
+      const integrityStateRepositoryMock = createIntegrityStateRepositoryMock();
+
+      const service = buildService(
+        repositoryMock,
+        integrityStateRepositoryMock,
+      );
+
+      await service.upsertNoticeArchive(notice, {
+        proposalReason: '정상 캡처',
+        sourceHtml: '<html>ok</html>',
+        htmlSha256: computeSha256('<html>ok</html>'),
+        httpMetadata: null,
+      });
+
+      expect(integrityStateRepositoryMock.insert).not.toHaveBeenCalled();
+      expect(integrityStateRepositoryMock.update).not.toHaveBeenCalled();
+    });
+
+    it('does not downgrade an already passed integrity state when seeding a deficit', async () => {
+      const integrityStateRepositoryMock = createIntegrityStateRepositoryMock();
+      integrityStateRepositoryMock.findOne.mockResolvedValue({
+        id: 3,
+        latestResult: 'passed',
+        failureStreak: 0,
+        lastPassedAt: new Date('2026-08-01T00:00:00.000Z'),
+      });
+
+      const service = buildService(
+        createRepositoryMock(),
+        integrityStateRepositoryMock,
+      );
+
+      await service.seedIntegrityDeficit(2220565);
+
+      expect(integrityStateRepositoryMock.insert).not.toHaveBeenCalled();
+      expect(integrityStateRepositoryMock.update).not.toHaveBeenCalled();
+    });
+
+    it('keeps failure streak and last pass time when re-seeding an existing deficit', async () => {
+      const lastPassedAt = new Date('2026-07-01T00:00:00.000Z');
+      const integrityStateRepositoryMock = createIntegrityStateRepositoryMock();
+      integrityStateRepositoryMock.findOne.mockResolvedValue({
+        id: 9,
+        latestResult: 'skipped',
+        failureStreak: 4,
+        lastPassedAt,
+      });
+
+      const service = buildService(
+        createRepositoryMock(),
+        integrityStateRepositoryMock,
+      );
+
+      await service.seedIntegrityDeficit(2220565, 'capture_failed');
+
+      expect(integrityStateRepositoryMock.insert).not.toHaveBeenCalled();
+      expect(integrityStateRepositoryMock.update).toHaveBeenCalledWith(
+        { id: 9 },
+        expect.objectContaining({
+          latestResult: 'skipped',
+          lastSkipReason: 'capture_failed',
+          failureStreak: 4,
+          lastPassedAt,
+        }),
+      );
+    });
+
+    it('does not throw when no integrity state repository is configured', async () => {
+      const service = buildService(createRepositoryMock());
+
+      await expect(
+        service.seedIntegrityDeficit(2220565),
+      ).resolves.toBeUndefined();
+    });
+
+    it('never rewrites core snapshot columns of an existing row while filling artifacts', async () => {
+      const existingRow = buildRow({ noticeNum: 2220565 });
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 1 }),
+      };
+      repositoryMock.findOne.mockResolvedValue(existingRow);
+
+      const service = buildService(repositoryMock);
+
+      await service.upsertNoticeArchive(
+        { ...notice, subject: '변조 시도' },
+        {
+          proposalReason: '변조 시도',
+          sourceHtml: '<html>backfilled</html>',
+          htmlSha256: computeSha256('<html>backfilled</html>'),
+          httpMetadata: null,
+        },
+      );
+
+      expect(repositoryMock.save).not.toHaveBeenCalled();
+
+      const patchedColumns = repositoryMock.update.mock.calls.flatMap(
+        (call: any[]) => Object.keys(call[1] as Record<string, unknown>),
+      );
+      expect(patchedColumns.sort()).toEqual(['sourceHtml', 'sourceHtmlSha256']);
+    });
+
+    it('treats empty html/sha from the proposalReason backfill path as no artifact write', async () => {
+      const existingRow = buildRow({ noticeNum: 2220565 });
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 1 }),
+      };
+      repositoryMock.findOne.mockResolvedValue(existingRow);
+
+      const service = buildService(repositoryMock);
+
+      await service.updateNsmHtmlAndDetail(2220565, {
+        html: '',
+        sha256: '',
+        proposalReason: '제안이유 백필',
+        httpMetadata: null,
+      });
+
+      expect(repositoryMock.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getNoticesWithMissingSnapshotArtifacts', () => {
+    const buildService = (repositoryMock: any) =>
+      new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        createChangeTrackingServiceMock() as any,
+      );
+
+    it('selects only active rows with NULL source html, newest first', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValueOnce([
+            {
+              noticeNum: 2220565,
+              assemblyLink: 'https://example.com/2220565',
+            },
+          ])
+          .mockResolvedValueOnce([{ noticeNum: 2219999 }]),
+      };
+
+      const result =
+        await buildService(
+          repositoryMock,
+        ).getNoticesWithMissingSnapshotArtifacts(50);
+
+      expect(result.pal).toEqual([
+        { num: 2220565, assemblyLink: 'https://example.com/2220565' },
+      ]);
+      expect(result.nsm).toEqual([{ num: 2219999 }]);
+
+      for (const call of repositoryMock.find.mock.calls) {
+        expect(call[0]).toMatchObject({
+          where: expect.objectContaining({ lifecycleStatus: 'active' }),
+          order: { noticeNum: 'DESC' },
+          take: 50,
+        });
+      }
+    });
+
+    it('drops PAL rows without a usable assembly link', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValueOnce([
+            { noticeNum: 1, assemblyLink: '   ' },
+            { noticeNum: 2, assemblyLink: null },
+            { noticeNum: 3, assemblyLink: 'https://example.com/3' },
+          ])
+          .mockResolvedValueOnce([]),
+      };
+
+      const result =
+        await buildService(
+          repositoryMock,
+        ).getNoticesWithMissingSnapshotArtifacts(10);
+
+      expect(result.pal).toEqual([
+        { num: 3, assemblyLink: 'https://example.com/3' },
+      ]);
+    });
+
+    it('short-circuits a non-positive limit without touching the repository', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest.fn<(...args: any[]) => Promise<any>>(),
+      };
+
+      const result =
+        await buildService(
+          repositoryMock,
+        ).getNoticesWithMissingSnapshotArtifacts(0);
+
+      expect(result).toEqual({ pal: [], nsm: [] });
+      expect(repositoryMock.find).not.toHaveBeenCalled();
+    });
+  });
 });

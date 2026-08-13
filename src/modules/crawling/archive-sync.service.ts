@@ -315,6 +315,10 @@ export class ArchiveSyncService implements OnModuleInit {
         }),
       );
 
+      await this.safeRun('snapshot artifact backfill', () =>
+        this.runSnapshotArtifactBackfill('bootstrap'),
+      );
+
       await this.safeRun('integrity rescan', () =>
         this.runScheduledIntegrityRescan('bootstrap'),
       );
@@ -734,6 +738,26 @@ export class ArchiveSyncService implements OnModuleInit {
       /* crossPhaseGuard */ true,
       this.getWriteHeavyPhaseEntries(),
     );
+  }
+
+  /**
+   * Re-captures snapshot artifacts for rows whose first capture failed.
+   * Runs before an integrity rescan so repaired rows are re-verified in the
+   * same pass instead of staying `skipped` for another cycle.
+   */
+  async runSnapshotArtifactBackfill(trigger: string): Promise<void> {
+    const result =
+      await this.archiveOrchestratorService.backfillMissingSnapshotArtifacts();
+
+    if (result.palFilled + result.nsmFilled + result.failed > 0) {
+      LoggerUtils.log(
+        ArchiveSyncService.name,
+        `[${trigger}] snapshot artifact backfill: pal=${result.palFilled}/${result.palScanned}, ` +
+          `nsm=${result.nsmFilled}/${result.nsmScanned}, failed=${result.failed}`,
+      );
+    }
+
+    await this.archiveOrchestratorService.backfillMissingScreenshots();
   }
 
   /**

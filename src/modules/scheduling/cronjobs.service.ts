@@ -374,6 +374,9 @@ export class CronJobsService {
     if (this.shouldSkipArchiveSyncCron('integrity re-scan')) {
       return;
     }
+    await this.execute('snapshot artifact backfill', () =>
+      this.archiveSyncService.runSnapshotArtifactBackfill('cron'),
+    );
     await this.execute('integrity re-scan', () =>
       this.archiveSyncService
         .runScheduledIntegrityRescan('cron')

@@ -33,10 +33,51 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
   private activeLeases = 0;
   private readonly leaseWaitQueue: Array<() => void> = [];
   private readonly trackedBrowserPids = new Set<number>();
+  /** Per-lease process ownership; a lease may only clean up pids it owns. */
+  private readonly activeLeasePids = new Map<number, Set<number>>();
+  private leaseSeq = 0;
   private readonly zombieWarningLastAt = new Map<number, number>();
   private readonly closeTimeoutMs = 10_000;
   private readonly forceKillWaitMs = 5_000;
   private shuttingDown = false;
+
+  private isClaimedByOtherLease(pid: number, leaseId: number): boolean {
+    for (const [id, pids] of this.activeLeasePids) {
+      if (id !== leaseId && pids.has(pid)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private collectSessionTreePids(
+    sessionPid: number,
+    rows: ProcessSnapshotRow[],
+  ): Set<number> {
+    const childrenByParent = new Map<number, ProcessSnapshotRow[]>();
+    for (const row of rows) {
+      const children = childrenByParent.get(row.ppid) ?? [];
+      children.push(row);
+      childrenByParent.set(row.ppid, children);
+    }
+
+    const owned = new Set<number>([sessionPid]);
+    const stack = [sessionPid];
+
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (current == null) continue;
+
+      for (const child of childrenByParent.get(current) ?? []) {
+        if (!owned.has(child.pid)) {
+          owned.add(child.pid);
+          stack.push(child.pid);
+        }
+      }
+    }
+
+    return owned;
+  }
 
   private wakeLeaseWaiters(): void {
     while (this.leaseWaitQueue.length > 0) {
@@ -267,18 +308,42 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
   private async closeBrowserSession(
     label: string,
     session: BrowserSessionLike,
+    leaseId: number,
     leaseStartPids: Set<number>,
   ): Promise<void> {
-    const pid = this.resolvePid(session);
-    if (pid != null) {
-      this.trackedBrowserPids.add(pid);
+    const ownedPids = this.activeLeasePids.get(leaseId) ?? new Set<number>();
+    const sessionPid = this.resolvePid(session);
+    if (sessionPid != null) {
+      ownedPids.add(sessionPid);
     }
 
     const observedBeforeClose = await this.collectBrowserDescendants();
-    for (const row of observedBeforeClose) {
-      if (!leaseStartPids.has(row.pid)) {
-        this.trackedBrowserPids.add(row.pid);
+
+    if (sessionPid != null) {
+      const sessionTree = this.collectSessionTreePids(
+        sessionPid,
+        observedBeforeClose,
+      );
+      for (const row of observedBeforeClose) {
+        if (
+          sessionTree.has(row.pid) &&
+          !this.isClaimedByOtherLease(row.pid, leaseId)
+        ) {
+          ownedPids.add(row.pid);
+        }
       }
+    } else if (this.activeLeasePids.size <= 1) {
+      // No resolvable browser pid: adopting strays is only safe when no other
+      // lease can own them.
+      for (const row of observedBeforeClose) {
+        if (!leaseStartPids.has(row.pid)) {
+          ownedPids.add(row.pid);
+        }
+      }
+    }
+
+    for (const pid of ownedPids) {
+      this.trackedBrowserPids.add(pid);
     }
 
     const closePromise = Promise.resolve()
@@ -309,43 +374,41 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
     }
 
     const observedAfterClose = await this.collectBrowserDescendants();
-    const observedAfterSet = new Set(observedAfterClose.map((row) => row.pid));
-    const zombieAfterSet = new Set(
-      observedAfterClose
-        .filter((row) => row.stat.startsWith('Z'))
-        .map((row) => row.pid),
+    const observedAfterMap = new Map(
+      observedAfterClose.map((row) => [row.pid, row] as const),
     );
 
-    for (const trackedPid of [...this.trackedBrowserPids]) {
-      if (!observedAfterSet.has(trackedPid) || zombieAfterSet.has(trackedPid)) {
-        this.trackedBrowserPids.delete(trackedPid);
-      }
-    }
+    const release = (pid: number): void => {
+      ownedPids.delete(pid);
+      this.trackedBrowserPids.delete(pid);
+    };
 
-    for (const row of observedAfterClose) {
+    for (const pid of [...ownedPids]) {
+      const row = observedAfterMap.get(pid);
+
+      if (!row) {
+        release(pid);
+        continue;
+      }
+
       if (row.stat.startsWith('Z')) {
         this.logZombieIfNeeded(label, row);
+        release(pid);
+        continue;
       }
-    }
 
-    const leakedRows = observedAfterClose.filter((row) =>
-      this.trackedBrowserPids.has(row.pid),
-    );
-
-    for (const row of leakedRows) {
-      const stillAlive = await this.isProcessAlive(row.pid);
-      if (!stillAlive) {
-        this.trackedBrowserPids.delete(row.pid);
+      if (!(await this.isProcessAlive(pid))) {
+        release(pid);
         continue;
       }
 
       this.logger.warn(
-        `${label}: browser pid ${row.pid} (${row.command}) still alive after closeBrowser; forcing cleanup`,
+        `${label}: browser pid ${pid} (${row.command}) still alive after closeBrowser; forcing cleanup`,
       );
-      await this.forceKillProcessTree(row.pid, label);
+      await this.forceKillProcessTree(pid, label);
 
-      if (!(await this.isProcessAlive(row.pid))) {
-        this.trackedBrowserPids.delete(row.pid);
+      if (!(await this.isProcessAlive(pid))) {
+        release(pid);
       }
     }
   }
@@ -355,19 +418,30 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
     session: TSession,
     task: (session: TSession) => Promise<TResult>,
   ): Promise<TResult> {
-    const leaseStartPids = new Set(
-      (await this.collectBrowserDescendants()).map((row) => row.pid),
-    );
-
     await this.waitForLeaseSlot(label);
+
+    const leaseId = ++this.leaseSeq;
+    this.activeLeasePids.set(leaseId, new Set<number>());
+
     try {
-      return await task(session);
-    } finally {
-      await this.closeBrowserSession(
-        label,
-        session as BrowserSessionLike,
-        leaseStartPids,
+      // Snapshot taken after slot acquisition so concurrent leases' browsers are
+      // never mistaken for this lease's own processes.
+      const leaseStartPids = new Set(
+        (await this.collectBrowserDescendants()).map((row) => row.pid),
       );
+
+      try {
+        return await task(session);
+      } finally {
+        await this.closeBrowserSession(
+          label,
+          session as BrowserSessionLike,
+          leaseId,
+          leaseStartPids,
+        );
+      }
+    } finally {
+      this.activeLeasePids.delete(leaseId);
       this.releaseLease();
     }
   }

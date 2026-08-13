@@ -58,6 +58,10 @@ export class NsmBillDeletedError extends Error {
   }
 }
 
+export function buildNsmDetailUrl(billNo: string): string {
+  return `https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/${billNo.trim()}/detailRP`;
+}
+
 @Injectable()
 export class CrawlingCoreService {
   private readonly logger = LoggerUtils.getContextLogger(
@@ -155,7 +159,7 @@ export class CrawlingCoreService {
       return null;
     }
 
-    const detailUrl = `https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/${normalized}/detailRP`;
+    const detailUrl = buildNsmDetailUrl(normalized);
 
     try {
       const response = await fetchHtmlPage(detailUrl, {
@@ -528,7 +532,7 @@ export class CrawlingCoreService {
       `captureNsmDetailFull(${normalized})`,
       client,
       async () => {
-        const detailUrl = `https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/${normalized}/detailRP`;
+        const detailUrl = buildNsmDetailUrl(normalized);
         const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
 
         await client.initBrowser();

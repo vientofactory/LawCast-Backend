@@ -39,6 +39,82 @@ export class NoticeArchiveArtifactSupport {
     return 'pending';
   }
 
+  /**
+   * Records a snapshot-artifact deficit so the row stays a visible retry target
+   * instead of silently looking unverified forever.
+   */
+  async seedIntegrityDeficit(
+    noticeNum: number,
+    skipReason: string,
+  ): Promise<void> {
+    if (!this.integrityStateRepository) {
+      return;
+    }
+
+    const previous = await this.integrityStateRepository.findOne({
+      where: { noticeNum },
+      select: {
+        id: true,
+        latestResult: true,
+        failureStreak: true,
+        lastPassedAt: true,
+      },
+    });
+
+    // Never downgrade a row that already has a verified snapshot.
+    if (previous?.latestResult === 'passed') {
+      return;
+    }
+
+    const payload = {
+      noticeNum,
+      latestCheckId: null,
+      latestResult: 'skipped' as ArchiveIntegrityCheckResult,
+      latestCheckedAt: new Date(),
+      lastPassedAt: previous?.lastPassedAt ?? null,
+      failureStreak: previous?.failureStreak ?? 0,
+      lastSkipReason: skipReason,
+      latestStoredSha256: null,
+      latestCalculatedSha256: null,
+    };
+
+    if (previous?.id) {
+      await this.integrityStateRepository.update({ id: previous.id }, payload);
+      return;
+    }
+
+    await this.integrityStateRepository.insert(payload);
+  }
+
+  /**
+   * Clears a previously seeded deficit once the missing artifacts are filled so
+   * the next integrity scan re-evaluates the row.
+   */
+  async markIntegrityStatePendingRecheck(noticeNum: number): Promise<void> {
+    if (!this.integrityStateRepository) {
+      return;
+    }
+
+    const previous = await this.integrityStateRepository.findOne({
+      where: { noticeNum },
+      select: { id: true, latestResult: true },
+    });
+
+    if (!previous?.id || previous.latestResult !== 'skipped') {
+      return;
+    }
+
+    await this.integrityStateRepository.update(
+      { id: previous.id },
+      {
+        latestResult: null,
+        latestCheckedAt: null,
+        lastSkipReason: null,
+        failureStreak: 0,
+      },
+    );
+  }
+
   private async hydrateSummaryState(row: NoticeArchive): Promise<void> {
     if (!this.summaryStateRepository) {
       return;
