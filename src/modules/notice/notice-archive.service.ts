@@ -63,6 +63,7 @@ import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { logAndBridge } from '../../utils/bridge-log.utils';
+import { canonicalizeProposalReason } from '../../utils/proposal-reason.utils';
 import {
   recoverCompetentAuthorityName,
   recoverOptionalCompetentAuthorityName,
@@ -307,18 +308,6 @@ export class NoticeArchiveService {
 
   private normalizeStableId(value: string | null | undefined): string | null {
     const normalized = value?.trim();
-    return normalized && normalized.length > 0 ? normalized : null;
-  }
-
-  private normalizeProposalReasonText(
-    value: string | null | undefined,
-  ): string | null {
-    const normalized = value
-      ?.replace(/\r\n?/g, '\n')
-      .split('\n')
-      .map((line) => line.replace(/[ \t\f\v]+/g, ' ').trim())
-      .join('\n')
-      .trim();
     return normalized && normalized.length > 0 ? normalized : null;
   }
 
@@ -639,6 +628,9 @@ export class NoticeArchiveService {
       }
 
       if (typeof raw === 'string') {
+        if (fieldPath === 'proposalReason') {
+          return canonicalizeProposalReason(raw);
+        }
         const normalized = raw.replace(/\s+/g, ' ').trim();
         return normalized.length > 0 ? normalized : null;
       }
@@ -660,8 +652,8 @@ export class NoticeArchiveService {
     };
 
     const fallbackProposalReason =
-      this.normalizeProposalReasonText(baselineText('proposalReason')) ??
-      this.normalizeProposalReasonText(beforeRow?.proposalReason) ??
+      canonicalizeProposalReason(baselineText('proposalReason')) ??
+      canonicalizeProposalReason(beforeRow?.proposalReason) ??
       null;
     const fallbackBillNumber =
       this.normalizeStableId(baselineText('billNumber')) ??
@@ -687,7 +679,7 @@ export class NoticeArchiveService {
       {
         preserveExistingWhenIncomingNull: existing,
         normalizeText: true,
-        normalizeTextValue: (value) => this.normalizeProposalReasonText(value),
+        normalizeTextValue: canonicalizeProposalReason,
       },
     );
 
@@ -2714,7 +2706,7 @@ export class NoticeArchiveService {
     const latestProposalReason =
       await this.getLatestProposalReasonForNotice(noticeNum);
     const normalizedLatestProposalReason =
-      this.normalizeProposalReasonText(latestProposalReason);
+      canonicalizeProposalReason(latestProposalReason);
 
     // Keep chain-head proposalReason as baseline to avoid stale-row re-emission
     // when repair callers only mock latest-field reads.
@@ -2733,7 +2725,7 @@ export class NoticeArchiveService {
       {
         preserveExistingWhenIncomingNull: true,
         normalizeText: true,
-        normalizeTextValue: (value) => this.normalizeProposalReasonText(value),
+        normalizeTextValue: canonicalizeProposalReason,
       },
     );
 

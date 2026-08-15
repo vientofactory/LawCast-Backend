@@ -796,6 +796,69 @@ describe('NoticeArchiveService', () => {
       ).not.toHaveBeenCalled();
     });
 
+    it('does not append an event when a recrawl matches the multiline chain-head proposalReason', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 1,
+          details: [
+            {
+              fieldPath: 'proposalReason',
+              afterValue: '첫 줄\n둘째 줄\n\n넷째 줄',
+            },
+          ],
+        },
+      ]);
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219777,
+          subject: '멀티라인 재수집 테스트',
+          proposerCategory: '의원',
+          committee: '법제사법위원회',
+          assemblyLink: 'https://example.com/2219777',
+          contentId: null,
+          proposalReason: '',
+          sourceHtml: null,
+          sourceHtmlSha256: null,
+        }),
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219777,
+          subject: '멀티라인 재수집 테스트',
+          proposerCategory: '의원',
+          committee: '법제사법위원회',
+          link: 'https://example.com/2219777',
+          contentId: null,
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          proposalReason: ' 첫 줄 \r\n둘째   줄\r\n\r\n 넷째 줄 ',
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+      expect(
+        changeTrackingService.dispatchChangeNotification,
+      ).not.toHaveBeenCalled();
+    });
+
     it('preserves line breaks in proposalReason detail when appending diffchain event', async () => {
       const repositoryMock = {
         ...createRepositoryMock(),

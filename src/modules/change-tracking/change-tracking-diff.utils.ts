@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import { type ChangeDetailType } from './notice-change-detail.entity';
+import { canonicalizeProposalReason } from '../../utils/proposal-reason.utils';
 
 export interface DiffDetail {
   fieldPath: string;
@@ -42,18 +43,9 @@ function normalizeString(input: string): string {
   return input.replace(/\s+/g, ' ').trim();
 }
 
-function normalizeMultilineString(input: string): string {
-  return input
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((line) => line.replace(/[ \t\f\v]+/g, ' ').trim())
-    .join('\n')
-    .trim();
-}
-
 function normalizeTrackedString(fieldPath: string, input: string): string {
   if (fieldPath === 'proposalReason') {
-    return normalizeMultilineString(input);
+    return canonicalizeProposalReason(input) ?? '';
   }
   return normalizeString(input);
 }

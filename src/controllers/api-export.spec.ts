@@ -16,6 +16,7 @@ import { PackagesService } from '../modules/shared/packages.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
 import { WebPushSubscriptionService } from '../modules/notification/web-push-subscription.service';
 import { WebPushNotificationService } from '../modules/notification/web-push-notification.service';
+import { WebPushRegistrationService } from '../modules/notification/web-push-registration.service';
 
 // NoticeArchiveService 모킹
 const mockBuildArchiveExportZip = jest.fn();
@@ -67,6 +68,13 @@ describe('ApiController archive export', () => {
           provide: WebhookRegistrationService,
           useValue: {
             registerWebhook: jest.fn(),
+          },
+        },
+        {
+          provide: WebPushRegistrationService,
+          useValue: {
+            registerSubscription: jest.fn(),
+            unregisterSubscription: jest.fn(),
           },
         },
         {

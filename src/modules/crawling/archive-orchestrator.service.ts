@@ -24,6 +24,7 @@ import { logAndBridge } from '../../utils/bridge-log.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { normalizeNoticeNum } from '../../utils/notice-num.utils';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
+import { canonicalizeProposalReason } from '../../utils/proposal-reason.utils';
 import { ArchiveOrchestratorScreenshotCoordinator } from './utils/archive-orchestrator-screenshot-coordinator';
 
 const SNAPSHOT_ARTIFACT_BACKFILL_LIMIT = 200;
@@ -106,18 +107,6 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       logger: this.logger,
       discordBridge: this.discordBridge,
     });
-  }
-
-  private normalizeProposalReasonText(
-    value: string | null | undefined,
-  ): string | null {
-    const normalized = value
-      ?.replace(/\r\n?/g, '\n')
-      .split('\n')
-      .map((line) => line.replace(/[ \t\f\v]+/g, ' ').trim())
-      .join('\n')
-      .trim();
-    return normalized && normalized.length > 0 ? normalized : null;
   }
 
   private normalizeHeaderValue(value: unknown): string | undefined {
@@ -870,8 +859,8 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         await this.noticeArchiveService.getLatestProposalReasonForNotice(num);
       if (
         !latestReason ||
-        this.normalizeProposalReasonText(latestReason) !==
-          this.normalizeProposalReasonText(proposalReason)
+        canonicalizeProposalReason(latestReason) !==
+          canonicalizeProposalReason(proposalReason)
       ) {
         this.logger.warn(
           `proposalReason backfill verification failed for bill ${normalizedBillNo} (notice=${num})`,

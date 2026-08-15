@@ -14,6 +14,7 @@ import { ChangeTrackingService } from '../modules/change-tracking/change-trackin
 import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
 import { WebPushSubscriptionService } from '../modules/notification/web-push-subscription.service';
 import { WebPushNotificationService } from '../modules/notification/web-push-notification.service';
+import { WebPushRegistrationService } from '../modules/notification/web-push-registration.service';
 import { WebhookCleanupService } from '../modules/webhook/webhook-cleanup.service';
 import { NoticeArchiveService } from '../modules/notice/notice-archive.service';
 import { NoticesQueryService } from '../modules/crawling/notices-query.service';
@@ -217,6 +218,13 @@ describe('HTTP-Batch Processing Isolation', () => {
           provide: WebhookRegistrationService,
           useValue: {
             registerWebhook: jest.fn(),
+          },
+        },
+        {
+          provide: WebPushRegistrationService,
+          useValue: {
+            registerSubscription: jest.fn(),
+            unregisterSubscription: jest.fn(),
           },
         },
         {
