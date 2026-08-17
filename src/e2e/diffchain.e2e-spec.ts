@@ -9,6 +9,9 @@ import { WebhookService } from '../modules/webhook/webhook.service';
 import { CrawlingService } from '../modules/crawling/crawling.service';
 import { HealthCheckService } from '../modules/health/health-check.service';
 import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
+import { WebPushRegistrationService } from '../modules/notification/web-push-registration.service';
+import { WebPushSubscriptionService } from '../modules/notification/web-push-subscription.service';
+import { WebPushNotificationService } from '../modules/notification/web-push-notification.service';
 import { BatchProcessingService } from '../modules/shared/batch-processing.service';
 import {
   LEGACY_GENESIS_SOURCE,
@@ -20,8 +23,12 @@ import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
+import { getTrackedFieldsForCanonVersion } from '../modules/change-tracking/change-tracking-diff.utils';
 import { NoticeChangeSource } from '../modules/change-tracking/notice-change-source.enum';
 import { NoticeArchive } from '../modules/notice/notice-archive.entity';
+import { NoticeArchiveIntegrityCheck } from '../modules/notice/notice-archive-integrity-check.entity';
+import { NoticeArchiveIntegrityState } from '../modules/notice/notice-archive-integrity-state.entity';
+import { NoticeArchiveArtifactSupport } from '../modules/notice/utils/notice-archive-artifact-support';
 import {
   CHANGE_EVENT_TYPE,
   NoticeChangeEvent,
@@ -31,7 +38,7 @@ import {
   NoticeChangeDetail,
   type ChangeDetailType,
 } from '../modules/change-tracking/notice-change-detail.entity';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 
 type SeedDetail = {
   fieldPath: string;
@@ -111,6 +118,8 @@ describe('Diffchain API (e2e)', () => {
           NoticeArchive,
           NoticeChangeEvent,
           NoticeChangeDetail,
+          NoticeArchiveIntegrityCheck,
+          NoticeArchiveIntegrityState,
         ]),
       ],
       controllers: [ApiController],
@@ -142,6 +151,28 @@ describe('Diffchain API (e2e)', () => {
           provide: WebhookRegistrationService,
           useValue: {
             registerWebhook: jest.fn(),
+          },
+        },
+        {
+          provide: WebPushRegistrationService,
+          useValue: {
+            registerSubscription: jest.fn(),
+            unregisterSubscription: jest.fn(),
+          },
+        },
+        {
+          provide: WebPushSubscriptionService,
+          useValue: {
+            getSubscriptions: jest.fn(),
+            create: jest.fn(),
+            remove: jest.fn(),
+          },
+        },
+        {
+          provide: WebPushNotificationService,
+          useValue: {
+            getPublicConfig: jest.fn().mockReturnValue({ publicKey: 'test' }),
+            sendNotification: jest.fn(),
           },
         },
         {
@@ -266,6 +297,167 @@ describe('Diffchain API (e2e)', () => {
     expect(multiComparable).toMatchObject({ num: 1003, changeEventCount: 3 });
   });
 
+  it('reads diffchain rows from the real SQLite DB and validates the runtime chain audit', async () => {
+    const eventRepository = dataSource.getRepository(NoticeChangeEvent);
+    const detailRepository = dataSource.getRepository(NoticeChangeDetail);
+
+    const events = await eventRepository.find({
+      where: { noticeNum: 1003 },
+      order: { eventHeight: 'ASC', id: 'ASC' },
+    });
+
+    expect(events).toHaveLength(3);
+    const eventIds = events.map((event) => event.id);
+    const details = await detailRepository.find({
+      where: { eventId: In(eventIds) },
+      order: { id: 'ASC' },
+    });
+
+    expect(details.length).toBeGreaterThan(0);
+    expect(events.map((event) => event.eventHash.length)).toEqual([64, 64, 64]);
+
+    const report = await changeTrackingService.runScheduledChainAudit('daily');
+
+    expect(report.failureCount).toBe(0);
+    expect(report.failures).toEqual([]);
+    expect(report.noticeCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not flag a legacy canon-version hash drift as a runtime integrity failure', async () => {
+    const bootstrapService = new ChangeTrackingService(
+      {} as any,
+      {} as any,
+      undefined as any,
+    );
+    const detectedAt = new Date('2026-07-05T00:00:00.000Z');
+    const snapshot = {
+      num: 2001,
+      subject: '레거시 해시 회귀 검증',
+      proposerCategory: '의원',
+      committee: '정무위원회',
+      proposalReason: '문단 1\n문단 2',
+      billNumber: null,
+      proposer: null,
+      proposalDate: null,
+      contentCommittee: null,
+      referralDate: null,
+      noticePeriod: null,
+      proposalSession: null,
+      isDone: false,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
+    };
+    const built = bootstrapService.buildDiffEvent({
+      noticeNum: 2001,
+      beforeSnapshot: null,
+      afterSnapshot: snapshot,
+      detectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+      canonVersion: 1,
+    });
+
+    const changeEventRepository = {
+      createQueryBuilder: jest.fn(() => ({
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest.fn().mockResolvedValue([{ noticeNum: 2001 }]),
+      })),
+      find: jest.fn().mockResolvedValue([
+        {
+          id: 91,
+          noticeNum: 2001,
+          detectedAt,
+          eventType: CHANGE_EVENT_TYPE.CREATED,
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          eventHeight: 1,
+          prevEventHash: null,
+          eventHash: 'legacy-runtime-hash-drift',
+          changedFieldCount: built.diff.changedFieldCount,
+          diffSummaryJson: built.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 1,
+        },
+      ]),
+    } as any;
+
+    const changeDetailRepository = {
+      find: jest.fn().mockResolvedValue(
+        built.diff.details.map((detail, index) => ({
+          id: 901 + index,
+          eventId: 91,
+          ...detail,
+        })),
+      ),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      changeDetailRepository,
+      undefined as any,
+      undefined as any,
+    );
+
+    const report = await service.runScheduledChainAudit('daily');
+
+    expect(report.failureCount).toBe(0);
+    const noticeReport = report.failures.find(
+      (failure) => failure.noticeNum === 2001,
+    );
+    expect(noticeReport).toBeUndefined();
+  });
+
+  it('retries a transient SQLite transaction-state conflict during integrity rescan', async () => {
+    const archiveRepo = {
+      find: jest.fn().mockResolvedValue([
+        {
+          id: 1,
+          noticeNum: 4001,
+          sourceHtml: '<html><body>무결성 재검증</body></html>',
+          sourceHtmlSha256: createHash('sha256')
+            .update('<html><body>무결성 재검증</body></html>')
+            .digest('hex'),
+          integrityCheckPassed: true,
+          integrityVerifiedAt: new Date('2026-07-05T00:00:00.000Z'),
+        },
+      ]),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+    } as any;
+
+    const integrityCheckRepository = {
+      save: jest.fn().mockResolvedValue({ id: 1001 }),
+      create: jest.fn().mockImplementation((input) => input),
+    } as any;
+
+    const integrityStateRepository = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 11,
+        failureStreak: 0,
+        lastPassedAt: null,
+      }),
+      update: jest
+        .fn()
+        .mockRejectedValueOnce(
+          new Error(
+            'Transaction is not started yet, start transaction before committing or rolling it back.',
+          ),
+        )
+        .mockResolvedValue({ affected: 1 }),
+      insert: jest.fn().mockResolvedValue({ raw: {} }),
+    } as any;
+
+    const support = new NoticeArchiveArtifactSupport(
+      archiveRepo,
+      integrityCheckRepository,
+      integrityStateRepository,
+    );
+
+    const result = await support.runIntegrityScan(10);
+
+    expect(result.scanned).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(integrityStateRepository.update).toHaveBeenCalled();
+  });
+
   it('treats height=2 and above as comparable revisions and computes the matching summary', async () => {
     const [changesResponse, summaryResponse] = await Promise.all([
       request(app.getHttpServer())
@@ -301,6 +493,8 @@ describe('Diffchain API (e2e)', () => {
   });
 
   async function seedFixtures(): Promise<void> {
+    const noticeStateByNum = new Map<number, Record<string, unknown>>();
+
     await archiveRepository.save([
       createArchiveNotice({
         noticeNum: 1001,
@@ -319,123 +513,147 @@ describe('Diffchain API (e2e)', () => {
       }),
     ]);
 
-    await seedNotice1001();
-    await seedNotice1002();
-    await seedNotice1003();
+    await seedNotice1001(noticeStateByNum);
+    await seedNotice1002(noticeStateByNum);
+    await seedNotice1003(noticeStateByNum);
   }
 
-  async function seedNotice1001(): Promise<void> {
-    await appendEvent({
-      noticeNum: 1001,
-      eventType: CHANGE_EVENT_TYPE.CREATED,
-      source: LEGACY_GENESIS_SOURCE,
-      detectedAt: '2026-07-01T00:00:00.000Z',
-      details: [
-        {
-          fieldPath: 'subject',
-          changeType: 'added',
-          beforeValue: null,
-          afterValue: '의안 1001 최초 제목',
-        },
-        {
-          fieldPath: 'proposalReason',
-          changeType: 'added',
-          beforeValue: null,
-          afterValue: '의안 1001 최초 제안 이유',
-        },
-      ],
-    });
+  async function seedNotice1001(
+    noticeStateByNum: Map<number, Record<string, unknown>>,
+  ): Promise<void> {
+    await appendEvent(
+      {
+        noticeNum: 1001,
+        eventType: CHANGE_EVENT_TYPE.CREATED,
+        source: LEGACY_GENESIS_SOURCE,
+        detectedAt: '2026-07-01T00:00:00.000Z',
+        details: [
+          {
+            fieldPath: 'subject',
+            changeType: 'added',
+            beforeValue: null,
+            afterValue: '의안 1001 최초 제목',
+          },
+          {
+            fieldPath: 'proposalReason',
+            changeType: 'added',
+            beforeValue: null,
+            afterValue: '의안 1001 최초 제안 이유',
+          },
+        ],
+      },
+      noticeStateByNum,
+    );
   }
 
-  async function seedNotice1002(): Promise<void> {
-    await appendEvent({
-      noticeNum: 1002,
-      eventType: CHANGE_EVENT_TYPE.CREATED,
-      source: LEGACY_GENESIS_SOURCE,
-      detectedAt: '2026-07-01T00:00:00.000Z',
-      details: [
-        {
-          fieldPath: 'subject',
-          changeType: 'added',
-          beforeValue: null,
-          afterValue: '의안 1002 최초 제목',
-        },
-        {
-          fieldPath: 'proposalReason',
-          changeType: 'added',
-          beforeValue: null,
-          afterValue: '의안 1002 최초 제안 이유',
-        },
-      ],
-    });
+  async function seedNotice1002(
+    noticeStateByNum: Map<number, Record<string, unknown>>,
+  ): Promise<void> {
+    await appendEvent(
+      {
+        noticeNum: 1002,
+        eventType: CHANGE_EVENT_TYPE.CREATED,
+        source: LEGACY_GENESIS_SOURCE,
+        detectedAt: '2026-07-01T00:00:00.000Z',
+        details: [
+          {
+            fieldPath: 'subject',
+            changeType: 'added',
+            beforeValue: null,
+            afterValue: '의안 1002 최초 제목',
+          },
+          {
+            fieldPath: 'proposalReason',
+            changeType: 'added',
+            beforeValue: null,
+            afterValue: '의안 1002 최초 제안 이유',
+          },
+        ],
+      },
+      noticeStateByNum,
+    );
 
-    await appendEvent({
-      noticeNum: 1002,
-      eventType: CHANGE_EVENT_TYPE.UPDATED,
-      source: NoticeChangeSource.ARCHIVE_UPSERT,
-      detectedAt: '2026-07-02T00:00:00.000Z',
-      details: [
-        {
-          fieldPath: 'subject',
-          changeType: 'modified',
-          beforeValue: '의안 1002 최초 제목',
-          afterValue: '의안 1002 수정 제목',
-        },
-      ],
-    });
+    await appendEvent(
+      {
+        noticeNum: 1002,
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
+        detectedAt: '2026-07-02T00:00:00.000Z',
+        details: [
+          {
+            fieldPath: 'subject',
+            changeType: 'modified',
+            beforeValue: '의안 1002 최초 제목',
+            afterValue: '의안 1002 수정 제목',
+          },
+        ],
+      },
+      noticeStateByNum,
+    );
   }
 
-  async function seedNotice1003(): Promise<void> {
-    await appendEvent({
-      noticeNum: 1003,
-      eventType: CHANGE_EVENT_TYPE.CREATED,
-      source: LEGACY_GENESIS_SOURCE,
-      detectedAt: '2026-07-01T00:00:00.000Z',
-      details: [
-        {
-          fieldPath: 'subject',
-          changeType: 'added',
-          beforeValue: null,
-          afterValue: '의안 1003 최초 제목',
-        },
-        {
-          fieldPath: 'proposalReason',
-          changeType: 'added',
-          beforeValue: null,
-          afterValue: '의안 1003 최초 제안 이유',
-        },
-      ],
-    });
+  async function seedNotice1003(
+    noticeStateByNum: Map<number, Record<string, unknown>>,
+  ): Promise<void> {
+    await appendEvent(
+      {
+        noticeNum: 1003,
+        eventType: CHANGE_EVENT_TYPE.CREATED,
+        source: LEGACY_GENESIS_SOURCE,
+        detectedAt: '2026-07-01T00:00:00.000Z',
+        details: [
+          {
+            fieldPath: 'subject',
+            changeType: 'added',
+            beforeValue: null,
+            afterValue: '의안 1003 최초 제목',
+          },
+          {
+            fieldPath: 'proposalReason',
+            changeType: 'added',
+            beforeValue: null,
+            afterValue: '의안 1003 최초 제안 이유',
+          },
+        ],
+      },
+      noticeStateByNum,
+    );
 
-    await appendEvent({
-      noticeNum: 1003,
-      eventType: CHANGE_EVENT_TYPE.UPDATED,
-      source: NoticeChangeSource.ARCHIVE_UPSERT,
-      detectedAt: '2026-07-02T00:00:00.000Z',
-      details: [
-        {
-          fieldPath: 'subject',
-          changeType: 'modified',
-          beforeValue: '의안 1003 최초 제목',
-          afterValue: '의안 1003 수정 제목',
-        },
-      ],
-    });
+    await appendEvent(
+      {
+        noticeNum: 1003,
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
+        detectedAt: '2026-07-02T00:00:00.000Z',
+        details: [
+          {
+            fieldPath: 'subject',
+            changeType: 'modified',
+            beforeValue: '의안 1003 최초 제목',
+            afterValue: '의안 1003 수정 제목',
+          },
+        ],
+      },
+      noticeStateByNum,
+    );
 
-    await appendEvent({
-      noticeNum: 1003,
-      eventType: CHANGE_EVENT_TYPE.UPDATED,
-      source: NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
-      detectedAt: '2026-07-03T00:00:00.000Z',
-      details: [
-        {
-          fieldPath: 'proposalReason',
-          changeType: 'modified',
-          beforeValue: '의안 1003 최초 제안 이유',
-          afterValue: '의안 1003 최종 제안 이유',
-        },
-      ],
-    });
+    await appendEvent(
+      {
+        noticeNum: 1003,
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPDATE_SOURCE_HTML,
+        detectedAt: '2026-07-03T00:00:00.000Z',
+        details: [
+          {
+            fieldPath: 'proposalReason',
+            changeType: 'modified',
+            beforeValue: '의안 1003 최초 제안 이유',
+            afterValue: '의안 1003 최종 제안 이유',
+          },
+        ],
+      },
+      noticeStateByNum,
+    );
   }
 
   function createArchiveNotice(params: {
@@ -487,27 +705,74 @@ describe('Diffchain API (e2e)', () => {
     };
   }
 
-  async function appendEvent(params: {
-    noticeNum: number;
-    eventType: ChangeEventType;
-    source: NoticeChangeSource;
-    detectedAt: string;
-    details: SeedDetail[];
-  }): Promise<void> {
+  async function appendEvent(
+    params: {
+      noticeNum: number;
+      eventType: ChangeEventType;
+      source: NoticeChangeSource;
+      detectedAt: string;
+      details: SeedDetail[];
+    },
+    noticeStateByNum: Map<number, Record<string, unknown>> = new Map(),
+  ): Promise<void> {
+    const previousSnapshot =
+      params.eventType === CHANGE_EVENT_TYPE.CREATED
+        ? null
+        : (noticeStateByNum.get(params.noticeNum) ?? null);
+
+    const trackedFields = getTrackedFieldsForCanonVersion(2);
+    const nextSnapshot = Object.fromEntries(
+      trackedFields.map((fieldPath) => [fieldPath, null]),
+    ) as Record<string, unknown>;
+
+    if (previousSnapshot) {
+      for (const fieldPath of trackedFields) {
+        if (Object.prototype.hasOwnProperty.call(previousSnapshot, fieldPath)) {
+          nextSnapshot[fieldPath] = previousSnapshot[fieldPath];
+        }
+      }
+    }
+
+    nextSnapshot.num = params.noticeNum;
+    nextSnapshot.proposerCategory = '의원';
+    nextSnapshot.committee = '정무위원회';
+    nextSnapshot.isDone = false;
+    nextSnapshot.lifecycleStatus = 'active';
+    nextSnapshot.sourceDeletedAt = null;
+
+    for (const detail of params.details) {
+      nextSnapshot[detail.fieldPath] =
+        detail.afterValue === undefined ? null : detail.afterValue;
+    }
+
+    const built = changeTrackingService.buildDiffEvent({
+      noticeNum: params.noticeNum,
+      beforeSnapshot: previousSnapshot,
+      afterSnapshot: nextSnapshot,
+      detectedAt: new Date(params.detectedAt),
+      source: params.source,
+      canonVersion: 2,
+    });
+
     await changeTrackingService.appendChangeEventWithDetails({
       noticeNum: params.noticeNum,
       eventType: params.eventType,
       source: params.source,
       detectedAt: new Date(params.detectedAt),
-      eventHash: createHash('sha256')
-        .update(
-          `${params.noticeNum}:${params.eventType}:${params.source}:${params.detectedAt}:${params.details
-            .map((detail) => `${detail.fieldPath}:${detail.afterValue ?? ''}`)
-            .join('|')}`,
-        )
-        .digest('hex'),
-      changedFieldCount: params.details.length,
-      details: params.details,
+      eventHash: built.eventHash,
+      changedFieldCount: built.diff.changedFieldCount,
+      diffSummaryJson: built.diff.diffSummaryJson,
+      canonVersion: 2,
+      details: built.diff.details.map((detail) => ({
+        fieldPath: detail.fieldPath,
+        changeType: detail.changeType,
+        beforeValue: detail.beforeValue,
+        afterValue: detail.afterValue,
+        beforeHash: detail.beforeHash,
+        afterHash: detail.afterHash,
+      })),
     });
+
+    noticeStateByNum.set(params.noticeNum, nextSnapshot);
   }
 });

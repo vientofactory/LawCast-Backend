@@ -13,6 +13,7 @@ import {
 } from './notice-change-event.entity';
 import { NoticeChangeDetail } from './notice-change-detail.entity';
 import { NoticeChangeSource } from './notice-change-source.enum';
+import { getTrackedFieldsForCanonVersion } from './change-tracking-diff.utils';
 
 describe('ChangeTrackingService (diffchain batching)', () => {
   const createService = () => {
@@ -841,6 +842,240 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     expect(report.eventCount).toBe(1);
   });
 
+  it('accepts legacy prev_hash drift when the event remains canonically compatible', async () => {
+    const bootstrapService = new ChangeTrackingService(
+      {} as any,
+      {} as any,
+      undefined as any,
+    );
+    const firstDetectedAt = new Date('2026-07-01T00:00:00.000Z');
+    const secondDetectedAt = new Date('2026-07-02T00:00:00.000Z');
+    const firstSnapshot = {
+      num: 7101,
+      subject: '레거시 선행 이벤트',
+      proposerCategory: '의원',
+      committee: '정무위원회',
+      proposalReason: '문단 1\n문단 2',
+      billNumber: null,
+      proposer: null,
+      proposalDate: null,
+      contentCommittee: null,
+      referralDate: null,
+      noticePeriod: null,
+      proposalSession: null,
+      isDone: false,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
+    };
+    const firstBuilt = bootstrapService.buildDiffEvent({
+      noticeNum: 7101,
+      beforeSnapshot: null,
+      afterSnapshot: firstSnapshot,
+      detectedAt: firstDetectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+      trackedFields: getTrackedFieldsForCanonVersion(1),
+      canonVersion: 1,
+    });
+
+    const secondSnapshot = {
+      ...firstSnapshot,
+      subject: '레거시 이후 이벤트',
+    };
+    const secondBuilt = bootstrapService.buildDiffEvent({
+      noticeNum: 7101,
+      beforeSnapshot: firstSnapshot,
+      afterSnapshot: secondSnapshot,
+      detectedAt: secondDetectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+      trackedFields: getTrackedFieldsForCanonVersion(1),
+      canonVersion: 1,
+    });
+
+    const changeEventRepository = {
+      createQueryBuilder: jest.fn(() => ({
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn<(...args: any[]) => Promise<Array<{ noticeNum: number }>>>()
+          .mockResolvedValue([{ noticeNum: 7101 }]),
+      })),
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        {
+          id: 71,
+          noticeNum: 7101,
+          detectedAt: firstDetectedAt,
+          eventType: CHANGE_EVENT_TYPE.CREATED,
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          eventHeight: 1,
+          prevEventHash: null,
+          eventHash: 'legacy-first-hash-drift',
+          changedFieldCount: firstBuilt.diff.changedFieldCount,
+          diffSummaryJson: firstBuilt.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 1,
+        },
+        {
+          id: 72,
+          noticeNum: 7101,
+          detectedAt: secondDetectedAt,
+          eventType: CHANGE_EVENT_TYPE.UPDATED,
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          eventHeight: 2,
+          prevEventHash: 'legacy-stale-prev-hash',
+          eventHash: 'legacy-second-hash-drift',
+          changedFieldCount: secondBuilt.diff.changedFieldCount,
+          diffSummaryJson: secondBuilt.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 1,
+        },
+      ]),
+    } as any;
+
+    const changeDetailRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        ...firstBuilt.diff.details.map((detail, index) => ({
+          id: 701 + index,
+          eventId: 71,
+          ...detail,
+        })),
+        ...secondBuilt.diff.details.map((detail, index) => ({
+          id: 721 + index,
+          eventId: 72,
+          ...detail,
+        })),
+      ]),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      changeDetailRepository,
+      undefined as any,
+      undefined as any,
+    );
+
+    const report = await service.runScheduledChainAudit('daily');
+
+    expect(report.failureCount).toBe(0);
+    expect(report.noticeCount).toBe(1);
+    expect(report.eventCount).toBe(2);
+  });
+
+  it('follows the stored hash after a legacy-compatible event', async () => {
+    const bootstrapService = new ChangeTrackingService(
+      {} as any,
+      {} as any,
+      undefined as any,
+    );
+    const firstDetectedAt = new Date('2026-07-05T00:00:00.000Z');
+    const secondDetectedAt = new Date('2026-07-06T00:00:00.000Z');
+    const firstSnapshot = {
+      num: 7102,
+      contentId: 'legacy-content-id',
+      subject: '레거시 이벤트',
+      proposerCategory: null,
+      committee: null,
+      proposalReason: null,
+      billNumber: null,
+      proposer: null,
+      proposalDate: null,
+      contentCommittee: null,
+      referralDate: null,
+      noticePeriod: null,
+      proposalSession: null,
+      isDone: false,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
+    };
+    const secondSnapshot = {
+      ...firstSnapshot,
+      subject: '후속 이벤트',
+    };
+    const firstBuilt = bootstrapService.buildDiffEvent({
+      noticeNum: 7102,
+      beforeSnapshot: null,
+      afterSnapshot: firstSnapshot,
+      detectedAt: firstDetectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+      trackedFields: getTrackedFieldsForCanonVersion(1),
+      canonVersion: 1,
+    });
+    const secondBuilt = bootstrapService.buildDiffEvent({
+      noticeNum: 7102,
+      beforeSnapshot: firstSnapshot,
+      afterSnapshot: secondSnapshot,
+      detectedAt: secondDetectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+      trackedFields: getTrackedFieldsForCanonVersion(1),
+      canonVersion: 1,
+    });
+    const storedFirstHash = 'legacy-stored-first-hash';
+
+    const changeEventRepository = {
+      createQueryBuilder: jest.fn(() => ({
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn<(...args: any[]) => Promise<Array<{ noticeNum: number }>>>()
+          .mockResolvedValue([{ noticeNum: 7102 }]),
+      })),
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        {
+          id: 81,
+          noticeNum: 7102,
+          detectedAt: firstDetectedAt,
+          eventType: CHANGE_EVENT_TYPE.CREATED,
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          eventHeight: 1,
+          prevEventHash: null,
+          eventHash: storedFirstHash,
+          changedFieldCount: firstBuilt.diff.changedFieldCount,
+          diffSummaryJson: firstBuilt.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 1,
+        },
+        {
+          id: 82,
+          noticeNum: 7102,
+          detectedAt: secondDetectedAt,
+          eventType: CHANGE_EVENT_TYPE.UPDATED,
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          eventHeight: 2,
+          prevEventHash: storedFirstHash,
+          eventHash: secondBuilt.eventHash,
+          changedFieldCount: secondBuilt.diff.changedFieldCount,
+          diffSummaryJson: secondBuilt.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 1,
+        },
+      ]),
+    } as any;
+    const changeDetailRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        ...firstBuilt.diff.details.map((detail, index) => ({
+          id: 801 + index,
+          eventId: 81,
+          ...detail,
+        })),
+        ...secondBuilt.diff.details.map((detail, index) => ({
+          id: 821 + index,
+          eventId: 82,
+          ...detail,
+        })),
+      ]),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      changeDetailRepository,
+      undefined as any,
+      undefined as any,
+    );
+
+    const report = await service.runScheduledChainAudit('daily');
+
+    expect(report.failureCount).toBe(0);
+  });
+
   it('replays proposalReason line-layout changes with versioned semantics', () => {
     const service = new ChangeTrackingService(
       {} as any,
@@ -875,6 +1110,42 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     ]);
     expect(current.shouldAppend).toBe(false);
     expect(current.diff.details).toEqual([]);
+  });
+
+  it('selects tracked fields from canonVersion when callers omit them', () => {
+    const service = new ChangeTrackingService(
+      {} as any,
+      {} as any,
+      undefined as any,
+    );
+    const beforeSnapshot = {
+      num: 7004,
+      contentId: null,
+      subject: '동일 법률안',
+    };
+    const afterSnapshot = {
+      ...beforeSnapshot,
+      contentId: 'PRC_7004',
+    };
+
+    const legacy = service.buildDiffEvent({
+      noticeNum: 7004,
+      beforeSnapshot,
+      afterSnapshot,
+      canonVersion: 1,
+    });
+    const current = service.buildDiffEvent({
+      noticeNum: 7004,
+      beforeSnapshot,
+      afterSnapshot,
+      canonVersion: 2,
+    });
+
+    expect(legacy.shouldAppend).toBe(false);
+    expect(current.shouldAppend).toBe(true);
+    expect(current.diff.details).toEqual([
+      expect.objectContaining({ fieldPath: 'contentId' }),
+    ]);
   });
 
   it('keeps strict hash validation for canonVersion>1', async () => {

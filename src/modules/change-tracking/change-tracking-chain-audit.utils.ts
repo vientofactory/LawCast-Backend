@@ -7,6 +7,7 @@ import { NoticeChangeDetail } from './notice-change-detail.entity';
 import { type NoticeChangeSource } from './notice-change-source.enum';
 import {
   canonicalStringify,
+  canonicalizeChangeSnapshotForSource,
   getTrackedFieldsForCanonVersion,
   sha256Hex,
   type DiffComputationResult,
@@ -133,14 +134,6 @@ export async function runScheduledChainAuditInternal(
 function isLegacyCanonicalHashCompatible(
   input: LegacyHashCompatibilityInput,
 ): boolean {
-  const canonVersion = input.event.canonVersion ?? 1;
-
-  // Legacy v1 events were hashed before canonical payload rules were fully
-  // stabilized. Accept hash drift only when all other invariants still match.
-  if (canonVersion > 1) {
-    return false;
-  }
-
   if (input.event.eventType !== input.rebuilt.eventType) {
     return false;
   }
@@ -155,17 +148,37 @@ function isLegacyCanonicalHashCompatible(
     return false;
   }
 
-  for (const detail of input.eventDetails) {
-    const expectedBeforeHash =
-      detail.beforeValue === null ? null : sha256Hex(detail.beforeValue);
-    const expectedAfterHash =
-      detail.afterValue === null ? null : sha256Hex(detail.afterValue);
+  if (input.eventDetails.length !== input.rebuilt.diff.details.length) {
+    return false;
+  }
 
-    if ((detail.beforeHash ?? null) !== expectedBeforeHash) {
+  const expectedByField = new Map(
+    input.rebuilt.diff.details.map((detail) => [detail.fieldPath, detail]),
+  );
+
+  for (const detail of input.eventDetails) {
+    const expected = expectedByField.get(detail.fieldPath);
+    if (!expected) {
       return false;
     }
 
-    if ((detail.afterHash ?? null) !== expectedAfterHash) {
+    if (detail.changeType !== expected.changeType) {
+      return false;
+    }
+
+    if ((detail.beforeValue ?? null) !== (expected.beforeValue ?? null)) {
+      return false;
+    }
+
+    if ((detail.afterValue ?? null) !== (expected.afterValue ?? null)) {
+      return false;
+    }
+
+    if ((detail.beforeHash ?? null) !== (expected.beforeHash ?? null)) {
+      return false;
+    }
+
+    if ((detail.afterHash ?? null) !== (expected.afterHash ?? null)) {
       return false;
     }
   }
@@ -229,8 +242,17 @@ async function verifyNoticeChain(
     const nextState = applyDetailsToTrackedState(currentState, eventDetails);
     const rebuilt = deps.buildDiffEvent({
       noticeNum,
-      beforeSnapshot: beforeState,
-      afterSnapshot: nextState,
+      beforeSnapshot: canonicalizeChangeSnapshotForSource(
+        event.source,
+        event.canonVersion ?? 1,
+        beforeState,
+      ),
+      afterSnapshot:
+        canonicalizeChangeSnapshotForSource(
+          event.source,
+          event.canonVersion ?? 1,
+          nextState,
+        ) ?? nextState,
       detectedAt: event.detectedAt,
       source: event.source,
       trackedFields,
@@ -248,8 +270,20 @@ async function verifyNoticeChain(
       });
     }
 
+    const isLegacyCompatible =
+      (event.canonVersion ?? 1) <= 1 &&
+      event.eventHash !== rebuilt.eventHash &&
+      isLegacyCanonicalHashCompatible({
+        event,
+        rebuilt,
+        eventDetails,
+      });
+
     const expectedPrevHash = event.eventHeight === 1 ? null : previousHash;
-    if ((event.prevEventHash ?? null) !== expectedPrevHash) {
+    if (
+      (event.prevEventHash ?? null) !== expectedPrevHash &&
+      !isLegacyCompatible
+    ) {
       issues.push({
         noticeNum,
         eventId: event.id,
@@ -259,14 +293,7 @@ async function verifyNoticeChain(
       });
     }
 
-    if (
-      event.eventHash !== rebuilt.eventHash &&
-      !isLegacyCanonicalHashCompatible({
-        event,
-        rebuilt,
-        eventDetails,
-      })
-    ) {
+    if (event.eventHash !== rebuilt.eventHash && !isLegacyCompatible) {
       issues.push({
         noticeNum,
         eventId: event.id,

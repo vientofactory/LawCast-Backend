@@ -57,7 +57,10 @@ import {
   CHANGE_EVENT_TYPE,
   type ChangeEventType,
 } from '../change-tracking/notice-change-event.entity';
-import { DEFAULT_TRACKED_FIELDS } from '../change-tracking/change-tracking-diff.utils';
+import {
+  DEFAULT_TRACKED_FIELDS,
+  canonicalizeChangeSnapshotForSource,
+} from '../change-tracking/change-tracking-diff.utils';
 import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
@@ -310,87 +313,6 @@ export class NoticeArchiveService {
   private normalizeStableId(value: string | null | undefined): string | null {
     const normalized = value?.trim();
     return normalized && normalized.length > 0 ? normalized : null;
-  }
-
-  private canonicalizeTrackedSubject(
-    value: string | null | undefined,
-  ): string | null {
-    const normalized = value?.replace(/\s+/g, ' ').trim();
-    if (!normalized) {
-      return null;
-    }
-
-    // Suppress PAL/NSM presentation variance only (e.g., "(홍길동의원 등 15인)").
-    const withoutSponsorSuffix = normalized.replace(
-      /\s*\([^()]*의원\s+등\s+\d+인\)\s*$/u,
-      '',
-    );
-    const trimmed = withoutSponsorSuffix.trim();
-    return trimmed.length > 0 ? trimmed : normalized;
-  }
-
-  private canonicalizeTrackedProposalDate(
-    value: string | null | undefined,
-  ): string | null {
-    const normalized = value?.replace(/\s+/g, ' ').trim();
-    if (!normalized) {
-      return null;
-    }
-
-    const dotted = normalized.match(/^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.$/);
-    if (dotted) {
-      const [, year, month, day] = dotted;
-      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-    }
-
-    const dashed = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    if (dashed) {
-      const [, year, month, day] = dashed;
-      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-    }
-
-    return normalized;
-  }
-
-  private canonicalizeTrackedProposalSession(
-    value: string | null | undefined,
-  ): string | null {
-    const normalized = value?.replace(/\s+/g, ' ').trim();
-    if (!normalized) {
-      return null;
-    }
-
-    const sessionMatch = normalized.match(/제\s*(\d+)\s*회/u);
-    if (sessionMatch) {
-      return `제${sessionMatch[1]}회`;
-    }
-
-    return normalized;
-  }
-
-  private canonicalizeOscillationProneTrackedFields(
-    snapshot: Record<string, unknown> | null,
-  ): Record<string, unknown> | null {
-    if (!snapshot) {
-      return snapshot;
-    }
-
-    const normalized = { ...snapshot };
-    normalized.subject = this.canonicalizeTrackedSubject(
-      typeof normalized.subject === 'string' ? normalized.subject : null,
-    );
-    normalized.proposalDate = this.canonicalizeTrackedProposalDate(
-      typeof normalized.proposalDate === 'string'
-        ? normalized.proposalDate
-        : null,
-    );
-    normalized.proposalSession = this.canonicalizeTrackedProposalSession(
-      typeof normalized.proposalSession === 'string'
-        ? normalized.proposalSession
-        : null,
-    );
-
-    return normalized;
   }
 
   private preferIncomingTrackedValue<T>(
@@ -2948,10 +2870,16 @@ export class NoticeArchiveService {
       const afterSnapshot = this.buildTrackedSnapshot(afterRow);
       if (!afterSnapshot) return;
 
-      const canonicalBeforeSnapshot =
-        this.canonicalizeOscillationProneTrackedFields(beforeSnapshot);
-      const canonicalAfterSnapshot =
-        this.canonicalizeOscillationProneTrackedFields(afterSnapshot);
+      const canonicalBeforeSnapshot = canonicalizeChangeSnapshotForSource(
+        source,
+        2,
+        beforeSnapshot,
+      );
+      const canonicalAfterSnapshot = canonicalizeChangeSnapshotForSource(
+        source,
+        2,
+        afterSnapshot,
+      );
 
       const built = this.changeTrackingService.buildDiffEvent({
         noticeNum,

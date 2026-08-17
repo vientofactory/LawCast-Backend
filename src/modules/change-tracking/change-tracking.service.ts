@@ -15,6 +15,7 @@ import {
   canonicalStringify,
   computeDiff,
   CURRENT_CANON_VERSION,
+  getTrackedFieldsForCanonVersion,
   sha256Hex,
   type DiffComputationResult,
 } from './change-tracking-diff.utils';
@@ -689,6 +690,8 @@ export class ChangeTrackingService {
     const driverCode = String(driverError?.code ?? '').toLowerCase();
 
     const stateTargets = [
+      'transaction is not started yet',
+      'start transaction before committing or rolling it back',
       'cannot commit - no transaction is active',
       'no such savepoint',
       'release savepoint',
@@ -704,11 +707,13 @@ export class ChangeTrackingService {
       (code === 'sqlite_error' &&
         (message.includes('commit') ||
           message.includes('savepoint') ||
-          message.includes('rollback'))) ||
+          message.includes('rollback') ||
+          message.includes('transaction is not started yet'))) ||
       (driverCode === 'sqlite_error' &&
         (driverMessage.includes('commit') ||
           driverMessage.includes('savepoint') ||
-          driverMessage.includes('rollback')))
+          driverMessage.includes('rollback') ||
+          driverMessage.includes('transaction is not started yet')))
     );
   }
 
@@ -729,7 +734,7 @@ export class ChangeTrackingService {
     const diff = computeDiff(
       input.beforeSnapshot,
       input.afterSnapshot,
-      input.trackedFields,
+      input.trackedFields ?? getTrackedFieldsForCanonVersion(canonVersion),
       canonVersion,
     );
 

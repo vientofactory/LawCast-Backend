@@ -1,5 +1,6 @@
 import { MoreThan, type Repository } from 'typeorm';
 import JSZip from 'jszip';
+import { delayMs } from '../../../utils/async-delay.utils';
 import { NoticeArchive } from '../notice-archive.entity';
 import {
   NoticeArchiveIntegrityCheck,
@@ -374,6 +375,47 @@ export class NoticeArchiveArtifactSupport {
     let failed = 0;
     let skipped = 0;
 
+    const retryTransientSqliteTransactionError = async <T>(
+      work: () => Promise<T>,
+    ): Promise<T> => {
+      let attempt = 0;
+      while (true) {
+        try {
+          return await work();
+        } catch (error) {
+          const message = String(
+            (error as { message?: string } | undefined)?.message ?? '',
+          ).toLowerCase();
+          const driverMessage = String(
+            (
+              error as {
+                driverError?: { message?: string } | undefined;
+              }
+            )?.driverError?.message ?? '',
+          ).toLowerCase();
+
+          const isTransientSqliteTxIssue =
+            message.includes('transaction is not started yet') ||
+            message.includes(
+              'start transaction before committing or rolling it back',
+            ) ||
+            message.includes('cannot commit - no transaction is active') ||
+            message.includes('cannot rollback - no transaction is active') ||
+            driverMessage.includes('transaction is not started yet') ||
+            driverMessage.includes(
+              'start transaction before committing or rolling it back',
+            );
+
+          if (!isTransientSqliteTxIssue || attempt >= 2) {
+            throw error;
+          }
+
+          attempt += 1;
+          await delayMs(25 * attempt);
+        }
+      }
+    };
+
     for (;;) {
       const rows = await this.archiveRepository.find({
         where: lastSeenId > 0 ? { id: MoreThan(lastSeenId) } : undefined,
@@ -416,30 +458,35 @@ export class NoticeArchiveArtifactSupport {
         const checkedAt = new Date();
 
         const createdCheck = this.integrityCheckRepository
-          ? await this.integrityCheckRepository.save(
-              this.integrityCheckRepository.create({
-                noticeNum: row.noticeNum,
-                checkedAt,
-                storedSha256: row.sourceHtmlSha256,
-                calculatedSha256,
-                checkResult,
-                skipReason,
-                verifierVersion: 'integrity-scan-v2',
-                diagnosticsJson: null,
-              }),
+          ? await retryTransientSqliteTransactionError(async () =>
+              this.integrityCheckRepository!.save(
+                this.integrityCheckRepository!.create({
+                  noticeNum: row.noticeNum,
+                  checkedAt,
+                  storedSha256: row.sourceHtmlSha256,
+                  calculatedSha256,
+                  checkResult,
+                  skipReason,
+                  verifierVersion: 'integrity-scan-v2',
+                  diagnosticsJson: null,
+                }),
+              ),
             )
           : null;
 
         if (this.integrityStateRepository) {
-          const previousState = await this.integrityStateRepository.findOne({
-            where: { noticeNum: row.noticeNum },
-            select: {
-              id: true,
-              failureStreak: true,
-              lastPassedAt: true,
-              createdAt: true,
-            },
-          });
+          const previousState = await retryTransientSqliteTransactionError(
+            async () =>
+              this.integrityStateRepository!.findOne({
+                where: { noticeNum: row.noticeNum },
+                select: {
+                  id: true,
+                  failureStreak: true,
+                  lastPassedAt: true,
+                  createdAt: true,
+                },
+              }),
+          );
 
           const failureStreak =
             checkResult === 'failed'
@@ -462,27 +509,33 @@ export class NoticeArchiveArtifactSupport {
           };
 
           if (previousState?.id) {
-            await this.integrityStateRepository.update(
-              { id: previousState.id },
-              statePayload,
+            await retryTransientSqliteTransactionError(async () =>
+              this.integrityStateRepository!.update(
+                { id: previousState.id },
+                statePayload,
+              ),
             );
           } else {
-            await this.integrityStateRepository.insert(statePayload);
+            await retryTransientSqliteTransactionError(async () =>
+              this.integrityStateRepository!.insert(statePayload),
+            );
           }
         }
 
         if (!this.integrityStateRepository && !this.integrityCheckRepository) {
-          await this.archiveRepository.update(
-            { id: row.id },
-            {
-              integrityVerifiedAt: checkedAt,
-              integrityCheckPassed:
-                checkResult === 'passed'
-                  ? true
-                  : checkResult === 'failed'
-                    ? false
-                    : null,
-            },
+          await retryTransientSqliteTransactionError(async () =>
+            this.archiveRepository.update(
+              { id: row.id },
+              {
+                integrityVerifiedAt: checkedAt,
+                integrityCheckPassed:
+                  checkResult === 'passed'
+                    ? true
+                    : checkResult === 'failed'
+                      ? false
+                      : null,
+              },
+            ),
           );
         }
       }

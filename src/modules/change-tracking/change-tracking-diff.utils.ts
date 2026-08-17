@@ -4,6 +4,7 @@ import {
   canonicalizeProposalReason,
   canonicalizeProposalReasonForComparison,
 } from '../../utils/proposal-reason.utils';
+import { type NoticeChangeSource } from './notice-change-source.enum';
 
 export interface DiffDetail {
   fieldPath: string;
@@ -56,6 +57,84 @@ export function getTrackedFieldsForCanonVersion(
   canonVersion: number,
 ): readonly string[] {
   return canonVersion <= 1 ? LEGACY_TRACKED_FIELDS_V1 : DEFAULT_TRACKED_FIELDS;
+}
+
+export function canonicalizeArchiveUpsertSnapshot(
+  snapshot: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  const normalized = { ...snapshot };
+  normalized.subject = canonicalizeTrackedSubject(normalized.subject);
+  normalized.proposalDate = canonicalizeTrackedProposalDate(
+    normalized.proposalDate,
+  );
+  normalized.proposalSession = canonicalizeTrackedProposalSession(
+    normalized.proposalSession,
+  );
+
+  return normalized;
+}
+
+export function canonicalizeChangeSnapshotForSource(
+  source: NoticeChangeSource | null | undefined,
+  canonVersion: number,
+  snapshot: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (source === 'archive:upsert' && canonVersion >= 2) {
+    return canonicalizeArchiveUpsertSnapshot(snapshot);
+  }
+
+  return snapshot;
+}
+
+function canonicalizeTrackedSubject(value: unknown): string | null {
+  const normalized =
+    typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : null;
+  if (!normalized) {
+    return null;
+  }
+
+  const withoutSponsorSuffix = normalized.replace(
+    /\s*\([^()]*의원\s+등\s+\d+인\)\s*$/u,
+    '',
+  );
+  return withoutSponsorSuffix.trim() || normalized;
+}
+
+function canonicalizeTrackedProposalDate(value: unknown): string | null {
+  const normalized =
+    typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : null;
+  if (!normalized) {
+    return null;
+  }
+
+  const dotted = normalized.match(/^(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.$/);
+  if (dotted) {
+    const [, year, month, day] = dotted;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  const dashed = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (dashed) {
+    const [, year, month, day] = dashed;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+
+  return normalized;
+}
+
+function canonicalizeTrackedProposalSession(value: unknown): string | null {
+  const normalized =
+    typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : null;
+  if (!normalized) {
+    return null;
+  }
+
+  const sessionMatch = normalized.match(/제\s*(\d+)\s*회/u);
+  return sessionMatch ? `제${sessionMatch[1]}회` : normalized;
 }
 
 function normalizeString(input: string): string {
