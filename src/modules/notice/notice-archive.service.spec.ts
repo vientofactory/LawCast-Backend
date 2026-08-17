@@ -859,6 +859,178 @@ describe('NoticeArchiveService', () => {
       ).not.toHaveBeenCalled();
     });
 
+    it('does not append an event when a recrawl only restores line breaks lost by a legacy value', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 1,
+          details: [
+            {
+              fieldPath: 'proposalReason',
+              afterValue: '첫 줄 둘째 줄 셋째 줄',
+            },
+          ],
+        },
+      ]);
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219778,
+          subject: '레거시 개행 복원 테스트',
+          proposerCategory: '의원',
+          committee: '법제사법위원회',
+          assemblyLink: 'https://example.com/2219778',
+          contentId: null,
+          proposalReason: '첫 줄 둘째 줄 셋째 줄',
+          sourceHtml: null,
+          sourceHtmlSha256: null,
+        }),
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219778,
+          subject: '레거시 개행 복원 테스트',
+          proposerCategory: '의원',
+          committee: '법제사법위원회',
+          link: 'https://example.com/2219778',
+          contentId: null,
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          proposalReason: '첫 줄\n둘째 줄\n\n셋째 줄',
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+      expect(
+        changeTrackingService.dispatchChangeNotification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('records only contentId when NSM becomes PAL with equivalent proposalReason formatting', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219779,
+          subject: 'NSM PAL 전환 테스트',
+          proposerCategory: '의원',
+          committee: '법제사법위원회',
+          assemblyLink: 'https://example.com/nsm/2219779',
+          contentId: null,
+          proposalReason: '첫 줄 둘째 줄 셋째 줄',
+          sourceHtml: null,
+          sourceHtmlSha256: null,
+        }),
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219779,
+          subject: 'NSM PAL 전환 테스트',
+          proposerCategory: '의원',
+          committee: '법제사법위원회',
+          link: 'https://example.com/pal/2219779',
+          contentId: 'PRC_2219779',
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          proposalReason: '첫 줄\n둘째 줄\n\n셋째 줄',
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).toHaveBeenCalledTimes(1);
+      const callArg = (
+        changeTrackingService.appendChangeEventWithDetails as jest.Mock
+      ).mock.calls[0][0] as {
+        details: Array<{
+          fieldPath: string;
+          beforeValue: string | null;
+          afterValue: string | null;
+        }>;
+      };
+      const details = callArg.details as Array<{
+        fieldPath: string;
+        beforeValue: string | null;
+        afterValue: string | null;
+      }>;
+      expect(details).toEqual([
+        expect.objectContaining({
+          fieldPath: 'contentId',
+          beforeValue: null,
+          afterValue: 'PRC_2219779',
+        }),
+      ]);
+
+      changeTrackingService.appendChangeEventWithDetails.mockClear();
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 1,
+          details: [
+            {
+              fieldPath: 'contentId',
+              afterValue: 'PRC_2219779',
+            },
+            {
+              fieldPath: 'proposalReason',
+              afterValue: '첫 줄 둘째 줄 셋째 줄',
+            },
+          ],
+        },
+      ]);
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2219779,
+          subject: 'NSM PAL 전환 테스트',
+          proposerCategory: '의원',
+          committee: '법제사법위원회',
+          link: 'https://example.com/pal/2219779',
+          contentId: 'PRC_2219779',
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        {
+          proposalReason: '첫 줄\r\n둘째 줄\r\n\r\n셋째 줄',
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+    });
+
     it('preserves line breaks in proposalReason detail when appending diffchain event', async () => {
       const repositoryMock = {
         ...createRepositoryMock(),
@@ -998,6 +1170,7 @@ describe('NoticeArchiveService', () => {
       repositoryMock.findOne.mockResolvedValue(
         buildRow({
           noticeNum: 2219801,
+          contentId: 'PRC_2219801',
           subject: '기존 법률안',
           proposerCategory: '정부',
           committee: '정무위원회',

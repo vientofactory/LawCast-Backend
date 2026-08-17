@@ -24,7 +24,10 @@ import { logAndBridge } from '../../utils/bridge-log.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { normalizeNoticeNum } from '../../utils/notice-num.utils';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
-import { canonicalizeProposalReason } from '../../utils/proposal-reason.utils';
+import {
+  canonicalizeProposalReason,
+  canonicalizeProposalReasonForComparison,
+} from '../../utils/proposal-reason.utils';
 import { ArchiveOrchestratorScreenshotCoordinator } from './utils/archive-orchestrator-screenshot-coordinator';
 
 const SNAPSHOT_ARTIFACT_BACKFILL_LIMIT = 200;
@@ -328,7 +331,8 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
             {
               html,
               sha256: this.computeSha256(html),
-              proposalReason: full.detail?.proposalReason?.trim() ?? '',
+              proposalReason:
+                canonicalizeProposalReason(full.detail?.proposalReason) ?? '',
               proposalSession: full.detail?.session?.trim() || null,
               billNumber: full.detail?.billNo?.trim() || null,
               proposer: full.detail?.proposer?.trim() || null,
@@ -450,7 +454,8 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
                   const content = await this.crawlingCoreService.getContent(
                     notice.contentId,
                   );
-                  proposalReason = content?.proposalReason?.trim() || '';
+                  proposalReason =
+                    canonicalizeProposalReason(content?.proposalReason) ?? '';
                   sourceTitle = content?.title?.trim() || notice.subject;
                   contentBillNumber = content?.billNumber?.trim() || null;
                   contentProposer = content?.proposer?.trim() || null;
@@ -657,7 +662,8 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
                   noticePeriod?: string;
                 };
 
-                proposalReason = full.detail.proposalReason?.trim() ?? '';
+                proposalReason =
+                  canonicalizeProposalReason(full.detail.proposalReason) ?? '';
                 sourceTitle = full.detail.proposalInfo?.trim() || item.billName;
                 contentBillNumber = full.detail.billNo?.trim() || null;
                 contentProposer = full.detail.proposer?.trim() || null;
@@ -808,7 +814,8 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         referralDate?: string;
         noticePeriod?: string;
       };
-      const proposalReason = full.detail?.proposalReason?.trim() ?? '';
+      const proposalReason =
+        canonicalizeProposalReason(full.detail?.proposalReason) ?? '';
       const proposalSession = full.detail?.session?.trim() || null;
       const billNumber = full.detail?.billNo?.trim() || null;
       const proposer = full.detail?.proposer?.trim() || null;
@@ -859,8 +866,8 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         await this.noticeArchiveService.getLatestProposalReasonForNotice(num);
       if (
         !latestReason ||
-        canonicalizeProposalReason(latestReason) !==
-          canonicalizeProposalReason(proposalReason)
+        canonicalizeProposalReasonForComparison(latestReason) !==
+          canonicalizeProposalReasonForComparison(proposalReason)
       ) {
         this.logger.warn(
           `proposalReason backfill verification failed for bill ${normalizedBillNo} (notice=${num})`,

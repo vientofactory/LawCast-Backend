@@ -637,7 +637,7 @@ describe('CrawlingSchedulerService', () => {
       expect((service as any).isPendingProcessing).toBe(false);
     });
 
-    it('should recompare all existing pending bills across full NSM pages', async () => {
+    it('should recompare only existing pending bills across full NSM pages', async () => {
       const existingNonPendingItem = {
         billNo: '2200000',
         billName: '기존 비발의 법안',
@@ -667,6 +667,15 @@ describe('CrawlingSchedulerService', () => {
           link: 'https://example.com/2200002',
         },
       ];
+      const existingPalPendingItem = {
+        billNo: '2200004',
+        billName: '기존 PAL 발의안',
+        proposer: '이영희의원',
+        progressStatus: '발의',
+        committee: '법제사법위원회',
+        ministry: '',
+        link: 'https://example.com/2200004',
+      };
       const newPendingItem = {
         billNo: '2200003',
         billName: '신규 발의안',
@@ -680,7 +689,11 @@ describe('CrawlingSchedulerService', () => {
       (crawlingCoreService.getAllNsmPages as jest.Mock).mockReturnValue({
         [Symbol.asyncIterator]: async function* () {
           yield {
-            items: [existingNonPendingItem, ...existingPendingItems],
+            items: [
+              existingNonPendingItem,
+              ...existingPendingItems,
+              existingPalPendingItem,
+            ],
             currentPage: 1,
             totalPages: 2,
           };
@@ -694,7 +707,11 @@ describe('CrawlingSchedulerService', () => {
       (crawlingCoreService.getAllNsmPendingPages as jest.Mock).mockReturnValue({
         [Symbol.asyncIterator]: async function* () {
           yield {
-            items: [...existingPendingItems, newPendingItem],
+            items: [
+              ...existingPendingItems,
+              existingPalPendingItem,
+              newPendingItem,
+            ],
             currentPage: 1,
             totalPages: 1,
           };
@@ -718,6 +735,9 @@ describe('CrawlingSchedulerService', () => {
       (
         archiveOrchestratorService.archiveNsmBillItems as jest.Mock
       ).mockResolvedValue([]);
+      (
+        noticeArchiveService.getArchivedNullContentIdNums as jest.Mock
+      ).mockResolvedValue(new Set([2200001, 2200002]));
 
       await service.handlePendingCron();
 
@@ -739,12 +759,23 @@ describe('CrawlingSchedulerService', () => {
         archiveOrchestratorService.archiveNsmBillItems,
       ).toHaveBeenCalledWith(
         expect.arrayContaining([
-          expect.objectContaining({ billNo: '2200000' }),
           expect.objectContaining({ billNo: '2200001' }),
           expect.objectContaining({ billNo: '2200002' }),
         ]),
         { reason: NsmArchiveReason.EXISTING_PENDING_RECOMPARE },
       );
+      expect(
+        archiveOrchestratorService.archiveNsmBillItems,
+      ).not.toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ billNo: '2200000' }),
+          expect.objectContaining({ billNo: '2200004' }),
+        ]),
+        { reason: NsmArchiveReason.EXISTING_PENDING_RECOMPARE },
+      );
+      expect(
+        noticeArchiveService.getArchivedNullContentIdNums,
+      ).toHaveBeenCalledWith([2200001, 2200002, 2200004]);
     });
 
     it('should sync new non-pending NSM bills without classifying them as pending notifications', async () => {

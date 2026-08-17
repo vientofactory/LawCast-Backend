@@ -207,6 +207,7 @@ export const INTEGRITY_SKIP_REASON_MISSING_SOURCE = 'missing_source_or_hash';
 type TrackedArchiveRow = Pick<
   NoticeArchive,
   | 'noticeNum'
+  | 'contentId'
   | 'subject'
   | 'proposerCategory'
   | 'committee'
@@ -541,6 +542,7 @@ export class NoticeArchiveService {
     const rows = await this.archiveRepository.find({
       select: {
         noticeNum: true,
+        contentId: true,
         subject: true,
         proposerCategory: true,
         committee: true,
@@ -919,6 +921,7 @@ export class NoticeArchiveService {
       beforeRow,
       {
         noticeNum: coreFields.noticeNum,
+        contentId: coreFields.contentId,
         subject: coreFields.subject,
         proposerCategory: coreFields.proposerCategory,
         committee: coreFields.committee,
@@ -1626,6 +1629,7 @@ export class NoticeArchiveService {
       where: { noticeNum: In(uniqueNums) },
       select: {
         noticeNum: true,
+        contentId: true,
         subject: true,
         proposerCategory: true,
         committee: true,
@@ -2818,6 +2822,7 @@ export class NoticeArchiveService {
       where: { noticeNum },
       select: {
         noticeNum: true,
+        contentId: true,
         subject: true,
         proposerCategory: true,
         committee: true,
@@ -2868,6 +2873,7 @@ export class NoticeArchiveService {
       where,
       select: {
         noticeNum: true,
+        contentId: true,
         subject: true,
         proposerCategory: true,
         committee: true,
@@ -2904,6 +2910,7 @@ export class NoticeArchiveService {
 
     return {
       num: row.noticeNum,
+      contentId: row.contentId,
       subject: row.subject,
       proposerCategory: row.proposerCategory,
       committee: row.committee,

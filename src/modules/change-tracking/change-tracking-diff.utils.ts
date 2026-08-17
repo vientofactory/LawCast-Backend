@@ -1,6 +1,9 @@
 import { createHash } from 'crypto';
 import { type ChangeDetailType } from './notice-change-detail.entity';
-import { canonicalizeProposalReason } from '../../utils/proposal-reason.utils';
+import {
+  canonicalizeProposalReason,
+  canonicalizeProposalReasonForComparison,
+} from '../../utils/proposal-reason.utils';
 
 export interface DiffDetail {
   fieldPath: string;
@@ -23,6 +26,7 @@ export interface DiffComputationResult {
 // Track only user-meaningful notice metadata and proposal text.
 export const DEFAULT_TRACKED_FIELDS = [
   'num',
+  'contentId',
   'subject',
   'proposerCategory',
   'committee',
@@ -176,7 +180,13 @@ export function computeDiff(
     const beforeValue = toComparableString(beforeRaw, fieldPath);
     const afterValue = toComparableString(afterRaw, fieldPath);
 
-    if (beforeValue === afterValue) {
+    const valuesMatch =
+      fieldPath === 'proposalReason'
+        ? canonicalizeProposalReasonForComparison(beforeValue) ===
+          canonicalizeProposalReasonForComparison(afterValue)
+        : beforeValue === afterValue;
+
+    if (valuesMatch) {
       continue;
     }
 

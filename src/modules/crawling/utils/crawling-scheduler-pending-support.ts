@@ -249,8 +249,16 @@ export async function performPendingBillsCrawlInternal(
     .filter((notice) => !pendingCandidateNums.has(notice.num))
     .map((notice) => rawItemMap.get(notice.num))
     .filter((item): item is INsmBillItem => item !== undefined);
-  const existingPendingItems = nsmNotices
-    .filter((notice) => !newNsmNumSet.has(notice.num))
+  const existingPendingNotices = nsmNotices.filter(
+    (notice) =>
+      !newNsmNumSet.has(notice.num) && pendingCandidateNums.has(notice.num),
+  );
+  const archivedNsmOriginNums =
+    await deps.noticeArchiveService.getArchivedNullContentIdNums(
+      existingPendingNotices.map((notice) => notice.num),
+    );
+  const existingPendingItems = existingPendingNotices
+    .filter((notice) => archivedNsmOriginNums.has(notice.num))
     .map((notice) => rawItemMap.get(notice.num))
     .filter((item): item is INsmBillItem => item !== undefined);
 

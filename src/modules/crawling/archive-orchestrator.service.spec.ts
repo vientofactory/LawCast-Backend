@@ -859,12 +859,12 @@ describe('ArchiveOrchestratorService', () => {
       );
     });
 
-    it('accepts latest-chain reason with different whitespace formatting', async () => {
+    it('accepts latest-chain reason with different whitespace and line layout', async () => {
       (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
         {
           html: '<html>nsm detail</html>',
           screenshot: null,
-          detail: { proposalReason: '사유 본문', session: '제418회' },
+          detail: { proposalReason: '사유\n본문', session: '제418회' },
           responseUrl:
             'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219780/detailRP',
           statusCode: 200,
@@ -879,11 +879,11 @@ describe('ArchiveOrchestratorService', () => {
         '2219780',
       );
 
-      expect(result).toBe('사유 본문');
+      expect(result).toBe('사유\n본문');
       expect(noticeArchiveService.updateNsmHtmlAndDetail).toHaveBeenCalledWith(
         2219780,
         expect.objectContaining({
-          proposalReason: '사유 본문',
+          proposalReason: '사유\n본문',
           html: '<html>nsm detail</html>',
           sha256: computeSha256('<html>nsm detail</html>'),
         }),
