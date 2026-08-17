@@ -59,6 +59,28 @@ export function getTrackedFieldsForCanonVersion(
   return canonVersion <= 1 ? LEGACY_TRACKED_FIELDS_V1 : DEFAULT_TRACKED_FIELDS;
 }
 
+// Pre-versioned archive:upsert events (contentId tracked before the
+// canonVersion column existed) were diffed against DEFAULT_TRACKED_FIELDS, so
+// the audit replays them with contentId in the tracked state shape. Note that
+// this only affects diff/state reconstruction: snapshot canonicalization is
+// still gated on canonVersion >= 2 because those events were hashed from raw
+// snapshots (see canonicalizeChangeSnapshotForSource).
+export function getTrackedFieldsForChangeEvent(input: {
+  source: NoticeChangeSource | null | undefined;
+  canonVersion: number;
+  preVersionedArchiveUpsert: boolean;
+}): readonly string[] {
+  if (
+    input.preVersionedArchiveUpsert &&
+    input.source === 'archive:upsert' &&
+    input.canonVersion <= 1
+  ) {
+    return DEFAULT_TRACKED_FIELDS;
+  }
+
+  return getTrackedFieldsForCanonVersion(input.canonVersion);
+}
+
 export function canonicalizeArchiveUpsertSnapshot(
   snapshot: Record<string, unknown> | null,
 ): Record<string, unknown> | null {
@@ -78,6 +100,11 @@ export function canonicalizeArchiveUpsertSnapshot(
   return normalized;
 }
 
+// Snapshot canonicalization (sponsor-suffix stripping, date/session
+// normalization) was introduced together with canon v2 in the same release.
+// Pre-versioned v1 events (canonVersion=1) were hashed from raw snapshots, so
+// the audit must never canonicalize them even when the chain recorded
+// contentId details before the canonVersion column existed.
 export function canonicalizeChangeSnapshotForSource(
   source: NoticeChangeSource | null | undefined,
   canonVersion: number,

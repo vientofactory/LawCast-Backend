@@ -8,7 +8,7 @@ import { type NoticeChangeSource } from './notice-change-source.enum';
 import {
   canonicalStringify,
   canonicalizeChangeSnapshotForSource,
-  getTrackedFieldsForCanonVersion,
+  getTrackedFieldsForChangeEvent,
   sha256Hex,
   type DiffComputationResult,
 } from './change-tracking-diff.utils';
@@ -228,15 +228,37 @@ async function verifyNoticeChain(
   }
 
   const issues: ChainVerificationIssue[] = [];
+  // A chain whose v1 archive:upsert events carry contentId details was written
+  // during the window where contentId was already tracked but the canonVersion
+  // column did not exist yet. Such events were diffed with DEFAULT_TRACKED_FIELDS
+  // (contentId included) but hashed from raw snapshots without the archive
+  // upsert canonicalization that canon v2 introduced later, so the audit must
+  // mirror exactly that: contentId in the state shape, no snapshot
+  // canonicalization for the v1 segment.
+  const hasPreVersionedArchiveUpsert = events.some((event) => {
+    if ((event.canonVersion ?? 1) > 1 || event.source !== 'archive:upsert') {
+      return false;
+    }
+
+    const eventDetails = detailsByEventId.get(event.id) ?? [];
+    return eventDetails.some((detail) => detail.fieldPath === 'contentId');
+  });
   let previousHash: string | null = null;
   let currentState: Record<string, unknown> = {};
 
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     const eventDetails = detailsByEventId.get(event.id) ?? [];
-    const trackedFields = getTrackedFieldsForCanonVersion(
-      event.canonVersion ?? 1,
-    );
+    const canonVersion = event.canonVersion ?? 1;
+    const usePreVersionedArchiveUpsert =
+      hasPreVersionedArchiveUpsert &&
+      event.source === 'archive:upsert' &&
+      canonVersion <= 1;
+    const trackedFields = getTrackedFieldsForChangeEvent({
+      source: event.source,
+      canonVersion,
+      preVersionedArchiveUpsert: usePreVersionedArchiveUpsert,
+    });
     currentState = ensureTrackedStateFields(currentState, trackedFields);
     const beforeState = index === 0 ? null : { ...currentState };
     const nextState = applyDetailsToTrackedState(currentState, eventDetails);
@@ -244,20 +266,20 @@ async function verifyNoticeChain(
       noticeNum,
       beforeSnapshot: canonicalizeChangeSnapshotForSource(
         event.source,
-        event.canonVersion ?? 1,
+        canonVersion,
         beforeState,
       ),
       afterSnapshot:
         canonicalizeChangeSnapshotForSource(
           event.source,
-          event.canonVersion ?? 1,
+          canonVersion,
           nextState,
         ) ?? nextState,
       detectedAt: event.detectedAt,
       source: event.source,
       trackedFields,
       hashAlgo: event.hashAlgo,
-      canonVersion: event.canonVersion,
+      canonVersion,
     });
 
     if (event.eventHeight !== index + 1) {

@@ -13,7 +13,10 @@ import {
 } from './notice-change-event.entity';
 import { NoticeChangeDetail } from './notice-change-detail.entity';
 import { NoticeChangeSource } from './notice-change-source.enum';
-import { getTrackedFieldsForCanonVersion } from './change-tracking-diff.utils';
+import {
+  DEFAULT_TRACKED_FIELDS,
+  getTrackedFieldsForCanonVersion,
+} from './change-tracking-diff.utils';
 
 describe('ChangeTrackingService (diffchain batching)', () => {
   const createService = () => {
@@ -1227,5 +1230,206 @@ describe('ChangeTrackingService (diffchain batching)', () => {
 
     expect(report.failureCount).toBe(1);
     expect(report.failures[0]?.code).toBe('event_hash_mismatch');
+  });
+
+  it('replays pre-versioned v1 chains that recorded contentId details without v2 snapshot canonicalization', async () => {
+    const bootstrapService = new ChangeTrackingService(
+      {} as any,
+      {} as any,
+      undefined as any,
+    );
+    const firstDetectedAt = new Date('2026-07-07T00:00:00.000Z');
+    const secondDetectedAt = new Date('2026-07-08T00:00:00.000Z');
+    // Pre-versioned era (contentId tracked, canonVersion column absent):
+    // events were diffed with DEFAULT_TRACKED_FIELDS but hashed from raw
+    // snapshots, so sponsor-suffix subjects and dotted dates were never
+    // canonicalized. The audit must reproduce exactly that.
+    const firstSnapshot = {
+      num: 7201,
+      contentId: 'PRC_7201',
+      subject: '무결성 보존에 관한 법률안(김철수 의원 등 10인)',
+      proposerCategory: '의원',
+      committee: '정무위원회',
+      proposalReason: '문단 1\n문단 2',
+      billNumber: null,
+      proposer: null,
+      proposalDate: '2026. 7. 7.',
+      contentCommittee: null,
+      referralDate: null,
+      noticePeriod: null,
+      proposalSession: null,
+      isDone: false,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
+    };
+    const firstBuilt = bootstrapService.buildDiffEvent({
+      noticeNum: 7201,
+      beforeSnapshot: null,
+      afterSnapshot: firstSnapshot,
+      detectedAt: firstDetectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+      trackedFields: DEFAULT_TRACKED_FIELDS,
+      canonVersion: 1,
+    });
+
+    const secondSnapshot = {
+      ...firstSnapshot,
+      subject: '무결성 보존에 관한 법률안(김철수 의원 등 10인)(수정)',
+    };
+    const secondBuilt = bootstrapService.buildDiffEvent({
+      noticeNum: 7201,
+      beforeSnapshot: firstSnapshot,
+      afterSnapshot: secondSnapshot,
+      detectedAt: secondDetectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+      trackedFields: DEFAULT_TRACKED_FIELDS,
+      canonVersion: 1,
+    });
+
+    const changeEventRepository = {
+      createQueryBuilder: jest.fn(() => ({
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn<(...args: any[]) => Promise<Array<{ noticeNum: number }>>>()
+          .mockResolvedValue([{ noticeNum: 7201 }]),
+      })),
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        {
+          id: 91,
+          noticeNum: 7201,
+          detectedAt: firstDetectedAt,
+          eventType: CHANGE_EVENT_TYPE.CREATED,
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          eventHeight: 1,
+          prevEventHash: null,
+          eventHash: firstBuilt.eventHash,
+          changedFieldCount: firstBuilt.diff.changedFieldCount,
+          diffSummaryJson: firstBuilt.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 1,
+        },
+        {
+          id: 92,
+          noticeNum: 7201,
+          detectedAt: secondDetectedAt,
+          eventType: CHANGE_EVENT_TYPE.UPDATED,
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          eventHeight: 2,
+          prevEventHash: firstBuilt.eventHash,
+          eventHash: secondBuilt.eventHash,
+          changedFieldCount: secondBuilt.diff.changedFieldCount,
+          diffSummaryJson: secondBuilt.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 1,
+        },
+      ]),
+    } as any;
+    const changeDetailRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        ...firstBuilt.diff.details.map((detail, index) => ({
+          id: 901 + index,
+          eventId: 91,
+          ...detail,
+        })),
+        ...secondBuilt.diff.details.map((detail, index) => ({
+          id: 921 + index,
+          eventId: 92,
+          ...detail,
+        })),
+      ]),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      changeDetailRepository,
+      undefined as any,
+      undefined as any,
+    );
+
+    const report = await service.runScheduledChainAudit('daily');
+
+    expect(report.failureCount).toBe(0);
+  });
+
+  it('never canonicalizes v1 snapshots even when the subject or date would change under v2 rules', async () => {
+    const bootstrapService = new ChangeTrackingService(
+      {} as any,
+      {} as any,
+      undefined as any,
+    );
+    const detectedAt = new Date('2026-07-09T00:00:00.000Z');
+    const snapshot = {
+      num: 7202,
+      subject: '무결성 보존에 관한 법률안(박영희 의원 등 15인)',
+      proposerCategory: '의원',
+      committee: null,
+      proposalReason: '문단 1\n문단 2',
+      billNumber: null,
+      proposer: null,
+      proposalDate: '2026. 7. 9.',
+      contentCommittee: null,
+      referralDate: null,
+      noticePeriod: null,
+      proposalSession: null,
+      isDone: false,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
+    };
+    const built = bootstrapService.buildDiffEvent({
+      noticeNum: 7202,
+      beforeSnapshot: null,
+      afterSnapshot: snapshot,
+      detectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+      trackedFields: getTrackedFieldsForCanonVersion(1),
+      canonVersion: 1,
+    });
+
+    const changeEventRepository = {
+      createQueryBuilder: jest.fn(() => ({
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn<(...args: any[]) => Promise<Array<{ noticeNum: number }>>>()
+          .mockResolvedValue([{ noticeNum: 7202 }]),
+      })),
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        {
+          id: 93,
+          noticeNum: 7202,
+          detectedAt,
+          eventType: CHANGE_EVENT_TYPE.CREATED,
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          eventHeight: 1,
+          prevEventHash: null,
+          eventHash: built.eventHash,
+          changedFieldCount: built.diff.changedFieldCount,
+          diffSummaryJson: built.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 1,
+        },
+      ]),
+    } as any;
+    const changeDetailRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue(
+        built.diff.details.map((detail, index) => ({
+          id: 931 + index,
+          eventId: 93,
+          ...detail,
+        })),
+      ),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      changeDetailRepository,
+      undefined as any,
+      undefined as any,
+    );
+
+    const report = await service.runScheduledChainAudit('daily');
+
+    expect(report.failureCount).toBe(0);
   });
 });
