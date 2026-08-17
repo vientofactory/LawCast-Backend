@@ -418,11 +418,11 @@ diffchain은 비교/해시 규칙이 바뀌어도 **과거에 저장된 이벤�
 
 #### 버전별 규칙
 
-| 규칙 | v1 (레거시) | v2 (현행) |
-| --- | --- | --- |
-| tracked fields | `LEGACY_TRACKED_FIELDS_V1` (contentId 미포함) | `DEFAULT_TRACKED_FIELDS` (contentId 포함) |
-| `proposalReason` 비교 | 줄바꿈 보존 리터럴 비교 | semantic 비교 (공백·줄 배치·빈 줄 수 무시, Unicode/NBSP/zero-width 공백 정규화) |
-| archive:upsert snapshot canonicalization | 없음 (raw 스냅샷 그대로 해시) | subject의 `(N의원 등 M인)` 접미사 제거, `proposalDate` → ISO, `proposalSession` → `제N회` |
+| 규칙                                     | v1 (레거시)                                   | v2 (현행)                                                                                 |
+| ---------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| tracked fields                           | `LEGACY_TRACKED_FIELDS_V1` (contentId 미포함) | `DEFAULT_TRACKED_FIELDS` (contentId 포함)                                                 |
+| `proposalReason` 비교                    | 줄바꿈 보존 리터럴 비교                       | semantic 비교 (공백·줄 배치·빈 줄 수 무시, Unicode/NBSP/zero-width 공백 정규화)           |
+| archive:upsert snapshot canonicalization | 없음 (raw 스냅샷 그대로 해시)                 | subject의 `(N의원 등 M인)` 접미사 제거, `proposalDate` → ISO, `proposalSession` → `제N회` |
 
 감사 재구성 시 tracked fields 선택은 `getTrackedFieldsForChangeEvent()`가, snapshot canonicalization 적용 여부는 `canonicalizeChangeSnapshotForSource()`가 담당하며, 둘 다 이벤트의 `source` + `canonVersion` 기준으로 분기합니다.
 
@@ -455,46 +455,6 @@ v1 이벤트는 재구성한 `event_hash`가 저장값과 달라도 아래 조�
 `prev_event_hash` drift(과거 규칙으로 연결된 해시)도 동일 기준으로 허용되며, 이후 이벤트는 저장된 해시를 기준으로 체인을 이어갑니다. v2 이상 이벤트는 이 완화를 적용하지 않고 hash 불일치 시 즉시 실패로 처리합니다.
 
 이 완화는 "과거 체인을 현재 정책으로 재해석"하는 것이 아니라, "과거 규칙이 만든 저장값 자체가 자기 내부적으로 일관적인지"만 확인하는 방어 장치입니다. 저장된 값이 변조되면 detail 값/해시 대조에서 걸러집니다.
-
-#### 수동 검증 (읽기 전용)
-
-일/주간 감사는 크론(`7 4 * * *`, `19 4 * * 1`)으로 실행되지만, 운영 DB에 대해 읽기 전용으로 수동 검증할 수도 있습니다.
-
-```bash
-# backend 디렉터리에서, 운영 DB는 프로젝트 루트의 lawcast_prod.db
-npm run build
-node -e "
-const sqlite3 = require('sqlite3');
-const { DataSource } = require('typeorm');
-const { NoticeChangeEvent } = require('./dist/modules/change-tracking/notice-change-event.entity');
-const { NoticeChangeDetail } = require('./dist/modules/change-tracking/notice-change-detail.entity');
-const { ChangeTrackingService } = require('./dist/modules/change-tracking/change-tracking.service');
-(async () => {
-  const ds = new DataSource({
-    type: 'sqlite',
-    database: process.env.PROD_DB_PATH ?? '../lawcast_prod.db',
-    flags: sqlite3.OPEN_READONLY,
-    entities: [NoticeChangeEvent, NoticeChangeDetail],
-    synchronize: false,
-  });
-  await ds.initialize();
-  const svc = new ChangeTrackingService(
-    ds.getRepository(NoticeChangeEvent),
-    ds.getRepository(NoticeChangeDetail),
-  );
-  const report = await svc.runScheduledChainAudit('daily');
-  console.log(JSON.stringify({
-    noticeCount: report.noticeCount,
-    eventCount: report.eventCount,
-    failureCount: report.failureCount,
-    checkpointRootHash: report.checkpointRootHash,
-  }, null, 2));
-  await ds.destroy();
-})().catch((e) => { console.error(e); process.exit(1); });
-"
-```
-
-`flags: sqlite3.OPEN_READONLY` 덕분에 감사는 SELECT만 수행하며 운영 DB를 절대 변경하지 않습니다. `failureCount=0`이면 전체 체인이 현재 규칙과 과거 규칙 모두에서 무결성 상태임을 의미합니다.
 
 ### 저장 구조
 
