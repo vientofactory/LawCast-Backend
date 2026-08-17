@@ -437,14 +437,6 @@ contentId 추적이 활성화됐지만 `canon_version` 컬럼이 아직 없던 �
 - 상태 복원: `DEFAULT_TRACKED_FIELDS` (contentId 포함) → 저장된 detail과 일치
 - snapshot canonicalization: **미적용** (해시가 raw 스냅샷 기준이므로 v2용 정규화를 씌우면 해시가 깨짐)
 
-감지는 체인 내 v1 `archive:upsert` 이벤트에 `contentId` detail이 존재하는지로 판단하며, `change-tracking-chain-audit.utils.ts`의 `hasPreVersionedArchiveUpsert`가 담당합니다.
-
-운영 DB(`lawcast_prod.db`) 기준 실제 검증 수치:
-
-- v1 이벤트 48,762개 중 339개가 pre-versioned contentId detail 보유
-- 이 처리를 비활성화하면 **1,017건의 감사 실패** 발생 (`event_hash_mismatch` 339 + `changed_field_count_mismatch` 339 + `diff_summary_mismatch` 339)
-- 처리를 적용하면 전체 **48,762개 이벤트 / 20,084개 체인 모두 0 failures**
-
 #### 레거시 hash drift 허용 (v1 전용)
 
 v1 이벤트는 재구성한 `event_hash`가 저장값과 달라도 아래 조건이 **모두** 일치하면 정식 호환(legacy-compatible)으로 간주해 허용합니다.
