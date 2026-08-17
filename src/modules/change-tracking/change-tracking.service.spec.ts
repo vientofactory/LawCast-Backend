@@ -334,6 +334,9 @@ describe('ChangeTrackingService (diffchain batching)', () => {
 
     expect(saved).toMatchObject({ noticeNum: 1001, eventHeight: 4 });
     expect(changeEventRepository.manager.transaction).toHaveBeenCalledTimes(2);
+    expect(inTxEventRepo.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ canonVersion: 2 }),
+    );
     expect(inTxEventRepo.save).toHaveBeenCalledTimes(2);
     expect(inTxDetailRepo.save).toHaveBeenCalledTimes(1);
   });
@@ -836,6 +839,42 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     expect(report.failureCount).toBe(0);
     expect(report.noticeCount).toBe(1);
     expect(report.eventCount).toBe(1);
+  });
+
+  it('replays proposalReason line-layout changes with versioned semantics', () => {
+    const service = new ChangeTrackingService(
+      {} as any,
+      {} as any,
+      undefined as any,
+    );
+    const beforeSnapshot = {
+      proposalReason: '첫 줄 둘째 줄 셋째 줄',
+    };
+    const afterSnapshot = {
+      proposalReason: '첫 줄\n둘째 줄\n\n셋째 줄',
+    };
+
+    const legacy = service.buildDiffEvent({
+      noticeNum: 7003,
+      beforeSnapshot,
+      afterSnapshot,
+      trackedFields: ['proposalReason'],
+      canonVersion: 1,
+    });
+    const current = service.buildDiffEvent({
+      noticeNum: 7003,
+      beforeSnapshot,
+      afterSnapshot,
+      trackedFields: ['proposalReason'],
+      canonVersion: 2,
+    });
+
+    expect(legacy.shouldAppend).toBe(true);
+    expect(legacy.diff.details).toEqual([
+      expect.objectContaining({ fieldPath: 'proposalReason' }),
+    ]);
+    expect(current.shouldAppend).toBe(false);
+    expect(current.diff.details).toEqual([]);
   });
 
   it('keeps strict hash validation for canonVersion>1', async () => {

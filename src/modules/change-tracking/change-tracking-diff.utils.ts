@@ -23,10 +23,12 @@ export interface DiffComputationResult {
   diffSummaryJson: string;
 }
 
-// Track only user-meaningful notice metadata and proposal text.
-export const DEFAULT_TRACKED_FIELDS = [
+export const CURRENT_CANON_VERSION = 2;
+
+// Canon v1 predates contentId tracking and compares preserved proposalReason
+// line layouts literally. Never mutate this list: historical hashes depend on it.
+export const LEGACY_TRACKED_FIELDS_V1 = [
   'num',
-  'contentId',
   'subject',
   'proposerCategory',
   'committee',
@@ -42,6 +44,19 @@ export const DEFAULT_TRACKED_FIELDS = [
   'lifecycleStatus',
   'sourceDeletedAt',
 ] as const;
+
+// Track only user-meaningful notice metadata and proposal text.
+export const DEFAULT_TRACKED_FIELDS = [
+  'num',
+  'contentId',
+  ...LEGACY_TRACKED_FIELDS_V1.slice(1),
+] as const;
+
+export function getTrackedFieldsForCanonVersion(
+  canonVersion: number,
+): readonly string[] {
+  return canonVersion <= 1 ? LEGACY_TRACKED_FIELDS_V1 : DEFAULT_TRACKED_FIELDS;
+}
 
 function normalizeString(input: string): string {
   return input.replace(/\s+/g, ' ').trim();
@@ -167,6 +182,7 @@ export function computeDiff(
   before: Record<string, unknown> | null,
   after: Record<string, unknown>,
   trackedFields: readonly string[] = DEFAULT_TRACKED_FIELDS,
+  canonVersion = CURRENT_CANON_VERSION,
 ): DiffComputationResult {
   const normalizedBefore = before ? normalizeSnapshot(before) : null;
   const normalizedAfter = normalizeSnapshot(after);
@@ -181,7 +197,7 @@ export function computeDiff(
     const afterValue = toComparableString(afterRaw, fieldPath);
 
     const valuesMatch =
-      fieldPath === 'proposalReason'
+      canonVersion >= 2 && fieldPath === 'proposalReason'
         ? canonicalizeProposalReasonForComparison(beforeValue) ===
           canonicalizeProposalReasonForComparison(afterValue)
         : beforeValue === afterValue;

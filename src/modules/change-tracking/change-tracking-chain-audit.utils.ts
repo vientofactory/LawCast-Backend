@@ -7,7 +7,7 @@ import { NoticeChangeDetail } from './notice-change-detail.entity';
 import { type NoticeChangeSource } from './notice-change-source.enum';
 import {
   canonicalStringify,
-  DEFAULT_TRACKED_FIELDS,
+  getTrackedFieldsForCanonVersion,
   sha256Hex,
   type DiffComputationResult,
 } from './change-tracking-diff.utils';
@@ -216,11 +216,15 @@ async function verifyNoticeChain(
 
   const issues: ChainVerificationIssue[] = [];
   let previousHash: string | null = null;
-  let currentState = createEmptyTrackedState();
+  let currentState: Record<string, unknown> = {};
 
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     const eventDetails = detailsByEventId.get(event.id) ?? [];
+    const trackedFields = getTrackedFieldsForCanonVersion(
+      event.canonVersion ?? 1,
+    );
+    currentState = ensureTrackedStateFields(currentState, trackedFields);
     const beforeState = index === 0 ? null : { ...currentState };
     const nextState = applyDetailsToTrackedState(currentState, eventDetails);
     const rebuilt = deps.buildDiffEvent({
@@ -229,7 +233,7 @@ async function verifyNoticeChain(
       afterSnapshot: nextState,
       detectedAt: event.detectedAt,
       source: event.source,
-      trackedFields: DEFAULT_TRACKED_FIELDS,
+      trackedFields,
       hashAlgo: event.hashAlgo,
       canonVersion: event.canonVersion,
     });
@@ -343,10 +347,17 @@ async function verifyNoticeChain(
   };
 }
 
-function createEmptyTrackedState(): Record<string, unknown> {
-  return Object.fromEntries(
-    DEFAULT_TRACKED_FIELDS.map((fieldPath) => [fieldPath, null]),
-  ) as Record<string, unknown>;
+function ensureTrackedStateFields(
+  state: Record<string, unknown>,
+  trackedFields: readonly string[],
+): Record<string, unknown> {
+  const nextState = { ...state };
+  for (const fieldPath of trackedFields) {
+    if (!Object.prototype.hasOwnProperty.call(nextState, fieldPath)) {
+      nextState[fieldPath] = null;
+    }
+  }
+  return nextState;
 }
 
 function applyDetailsToTrackedState(

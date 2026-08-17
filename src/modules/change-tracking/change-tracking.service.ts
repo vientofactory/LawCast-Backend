@@ -14,6 +14,7 @@ import { NoticeArchive } from '../notice/notice-archive.entity';
 import {
   canonicalStringify,
   computeDiff,
+  CURRENT_CANON_VERSION,
   sha256Hex,
   type DiffComputationResult,
 } from './change-tracking-diff.utils';
@@ -611,7 +612,7 @@ export class ChangeTrackingService {
       diffSummaryJson: input.diffSummaryJson ?? null,
       crawlerRunId: input.crawlerRunId ?? null,
       hashAlgo: input.hashAlgo ?? 'sha256',
-      canonVersion: input.canonVersion ?? 1,
+      canonVersion: input.canonVersion ?? CURRENT_CANON_VERSION,
     });
   }
 
@@ -722,13 +723,14 @@ export class ChangeTrackingService {
    */
   buildDiffEvent(input: BuildDiffEventInput): BuildDiffEventOutput {
     const hashAlgo = input.hashAlgo ?? 'sha256';
-    const canonVersion = input.canonVersion ?? 1;
+    const canonVersion = input.canonVersion ?? CURRENT_CANON_VERSION;
     const detectedAt = input.detectedAt ?? new Date();
 
     const diff = computeDiff(
       input.beforeSnapshot,
       input.afterSnapshot,
       input.trackedFields,
+      canonVersion,
     );
 
     const eventType = this.resolveEventType(input);
