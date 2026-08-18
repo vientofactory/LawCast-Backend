@@ -1990,6 +1990,9 @@ export class NoticeArchiveService {
     revRaw?: string,
   ): Promise<{
     detail: ArchiveDetailResult;
+    timeline: Awaited<
+      ReturnType<ChangeTrackingService['getNoticeChangeTimeline']>
+    >;
     revision: {
       requestedRev: number | null;
       resolvedRev: number | null;
@@ -2043,6 +2046,7 @@ export class NoticeArchiveService {
 
     return {
       detail: detailWithRevision,
+      timeline,
       revision: {
         requestedRev,
         resolvedRev,

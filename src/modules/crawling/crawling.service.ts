@@ -28,6 +28,7 @@ export class CrawlingService {
     APP_CONSTANTS.CACHE.TTL.QUICK_KEYWORDS;
   private readonly quickKeywordSourceLimit = 300;
   private readonly quickKeywordDefaultLimit = 8;
+  private readonly archiveStartedAtCache = new Map<number, Date>();
 
   constructor(
     private cacheService: CacheService,
@@ -146,14 +147,24 @@ export class CrawlingService {
       return [];
     }
 
-    const archiveStartedAtMap =
-      await this.noticeArchiveService.getArchiveStartedAtByNoticeNums(
-        cachedNotices.map((notice) => notice.num),
-      );
+    const noticeNums = cachedNotices.map((notice) => notice.num);
+    const missingNoticeNums = noticeNums.filter(
+      (noticeNum) => !this.archiveStartedAtCache.has(noticeNum),
+    );
+    if (missingNoticeNums.length > 0) {
+      const loaded =
+        await this.noticeArchiveService.getArchiveStartedAtByNoticeNums(
+          missingNoticeNums,
+        );
+      for (const [noticeNum, archiveStartedAt] of loaded) {
+        this.archiveStartedAtCache.set(noticeNum, archiveStartedAt);
+      }
+    }
 
     const sorted = [...cachedNotices].sort((left, right) => {
-      const leftTime = archiveStartedAtMap.get(left.num)?.getTime() ?? 0;
-      const rightTime = archiveStartedAtMap.get(right.num)?.getTime() ?? 0;
+      const leftTime = this.archiveStartedAtCache.get(left.num)?.getTime() ?? 0;
+      const rightTime =
+        this.archiveStartedAtCache.get(right.num)?.getTime() ?? 0;
 
       if (rightTime !== leftTime) {
         return rightTime - leftTime;

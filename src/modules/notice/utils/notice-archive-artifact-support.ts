@@ -144,6 +144,39 @@ export class NoticeArchiveArtifactSupport {
   ): Promise<ArchiveDetailResult | null> {
     const row = await this.archiveRepository.findOne({
       where: { noticeNum },
+      select: {
+        noticeNum: true,
+        subject: true,
+        proposerCategory: true,
+        committee: true,
+        assemblyLink: true,
+        contentId: true,
+        proposalReason: true,
+        sourceTitle: true,
+        contentBillNumber: true,
+        contentProposer: true,
+        contentProposalDate: true,
+        contentCommittee: true,
+        contentReferralDate: true,
+        contentNoticePeriod: true,
+        contentProposalSession: true,
+        attachmentPdfFile: true,
+        attachmentHwpFile: true,
+        archivedAt: true,
+        sourceHtmlSha256: true,
+        integrityVerifiedAt: true,
+        integrityCheckPassed: true,
+        httpMetadataJson: true,
+        httpFetchedAt: true,
+        httpStatusCode: true,
+        httpContentType: true,
+        httpEtag: true,
+        httpLastModified: true,
+        lifecycleStatus: true,
+        sourceDeletedAt: true,
+        screenshotFormat: true,
+        archiveStartedAt: true,
+      },
     });
 
     if (!row) {
@@ -152,11 +185,42 @@ export class NoticeArchiveArtifactSupport {
 
     await this.hydrateSummaryState(row);
 
-    const integrity = await this.verifyAndRefreshIntegrity(row);
+    const artifactFlags = (await this.archiveRepository.query(
+      `SELECT
+         LENGTH(CAST("source_html" AS BLOB)) AS "sourceHtmlSize",
+         CASE WHEN "screenshot_blob" IS NULL THEN 0 ELSE 1 END AS "hasScreenshot"
+       FROM "notice_archives"
+       WHERE "noticeNum" = ?`,
+      [noticeNum],
+    )) as Array<{ sourceHtmlSize: number | null; hasScreenshot: number }>;
+    let loadedSourceHtml: string | null | undefined;
+    const loadSourceHtml = async (): Promise<string | null> => {
+      if (loadedSourceHtml !== undefined) {
+        return loadedSourceHtml;
+      }
+      const artifact = await this.archiveRepository.findOne({
+        where: { noticeNum },
+        select: { sourceHtml: true },
+      });
+      loadedSourceHtml = artifact?.sourceHtml ?? null;
+      return loadedSourceHtml;
+    };
+
+    const integrity = await this.verifyAndRefreshIntegrity(row, loadSourceHtml);
     const httpMetadata = parseHttpMetadata(row.httpMetadataJson);
+    const needsHtmlFallback = [
+      row.contentBillNumber,
+      row.contentProposer,
+      row.contentProposalDate,
+      row.contentCommittee,
+      row.contentReferralDate,
+      row.contentNoticePeriod,
+      row.contentProposalSession,
+    ].some((value) => !value);
     const fallbackFromHtml = this.extractPalFieldsFromSourceHtml(
-      row.sourceHtml,
+      needsHtmlFallback ? await loadSourceHtml() : null,
     );
+    const sourceHtmlSize = Number(artifactFlags[0]?.sourceHtmlSize ?? 0);
 
     return {
       notice: mapArchiveEntityToNoticeItem(row),
@@ -176,9 +240,7 @@ export class NoticeArchiveArtifactSupport {
       archiveMetadata: {
         archivedAt: row.archivedAt,
         sourceHtmlSha256: row.sourceHtmlSha256,
-        sourceHtmlSize: row.sourceHtml
-          ? Buffer.byteLength(row.sourceHtml, 'utf8')
-          : 0,
+        sourceHtmlSize: Number.isFinite(sourceHtmlSize) ? sourceHtmlSize : 0,
         integrity: {
           status: integrity.status,
           checkedAt: integrity.checkedAt,
@@ -203,7 +265,7 @@ export class NoticeArchiveArtifactSupport {
         },
       },
       screenshotMeta: {
-        hasScreenshot: row.screenshotBlob != null,
+        hasScreenshot: artifactFlags[0]?.hasScreenshot === 1,
         format: row.screenshotFormat ?? null,
       },
     };
@@ -565,7 +627,10 @@ export class NoticeArchiveArtifactSupport {
     };
   }
 
-  private async verifyAndRefreshIntegrity(row: NoticeArchive): Promise<{
+  private async verifyAndRefreshIntegrity(
+    row: NoticeArchive,
+    loadSourceHtml?: () => Promise<string | null>,
+  ): Promise<{
     status: ArchiveIntegrityStatus;
     checkedAt: Date | null;
     passed: boolean | null;
@@ -602,7 +667,7 @@ export class NoticeArchiveArtifactSupport {
       }
     }
 
-    if (!row.sourceHtml || !row.sourceHtmlSha256) {
+    if (!row.sourceHtmlSha256) {
       return {
         status: 'pending',
         checkedAt: row.integrityVerifiedAt ?? null,
@@ -628,7 +693,18 @@ export class NoticeArchiveArtifactSupport {
       };
     }
 
-    const calculatedSha256 = computeSha256(row.sourceHtml);
+    const sourceHtml = row.sourceHtml ?? (await loadSourceHtml?.()) ?? null;
+    if (!sourceHtml) {
+      return {
+        status: 'pending',
+        checkedAt: null,
+        passed: null,
+        skipReason: null,
+        calculatedSha256: null,
+      };
+    }
+
+    const calculatedSha256 = computeSha256(sourceHtml);
     const passed = calculatedSha256 === row.sourceHtmlSha256;
 
     return {

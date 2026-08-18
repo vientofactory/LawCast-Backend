@@ -157,6 +157,31 @@ describe('CrawlingService', () => {
       ]);
     });
 
+    it('reuses cached archive timestamps across recent notice reads', async () => {
+      const mockNotices = [
+        { num: 1, subject: 'Test Notice 1' },
+        { num: 2, subject: 'Test Notice 2' },
+      ];
+      (cacheService.getRecentNotices as jest.Mock).mockResolvedValue(
+        mockNotices,
+      );
+      (
+        noticeArchiveService.getArchiveStartedAtByNoticeNums as jest.Mock
+      ).mockResolvedValue(
+        new Map([
+          [1, new Date('2024-01-01')],
+          [2, new Date('2024-01-02')],
+        ]),
+      );
+
+      await service.getRecentNotices();
+      await service.getRecentNotices();
+
+      expect(
+        noticeArchiveService.getArchiveStartedAtByNoticeNums,
+      ).toHaveBeenCalledTimes(1);
+    });
+
     it('should return empty array when no cached notices', async () => {
       (cacheService.getRecentNotices as jest.Mock).mockResolvedValue([]);
 

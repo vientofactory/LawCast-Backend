@@ -237,17 +237,34 @@ export async function getArchiveStartedAtByNoticeNums(
     return new Map();
   }
 
-  const rows = await deps.archiveRepository.find({
-    where: {
-      noticeNum: In(uniqueNums),
-    },
-    select: {
-      noticeNum: true,
-      archiveStartedAt: true,
-    },
-  });
+  const rows: Array<{ noticeNum: unknown; archiveStartedAt: unknown }> = [];
+  const batchSize = 500;
+  for (let offset = 0; offset < uniqueNums.length; offset += batchSize) {
+    const batch = uniqueNums.slice(offset, offset + batchSize);
+    const placeholders = batch.map(() => '?').join(', ');
+    const batchRows = await deps.archiveRepository.manager.query(
+      `SELECT "noticeNum" AS "noticeNum",
+              "archive_started_at" AS "archiveStartedAt"
+       FROM "notice_archives"
+       INDEXED BY "idx_notice_archives_notice_num_archive_started_at"
+       WHERE "noticeNum" IN (${placeholders})`,
+      batch,
+    );
+    rows.push(...batchRows);
+  }
 
-  return new Map(rows.map((row) => [row.noticeNum, row.archiveStartedAt]));
+  const result = new Map<number, Date>();
+  for (const row of rows) {
+    const noticeNum = Number(row.noticeNum);
+    const archiveStartedAt = new Date(String(row.archiveStartedAt));
+    if (
+      Number.isInteger(noticeNum) &&
+      !Number.isNaN(archiveStartedAt.getTime())
+    ) {
+      result.set(noticeNum, archiveStartedAt);
+    }
+  }
+  return result;
 }
 
 export async function countByNoticeNumComparison(

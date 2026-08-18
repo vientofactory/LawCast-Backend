@@ -208,7 +208,7 @@ export class ApiController {
     @Param('num', ParseIntPipe) num: number,
     @Query('rev') revRaw?: string,
   ) {
-    const { detail, revision } =
+    const { detail, timeline, revision } =
       await this.noticeArchiveService.getArchivedNoticeDetailWithRevision(
         num,
         revRaw,
@@ -219,6 +219,11 @@ export class ApiController {
       aiSummaryEnabled: (await this.healthCheckService.getOllamaMetrics())
         .enabled,
       revision,
+      changes: {
+        noticeNum: num,
+        items: timeline,
+        count: timeline.length,
+      },
     });
   }
 

@@ -19,6 +19,7 @@ import { AddWebPushSubscriptions1754179201000 } from './202608030001-add-web-pus
 import { AddFtsAndChangeTrackingLatestValueIndexes1754611201000 } from './202608080001-add-fts-and-change-tracking-latest-value-indexes.migration';
 import { OptimizeRecentChangesQueries1754899201000 } from './202608110001-optimize-recent-changes-queries.migration';
 import { AllowSnapshotArtifactFirstFill1755043201000 } from './202608130001-allow-snapshot-artifact-first-fill.migration';
+import { AddArchiveNoticeNumStartedAtIndex1755561601000 } from './202608190001-add-archive-notice-num-started-at-index.migration';
 
 export const migrations: (new () => MigrationInterface)[] = [
   InitialSchemaMigration1744953900000,
@@ -41,4 +42,5 @@ export const migrations: (new () => MigrationInterface)[] = [
   AddFtsAndChangeTrackingLatestValueIndexes1754611201000,
   OptimizeRecentChangesQueries1754899201000,
   AllowSnapshotArtifactFirstFill1755043201000,
+  AddArchiveNoticeNumStartedAtIndex1755561601000,
 ];
