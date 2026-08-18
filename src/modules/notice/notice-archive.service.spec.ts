@@ -1,6 +1,8 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import { DataSource } from 'typeorm';
 import { NoticeArchiveService } from './notice-archive.service';
 import { NoticeArchive } from '../notice/notice-archive.entity';
+import { NoticeArchiveSnapshotState } from './notice-archive-summary-state.entity';
 import { computeSha256 } from './notice-archive.helpers';
 import { computeDiff } from '../change-tracking/change-tracking-diff.utils';
 import { CHANGE_EVENT_TYPE } from '../change-tracking/notice-change-event.entity';
@@ -57,6 +59,9 @@ describe('NoticeArchiveService', () => {
       getLatestFieldAfterValue: jest
         .fn<(...args: any[]) => Promise<string | null>>()
         .mockResolvedValue(null),
+      getNoticeNumsWithAnyEvent: jest
+        .fn<(...args: any[]) => Promise<Set<number>>>()
+        .mockResolvedValue(new Set()),
       buildDiffEvent: jest.fn((input: any) => {
         const diff = computeDiff(input.beforeSnapshot, input.afterSnapshot);
         const lifecycleStatus =
@@ -159,6 +164,62 @@ describe('NoticeArchiveService', () => {
       ...overrides,
     };
   };
+
+  it('seeds legacy genesis from eventless rows using keyset pagination', async () => {
+    const firstRow = buildRow({ id: 1, noticeNum: 2200001 });
+    const secondRow = buildRow({ id: 2, noticeNum: 2200002 });
+    const getMany = jest
+      .fn<(...args: any[]) => Promise<NoticeArchive[]>>()
+      .mockResolvedValueOnce([firstRow, secondRow])
+      .mockResolvedValueOnce([]);
+    const queryBuilder = {
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany,
+    };
+    const repositoryMock = {
+      ...createRepositoryMock(),
+      count: jest.fn<() => Promise<number>>().mockResolvedValue(20103),
+      createQueryBuilder: jest.fn().mockReturnValue(queryBuilder),
+    };
+    const summaryStateRepository = createSummaryStateRepositoryMock();
+    const changeTrackingService = createChangeTrackingServiceMock();
+    const service = new NoticeArchiveService(
+      repositoryMock as any,
+      summaryStateRepository as any,
+      changeTrackingService as any,
+    );
+
+    const result = await service.seedLegacyGenesisEvents(
+      new Date('2026-08-19T00:00:00.000Z'),
+      2,
+    );
+
+    expect(result).toMatchObject({
+      scanned: 20103,
+      seeded: 2,
+      skipped: 20101,
+    });
+    expect(queryBuilder.where).toHaveBeenNthCalledWith(
+      1,
+      'archive.noticeNum > :afterNoticeNum',
+      { afterNoticeNum: 0 },
+    );
+    expect(queryBuilder.where).toHaveBeenNthCalledWith(
+      2,
+      'archive.noticeNum > :afterNoticeNum',
+      { afterNoticeNum: 2200002 },
+    );
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('NOT EXISTS'),
+    );
+    expect(
+      changeTrackingService.appendChangeEventWithDetails,
+    ).toHaveBeenCalledTimes(2);
+  });
 
   it('includes bash and powershell verification scripts in archive export', async () => {
     const repositoryMock = createRepositoryMock();
@@ -269,6 +330,7 @@ describe('NoticeArchiveService', () => {
     expect(parsedJson.integritySnapshot.storedSha256).toBe(
       row.sourceHtmlSha256,
     );
+
     expect(parsedJson.integritySnapshot.calculatedSha256).toBe(
       row.sourceHtmlSha256,
     );
@@ -304,6 +366,94 @@ describe('NoticeArchiveService', () => {
     for (const script of exportResult.verificationScripts || []) {
       expect(script.content).toContain(exportResult.jsonFileName);
       expect(script.content).toContain(exportResult.integrityFileName);
+    }
+  });
+
+  it('uses indexed keyset and anti-join semantics for genesis candidates in SQLite', async () => {
+    const dataSource = new DataSource({
+      type: 'sqlite',
+      database: ':memory:',
+      entities: [NoticeArchive, NoticeArchiveSnapshotState],
+      synchronize: true,
+    });
+    await dataSource.initialize();
+
+    try {
+      const archiveRepository = dataSource.getRepository(NoticeArchive);
+      const summaryRepository = dataSource.getRepository(
+        NoticeArchiveSnapshotState,
+      );
+      await archiveRepository.save([
+        buildRow({ id: 1, noticeNum: 2200001 }),
+        buildRow({ id: 2, noticeNum: 2200002 }),
+        buildRow({ id: 3, noticeNum: 2200003 }),
+      ]);
+      await summaryRepository.save({
+        noticeNum: 2200003,
+        isDone: true,
+        aiSummary: null,
+        aiSummaryStatus: 'not_requested',
+      });
+      await dataSource.query(`
+        CREATE TABLE notice_change_events (
+          id INTEGER PRIMARY KEY,
+          notice_num INTEGER NOT NULL,
+          event_height INTEGER NOT NULL
+        )
+      `);
+      await dataSource.query(`
+        CREATE UNIQUE INDEX idx_notice_change_events_notice_num_event_height_unique
+        ON notice_change_events (notice_num, event_height)
+      `);
+      await dataSource.query(
+        `INSERT INTO notice_change_events (id, notice_num, event_height)
+         VALUES (1, 2200001, 1)`,
+      );
+
+      const service = new NoticeArchiveService(
+        archiveRepository,
+        summaryRepository,
+        createChangeTrackingServiceMock() as any,
+      );
+      const candidates = await (service as any).getGenesisCandidateRows(
+        2200001,
+        300,
+      );
+
+      expect(
+        candidates.map((row: NoticeArchive) => ({
+          noticeNum: row.noticeNum,
+          isDone: row.isDone,
+        })),
+      ).toEqual([
+        { noticeNum: 2200002, isDone: false },
+        { noticeNum: 2200003, isDone: true },
+      ]);
+
+      const plan = (await dataSource.query(
+        `EXPLAIN QUERY PLAN
+         SELECT archive.noticeNum
+         FROM notice_archives archive
+         WHERE archive.noticeNum > ?
+           AND NOT EXISTS (
+             SELECT 1
+             FROM notice_change_events event
+             WHERE event.notice_num = archive.noticeNum
+           )
+         ORDER BY archive.noticeNum ASC
+         LIMIT 300`,
+        [2200001],
+      )) as Array<{ detail: string }>;
+      const planText = plan.map((row) => row.detail).join('\n');
+      expect(planText).toMatch(
+        /SEARCH archive USING COVERING INDEX .*notice_num.*noticeNum>\?/,
+      );
+      expect(planText).toMatch(
+        /SEARCH event USING COVERING INDEX .*notice_num_event_height_unique/,
+      );
+      expect(planText).not.toContain('OFFSET');
+    } finally {
+      await dataSource.destroy();
     }
   });
 

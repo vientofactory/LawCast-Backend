@@ -377,18 +377,23 @@ export class NoticeArchiveService {
     }
 
     const take = Math.max(1, Math.min(batchSize, 2000));
-    let skip = 0;
-    let scanned = 0;
+    const startedAt = Date.now();
+    const scanned = await this.archiveRepository.count();
+    let cursorNoticeNum = 0;
     let seeded = 0;
-    let skipped = 0;
+
+    LoggerUtils.log(
+      NoticeArchiveService.name,
+      `Legacy genesis started: archiveTotal=${scanned} batchSize=${take}`,
+    );
 
     while (true) {
-      const rows = await this.getGenesisCandidateRows(skip, take);
+      const rows = await this.getGenesisCandidateRows(cursorNoticeNum, take);
       if (rows.length === 0) {
         break;
       }
 
-      scanned += rows.length;
+      cursorNoticeNum = rows[rows.length - 1].noticeNum;
 
       const existingEventNoticeNums =
         await this.changeTrackingService.getNoticeNumsWithAnyEvent(
@@ -397,13 +402,11 @@ export class NoticeArchiveService {
 
       for (const row of rows) {
         if (existingEventNoticeNums.has(row.noticeNum)) {
-          skipped += 1;
           continue;
         }
 
         const afterSnapshot = this.buildTrackedSnapshot(row);
         if (!afterSnapshot) {
-          skipped += 1;
           continue;
         }
 
@@ -438,15 +441,23 @@ export class NoticeArchiveService {
           });
 
         if (!event?.id) {
-          skipped += 1;
           continue;
         }
 
         seeded += 1;
       }
 
-      skip += rows.length;
+      LoggerUtils.log(
+        NoticeArchiveService.name,
+        `Legacy genesis progress: cursor=${cursorNoticeNum} candidates=${rows.length} seeded=${seeded}`,
+      );
     }
+
+    const skipped = Math.max(0, scanned - seeded);
+    LoggerUtils.log(
+      NoticeArchiveService.name,
+      `Legacy genesis completed: archiveTotal=${scanned} seeded=${seeded} skipped=${skipped} elapsedMs=${Date.now() - startedAt}`,
+    );
 
     return {
       boundaryAt: boundaryAt.toISOString(),
@@ -457,31 +468,39 @@ export class NoticeArchiveService {
   }
 
   private async getGenesisCandidateRows(
-    skip: number,
+    afterNoticeNum: number,
     take: number,
   ): Promise<TrackedArchiveRow[]> {
-    const rows = await this.archiveRepository.find({
-      select: {
-        noticeNum: true,
-        contentId: true,
-        subject: true,
-        proposerCategory: true,
-        committee: true,
-        proposalReason: true,
-        contentBillNumber: true,
-        contentProposer: true,
-        contentProposalDate: true,
-        contentCommittee: true,
-        contentReferralDate: true,
-        contentNoticePeriod: true,
-        contentProposalSession: true,
-        lifecycleStatus: true,
-        sourceDeletedAt: true,
-      },
-      order: { noticeNum: 'ASC' },
-      skip,
-      take,
-    });
+    const rows = await this.archiveRepository
+      .createQueryBuilder('archive')
+      .select([
+        'archive.noticeNum',
+        'archive.contentId',
+        'archive.subject',
+        'archive.proposerCategory',
+        'archive.committee',
+        'archive.proposalReason',
+        'archive.contentBillNumber',
+        'archive.contentProposer',
+        'archive.contentProposalDate',
+        'archive.contentCommittee',
+        'archive.contentReferralDate',
+        'archive.contentNoticePeriod',
+        'archive.contentProposalSession',
+        'archive.lifecycleStatus',
+        'archive.sourceDeletedAt',
+      ])
+      .where('archive.noticeNum > :afterNoticeNum', { afterNoticeNum })
+      .andWhere(
+        `NOT EXISTS (
+          SELECT 1
+          FROM notice_change_events event
+          WHERE event.notice_num = archive.noticeNum
+        )`,
+      )
+      .orderBy('archive.noticeNum', 'ASC')
+      .take(take)
+      .getMany();
 
     const states = await this.getSummaryStateByNoticeNums(
       rows.map((row) => row.noticeNum),
