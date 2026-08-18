@@ -31,7 +31,6 @@ import {
 import { NoticeArchiveSnapshotState } from './notice-archive-summary-state.entity';
 import {
   NOTICE_ITEM_SELECT,
-  buildArchiveWhereConditions,
   computeSha256,
   mapArchiveEntityToCachedNotice,
   mapArchiveEntityToNoticeItem,
@@ -1448,53 +1447,56 @@ export class NoticeArchiveService {
       return;
     }
 
-    const ftsQuery = params.fullText ? this.buildFtsMatchQuery(search) : null;
+    const currentSubject = this.buildCurrentFieldSql(
+      'subject',
+      'archive.subject',
+    );
+    const currentCommittee = this.buildCurrentFieldSql(
+      'committee',
+      'archive.committee',
+    );
+    const currentProposalReason = this.buildCurrentFieldSql(
+      'proposalReason',
+      'archive.proposalReason',
+    );
 
     qb.andWhere(
       new Brackets((query) => {
         query
-          .where('archive.subject LIKE :search', {
+          .where(`${currentSubject} LIKE :search`, {
             search: `%${search}%`,
           })
-          .orWhere('archive.committee LIKE :search', {
+          .orWhere(`${currentCommittee} LIKE :search`, {
             search: `%${search}%`,
           });
 
         if (params.fullText) {
-          if (ftsQuery) {
-            query.orWhere(
-              'archive.rowid IN (SELECT rowid FROM notice_archives_fts WHERE notice_archives_fts MATCH :ftsQuery)',
-              { ftsQuery },
-            );
-          } else {
-            // Fallback for symbols-only queries that cannot form an FTS MATCH string.
-            query.orWhere('archive.proposalReason LIKE :search', {
-              search: `%${search}%`,
-            });
-          }
+          query.orWhere(`${currentProposalReason} LIKE :search`, {
+            search: `%${search}%`,
+          });
         }
       }),
     );
   }
 
-  private buildFtsMatchQuery(search: string): string | null {
-    const terms = search
-      .trim()
-      .split(/\s+/)
-      .map((term) =>
-        term
-          .replace(/["'`]/g, ' ')
-          .replace(/[^\p{L}\p{N}_-]/gu, ' ')
-          .trim(),
-      )
-      .filter((term) => term.length > 0)
-      .map((term) => `"${term}"*`);
+  private buildCurrentFieldSql(
+    fieldPath: string,
+    fallbackExpression: string,
+  ): string {
+    const latestValueQuery = `
+      SELECT detail.after_value
+      FROM notice_change_details detail
+      INNER JOIN notice_change_events event ON event.id = detail.event_id
+      WHERE event.notice_num = archive.noticeNum
+        AND detail.field_path = '${fieldPath}'
+      ORDER BY event.event_height DESC, detail.id DESC
+      LIMIT 1
+    `;
 
-    if (terms.length === 0) {
-      return null;
-    }
-
-    return terms.join(' AND ');
+    return `CASE
+      WHEN EXISTS (${latestValueQuery}) THEN (${latestValueQuery})
+      ELSE ${fallbackExpression}
+    END`;
   }
 
   private async queryArchiveNoticeNumsByIsDoneFilter(params: {
@@ -1607,47 +1609,74 @@ export class NoticeArchiveService {
     return map;
   }
 
-  private async applyLifecycleOverlayFromDiffchain(
-    rows: NoticeArchive[],
+  private async applyCurrentOverlayFromDiffchain(
+    rows: Array<NoticeArchive | CachedNotice>,
   ): Promise<void> {
     if (!this.changeTrackingService || rows.length === 0) {
       return;
     }
 
     const noticeNums = rows
-      .map((row) => row.noticeNum)
+      .map((row) => ('noticeNum' in row ? row.noticeNum : row.num))
       .filter((num) => Number.isInteger(num) && num > 0);
 
     if (noticeNums.length === 0) {
       return;
     }
 
-    const [lifecycleByNoticeNum, sourceDeletedAtByNoticeNum] =
-      await Promise.all([
-        this.changeTrackingService.getLatestFieldValues(
-          noticeNums,
+    const latestByNoticeNum =
+      await this.changeTrackingService.getLatestFieldValuesForFields(
+        noticeNums,
+        [
+          'subject',
+          'proposerCategory',
+          'committee',
+          'contentId',
+          'proposalReason',
           'lifecycleStatus',
-        ),
-        this.changeTrackingService.getLatestFieldValues(
-          noticeNums,
           'sourceDeletedAt',
-        ),
-      ]);
+        ],
+      );
 
     for (const row of rows) {
-      const latestLifecycleStatus =
-        lifecycleByNoticeNum.get(row.noticeNum) ?? null;
+      const noticeNum = 'noticeNum' in row ? row.noticeNum : row.num;
+      const fields = latestByNoticeNum.get(noticeNum);
+      if (!fields) continue;
+
+      const setRequiredText = (
+        fieldPath: 'subject' | 'proposerCategory' | 'committee',
+      ) => {
+        if (!fields.has(fieldPath)) return;
+        const value = fields.get(fieldPath)?.trim();
+        if (value) row[fieldPath] = value;
+      };
+      setRequiredText('subject');
+      setRequiredText('proposerCategory');
+      setRequiredText('committee');
+
+      if (fields.has('contentId')) {
+        row.contentId = this.normalizeStableId(fields.get('contentId'));
+      }
+      if (fields.has('proposalReason')) {
+        const proposalReason = canonicalizeProposalReason(
+          fields.get('proposalReason'),
+        );
+        row.proposalReason =
+          'noticeNum' in row ? (proposalReason ?? '') : proposalReason;
+      }
+
+      const latestLifecycleStatus = fields.get('lifecycleStatus') ?? null;
       if (
-        latestLifecycleStatus === 'active' ||
-        latestLifecycleStatus === 'source_deleted' ||
-        latestLifecycleStatus === 'renumbered'
+        'lifecycleStatus' in row &&
+        (latestLifecycleStatus === 'active' ||
+          latestLifecycleStatus === 'source_deleted' ||
+          latestLifecycleStatus === 'renumbered')
       ) {
         row.lifecycleStatus = latestLifecycleStatus;
       }
 
-      const latestSourceDeletedAt =
-        sourceDeletedAtByNoticeNum.get(row.noticeNum) ?? null;
-      if (latestSourceDeletedAt) {
+      const latestSourceDeletedAt = fields.get('sourceDeletedAt') ?? null;
+      if ('sourceDeletedAt' in row && latestSourceDeletedAt) {
         const parsed = new Date(latestSourceDeletedAt);
         if (!Number.isNaN(parsed.getTime())) {
           row.sourceDeletedAt = parsed;
@@ -1732,7 +1761,7 @@ export class NoticeArchiveService {
       }
     }
 
-    await this.applyLifecycleOverlayFromDiffchain(rows);
+    await this.applyCurrentOverlayFromDiffchain(rows);
 
     return {
       items: rows.map((row) => mapArchiveEntityToNoticeItem(row)),
@@ -1746,18 +1775,14 @@ export class NoticeArchiveService {
 
   async listArchiveNotices(search?: string): Promise<ArchiveNoticeItem[]> {
     const normalizedSearch = (search || '').trim();
-    const where = buildArchiveWhereConditions({
+    const qb = this.createArchiveNoticeItemQueryBuilder('archive');
+    this.applyArchiveSearchFilters(qb, {
       search: normalizedSearch,
     });
-
-    const rows = await this.archiveRepository.find({
-      where,
-      select: NOTICE_ITEM_SELECT,
-      order: {
-        archiveStartedAt: 'DESC',
-        noticeNum: 'DESC',
-      },
-    });
+    const rows = await qb
+      .orderBy('archive.archiveStartedAt', 'DESC')
+      .addOrderBy('archive.noticeNum', 'DESC')
+      .getMany();
 
     if (this.summaryStateRepository && rows.length > 0) {
       const summaryStates = await this.getSummaryStateByNoticeNums(
@@ -1773,7 +1798,7 @@ export class NoticeArchiveService {
       }
     }
 
-    await this.applyLifecycleOverlayFromDiffchain(rows);
+    await this.applyCurrentOverlayFromDiffchain(rows);
 
     return rows.map((row) => mapArchiveEntityToNoticeItem(row));
   }
@@ -1817,7 +1842,7 @@ export class NoticeArchiveService {
       }
     }
 
-    await this.applyLifecycleOverlayFromDiffchain(rows);
+    await this.applyCurrentOverlayFromDiffchain(rows);
 
     return rows.map((row) => mapArchiveEntityToNoticeItem(row));
   }
@@ -1934,7 +1959,7 @@ export class NoticeArchiveService {
       }
     }
 
-    await this.applyLifecycleOverlayFromDiffchain(rows);
+    await this.applyCurrentOverlayFromDiffchain(rows);
 
     return {
       items: rows.map((row) => mapArchiveEntityToNoticeItem(row)),
@@ -1972,10 +1997,9 @@ export class NoticeArchiveService {
     }
 
     const timeline = this.changeTrackingService
-      ? await this.changeTrackingService.getNoticeChangeTimeline({
+      ? await this.changeTrackingService.getCompleteNoticeChangeTimeline(
           noticeNum,
-          limit: 1000,
-        })
+        )
       : [];
 
     const eventsAsc = [...timeline].sort(
@@ -2275,10 +2299,10 @@ export class NoticeArchiveService {
     }
 
     try {
-      const events = await this.changeTrackingService.getNoticeChangeTimeline({
-        noticeNum,
-        limit: 1000,
-      });
+      const events =
+        await this.changeTrackingService.getCompleteNoticeChangeTimeline(
+          noticeNum,
+        );
 
       return {
         exportedAt: new Date().toISOString(),
@@ -2581,6 +2605,12 @@ export class NoticeArchiveService {
       }),
     ]);
 
+    const latestNsmContentIds =
+      await this.changeTrackingService.getLatestFieldValues(
+        nsmRows.map((row) => row.noticeNum),
+        'contentId',
+      );
+
     return {
       pal: palRows
         .filter((row) => row.assemblyLink?.trim())
@@ -2588,7 +2618,12 @@ export class NoticeArchiveService {
           num: row.noticeNum,
           assemblyLink: row.assemblyLink,
         })),
-      nsm: nsmRows.map((row) => ({ num: row.noticeNum })),
+      nsm: nsmRows
+        .filter(
+          (row) =>
+            !this.normalizeStableId(latestNsmContentIds.get(row.noticeNum)),
+        )
+        .map((row) => ({ num: row.noticeNum })),
     };
   }
 
@@ -2642,14 +2677,6 @@ export class NoticeArchiveService {
       return;
     }
 
-    await this.fillMissingSnapshotArtifacts(noticeNum, {
-      sourceHtml: payload.html,
-      htmlSha256: payload.sha256,
-      httpMetadata: payload.httpMetadata,
-      screenshotBlob: payload.screenshotBlob ?? null,
-      screenshotFormat: payload.screenshotFormat ?? null,
-    });
-
     const beforeSnapshot = await this.buildDiffBaselineSnapshot(
       noticeNum,
       beforeRow,
@@ -2657,6 +2684,18 @@ export class NoticeArchiveService {
     if (!beforeSnapshot) {
       return;
     }
+
+    if (this.normalizeStableId(beforeSnapshot.contentId as string | null)) {
+      return;
+    }
+
+    await this.fillMissingSnapshotArtifacts(noticeNum, {
+      sourceHtml: payload.html,
+      htmlSha256: payload.sha256,
+      httpMetadata: payload.httpMetadata,
+      screenshotBlob: payload.screenshotBlob ?? null,
+      screenshotFormat: payload.screenshotFormat ?? null,
+    });
 
     const latestProposalReason =
       await this.getLatestProposalReasonForNotice(noticeNum);
@@ -3129,12 +3168,10 @@ export class NoticeArchiveService {
     }
 
     try {
-      const timeline = await this.changeTrackingService.getNoticeChangeTimeline(
-        {
+      const timeline =
+        await this.changeTrackingService.getCompleteNoticeChangeTimeline(
           noticeNum,
-          limit: 1000,
-        },
-      );
+        );
 
       if (timeline.length === 0) {
         return baseSnapshot;
@@ -3427,7 +3464,12 @@ export class NoticeArchiveService {
    * any Ollama calls.
    */
   async getRecentNoticesForCache(limit: number): Promise<CachedNotice[]> {
-    return getRecentNoticesForCache(this.getMaintenanceDeps(), limit);
+    const notices = await getRecentNoticesForCache(
+      this.getMaintenanceDeps(),
+      limit,
+    );
+    await this.applyCurrentOverlayFromDiffchain(notices);
+    return notices;
   }
 
   async getLatestProposalReasonForNotice(

@@ -162,6 +162,26 @@ export class CrawlingSchedulerProposalRetry {
     const now = Date.now();
     let queueDirty = await this.normalizeQueueBillNos(queue);
 
+    const nsmEligibleNums =
+      await this.options.noticeArchiveService.getArchivedNullContentIdNums(
+        queue.map((item) => item.notice.num),
+      );
+    let palUpgradedRemoved = 0;
+    let eligibilityIndex = queue.length;
+    while (eligibilityIndex--) {
+      if (!nsmEligibleNums.has(queue[eligibilityIndex].notice.num)) {
+        queue.splice(eligibilityIndex, 1);
+        palUpgradedRemoved += 1;
+        queueDirty = true;
+      }
+    }
+
+    if (palUpgradedRemoved > 0) {
+      this.options.logger.log(
+        `proposalReason retry: pruned ${palUpgradedRemoved} PAL-upgraded bill(s) from queue`,
+      );
+    }
+
     const sourceDeletedNums =
       await this.options.noticeArchiveService.getSourceDeletedNoticeNumSet(
         queue.map((item) => item.notice.num),

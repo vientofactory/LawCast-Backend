@@ -24,65 +24,79 @@ describe('NoticeArchiveService', () => {
       .mockImplementation(async (entity) => entity),
   });
 
-  const createChangeTrackingServiceMock = () => ({
-    beginChangeNotificationCollection: jest.fn<(...args: any[]) => void>(),
-    endChangeNotificationCollection: jest
-      .fn<(...args: any[]) => Promise<void>>()
-      .mockResolvedValue(undefined),
-    flushQueuedChangeNotificationsNow: jest
-      .fn<(...args: any[]) => Promise<void>>()
-      .mockResolvedValue(undefined),
-    getNoticeChangeTimeline: jest
+  const createChangeTrackingServiceMock = () => {
+    const getNoticeChangeTimeline = jest
       .fn<(...args: any[]) => Promise<any[]>>()
-      .mockResolvedValue([]),
-    getLatestFieldValue: jest
-      .fn<(...args: any[]) => Promise<string | null>>()
-      .mockResolvedValue(null),
-    getLatestFieldValues: jest
-      .fn<(...args: any[]) => Promise<Map<number, string | null>>>()
-      .mockResolvedValue(new Map()),
-    getLatestFieldAfterValue: jest
-      .fn<(...args: any[]) => Promise<string | null>>()
-      .mockResolvedValue(null),
-    buildDiffEvent: jest.fn((input: any) => {
-      const diff = computeDiff(input.beforeSnapshot, input.afterSnapshot);
-      const lifecycleStatus =
-        typeof input.afterSnapshot?.lifecycleStatus === 'string'
-          ? input.afterSnapshot.lifecycleStatus.trim().toLowerCase()
-          : '';
-      const sourceDeletedAt = input.afterSnapshot?.sourceDeletedAt;
-      const hasSourceDeletedAt =
-        sourceDeletedAt !== null &&
-        sourceDeletedAt !== undefined &&
-        String(sourceDeletedAt).trim().length > 0;
-      const eventType =
-        input.beforeSnapshot === null
-          ? CHANGE_EVENT_TYPE.CREATED
-          : (input.preferredEventType ??
-            (lifecycleStatus === 'source_deleted' ||
-            lifecycleStatus === 'renumbered' ||
-            lifecycleStatus === 'invalidated' ||
-            hasSourceDeletedAt
-              ? CHANGE_EVENT_TYPE.INVALIDATED
-              : CHANGE_EVENT_TYPE.UPDATED));
+      .mockResolvedValue([]);
 
-      return {
-        shouldAppend: input.beforeSnapshot === null || diff.changed,
-        eventType,
-        diff,
-        eventHash: 'test-event-hash',
-        detectedAt: new Date('2026-01-01T00:00:00.000Z'),
-        hashAlgo: 'sha256',
-        canonVersion: 1,
-      };
-    }),
-    appendChangeEventWithDetails: jest
-      .fn<(...args: any[]) => Promise<any>>()
-      .mockResolvedValue({ id: 1 }),
-    dispatchChangeNotification: jest
-      .fn<(...args: any[]) => Promise<void>>()
-      .mockResolvedValue(undefined),
-  });
+    return {
+      beginChangeNotificationCollection: jest.fn<(...args: any[]) => void>(),
+      endChangeNotificationCollection: jest
+        .fn<(...args: any[]) => Promise<void>>()
+        .mockResolvedValue(undefined),
+      flushQueuedChangeNotificationsNow: jest
+        .fn<(...args: any[]) => Promise<void>>()
+        .mockResolvedValue(undefined),
+      getNoticeChangeTimeline,
+      getCompleteNoticeChangeTimeline: jest
+        .fn<(...args: any[]) => Promise<any[]>>()
+        .mockImplementation(async (noticeNum: number) =>
+          getNoticeChangeTimeline({ noticeNum, limit: 1000 }),
+        ),
+      getLatestFieldValue: jest
+        .fn<(...args: any[]) => Promise<string | null>>()
+        .mockResolvedValue(null),
+      getLatestFieldValues: jest
+        .fn<(...args: any[]) => Promise<Map<number, string | null>>>()
+        .mockResolvedValue(new Map()),
+      getLatestFieldValuesForFields: jest
+        .fn<
+          (...args: any[]) => Promise<Map<number, Map<string, string | null>>>
+        >()
+        .mockResolvedValue(new Map()),
+      getLatestFieldAfterValue: jest
+        .fn<(...args: any[]) => Promise<string | null>>()
+        .mockResolvedValue(null),
+      buildDiffEvent: jest.fn((input: any) => {
+        const diff = computeDiff(input.beforeSnapshot, input.afterSnapshot);
+        const lifecycleStatus =
+          typeof input.afterSnapshot?.lifecycleStatus === 'string'
+            ? input.afterSnapshot.lifecycleStatus.trim().toLowerCase()
+            : '';
+        const sourceDeletedAt = input.afterSnapshot?.sourceDeletedAt;
+        const hasSourceDeletedAt =
+          sourceDeletedAt !== null &&
+          sourceDeletedAt !== undefined &&
+          String(sourceDeletedAt).trim().length > 0;
+        const eventType =
+          input.beforeSnapshot === null
+            ? CHANGE_EVENT_TYPE.CREATED
+            : (input.preferredEventType ??
+              (lifecycleStatus === 'source_deleted' ||
+              lifecycleStatus === 'renumbered' ||
+              lifecycleStatus === 'invalidated' ||
+              hasSourceDeletedAt
+                ? CHANGE_EVENT_TYPE.INVALIDATED
+                : CHANGE_EVENT_TYPE.UPDATED));
+
+        return {
+          shouldAppend: input.beforeSnapshot === null || diff.changed,
+          eventType,
+          diff,
+          eventHash: 'test-event-hash',
+          detectedAt: new Date('2026-01-01T00:00:00.000Z'),
+          hashAlgo: 'sha256',
+          canonVersion: 1,
+        };
+      }),
+      appendChangeEventWithDetails: jest
+        .fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValue({ id: 1 }),
+      dispatchChangeNotification: jest
+        .fn<(...args: any[]) => Promise<void>>()
+        .mockResolvedValue(undefined),
+    };
+  };
 
   const createSummaryStateRepositoryMock = () => ({
     find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([]),
@@ -793,6 +807,56 @@ describe('NoticeArchiveService', () => {
       ).not.toHaveBeenCalled();
       expect(
         changeTrackingService.dispatchChangeNotification,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('skips NSM detail and artifact backfill after the chain head is PAL-enriched', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 2,
+          details: [
+            {
+              fieldPath: 'contentId',
+              afterValue: 'PRC_2220590',
+            },
+            {
+              fieldPath: 'proposalReason',
+              afterValue: 'PAL 제안이유',
+            },
+          ],
+        },
+      ]);
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2220590,
+          contentId: null,
+          proposalReason: 'NSM 제안이유',
+          sourceHtml: null,
+          sourceHtmlSha256: null,
+        }),
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.updateNsmHtmlAndDetail(2220590, {
+        html: '<html>NSM</html>',
+        sha256: 'nsm-sha',
+        proposalReason: 'NSM 제안이유',
+        committee: '산업통상부',
+        httpMetadata: null,
+      });
+
+      expect(repositoryMock.update).not.toHaveBeenCalled();
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
       ).not.toHaveBeenCalled();
     });
 
@@ -1717,6 +1781,146 @@ describe('NoticeArchiveService', () => {
     });
   });
 
+  describe('current diffchain read model', () => {
+    it('overlays PAL chain-head fields onto archive list rows', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+          buildRow({
+            noticeNum: 2220590,
+            contentId: null,
+            committee: '산업통상부',
+            proposalReason: 'NSM 제안이유',
+          }),
+        ]),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldValuesForFields.mockResolvedValue(
+        new Map([
+          [
+            2220590,
+            new Map([
+              ['contentId', 'PRC_2220590'],
+              ['committee', '산업통상자원중소벤처기업위원회'],
+              ['proposalReason', 'PAL 제안이유'],
+            ]),
+          ],
+        ]),
+      );
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.getArchiveNoticesByNoticeNums([2220590]);
+
+      expect(result[0]).toMatchObject({
+        num: 2220590,
+        contentId: 'PRC_2220590',
+        committee: '산업통상자원중소벤처기업위원회',
+      });
+    });
+
+    it('builds archive search predicates from latest chain values', () => {
+      const service = new NoticeArchiveService(
+        createRepositoryMock() as any,
+        undefined as any,
+        createChangeTrackingServiceMock() as any,
+      );
+      const qb = { andWhere: jest.fn() };
+
+      (service as any).applyArchiveSearchFilters(qb, {
+        search: 'PAL 제안이유',
+        fullText: true,
+      });
+
+      const brackets = qb.andWhere.mock.calls[0][0] as {
+        whereFactory: (query: any) => void;
+      };
+      const nested = {
+        where: jest.fn().mockReturnThis(),
+        orWhere: jest.fn().mockReturnThis(),
+      };
+      brackets.whereFactory(nested);
+
+      const predicates = [
+        ...nested.where.mock.calls,
+        ...nested.orWhere.mock.calls,
+      ].map((call) => String(call[0]));
+      expect(predicates).toHaveLength(3);
+      expect(
+        predicates.every((sql) => sql.includes('notice_change_details')),
+      ).toBe(true);
+      expect(predicates[2]).toContain("detail.field_path = 'proposalReason'");
+    });
+
+    it('overlays PAL chain-head fields when rebuilding the restart cache', async () => {
+      const qb = {
+        innerJoin: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn<(...args: any[]) => Promise<any[]>>()
+          .mockResolvedValue([
+            {
+              noticeNum: 2220590,
+              subject: '반도체 법안',
+              proposerCategory: '의원',
+              committee: '산업통상부',
+              assemblyLink: 'https://opinion.lawmaking.go.kr/2220590',
+              contentId: null,
+              proposalReason: 'NSM 제안이유',
+              attachmentPdfFile: '',
+              attachmentHwpFile: '',
+            },
+          ]),
+      };
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        createQueryBuilder: jest.fn().mockReturnValue(qb),
+      };
+      const summaryStateRepository = createSummaryStateRepositoryMock();
+      summaryStateRepository.find.mockResolvedValue([
+        {
+          noticeNum: 2220590,
+          isDone: false,
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested',
+        },
+      ]);
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldValuesForFields.mockResolvedValue(
+        new Map([
+          [
+            2220590,
+            new Map([
+              ['contentId', 'PRC_2220590'],
+              ['committee', '산업통상자원중소벤처기업위원회'],
+              ['proposalReason', 'PAL 제안이유'],
+            ]),
+          ],
+        ]),
+      );
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        summaryStateRepository as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.getRecentNoticesForCache(100);
+
+      expect(result[0]).toMatchObject({
+        num: 2220590,
+        contentId: 'PRC_2220590',
+        committee: '산업통상자원중소벤처기업위원회',
+        proposalReason: 'PAL 제안이유',
+      });
+    });
+  });
+
   describe('invalidated isDone promotion', () => {
     it('promotes source_deleted invalidation to isDone=true in summary state', async () => {
       const repositoryMock = createRepositoryMock();
@@ -2378,6 +2582,39 @@ describe('NoticeArchiveService', () => {
       expect(result.pal).toEqual([
         { num: 3, assemblyLink: 'https://example.com/3' },
       ]);
+    });
+
+    it('excludes immutable NSM rows whose chain head is already PAL-enriched', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([
+            { noticeNum: 2220590 },
+            { noticeNum: 2220591 },
+          ]),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldValues.mockResolvedValue(
+        new Map([
+          [2220590, 'PRC_2220590'],
+          [2220591, null],
+        ]),
+      );
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.getNoticesWithMissingSnapshotArtifacts(10);
+
+      expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledWith(
+        [2220590, 2220591],
+        'contentId',
+      );
+      expect(result).toEqual({ pal: [], nsm: [{ num: 2220591 }] });
     });
 
     it('short-circuits a non-positive limit without touching the repository', async () => {

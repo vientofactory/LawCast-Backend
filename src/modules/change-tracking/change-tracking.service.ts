@@ -1027,10 +1027,23 @@ export class ChangeTrackingService {
   ): Promise<ChangeTimelineItem[]> {
     const normalizedLimit = Math.min(Math.max(query.limit ?? 20, 1), 100);
 
+    return this.loadNoticeChangeTimeline(query.noticeNum, normalizedLimit);
+  }
+
+  async getCompleteNoticeChangeTimeline(
+    noticeNum: number,
+  ): Promise<ChangeTimelineItem[]> {
+    return this.loadNoticeChangeTimeline(noticeNum);
+  }
+
+  private async loadNoticeChangeTimeline(
+    noticeNum: number,
+    limit?: number,
+  ): Promise<ChangeTimelineItem[]> {
     const events = await this.changeEventRepository.find({
-      where: { noticeNum: query.noticeNum },
+      where: { noticeNum },
       order: { detectedAt: 'DESC', eventHeight: 'DESC' },
-      take: normalizedLimit,
+      ...(limit === undefined ? {} : { take: limit }),
     });
 
     if (events.length === 0) {
@@ -1189,6 +1202,66 @@ export class ChangeTrackingService {
       }
       return result;
     }
+  }
+
+  async getLatestFieldValuesForFields(
+    noticeNums: number[],
+    fieldPaths: readonly string[],
+  ): Promise<Map<number, Map<string, string | null>>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+    const uniqueFields = Array.from(new Set(fieldPaths));
+    const result = new Map<number, Map<string, string | null>>();
+
+    if (uniqueNums.length === 0 || uniqueFields.length === 0) {
+      return result;
+    }
+
+    const fieldPlaceholders = uniqueFields.map(() => '?').join(', ');
+    const noticePlaceholders = uniqueNums.map(() => '?').join(', ');
+    const rows = await this.changeDetailRepository.manager.query(
+      `
+        SELECT ranked.noticeNum AS noticeNum,
+               ranked.fieldPath AS fieldPath,
+               ranked.afterValue AS afterValue
+        FROM (
+          SELECT event.notice_num AS noticeNum,
+                 detail.field_path AS fieldPath,
+                 detail.after_value AS afterValue,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY event.notice_num, detail.field_path
+                   ORDER BY event.event_height DESC, detail.id DESC
+                 ) AS rn
+          FROM notice_change_details detail
+          INNER JOIN notice_change_events event
+            ON event.id = detail.event_id
+          WHERE detail.field_path IN (${fieldPlaceholders})
+            AND event.notice_num IN (${noticePlaceholders})
+        ) ranked
+        WHERE ranked.rn = 1
+      `,
+      [...uniqueFields, ...uniqueNums],
+    );
+
+    for (const row of rows as Array<{
+      noticeNum: unknown;
+      fieldPath: unknown;
+      afterValue: unknown;
+    }>) {
+      const noticeNum = Number(row.noticeNum);
+      const fieldPath = String(row.fieldPath);
+      if (!Number.isFinite(noticeNum) || !uniqueFields.includes(fieldPath)) {
+        continue;
+      }
+
+      const fields = result.get(noticeNum) ?? new Map<string, string | null>();
+      fields.set(
+        fieldPath,
+        typeof row.afterValue === 'string' ? row.afterValue : null,
+      );
+      result.set(noticeNum, fields);
+    }
+
+    return result;
   }
 
   async getRecentChanges(

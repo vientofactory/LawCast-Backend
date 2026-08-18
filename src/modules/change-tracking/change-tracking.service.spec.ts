@@ -456,6 +456,66 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     expect(latestFieldValue).toBeNull();
   });
 
+  it('keeps public timelines capped while complete internal timelines omit take', async () => {
+    const eventFind = jest
+      .fn<(...args: any[]) => Promise<any[]>>()
+      .mockResolvedValue([]);
+    const service = new ChangeTrackingService(
+      { find: eventFind } as any,
+      {} as any,
+      undefined as any,
+    );
+
+    await service.getNoticeChangeTimeline({ noticeNum: 3002, limit: 1000 });
+    await service.getCompleteNoticeChangeTimeline(3002);
+
+    expect(eventFind).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: { noticeNum: 3002 },
+        take: 100,
+      }),
+    );
+    expect(eventFind.mock.calls[1][0]).not.toHaveProperty('take');
+  });
+
+  it('returns latest values for multiple fields while preserving explicit nulls', async () => {
+    const query = jest
+      .fn<(...args: any[]) => Promise<any[]>>()
+      .mockResolvedValue([
+        {
+          noticeNum: 2220590,
+          fieldPath: 'contentId',
+          afterValue: 'PRC_2220590',
+        },
+        {
+          noticeNum: 2220590,
+          fieldPath: 'proposalReason',
+          afterValue: null,
+        },
+      ]);
+    const service = new ChangeTrackingService(
+      {} as any,
+      { manager: { query } } as any,
+      undefined as any,
+    );
+
+    const result = await service.getLatestFieldValuesForFields(
+      [2220590],
+      ['contentId', 'proposalReason'],
+    );
+
+    expect(result.get(2220590)?.get('contentId')).toBe('PRC_2220590');
+    expect(result.get(2220590)?.has('proposalReason')).toBe(true);
+    expect(result.get(2220590)?.get('proposalReason')).toBeNull();
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'PARTITION BY event.notice_num, detail.field_path',
+      ),
+      ['contentId', 'proposalReason', 2220590],
+    );
+  });
+
   it('appends concurrent events with retries and preserves monotonic heights', async () => {
     let currentHeight = 3;
     let idSequence = 100;
