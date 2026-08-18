@@ -1432,4 +1432,136 @@ describe('ChangeTrackingService (diffchain batching)', () => {
 
     expect(report.failureCount).toBe(0);
   });
+
+  it('replays v2 chains whose empty proposalReason rows recorded no detail', async () => {
+    // proposalReason is a NOT NULL DEFAULT '' column, so write-time snapshots
+    // carried '' (never null) for empty reasons. Canon v2 compares proposalReason
+    // semantically ('' ≡ null), so no detail is recorded and the audit must seed
+    // '' instead of null to reproduce the stored hash. Regression for prod
+    // failures on archive:upsert + archive:updateNsmHtmlAndDetail v2 chains.
+    const bootstrapService = new ChangeTrackingService(
+      {} as any,
+      {} as any,
+      undefined as any,
+    );
+    const createdDetectedAt = new Date('2026-08-18T02:49:38.181Z');
+    const updatedDetectedAt = new Date('2026-08-18T02:49:59.158Z');
+    const createdSnapshot = {
+      num: 2220613,
+      contentId: null,
+      subject: '형사소송법 일부개정법률안',
+      proposerCategory: '의원',
+      committee: '법무부',
+      proposalReason: '',
+      billNumber: '2220613',
+      proposer: '정진욱의원 등 10인',
+      proposalDate: '2026-08-18',
+      contentCommittee: '법무부',
+      referralDate: null,
+      noticePeriod: null,
+      proposalSession: '제438회',
+      isDone: false,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
+    };
+    const updatedSnapshot = {
+      ...createdSnapshot,
+      proposalDate: '2026. 8. 18.',
+      proposalSession: '제438회 국회(임시회)',
+    };
+    const createdBuilt = bootstrapService.buildDiffEvent({
+      noticeNum: 2220613,
+      beforeSnapshot: null,
+      afterSnapshot: createdSnapshot,
+      detectedAt: createdDetectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+      canonVersion: 2,
+    });
+    const updatedBuilt = bootstrapService.buildDiffEvent({
+      noticeNum: 2220613,
+      beforeSnapshot: createdSnapshot,
+      afterSnapshot: updatedSnapshot,
+      detectedAt: updatedDetectedAt,
+      source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+      canonVersion: 2,
+    });
+
+    // The empty proposalReason must not appear in details (v2 semantic compare).
+    expect(
+      createdBuilt.diff.details.some(
+        (detail) => detail.fieldPath === 'proposalReason',
+      ),
+    ).toBe(false);
+    expect(
+      updatedBuilt.diff.details.some(
+        (detail) => detail.fieldPath === 'proposalReason',
+      ),
+    ).toBe(false);
+
+    const changeEventRepository = {
+      createQueryBuilder: jest.fn(() => ({
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn<(...args: any[]) => Promise<Array<{ noticeNum: number }>>>()
+          .mockResolvedValue([{ noticeNum: 2220613 }]),
+      })),
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        {
+          id: 50382,
+          noticeNum: 2220613,
+          detectedAt: createdDetectedAt,
+          eventType: CHANGE_EVENT_TYPE.CREATED,
+          source: NoticeChangeSource.ARCHIVE_UPSERT,
+          eventHeight: 1,
+          prevEventHash: null,
+          eventHash: createdBuilt.eventHash,
+          changedFieldCount: createdBuilt.diff.changedFieldCount,
+          diffSummaryJson: createdBuilt.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 2,
+        },
+        {
+          id: 50385,
+          noticeNum: 2220613,
+          detectedAt: updatedDetectedAt,
+          eventType: CHANGE_EVENT_TYPE.UPDATED,
+          source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+          eventHeight: 2,
+          prevEventHash: createdBuilt.eventHash,
+          eventHash: updatedBuilt.eventHash,
+          changedFieldCount: updatedBuilt.diff.changedFieldCount,
+          diffSummaryJson: updatedBuilt.diff.diffSummaryJson,
+          hashAlgo: 'sha256',
+          canonVersion: 2,
+        },
+      ]),
+    } as any;
+    const changeDetailRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        ...createdBuilt.diff.details.map((detail, index) => ({
+          id: 503820 + index,
+          eventId: 50382,
+          ...detail,
+        })),
+        ...updatedBuilt.diff.details.map((detail, index) => ({
+          id: 503850 + index,
+          eventId: 50385,
+          ...detail,
+        })),
+      ]),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      changeDetailRepository,
+      undefined as any,
+      undefined as any,
+    );
+
+    const report = await service.runScheduledChainAudit('daily');
+
+    expect(report.failureCount).toBe(0);
+    expect(report.eventCount).toBe(2);
+  });
 });

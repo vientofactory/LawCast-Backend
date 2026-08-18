@@ -259,7 +259,11 @@ async function verifyNoticeChain(
       canonVersion,
       preVersionedArchiveUpsert: usePreVersionedArchiveUpsert,
     });
-    currentState = ensureTrackedStateFields(currentState, trackedFields);
+    currentState = ensureTrackedStateFields(
+      currentState,
+      trackedFields,
+      canonVersion,
+    );
     const beforeState = index === 0 ? null : { ...currentState };
     const nextState = applyDetailsToTrackedState(currentState, eventDetails);
     const rebuilt = deps.buildDiffEvent({
@@ -399,12 +403,20 @@ async function verifyNoticeChain(
 function ensureTrackedStateFields(
   state: Record<string, unknown>,
   trackedFields: readonly string[],
+  canonVersion: number,
 ): Record<string, unknown> {
   const nextState = { ...state };
   for (const fieldPath of trackedFields) {
-    if (!Object.prototype.hasOwnProperty.call(nextState, fieldPath)) {
-      nextState[fieldPath] = null;
+    if (Object.prototype.hasOwnProperty.call(nextState, fieldPath)) {
+      continue;
     }
+
+    // proposalReason is a NOT NULL DEFAULT '' column, so write-time snapshots
+    // always carried '' (never null) for empty reasons. Since canon v2 compares
+    // proposalReason semantically ('' ≡ null), empty rows record no detail and
+    // the audit must seed '' instead of null to reproduce the stored hash.
+    nextState[fieldPath] =
+      canonVersion >= 2 && fieldPath === 'proposalReason' ? '' : null;
   }
   return nextState;
 }
