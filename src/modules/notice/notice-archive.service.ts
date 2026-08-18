@@ -1466,56 +1466,48 @@ export class NoticeArchiveService {
       return;
     }
 
-    const currentSubject = this.buildCurrentFieldSql(
-      'subject',
-      'archive.subject',
-    );
-    const currentCommittee = this.buildCurrentFieldSql(
-      'committee',
-      'archive.committee',
-    );
-    const currentProposalReason = this.buildCurrentFieldSql(
-      'proposalReason',
-      'archive.proposalReason',
-    );
+    const ftsQuery = params.fullText ? this.buildFtsMatchQuery(search) : null;
 
     qb.andWhere(
       new Brackets((query) => {
         query
-          .where(`${currentSubject} LIKE :search`, {
+          .where('archive.subject LIKE :search', {
             search: `%${search}%`,
           })
-          .orWhere(`${currentCommittee} LIKE :search`, {
+          .orWhere('archive.committee LIKE :search', {
             search: `%${search}%`,
           });
 
         if (params.fullText) {
-          query.orWhere(`${currentProposalReason} LIKE :search`, {
-            search: `%${search}%`,
-          });
+          if (ftsQuery) {
+            query.orWhere(
+              'archive.rowid IN (SELECT rowid FROM notice_archives_fts WHERE notice_archives_fts MATCH :ftsQuery)',
+              { ftsQuery },
+            );
+          } else {
+            query.orWhere('archive.proposalReason LIKE :search', {
+              search: `%${search}%`,
+            });
+          }
         }
       }),
     );
   }
 
-  private buildCurrentFieldSql(
-    fieldPath: string,
-    fallbackExpression: string,
-  ): string {
-    const latestValueQuery = `
-      SELECT detail.after_value
-      FROM notice_change_details detail
-      INNER JOIN notice_change_events event ON event.id = detail.event_id
-      WHERE event.notice_num = archive.noticeNum
-        AND detail.field_path = '${fieldPath}'
-      ORDER BY event.event_height DESC, detail.id DESC
-      LIMIT 1
-    `;
+  private buildFtsMatchQuery(search: string): string | null {
+    const terms = search
+      .trim()
+      .split(/\s+/)
+      .map((term) =>
+        term
+          .replace(/["'`]/g, ' ')
+          .replace(/[^\p{L}\p{N}_-]/gu, ' ')
+          .trim(),
+      )
+      .filter((term) => term.length > 0)
+      .map((term) => `"${term}"*`);
 
-    return `CASE
-      WHEN EXISTS (${latestValueQuery}) THEN (${latestValueQuery})
-      ELSE ${fallbackExpression}
-    END`;
+    return terms.length > 0 ? terms.join(' AND ') : null;
   }
 
   private async queryArchiveNoticeNumsByIsDoneFilter(params: {

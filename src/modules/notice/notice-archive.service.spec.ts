@@ -1972,7 +1972,7 @@ describe('NoticeArchiveService', () => {
       });
     });
 
-    it('builds archive search predicates from latest chain values', () => {
+    it('uses FTS candidates for full-text archive search', () => {
       const service = new NoticeArchiveService(
         createRepositoryMock() as any,
         undefined as any,
@@ -1999,10 +1999,12 @@ describe('NoticeArchiveService', () => {
         ...nested.orWhere.mock.calls,
       ].map((call) => String(call[0]));
       expect(predicates).toHaveLength(3);
-      expect(
-        predicates.every((sql) => sql.includes('notice_change_details')),
-      ).toBe(true);
-      expect(predicates[2]).toContain("detail.field_path = 'proposalReason'");
+      expect(predicates[0]).toBe('archive.subject LIKE :search');
+      expect(predicates[1]).toBe('archive.committee LIKE :search');
+      expect(predicates[2]).toContain('notice_archives_fts MATCH :ftsQuery');
+      expect(nested.orWhere.mock.calls[1][1]).toEqual({
+        ftsQuery: '"PAL"* AND "제안이유"*',
+      });
     });
 
     it('overlays PAL chain-head fields when rebuilding the restart cache', async () => {

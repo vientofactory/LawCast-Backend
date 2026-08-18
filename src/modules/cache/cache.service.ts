@@ -17,6 +17,7 @@ export class CacheService implements OnModuleDestroy {
   private readonly MAX_CACHE_SIZE = APP_CONSTANTS.CACHE.MAX_SIZE;
   private readonly CACHE_KEYS = APP_CONSTANTS.CACHE.KEYS;
   private readonly HEALTH_CHECK_TTL_SECONDS = 30;
+  private recentNoticesSnapshot: CachedNotice[] | null = null;
 
   constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache) {}
 
@@ -41,17 +42,22 @@ export class CacheService implements OnModuleDestroy {
     limit: number = APP_CONSTANTS.CACHE.DEFAULT_LIMIT,
   ): Promise<CachedNotice[]> {
     try {
-      const cachedNotices = await this.cacheManager.get<CachedNotice[]>(
-        this.CACHE_KEYS.RECENT_NOTICES,
-      );
+      if (!this.recentNoticesSnapshot) {
+        const cachedNotices = await this.cacheManager.get<CachedNotice[]>(
+          this.CACHE_KEYS.RECENT_NOTICES,
+        );
+        this.recentNoticesSnapshot = Array.isArray(cachedNotices)
+          ? cachedNotices.map((notice) => this.sanitizeNotice(notice))
+          : [];
+      }
 
-      if (!cachedNotices || cachedNotices.length === 0) {
+      if (this.recentNoticesSnapshot.length === 0) {
         LoggerUtils.logDev(CacheService.name, 'No cached notices found');
         return [];
       }
 
       const actualLimit = Math.min(limit, this.MAX_CACHE_SIZE);
-      return cachedNotices
+      return this.recentNoticesSnapshot
         .slice(0, actualLimit)
         .map((notice) => this.sanitizeNotice(notice));
     } catch (error) {
@@ -71,10 +77,11 @@ export class CacheService implements OnModuleDestroy {
         .map((notice) => this.sanitizeNotice(notice))
         .sort((a, b) => b.num - a.num);
 
-      const existingNotices =
-        (await this.cacheManager.get<CachedNotice[]>(
-          this.CACHE_KEYS.RECENT_NOTICES,
-        )) || [];
+      const existingNotices = this.recentNoticesSnapshot
+        ? this.recentNoticesSnapshot
+        : ((await this.cacheManager.get<CachedNotice[]>(
+            this.CACHE_KEYS.RECENT_NOTICES,
+          )) ?? []);
 
       const normalizedExistingNotices = existingNotices.map((notice) =>
         this.sanitizeNotice(notice),
@@ -120,6 +127,7 @@ export class CacheService implements OnModuleDestroy {
         this.cacheManager.set(this.CACHE_KEYS.RECENT_NOTICES, uniqueNotices, 0),
         this.cacheManager.set(this.CACHE_KEYS.LAST_UPDATED, new Date(), 0),
       ]);
+      this.recentNoticesSnapshot = uniqueNotices;
 
       LoggerUtils.debugDev(
         CacheService.name,
@@ -226,6 +234,7 @@ export class CacheService implements OnModuleDestroy {
         this.cacheManager.del(this.CACHE_KEYS.LAST_UPDATED),
         this.cacheManager.del(this.CACHE_KEYS.QUICK_KEYWORDS),
       ]);
+      this.recentNoticesSnapshot = null;
       LoggerUtils.logDev(CacheService.name, 'Redis cache cleared');
     } catch (error) {
       this.logger.error('Error clearing Redis cache:', error);
