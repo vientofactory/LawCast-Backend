@@ -31,6 +31,10 @@ const SCREENSHOT_CONFIG = {
   quality: APP_CONSTANTS.SCREENSHOT.QUALITY,
 } as const;
 
+type NsmCrawlConfig = PalCrawlConfig & {
+  hydrateTruncatedTitles?: boolean;
+};
+
 /** JPEG quality levels tried in order when the full-page capture is too large. */
 const SCREENSHOT_FALLBACK_QUALITIES =
   APP_CONSTANTS.SCREENSHOT.FALLBACK_QUALITIES;
@@ -67,7 +71,7 @@ export class CrawlingCoreService {
   private readonly logger = LoggerUtils.getContextLogger(
     CrawlingCoreService.name,
   );
-  private readonly crawlConfig: PalCrawlConfig;
+  private readonly crawlConfig: NsmCrawlConfig;
 
   constructor(
     private readonly browserLeaseManager: BrowserLeaseManagerService,
@@ -77,6 +81,8 @@ export class CrawlingCoreService {
       timeout: APP_CONSTANTS.CRAWLING.TIMEOUT,
       retryCount: APP_CONSTANTS.CRAWLING.RETRY_COUNT,
       customHeaders: APP_CONSTANTS.CRAWLING.HEADERS,
+      hydrateTruncatedTitles:
+        APP_CONSTANTS.CRAWLING.NSM_HYDRATE_TRUNCATED_TITLES,
     };
   }
 
@@ -90,6 +96,7 @@ export class CrawlingCoreService {
       timeout: this.crawlConfig.timeout,
       retryCount: this.crawlConfig.retryCount,
       customHeaders: this.crawlConfig.customHeaders,
+      hydrateTruncatedTitles: this.crawlConfig.hydrateTruncatedTitles,
     });
   }
 

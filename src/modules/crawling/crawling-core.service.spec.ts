@@ -122,6 +122,20 @@ describe('CrawlingCoreService', () => {
     expect(service).toBeDefined();
   });
 
+  it('passes the configured title hydration option to NSM clients', async () => {
+    (mockNsmLmSts as any).getAllPages = jest
+      .fn()
+      .mockReturnValue((async function* () {})());
+
+    for await (const _page of service.getAllNsmPages()) {
+      // Empty mocked stream.
+    }
+
+    expect(NsmLmSts).toHaveBeenCalledWith(
+      expect.objectContaining({ hydrateTruncatedTitles: false }),
+    );
+  });
+
   describe('crawlData', () => {
     it('should return crawled data successfully', async () => {
       mockPalCrawl.get.mockResolvedValue(mockTableData);

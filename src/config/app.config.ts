@@ -143,6 +143,11 @@ export const APP_CONSTANTS = {
     USER_AGENT: 'LawCast/1.0 (Legislative Notice Crawler)',
     TIMEOUT: 15000, // 15 seconds timeout
     RETRY_COUNT: 3, // 3 retries
+    /** Hydrates truncated NSM list titles with detail-page requests. Disabled to avoid list-crawl N+1 traffic. */
+    NSM_HYDRATE_TRUNCATED_TITLES: parseBooleanWithDefault(
+      process.env.CRAWLING_NSM_HYDRATE_TRUNCATED_TITLES,
+      false,
+    ),
     SUMMARY_CONCURRENCY: 3,
     /** Global max concurrent Chromium sessions across crawling/screenshot paths. */
     BROWSER_MAX_CONCURRENCY: parseIntWithDefault(
