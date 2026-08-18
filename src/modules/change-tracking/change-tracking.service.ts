@@ -1216,49 +1216,59 @@ export class ChangeTrackingService {
       return result;
     }
 
+    const batchSize = 200;
     const fieldPlaceholders = uniqueFields.map(() => '?').join(', ');
-    const noticePlaceholders = uniqueNums.map(() => '?').join(', ');
-    const rows = await this.changeDetailRepository.manager.query(
-      `
-        SELECT ranked.noticeNum AS noticeNum,
-               ranked.fieldPath AS fieldPath,
-               ranked.afterValue AS afterValue
-        FROM (
-          SELECT event.notice_num AS noticeNum,
-                 detail.field_path AS fieldPath,
-                 detail.after_value AS afterValue,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY event.notice_num, detail.field_path
-                   ORDER BY event.event_height DESC, detail.id DESC
-                 ) AS rn
-          FROM notice_change_details detail
-          INNER JOIN notice_change_events event
-            ON event.id = detail.event_id
-          WHERE detail.field_path IN (${fieldPlaceholders})
-            AND event.notice_num IN (${noticePlaceholders})
-        ) ranked
-        WHERE ranked.rn = 1
-      `,
-      [...uniqueFields, ...uniqueNums],
-    );
 
-    for (const row of rows as Array<{
-      noticeNum: unknown;
-      fieldPath: unknown;
-      afterValue: unknown;
-    }>) {
-      const noticeNum = Number(row.noticeNum);
-      const fieldPath = String(row.fieldPath);
-      if (!Number.isFinite(noticeNum) || !uniqueFields.includes(fieldPath)) {
-        continue;
-      }
-
-      const fields = result.get(noticeNum) ?? new Map<string, string | null>();
-      fields.set(
-        fieldPath,
-        typeof row.afterValue === 'string' ? row.afterValue : null,
+    for (let offset = 0; offset < uniqueNums.length; offset += batchSize) {
+      const noticeBatch = uniqueNums.slice(offset, offset + batchSize);
+      const noticePlaceholders = noticeBatch.map(() => '?').join(', ');
+      const rows = await this.changeDetailRepository.manager.query(
+        `
+          WITH relevant_events AS MATERIALIZED (
+            SELECT id, notice_num, event_height
+            FROM notice_change_events
+            WHERE notice_num IN (${noticePlaceholders})
+          )
+          SELECT ranked.noticeNum AS noticeNum,
+                 ranked.fieldPath AS fieldPath,
+                 ranked.afterValue AS afterValue
+          FROM (
+            SELECT event.notice_num AS noticeNum,
+                   detail.field_path AS fieldPath,
+                   detail.after_value AS afterValue,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY event.notice_num, detail.field_path
+                     ORDER BY event.event_height DESC, detail.id DESC
+                   ) AS rn
+            FROM relevant_events event
+            INNER JOIN notice_change_details detail
+              ON detail.event_id = event.id
+            WHERE detail.field_path IN (${fieldPlaceholders})
+          ) ranked
+          WHERE ranked.rn = 1
+        `,
+        [...noticeBatch, ...uniqueFields],
       );
-      result.set(noticeNum, fields);
+
+      for (const row of rows as Array<{
+        noticeNum: unknown;
+        fieldPath: unknown;
+        afterValue: unknown;
+      }>) {
+        const noticeNum = Number(row.noticeNum);
+        const fieldPath = String(row.fieldPath);
+        if (!Number.isFinite(noticeNum) || !uniqueFields.includes(fieldPath)) {
+          continue;
+        }
+
+        const fields =
+          result.get(noticeNum) ?? new Map<string, string | null>();
+        fields.set(
+          fieldPath,
+          typeof row.afterValue === 'string' ? row.afterValue : null,
+        );
+        result.set(noticeNum, fields);
+      }
     }
 
     return result;

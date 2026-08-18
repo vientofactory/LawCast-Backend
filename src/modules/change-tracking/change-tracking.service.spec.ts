@@ -6,6 +6,7 @@ import {
   beforeEach,
   afterEach,
 } from '@jest/globals';
+import { DataSource } from 'typeorm';
 import { ChangeTrackingService } from './change-tracking.service';
 import {
   CHANGE_EVENT_TYPE,
@@ -509,11 +510,125 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     expect(result.get(2220590)?.has('proposalReason')).toBe(true);
     expect(result.get(2220590)?.get('proposalReason')).toBeNull();
     expect(query).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'PARTITION BY event.notice_num, detail.field_path',
-      ),
-      ['contentId', 'proposalReason', 2220590],
+      expect.stringContaining('WITH relevant_events AS MATERIALIZED'),
+      [2220590, 'contentId', 'proposalReason'],
     );
+  });
+
+  it('batches multi-field latest value lookups before joining change details', async () => {
+    const query = jest
+      .fn<(...args: any[]) => Promise<any[]>>()
+      .mockImplementation(async (_sql: string, params: unknown[]) => [
+        {
+          noticeNum: params[0],
+          fieldPath: 'contentId',
+          afterValue: `PRC_${String(params[0])}`,
+        },
+      ]);
+    const service = new ChangeTrackingService(
+      {} as any,
+      { manager: { query } } as any,
+      undefined as any,
+    );
+    const noticeNums = Array.from({ length: 401 }, (_, index) => index + 1);
+
+    const result = await service.getLatestFieldValuesForFields(noticeNums, [
+      'contentId',
+    ]);
+
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(query.mock.calls.map((call) => call[1].length)).toEqual([
+      201, 201, 2,
+    ]);
+    expect(result.get(1)?.get('contentId')).toBe('PRC_1');
+    expect(result.get(201)?.get('contentId')).toBe('PRC_201');
+    expect(result.get(401)?.get('contentId')).toBe('PRC_401');
+  });
+
+  it('executes batched latest-field lookup with SQLite semantics', async () => {
+    const dataSource = new DataSource({
+      type: 'sqlite',
+      database: ':memory:',
+    });
+    await dataSource.initialize();
+
+    try {
+      await dataSource.query(`
+        CREATE TABLE notice_change_events (
+          id INTEGER PRIMARY KEY,
+          notice_num INTEGER NOT NULL,
+          event_height INTEGER NOT NULL
+        )
+      `);
+      await dataSource.query(`
+        CREATE TABLE notice_change_details (
+          id INTEGER PRIMARY KEY,
+          event_id INTEGER NOT NULL,
+          field_path TEXT NOT NULL,
+          after_value TEXT NULL
+        )
+      `);
+      await dataSource.query(`
+        CREATE UNIQUE INDEX idx_notice_change_events_notice_num_event_height_unique
+        ON notice_change_events (notice_num, event_height)
+      `);
+      await dataSource.query(`
+        CREATE INDEX idx_notice_change_details_event_id_field_path_id
+        ON notice_change_details (event_id, field_path, id DESC)
+      `);
+      await dataSource.query(
+        `INSERT INTO notice_change_events (id, notice_num, event_height)
+         VALUES (1, 2220590, 1), (2, 2220590, 2)`,
+      );
+      await dataSource.query(
+        `INSERT INTO notice_change_details
+           (id, event_id, field_path, after_value)
+         VALUES
+           (1, 1, 'contentId', 'OLD_CONTENT'),
+           (2, 1, 'proposalReason', 'old reason'),
+           (3, 2, 'contentId', 'PRC_2220590'),
+           (4, 2, 'proposalReason', NULL)`,
+      );
+
+      let executedSql = '';
+      let executedParams: unknown[] = [];
+      const service = new ChangeTrackingService(
+        {} as any,
+        {
+          manager: {
+            query: async (sql: string, params: unknown[]) => {
+              executedSql = sql;
+              executedParams = params;
+              return dataSource.query(sql, params);
+            },
+          },
+        } as any,
+        undefined as any,
+      );
+      const result = await service.getLatestFieldValuesForFields(
+        [2220590],
+        ['contentId', 'proposalReason'],
+      );
+
+      expect(result.get(2220590)?.get('contentId')).toBe('PRC_2220590');
+      expect(result.get(2220590)?.has('proposalReason')).toBe(true);
+      expect(result.get(2220590)?.get('proposalReason')).toBeNull();
+
+      const plan = (await dataSource.query(
+        `EXPLAIN QUERY PLAN ${executedSql}`,
+        executedParams,
+      )) as Array<{ detail: string }>;
+      const planText = plan.map((row) => row.detail).join('\n');
+      expect(planText).toContain('MATERIALIZE relevant_events');
+      expect(planText).toMatch(
+        /SEARCH notice_change_events USING COVERING INDEX .*notice_num/,
+      );
+      expect(planText).toMatch(
+        /SEARCH detail USING INDEX .*event_id_field_path_id/,
+      );
+    } finally {
+      await dataSource.destroy();
+    }
   });
 
   it('appends concurrent events with retries and preserves monotonic heights', async () => {
