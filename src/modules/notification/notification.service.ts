@@ -55,6 +55,7 @@ export class NotificationService {
   // Mapping of change-tracking field paths to user-friendly labels for Discord embeds
   private readonly CHANGE_FIELD_LABELS: Readonly<Record<string, string>> = {
     num: '의안번호',
+    contentId: '국회 의안 ID',
     subject: '법률안명',
     proposerCategory: '제안자 구분',
     committee: '소관위원회',
