@@ -1329,6 +1329,76 @@ describe('NoticeArchiveService', () => {
       expect(repositoryMock.save).not.toHaveBeenCalled();
     });
 
+    it('does not let an NSM recrawl downgrade PAL-enriched identity, committees, or proposalReason', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2220590,
+          contentId: null,
+          committee: '산업통상부',
+          contentCommittee: '산업통상부',
+          proposalReason: 'NSM 제안이유',
+        }),
+      );
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 2,
+          details: [
+            {
+              fieldPath: 'contentId',
+              afterValue: 'PRC_N2V6U0U7S2T9R1S7O5M9N2L7M7K1S3',
+            },
+            {
+              fieldPath: 'committee',
+              afterValue: '산업통상자원중소벤처기업위원회',
+            },
+            {
+              fieldPath: 'contentCommittee',
+              afterValue: '산업통상자원중소벤처기업위원회',
+            },
+            {
+              fieldPath: 'proposalReason',
+              afterValue: 'PAL 제안이유',
+            },
+          ],
+        },
+      ]);
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      await service.upsertNoticeArchive(
+        {
+          num: 2220590,
+          subject: '반도체산업 경쟁력 강화법',
+          proposerCategory: '의원',
+          committee: '산업통상부',
+          link: 'https://opinion.lawmaking.go.kr/2220590',
+          contentId: null,
+          attachments: { pdfFile: null, hwpFile: null },
+        },
+        {
+          proposalReason: 'NSM 제안이유',
+          committee: '산업통상부',
+          sourceHtml: null,
+          htmlSha256: null,
+          httpMetadata: null,
+        },
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+      expect(repositoryMock.save).not.toHaveBeenCalled();
+    });
+
     it('uses chain-head baseline to avoid stale-row re-emission', async () => {
       const repositoryMock = {
         ...createRepositoryMock(),

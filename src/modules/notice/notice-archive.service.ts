@@ -596,9 +596,14 @@ export class NoticeArchiveService {
       baselineText('proposalSession') ??
       beforeRow?.contentProposalSession ??
       null;
+    const fallbackContentId =
+      this.normalizeStableId(baselineText('contentId')) ??
+      this.normalizeStableId(beforeRow?.contentId);
+    const isNsmRecrawlAfterPalUpgrade =
+      existing && normalizedContentId === null && fallbackContentId !== null;
 
     const resolvedProposalReason = this.preferIncomingTrackedValue(
-      originalContent.proposalReason,
+      isNsmRecrawlAfterPalUpgrade ? null : originalContent.proposalReason,
       fallbackProposalReason,
       {
         preserveExistingWhenIncomingNull: existing,
@@ -608,13 +613,17 @@ export class NoticeArchiveService {
     );
 
     const resolvedContentBillNumber = this.preferIncomingTrackedValue(
-      this.normalizeStableId(originalContent.billNumber),
+      isNsmRecrawlAfterPalUpgrade
+        ? null
+        : this.normalizeStableId(originalContent.billNumber),
       fallbackBillNumber,
       { preserveExistingWhenIncomingNull: existing },
     );
 
     const resolvedContentProposer = this.preferIncomingTrackedValue(
-      originalContent.proposer?.trim() || null,
+      isNsmRecrawlAfterPalUpgrade
+        ? null
+        : originalContent.proposer?.trim() || null,
       fallbackProposer,
       {
         preserveExistingWhenIncomingNull: existing,
@@ -623,7 +632,9 @@ export class NoticeArchiveService {
     );
 
     const resolvedContentProposalDate = this.preferIncomingTrackedValue(
-      originalContent.proposalDate?.trim() || null,
+      isNsmRecrawlAfterPalUpgrade
+        ? null
+        : originalContent.proposalDate?.trim() || null,
       fallbackProposalDate,
       {
         preserveExistingWhenIncomingNull: existing,
@@ -632,7 +643,9 @@ export class NoticeArchiveService {
     );
 
     const resolvedContentCommittee = this.preferIncomingTrackedValue(
-      originalContent.committee?.trim() || null,
+      isNsmRecrawlAfterPalUpgrade
+        ? null
+        : originalContent.committee?.trim() || null,
       fallbackContentCommittee,
       {
         preserveExistingWhenIncomingNull: existing,
@@ -641,7 +654,9 @@ export class NoticeArchiveService {
     );
 
     const resolvedContentReferralDate = this.preferIncomingTrackedValue(
-      originalContent.referralDate?.trim() || null,
+      isNsmRecrawlAfterPalUpgrade
+        ? null
+        : originalContent.referralDate?.trim() || null,
       fallbackReferralDate,
       {
         preserveExistingWhenIncomingNull: existing,
@@ -650,7 +665,9 @@ export class NoticeArchiveService {
     );
 
     const resolvedContentNoticePeriod = this.preferIncomingTrackedValue(
-      originalContent.noticePeriod?.trim() || null,
+      isNsmRecrawlAfterPalUpgrade
+        ? null
+        : originalContent.noticePeriod?.trim() || null,
       fallbackNoticePeriod,
       {
         preserveExistingWhenIncomingNull: existing,
@@ -659,7 +676,9 @@ export class NoticeArchiveService {
     );
 
     const resolvedContentProposalSession = this.preferIncomingTrackedValue(
-      originalContent.proposalSession?.trim() || null,
+      isNsmRecrawlAfterPalUpgrade
+        ? null
+        : originalContent.proposalSession?.trim() || null,
       fallbackProposalSession,
       {
         preserveExistingWhenIncomingNull: existing,
@@ -668,7 +687,9 @@ export class NoticeArchiveService {
     );
 
     const resolvedNoticeCommittee = recoverCompetentAuthorityName(
-      notice.committee,
+      isNsmRecrawlAfterPalUpgrade
+        ? (baselineText('committee') ?? beforeRow?.committee ?? '')
+        : notice.committee,
       {
         preferredKinds: ['committee', 'ministry', 'agency'],
       },
@@ -687,11 +708,19 @@ export class NoticeArchiveService {
     // Core content fields - always written on both INSERT and UPDATE.
     const coreFields = {
       noticeNum: notice.num,
-      subject: notice.subject,
-      proposerCategory: notice.proposerCategory,
+      subject: isNsmRecrawlAfterPalUpgrade
+        ? (baselineText('subject') ?? beforeRow?.subject ?? notice.subject)
+        : notice.subject,
+      proposerCategory: isNsmRecrawlAfterPalUpgrade
+        ? (baselineText('proposerCategory') ??
+          beforeRow?.proposerCategory ??
+          notice.proposerCategory)
+        : notice.proposerCategory,
       committee: resolvedNoticeCommittee,
       assemblyLink: notice.link,
-      contentId: notice.contentId ?? null,
+      contentId: isNsmRecrawlAfterPalUpgrade
+        ? fallbackContentId
+        : normalizedContentId,
       proposalReason: resolvedProposalReason ?? '',
       sourceTitle: originalContent.title?.trim() || notice.subject,
       contentBillNumber: resolvedContentBillNumber,
