@@ -86,6 +86,7 @@ interface DispatchChangeNotificationInput {
   event: NoticeChangeEvent;
   subject: string;
   changedFields: string[];
+  changeDetails?: Array<{ fieldPath: string; changeType: ChangeDetailType }>;
 }
 
 interface ChangeTimelineQuery {
@@ -858,6 +859,14 @@ export class ChangeTrackingService {
       return;
     }
 
+    // contentId only appears once the National Assembly (PAL) enriches an
+    // NSM-origin notice, so its addition marks the NSM->PAL transition.
+    const isNsmToPalTransition =
+      input.changeDetails?.some(
+        (detail) =>
+          detail.fieldPath === 'contentId' && detail.changeType === 'added',
+      ) ?? false;
+
     const payload: ChangeNotificationPayload = {
       noticeNum: input.event.noticeNum,
       subject: input.subject,
@@ -868,6 +877,7 @@ export class ChangeTrackingService {
       eventHeight: input.event.eventHeight,
       eventId: input.event.id,
       detectedAt: input.event.detectedAt.toISOString(),
+      isNsmToPalTransition,
     };
 
     this.queuedChangeNotifications.push(payload);

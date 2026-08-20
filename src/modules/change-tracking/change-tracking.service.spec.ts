@@ -95,10 +95,67 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       notificationBatchService.processChangeNotificationBatch as jest.Mock
     ).mock.calls[0];
 
-    expect(Array.isArray(payloads)).toBe(true);
     expect(payloads).toHaveLength(2);
     expect(payloads[0]).toMatchObject({ noticeNum: 1001, subject: '법률안 A' });
     expect(payloads[1]).toMatchObject({ noticeNum: 1002, subject: '법률안 B' });
+  });
+
+  it('flags contentId newly added as an NSM->PAL transition notification', async () => {
+    const { service, notificationBatchService } = createService();
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 5,
+        noticeNum: 4001,
+        detectedAt: new Date('2026-01-01T00:04:00.000Z'),
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+        eventHash: 'hash-transition',
+      } as any,
+      subject: 'NSM->PAL 이관 법률안',
+      changedFields: ['contentId'],
+      changeDetails: [{ fieldPath: 'contentId', changeType: 'added' }],
+    });
+
+    await jest.advanceTimersByTimeAsync(200);
+
+    const [payloads] = (
+      notificationBatchService.processChangeNotificationBatch as jest.Mock
+    ).mock.calls[0];
+
+    expect(payloads[0]).toMatchObject({
+      noticeNum: 4001,
+      isNsmToPalTransition: true,
+    });
+  });
+
+  it('does not flag ordinary contentId modifications as an NSM->PAL transition', async () => {
+    const { service, notificationBatchService } = createService();
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 6,
+        noticeNum: 4002,
+        detectedAt: new Date('2026-01-01T00:05:00.000Z'),
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
+        eventHash: 'hash-modified',
+      } as any,
+      subject: '일반 변경 법률안',
+      changedFields: ['contentId'],
+      changeDetails: [{ fieldPath: 'contentId', changeType: 'modified' }],
+    });
+
+    await jest.advanceTimersByTimeAsync(200);
+
+    const [payloads] = (
+      notificationBatchService.processChangeNotificationBatch as jest.Mock
+    ).mock.calls[0];
+
+    expect(payloads[0]).toMatchObject({
+      noticeNum: 4002,
+      isNsmToPalTransition: false,
+    });
   });
 
   it('does not flush on nested collection end until outer collection completes', async () => {

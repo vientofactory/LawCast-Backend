@@ -23,6 +23,7 @@ export interface ChangeNotificationPayload {
   eventHeight?: number;
   eventId?: number;
   detectedAt?: string;
+  isNsmToPalTransition?: boolean;
 }
 
 export interface AdminAnnouncementPayload {
@@ -225,6 +226,44 @@ export class NotificationService {
     });
   }
 
+  async sendDiscordNsmToPalTransitionBatch(
+    payload: ChangeNotificationPayload,
+    webhooks: Webhook[],
+    abortSignal?: AbortSignal,
+  ): Promise<NotificationSendResult[]> {
+    const embed = this.createNsmToPalTransitionEmbed(payload);
+    return this.sendDiscordEmbedBatch(embed, webhooks, {
+      username: 'LawCast 변경 추적',
+      context: 'nsm to pal transition notification',
+      abortSignal,
+    });
+  }
+
+  async sendDiscordNsmToPalTransitionDigestBatch(
+    payloads: ChangeNotificationPayload[],
+    webhooks: Webhook[],
+    abortSignal?: AbortSignal,
+  ): Promise<NotificationSendResult[]> {
+    if (payloads.length === 0) {
+      return [];
+    }
+
+    if (payloads.length === 1) {
+      return this.sendDiscordNsmToPalTransitionBatch(
+        payloads[0],
+        webhooks,
+        abortSignal,
+      );
+    }
+
+    const embed = this.createNsmToPalTransitionDigestEmbed(payloads);
+    return this.sendDiscordEmbedBatch(embed, webhooks, {
+      username: 'LawCast 변경 추적',
+      context: 'nsm to pal transition digest notification',
+      abortSignal,
+    });
+  }
+
   async sendDiscordAdminAnnouncementBatch(
     payload: AdminAnnouncementPayload,
     webhooks: Webhook[],
@@ -403,6 +442,92 @@ export class NotificationService {
       .addField('처리 상태', '입법예고 기간 종료', true)
       .addField('자세히 보기', `[종료 추적 상세](${detailUrl})`, false)
       .setColor(APP_CONSTANTS.COLORS.DISCORD.SUCCESS)
+      .setTimestamp()
+      .setFooter('LawCast 알림 서비스', '');
+  }
+
+  private createNsmToPalTransitionEmbed(
+    payload: ChangeNotificationPayload,
+  ): MessageBuilder {
+    const detailUrl =
+      payload.eventHeight && payload.eventHeight > 1
+        ? this.buildFrontendNoticeDetailUrlByNoticeNum(payload.noticeNum, {
+            timeline: 'true',
+            cmpFrom: String(payload.eventHeight - 1),
+            cmpTo: String(payload.eventHeight),
+          })
+        : this.buildFrontendNoticeDetailUrlByNoticeNum(payload.noticeNum, {
+            timeline: 'true',
+          });
+
+    return new MessageBuilder()
+      .setTitle('국회 입법예고로 이관 감지')
+      .setDescription(
+        '국민참여입법센터에 있던 법률안이 국회 입법예고로 이관되었습니다.',
+      )
+      .addField('법률안명', payload.subject, false)
+      .addField('의안번호', String(payload.noticeNum), true)
+      .addField('자세히 보기', `[이관 상세](${detailUrl})`, false)
+      .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
+      .setTimestamp()
+      .setFooter('LawCast 알림 서비스', '');
+  }
+
+  private createNsmToPalTransitionDigestEmbed(
+    payloads: ChangeNotificationPayload[],
+  ): MessageBuilder {
+    const uniqueNoticeNums = Array.from(
+      new Set(payloads.map((payload) => payload.noticeNum)),
+    );
+    const eventIds = payloads
+      .map((payload) => payload.eventId)
+      .filter(
+        (eventId): eventId is number =>
+          Number.isInteger(eventId) && eventId > 0,
+      );
+    const fromEventId = eventIds.length > 0 ? Math.min(...eventIds) : null;
+    const toEventId = eventIds.length > 0 ? Math.max(...eventIds) : null;
+
+    const detailParams: Record<string, string> = {
+      digest: '1',
+      jumpToFirst: '1',
+      comparableOnly: 'true',
+      excludeLegacyGenesisSource: 'true',
+      limit: '50',
+    };
+
+    if (fromEventId !== null) {
+      detailParams.fromEventId = String(fromEventId);
+    }
+
+    if (toEventId !== null) {
+      detailParams.toEventId = String(toEventId);
+    }
+
+    const detailUrl = this.buildFrontendNoticeChangesUrl(detailParams);
+
+    const itemLines: string[] = [];
+    for (const payload of payloads.slice(0, 6)) {
+      itemLines.push(`• **[${payload.noticeNum}]** ${payload.subject}`);
+    }
+
+    if (payloads.length > 6) {
+      itemLines.push(`... 외 ${payloads.length - 6}건`);
+    }
+
+    return new MessageBuilder()
+      .setTitle(`국회 입법예고로 이관 감지 (${payloads.length}건)`)
+      .setDescription(
+        `국민참여입법센터에서 국회 입법예고로 이관된 ${payloads.length.toLocaleString()}건을 하나로 요약했습니다.`,
+      )
+      .addField(
+        '영향 법률안 수',
+        `${uniqueNoticeNums.length.toLocaleString()}건`,
+        true,
+      )
+      .addField('자세히 보기', `[이관 내역 모아보기](${detailUrl})`, true)
+      .addField('감지 항목', this.truncateForEmbed(itemLines.join('\n')), false)
+      .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
       .setTimestamp()
       .setFooter('LawCast 알림 서비스', '');
   }

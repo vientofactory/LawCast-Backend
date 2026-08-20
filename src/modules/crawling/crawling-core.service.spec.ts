@@ -152,6 +152,7 @@ describe('CrawlingCoreService', () => {
             'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Cache-Control': 'no-cache',
         },
+        hydrateTruncatedTitles: false,
       });
       expect(mockPalCrawl.get).toHaveBeenCalledTimes(1);
       expect(result).toEqual(mockTableData);
@@ -212,6 +213,7 @@ describe('CrawlingCoreService', () => {
             'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Cache-Control': 'no-cache',
         },
+        hydrateTruncatedTitles: false,
       });
       expect(mockPalCrawl.getContent).toHaveBeenCalledWith(contentId);
       expect(result).toEqual(mockContent);

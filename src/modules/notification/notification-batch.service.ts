@@ -453,8 +453,15 @@ export class NotificationBatchService {
     const noticePeriodEndedPayloads = payloads.filter((payload) =>
       payload.changedFields.includes('isDone'),
     );
+    const nsmToPalTransitionPayloads = payloads.filter(
+      (payload) =>
+        !payload.changedFields.includes('isDone') &&
+        payload.isNsmToPalTransition === true,
+    );
     const regularPayloads = payloads.filter(
-      (payload) => !payload.changedFields.includes('isDone'),
+      (payload) =>
+        !payload.changedFields.includes('isDone') &&
+        payload.isNsmToPalTransition !== true,
     );
 
     let activeWebhooks: Awaited<ReturnType<typeof this.webhookService.findAll>>;
@@ -628,6 +635,97 @@ export class NotificationBatchService {
               activeWebhooks,
               (webhooks) =>
                 this.notificationService.sendDiscordNoticePeriodEndedBatch(
+                  payload,
+                  webhooks,
+                  abortSignal,
+                ),
+              {
+                itemLabel: `${payload.noticeNum}:${payload.subject}`,
+                itemType: 'change',
+              },
+            );
+
+          const webPushDispatch = await this.dispatchToWebPush(
+            activePushSubscriptions,
+            (subscriptions) =>
+              this.webPushNotificationService.sendChangeBatch(
+                payload,
+                subscriptions,
+              ),
+          );
+
+          return {
+            noticeNum: payload.noticeNum,
+            subject: payload.subject,
+            totalWebhooks: activeWebhooks.length,
+            totalPushSubscriptions: webPushDispatch.targetCount,
+            successCount,
+            failedCount,
+            deactivated,
+            temporaryFailures,
+            webPushSuccessCount: webPushDispatch.successCount,
+            webPushFailedCount: webPushDispatch.failedCount,
+            webPushDeactivatedCount: webPushDispatch.deactivatedCount,
+          };
+        });
+      }
+    }
+
+    if (nsmToPalTransitionPayloads.length > 0) {
+      if (nsmToPalTransitionPayloads.length > 1) {
+        jobs.push(async (abortSignal: AbortSignal) => {
+          const uniqueNoticeCount = new Set(
+            nsmToPalTransitionPayloads.map((payload) => payload.noticeNum),
+          ).size;
+          const { successCount, failedCount, deactivated, temporaryFailures } =
+            await this.dispatchToWebhooks(
+              activeWebhooks,
+              (webhooks) =>
+                this.notificationService.sendDiscordNsmToPalTransitionDigestBatch(
+                  nsmToPalTransitionPayloads,
+                  webhooks,
+                  abortSignal,
+                ),
+              {
+                itemLabel: `${nsmToPalTransitionPayloads.length} nsm-to-pal transitions across ${uniqueNoticeCount} notices`,
+                itemType: 'change',
+              },
+            );
+
+          const webPushDispatch = await this.dispatchToWebPush(
+            activePushSubscriptions,
+            (subscriptions) =>
+              this.webPushNotificationService.sendChangeDigestBatch(
+                nsmToPalTransitionPayloads,
+                subscriptions,
+                { ended: false, nsmToPalTransition: true },
+              ),
+          );
+
+          return {
+            noticeNum: nsmToPalTransitionPayloads[0].noticeNum,
+            subject: `국회 입법예고로 이관 ${nsmToPalTransitionPayloads.length}건 요약`,
+            totalWebhooks: activeWebhooks.length,
+            totalPushSubscriptions: webPushDispatch.targetCount,
+            successCount,
+            failedCount,
+            deactivated,
+            temporaryFailures,
+            webPushSuccessCount: webPushDispatch.successCount,
+            webPushFailedCount: webPushDispatch.failedCount,
+            webPushDeactivatedCount: webPushDispatch.deactivatedCount,
+            aggregatedEventCount: nsmToPalTransitionPayloads.length,
+            aggregatedNoticeCount: uniqueNoticeCount,
+          };
+        });
+      } else {
+        jobs.push(async (abortSignal: AbortSignal) => {
+          const payload = nsmToPalTransitionPayloads[0];
+          const { successCount, failedCount, deactivated, temporaryFailures } =
+            await this.dispatchToWebhooks(
+              activeWebhooks,
+              (webhooks) =>
+                this.notificationService.sendDiscordNsmToPalTransitionBatch(
                   payload,
                   webhooks,
                   abortSignal,

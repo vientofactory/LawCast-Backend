@@ -24,6 +24,8 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     sendDiscordChangeDigestNotificationBatch: jest.Mock;
     sendDiscordNoticePeriodEndedBatch: jest.Mock;
     sendDiscordNoticePeriodEndedDigestBatch: jest.Mock;
+    sendDiscordNsmToPalTransitionBatch: jest.Mock;
+    sendDiscordNsmToPalTransitionDigestBatch: jest.Mock;
     clearPermanentFailureFlag: jest.Mock;
   };
   let batchProcessingService: {
@@ -96,6 +98,20 @@ describe('NotificationBatchService (diffchain change batching)', () => {
         >()
         .mockResolvedValue([{ webhookId: 1, success: true }]),
       sendDiscordNoticePeriodEndedDigestBatch: jest
+        .fn<
+          (
+            ...args: any[]
+          ) => Promise<Array<{ webhookId: number; success: boolean }>>
+        >()
+        .mockResolvedValue([{ webhookId: 1, success: true }]),
+      sendDiscordNsmToPalTransitionBatch: jest
+        .fn<
+          (
+            ...args: any[]
+          ) => Promise<Array<{ webhookId: number; success: boolean }>>
+        >()
+        .mockResolvedValue([{ webhookId: 1, success: true }]),
+      sendDiscordNsmToPalTransitionDigestBatch: jest
         .fn<
           (
             ...args: any[]
@@ -495,6 +511,49 @@ describe('NotificationBatchService (diffchain change batching)', () => {
       aggregatedEventCount: 2,
       aggregatedNoticeCount: 2,
     });
+  });
+
+  it('routes NSM->PAL transition payloads (contentId newly added) through the dedicated transition path', async () => {
+    const payloads: ChangeNotificationPayload[] = [
+      {
+        noticeNum: 601,
+        subject: '이관 법률안 601',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+        changedFields: ['contentId'],
+        eventHash: 'hash-transition-601',
+        isNsmToPalTransition: true,
+      },
+      {
+        noticeNum: 602,
+        subject: '일반 변경 법률안 602',
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
+        changedFields: ['subject'],
+        eventHash: 'hash-602',
+      },
+    ];
+
+    const results = await service.executeChangeNotificationBatch(payloads, {
+      concurrency: 1,
+    });
+
+    expect(
+      notificationService.sendDiscordNsmToPalTransitionBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordNsmToPalTransitionBatch,
+    ).toHaveBeenCalledWith(payloads[0], expect.any(Array), expect.any(Object));
+    expect(
+      notificationService.sendDiscordChangeNotificationBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordChangeNotificationBatch,
+    ).toHaveBeenCalledWith(payloads[1], expect.any(Array), expect.any(Object));
+    expect(
+      notificationService.sendDiscordNsmToPalTransitionDigestBatch,
+    ).not.toHaveBeenCalled();
+    expect(results).toHaveLength(2);
   });
 
   it('skips web push dispatch when there are no active subscriptions', async () => {

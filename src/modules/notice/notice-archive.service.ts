@@ -3006,6 +3006,10 @@ export class NoticeArchiveService {
           event,
           subject,
           changedFields: built.diff.details.map((detail) => detail.fieldPath),
+          changeDetails: built.diff.details.map((detail) => ({
+            fieldPath: detail.fieldPath,
+            changeType: detail.changeType,
+          })),
         })
         .catch((dispatchError) => {
           const warnMessage = `Failed to dispatch change notification for event ${event.id}: ${(dispatchError as Error).message}`;
@@ -3275,6 +3279,10 @@ export class NoticeArchiveService {
         event,
         subject: input.subject,
         changedFields: built.diff.details.map((detail) => detail.fieldPath),
+        changeDetails: built.diff.details.map((detail) => ({
+          fieldPath: detail.fieldPath,
+          changeType: detail.changeType,
+        })),
       })
       .catch((dispatchError) => {
         this.logger.warn(

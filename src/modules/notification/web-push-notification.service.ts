@@ -141,17 +141,28 @@ export class WebPushNotificationService {
             timeline: 'true',
           });
 
+    const title = isDoneChanged
+      ? '입법예고 기간 종료 감지'
+      : payload.isNsmToPalTransition
+        ? '국회 입법예고로 이관 감지'
+        : '입법예고 변경 감지';
+    const type = isDoneChanged
+      ? 'notice_period_ended'
+      : payload.isNsmToPalTransition
+        ? 'notice_nsm_to_pal_transition'
+        : 'notice_changed';
+
     return this.sendBatch(
       subscriptions,
       {
-        title: isDoneChanged ? '입법예고 기간 종료 감지' : '입법예고 변경 감지',
+        title,
         body: `${payload.subject} (${payload.noticeNum})`,
         url: url ?? this.frontendUrls[0] ?? '/',
         tag: `lawcast-change-${payload.noticeNum}`,
         data: {
           noticeNum: payload.noticeNum,
           changedFields: payload.changedFields,
-          type: isDoneChanged ? 'notice_period_ended' : 'notice_changed',
+          type,
         },
       },
       { urgency: 'normal' },
@@ -161,7 +172,7 @@ export class WebPushNotificationService {
   async sendChangeDigestBatch(
     payloads: ChangeNotificationPayload[],
     subscriptions: WebPushSubscription[],
-    options: { ended: boolean },
+    options: { ended: boolean; nsmToPalTransition?: boolean },
   ): Promise<WebPushDispatchSummary> {
     const noticeNums = Array.from(
       new Set(payloads.map((payload) => payload.noticeNum)),
@@ -171,21 +182,28 @@ export class WebPushNotificationService {
       this.frontendUrls[0] ??
       '/';
 
+    const title = options.ended
+      ? `입법예고 종료 ${payloads.length}건`
+      : options.nsmToPalTransition
+        ? `국회 입법예고로 이관 ${payloads.length}건`
+        : `입법예고 변경 ${payloads.length}건`;
+    const type = options.ended
+      ? 'notice_period_ended_digest'
+      : options.nsmToPalTransition
+        ? 'notice_nsm_to_pal_transition_digest'
+        : 'notice_changed_digest';
+
     return this.sendBatch(
       subscriptions,
       {
-        title: options.ended
-          ? `입법예고 종료 ${payloads.length}건`
-          : `입법예고 변경 ${payloads.length}건`,
+        title,
         body: `${noticeNums.length}개 법률안에서 변경이 감지되었습니다.`,
         url,
         tag: `lawcast-change-digest-${Date.now()}`,
         data: {
           noticeNums,
           eventCount: payloads.length,
-          type: options.ended
-            ? 'notice_period_ended_digest'
-            : 'notice_changed_digest',
+          type,
         },
       },
       { urgency: 'normal' },
