@@ -27,6 +27,7 @@ import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { OllamaModule } from './modules/ollama/ollama.module';
 import { DiscordBridgeModule } from './modules/discord-bridge/discord-bridge.module';
 import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.module';
+import { ObservabilityModule } from './modules/observability/observability.module';
 
 @Module({
   imports: [
@@ -88,6 +89,8 @@ import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.
     HealthModule,
     SchedulingModule,
     ChangeTrackingModule,
+    // Observability
+    ObservabilityModule,
     // Third-party integration modules
     OllamaModule,
     DiscordBridgeModule,
