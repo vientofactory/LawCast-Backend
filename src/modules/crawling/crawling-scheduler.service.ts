@@ -28,7 +28,18 @@ const { PENDING_CRAWL_MAX_RETRIES, PENDING_CRAWL_RETRY_BASE_MS } =
   APP_CONSTANTS.ARCHIVE_SYNC;
 
 function isRetryableNetworkError(error: unknown): boolean {
-  return isRetryableNetworkOrSystemError(error);
+  if (isRetryableNetworkOrSystemError(error)) return true;
+
+  // pal-crawl's HttpClient throws bare Error objects for HTTP-level failures
+  // like "Invalid response: 307 Temporary Redirect".  307/308 redirects from
+  // opinion.lawmaking.go.kr are transient (server-side load balancing) and
+  // should be retried.
+  const msg = error instanceof Error ? error.message : '';
+  if (/Invalid\s+response:\s*(307|308)\b/.test(msg)) {
+    return true;
+  }
+
+  return false;
 }
 @Injectable()
 export class CrawlingSchedulerService implements OnModuleInit {

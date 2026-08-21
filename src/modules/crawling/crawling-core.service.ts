@@ -22,6 +22,38 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { BrowserLeaseManagerService } from './browser-lease-manager.service';
 import { recoverCompetentAuthorityName } from './utils/competent-authority-autocomplete.utils';
 
+/**
+ * Enriched error that attaches crawl phase, page index, and bill number
+ * context to pal-crawl HTTP errors (which only carry a bare message like
+ * "Invalid response: 307 Temporary Redirect").
+ *
+ * The extra fields are read by `toPendingErrorDiagnostics` in the
+ * crawling-scheduler-pending-support module to produce actionable logs.
+ */
+export class NsmCrawlContextError extends Error {
+  readonly crawlPhase: string;
+  readonly crawlPageIndex?: number;
+  readonly crawlBillNo?: string;
+  readonly cause?: unknown;
+
+  constructor(
+    message: string,
+    context: {
+      phase: string;
+      pageIndex?: number;
+      billNo?: string;
+      cause?: unknown;
+    },
+  ) {
+    super(message);
+    this.name = 'NsmCrawlContextError';
+    this.crawlPhase = context.phase;
+    this.crawlPageIndex = context.pageIndex;
+    this.crawlBillNo = context.billNo;
+    this.cause = context.cause;
+  }
+}
+
 const SCREENSHOT_CONFIG = {
   enabled: true,
   fullPage: true,
@@ -299,7 +331,23 @@ export class CrawlingCoreService {
     query?: Omit<INsmSearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
   ): AsyncGenerator<INsmSearchResult> {
-    yield* this.createNsmClient().getAllPages(query, options);
+    const client = this.createNsmClient();
+    let currentPage = 0;
+    try {
+      for await (const page of client.getAllPages(query, options)) {
+        currentPage++;
+        yield page;
+      }
+    } catch (error) {
+      throw new NsmCrawlContextError(
+        error instanceof Error ? error.message : String(error),
+        {
+          phase: 'nsm-list',
+          pageIndex: currentPage || undefined,
+          cause: error,
+        },
+      );
+    }
   }
 
   async crawlAllPages(options?: {
@@ -491,7 +539,23 @@ export class CrawlingCoreService {
     query?: Omit<INsmSearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
   ): AsyncGenerator<INsmSearchResult> {
-    yield* this.createNsmClient().getAllPendingPages(query, options);
+    const client = this.createNsmClient();
+    let currentPage = 0;
+    try {
+      for await (const page of client.getAllPendingPages(query, options)) {
+        currentPage++;
+        yield page;
+      }
+    } catch (error) {
+      throw new NsmCrawlContextError(
+        error instanceof Error ? error.message : String(error),
+        {
+          phase: 'nsm-pending-list',
+          pageIndex: currentPage || undefined,
+          cause: error,
+        },
+      );
+    }
   }
 
   /**

@@ -24,16 +24,44 @@ interface PendingErrorDiagnostics {
   statusCode?: number;
   statusText?: string;
   responseUrl?: string;
+  crawlPhase?: string;
+  crawlPageIndex?: number;
+  crawlBillNo?: string;
+}
+
+/**
+ * pal-crawl's HttpClient throws plain Error objects like:
+ *   "Invalid response: 307 Temporary Redirect"
+ * without any structured properties (statusCode, url, etc.).
+ * We extract the numeric status code from the message as a fallback.
+ */
+function parseStatusCodeFromMessage(message: string): number | undefined {
+  const match = message.match(/Invalid\s+response:\s*(\d{3})\b/);
+  if (match?.[1]) {
+    const code = Number.parseInt(match[1], 10);
+    if (code >= 100 && code < 600) return code;
+  }
+  return undefined;
 }
 
 function toPendingErrorDiagnostics(error: unknown): PendingErrorDiagnostics {
   const fallbackMessage =
     error instanceof Error ? error.message : String(error ?? 'Unknown error');
 
+  // NsmCrawlContextError stores the original pal-crawl error as `cause`;
+  // prefer its stack trace for debugging if the wrapper's own stack is less
+  // informative.
+  const causeStack =
+    error instanceof Error &&
+    typeof (error as { cause?: unknown }).cause === 'object' &&
+    (error as { cause?: unknown }).cause instanceof Error
+      ? ((error as unknown as { cause: Error }).cause as Error).stack
+      : undefined;
+
   const details: PendingErrorDiagnostics = {
     message: fallbackMessage,
     name: error instanceof Error ? error.name : undefined,
-    stack: error instanceof Error ? error.stack : undefined,
+    stack: causeStack ?? (error instanceof Error ? error.stack : undefined),
   };
 
   if (typeof error === 'object' && error !== null) {
@@ -47,7 +75,21 @@ function toPendingErrorDiagnostics(error: unknown): PendingErrorDiagnostics {
       statusText?: string;
       responseUrl?: string;
       url?: string;
+      crawlPhase?: string;
+      crawlPageIndex?: number;
+      crawlBillNo?: string;
+      cause?: unknown;
     };
+
+    // Also check the cause chain for crawl context fields
+    const cause =
+      typeof candidate.cause === 'object' && candidate.cause !== null
+        ? (candidate.cause as {
+            crawlPhase?: string;
+            crawlPageIndex?: number;
+            crawlBillNo?: string;
+          })
+        : undefined;
 
     const statusCode =
       typeof candidate.response?.status === 'number'
@@ -70,9 +112,15 @@ function toPendingErrorDiagnostics(error: unknown): PendingErrorDiagnostics {
             ? candidate.url
             : undefined;
 
-    details.statusCode = statusCode;
+    details.statusCode =
+      statusCode ?? parseStatusCodeFromMessage(fallbackMessage);
     details.statusText = statusText;
     details.responseUrl = responseUrl;
+    details.crawlPhase = candidate.crawlPhase ?? cause?.crawlPhase;
+    details.crawlPageIndex = candidate.crawlPageIndex ?? cause?.crawlPageIndex;
+    details.crawlBillNo = candidate.crawlBillNo ?? cause?.crawlBillNo;
+  } else {
+    details.statusCode = parseStatusCodeFromMessage(fallbackMessage);
   }
 
   return details;
@@ -81,14 +129,33 @@ function toPendingErrorDiagnostics(error: unknown): PendingErrorDiagnostics {
 function buildPendingErrorLocationHint(
   diagnostics: PendingErrorDiagnostics,
 ): string {
-  if (diagnostics.responseUrl) {
-    return diagnostics.statusCode
-      ? `${diagnostics.responseUrl} (status=${diagnostics.statusCode}${diagnostics.statusText ? ` ${diagnostics.statusText}` : ''})`
-      : diagnostics.responseUrl;
-  }
+  const statusPart = diagnostics.statusCode
+    ? `status=${diagnostics.statusCode}${diagnostics.statusText ? ` ${diagnostics.statusText}` : ''}`
+    : undefined;
 
-  if (diagnostics.statusCode) {
-    return `${diagnostics.statusCode}${diagnostics.statusText ? ` ${diagnostics.statusText}` : ''}`;
+  const phasePart = diagnostics.crawlPhase
+    ? `phase=${diagnostics.crawlPhase}`
+    : undefined;
+
+  const pagePart =
+    diagnostics.crawlPageIndex !== undefined
+      ? `page=${diagnostics.crawlPageIndex}`
+      : undefined;
+
+  const billPart = diagnostics.crawlBillNo
+    ? `bill=${diagnostics.crawlBillNo}`
+    : undefined;
+
+  const parts = [
+    diagnostics.responseUrl,
+    statusPart,
+    phasePart,
+    pagePart,
+    billPart,
+  ].filter(Boolean);
+
+  if (parts.length > 0) {
+    return parts.join(', ');
   }
 
   return 'unknown-location';
@@ -142,7 +209,7 @@ export async function handlePendingCronInternal(
         loggerArgs: diagnostics.stack ? [diagnostics.stack] : [error],
         context: 'CrawlingSchedulerService',
         discordBridge: deps.discordBridge,
-        bridgeMessage: `Pending bills crawl attempt ${attempt + 1}/${pendingCrawlMaxRetries + 1} failed (${diagnostics.statusCode ?? 'no-status'}) at ${diagnostics.responseUrl ?? 'unknown-location'}`,
+        bridgeMessage: `Pending bills crawl attempt ${attempt + 1}/${pendingCrawlMaxRetries + 1} failed (${diagnostics.statusCode ?? 'no-status'}) at ${diagnostics.responseUrl ?? diagnostics.crawlPhase ?? 'unknown-location'}`,
         metadata: {
           attempt: attempt + 1,
           maxAttempts: pendingCrawlMaxRetries + 1,
@@ -152,6 +219,9 @@ export async function handlePendingCronInternal(
           statusCode: diagnostics.statusCode,
           statusText: diagnostics.statusText,
           responseUrl: diagnostics.responseUrl,
+          crawlPhase: diagnostics.crawlPhase,
+          crawlPageIndex: diagnostics.crawlPageIndex,
+          crawlBillNo: diagnostics.crawlBillNo,
         },
       });
 
@@ -178,7 +248,11 @@ export async function handlePendingCronInternal(
       (diagnostics.statusCode
         ? ` (status=${diagnostics.statusCode}${diagnostics.statusText ? ` ${diagnostics.statusText}` : ''})`
         : '') +
-      (diagnostics.responseUrl ? ` @ ${diagnostics.responseUrl}` : ''),
+      (diagnostics.responseUrl
+        ? ` @ ${diagnostics.responseUrl}`
+        : diagnostics.crawlPhase
+          ? ` @ ${diagnostics.crawlPhase}${diagnostics.crawlPageIndex !== undefined ? ` page ${diagnostics.crawlPageIndex}` : ''}`
+          : ''),
     metadata: {
       attempts: lastAttempt + 1,
       maxAttempts: pendingCrawlMaxRetries + 1,
@@ -187,6 +261,9 @@ export async function handlePendingCronInternal(
       statusCode: diagnostics.statusCode,
       statusText: diagnostics.statusText,
       responseUrl: diagnostics.responseUrl,
+      crawlPhase: diagnostics.crawlPhase,
+      crawlPageIndex: diagnostics.crawlPageIndex,
+      crawlBillNo: diagnostics.crawlBillNo,
     },
   });
 }
