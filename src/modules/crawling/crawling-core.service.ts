@@ -123,15 +123,12 @@ export class CrawlingCoreService {
   }
 
   private createNsmClient(): NsmLmSts {
-    return new NsmLmSts({
-      userAgent: this.crawlConfig.userAgent,
-      timeout: this.crawlConfig.timeout,
-      retryCount: this.crawlConfig.retryCount,
-      customHeaders: this.crawlConfig.customHeaders,
-      hydrateTruncatedTitles: this.crawlConfig.hydrateTruncatedTitles,
-    });
+    return new NsmLmSts(this.crawlConfig);
   }
 
+  /**
+   * Extracts the deletion alert message from NSM detail HTML, if present.
+   */
   private extractNsmDeletionAlertMessage(html: string): string | null {
     if (!html) {
       return null;
@@ -192,6 +189,10 @@ export class CrawlingCoreService {
     return { confirmed, alertMessage };
   }
 
+  /**
+   * Probes the NSM detail page for a bill to see if it has been deleted.
+   * Returns the deletion alert message if confirmed, or null otherwise.
+   */
   async probeNsmDeletedBillAlert(billNo: string): Promise<string | null> {
     const normalized = billNo.trim();
     if (!normalized) {
@@ -305,14 +306,23 @@ export class CrawlingCoreService {
     return this.createClient().getDoneContent(contentId);
   }
 
+  /**
+   * Searches for notices based on the provided query parameters.
+   */
   async search(query?: ISearchQuery): Promise<ISearchResult> {
     return this.createClient().search(query);
   }
 
+  /**
+   * Searches for completed notices based on the provided query parameters.
+   */
   async searchDone(query?: ISearchQuery): Promise<ISearchResult> {
     return this.createClient().searchDone(query);
   }
 
+  /**
+   * Searches for NSM bills based on the provided query parameters.
+   */
   async *getAllPages(
     query?: Omit<ISearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
@@ -320,6 +330,9 @@ export class CrawlingCoreService {
     yield* this.createClient().getAllPages(query, options);
   }
 
+  /**
+   * Searches for completed NSM bills based on the provided query parameters.
+   */
   async *getAllDonePages(
     query?: Omit<ISearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
@@ -327,6 +340,9 @@ export class CrawlingCoreService {
     yield* this.createClient().getAllDonePages(query, options);
   }
 
+  /**
+   * Fetches all pages of active NSM bills from 국민참여입법센터 (opinion.lawmaking.go.kr) via NsmLmSts.
+   */
   async *getAllNsmPages(
     query?: Omit<INsmSearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
@@ -350,6 +366,9 @@ export class CrawlingCoreService {
     }
   }
 
+  /**
+   * Fetches all pages of active NSM bills and returns a flat array of all items.
+   */
   async crawlAllPages(options?: {
     stopBelowNum?: number;
     delayMs?: number;
@@ -567,23 +586,6 @@ export class CrawlingCoreService {
    *
    * @param billNo The 의안번호 of the bill (e.g. "2200001").
    */
-  /**
-   * Captures everything needed to archive a NSM (opinion.lawmaking.go.kr) bill
-   * detail page in a **single Puppeteer session**:
-   *
-   * - HTML source (bypasses the Waitingroom JS anti-bot challenge that blocks
-   *   plain HTTP requests from NsmLmSts.httpClient)
-   * - Full-page JPEG screenshot (same recompression pipeline as the old
-   *   captureNsmDetailScreenshot)
-   * - Parsed INsmBillDetail (proposalReason, proposer, session …) from the
-   *   already-loaded page HTML, using NsmLmStsParser from pal-crawl
-   *
-   * Previously these required two separate Puppeteer launches and one plain
-   * HTTP request (getNsmDetail), all of which hit the same URL.
-   * This method collapses all three into one browser session.
-   *
-   * @param billNo 의안번호 (e.g. "2219152")
-   */
   async captureNsmDetailFull(billNo: string): Promise<{
     html: string;
     screenshot: Buffer | null;
@@ -618,7 +620,7 @@ export class CrawlingCoreService {
 
           // ── Navigate with Waitingroom bypass ──────────────────────────────
           //
-          // opinion.lawmaking.go.kr serves a <title>Waitingroom</title> page
+          // opinion.lawmaking.go.kr serves a Waitingroom page
           // that uses a JavaScript polling timer before redirecting to the real
           // detail page.  Using `networkidle0` on the initial goto() resolves as
           // soon as the Waitingroom itself becomes idle (before the JS redirect),
