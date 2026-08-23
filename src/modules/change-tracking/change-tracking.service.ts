@@ -1530,6 +1530,7 @@ export class ChangeTrackingService {
       {
         changeEventRepository: this.changeEventRepository,
         changeDetailRepository: this.changeDetailRepository,
+        archiveRepository: this.noticeArchiveRepository,
         baselineEventHeight: this.BASELINE_EVENT_HEIGHT,
         logger: this.logger,
         buildDiffEvent: (input) => this.buildDiffEvent(input),

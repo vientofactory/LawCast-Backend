@@ -16,6 +16,7 @@ import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { type DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { type ChangeChainAuditReport } from './change-tracking.service';
 import { logAndBridge } from '../../utils/bridge-log.utils';
+import { NoticeArchive } from '../notice/notice-archive.entity';
 
 interface ChainVerificationIssue {
   noticeNum: number;
@@ -58,6 +59,7 @@ interface LegacyHashCompatibilityInput {
 export interface ChangeTrackingChainAuditDeps {
   changeEventRepository: Repository<NoticeChangeEvent>;
   changeDetailRepository: Repository<NoticeChangeDetail>;
+  archiveRepository?: Repository<NoticeArchive>;
   baselineEventHeight: number;
   logger: { log(message: string): void; error(message: string): void };
   buildDiffEvent(input: BuildDiffEventInput): BuildDiffEventOutput;
@@ -186,6 +188,29 @@ function isLegacyCanonicalHashCompatible(
   return true;
 }
 
+function buildAuditSeedSnapshot(row: NoticeArchive): Record<string, unknown> {
+  return {
+    num: row.noticeNum,
+    contentId: row.contentId ?? null,
+    subject: row.subject,
+    proposerCategory: row.proposerCategory,
+    committee: row.committee,
+    proposalReason: row.proposalReason,
+    billNumber: row.contentBillNumber,
+    proposer: row.contentProposer,
+    proposalDate: row.contentProposalDate,
+    contentCommittee: row.contentCommittee,
+    referralDate: row.contentReferralDate,
+    noticePeriod: row.contentNoticePeriod,
+    proposalSession: row.contentProposalSession,
+    isDone: false,
+    lifecycleStatus: row.lifecycleStatus,
+    sourceDeletedAt: row.sourceDeletedAt
+      ? row.sourceDeletedAt.toISOString()
+      : null,
+  };
+}
+
 async function verifyAllChains(
   deps: ChangeTrackingChainAuditDeps,
 ): Promise<ChainVerificationReport[]> {
@@ -195,9 +220,46 @@ async function verifyAllChains(
     .orderBy('event.noticeNum', 'ASC')
     .getRawMany<{ noticeNum: number | string }>();
 
+  const noticeNums = rawNoticeNums.map((r) => Number(r.noticeNum));
+
+  // Pre-fetch archive rows to seed initial state for each chain.
+  // The write path (buildDiffBaselineSnapshot) starts from the DB row,
+  // so the audit must do the same to reproduce stored hashes.
+  const archiveSnapshotByNum = new Map<number, Record<string, unknown>>();
+  if (deps.archiveRepository && noticeNums.length > 0) {
+    const BATCH = 500;
+    for (let i = 0; i < noticeNums.length; i += BATCH) {
+      const batch = noticeNums.slice(i, i + BATCH);
+      const rows = await deps.archiveRepository.find({
+        where: { noticeNum: In(batch) } as any,
+        select: [
+          'noticeNum',
+          'contentId',
+          'subject',
+          'proposerCategory',
+          'committee',
+          'proposalReason',
+          'contentBillNumber',
+          'contentProposer',
+          'contentProposalDate',
+          'contentCommittee',
+          'contentReferralDate',
+          'contentNoticePeriod',
+          'contentProposalSession',
+          'lifecycleStatus',
+          'sourceDeletedAt',
+        ],
+      });
+      for (const row of rows) {
+        archiveSnapshotByNum.set(row.noticeNum, buildAuditSeedSnapshot(row));
+      }
+    }
+  }
+
   const reports: ChainVerificationReport[] = [];
-  for (const raw of rawNoticeNums) {
-    const result = await verifyNoticeChain(deps, Number(raw.noticeNum));
+  for (const noticeNum of noticeNums) {
+    const seedSnapshot = archiveSnapshotByNum.get(noticeNum) ?? null;
+    const result = await verifyNoticeChain(deps, noticeNum, seedSnapshot);
     reports.push(result);
   }
 
@@ -207,6 +269,7 @@ async function verifyAllChains(
 async function verifyNoticeChain(
   deps: ChangeTrackingChainAuditDeps,
   noticeNum: number,
+  seedSnapshot: Record<string, unknown> | null = null,
 ): Promise<ChainVerificationReport> {
   const events = await deps.changeEventRepository.find({
     where: { noticeNum },
@@ -244,7 +307,12 @@ async function verifyNoticeChain(
     return eventDetails.some((detail) => detail.fieldPath === 'contentId');
   });
   let previousHash: string | null = null;
-  let currentState: Record<string, unknown> = {};
+  // Seed from the current archive row to match the write path
+  // (buildDiffBaselineSnapshot), which starts from the DB row and
+  // overlays chain history. Without this, fields added to the schema
+  // after earlier events (e.g. contentId in v2) would be null in the
+  // audit while the write path used the DB row value.
+  let currentState: Record<string, unknown> = { ...(seedSnapshot ?? {}) };
 
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];

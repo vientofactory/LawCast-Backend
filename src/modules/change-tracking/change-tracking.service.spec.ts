@@ -1796,4 +1796,60 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     expect(report.failureCount).toBe(0);
     expect(report.eventCount).toBe(2);
   });
+
+  it('seeds initial state from archive row for v1→v2 chains where contentId was not tracked in v1', async () => {
+    // Regression: notice 2219721 had v1 archive:upsert without contentId detail,
+    // but the DB row has contentId. The write path (buildDiffBaselineSnapshot)
+    // reads contentId from the row, so the audit must do the same.
+    const changeEventRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([]),
+      createQueryBuilder: jest.fn().mockReturnValue({
+        select: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getRawMany: jest
+          .fn<(...args: any[]) => Promise<any[]>>()
+          .mockResolvedValue([{ noticeNum: 99001 }]),
+      }),
+    } as any;
+
+    const changeDetailRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([]),
+    } as any;
+
+    const archiveRepository = {
+      find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+        {
+          noticeNum: 99001,
+          contentId: 'PRC_SEED_TEST',
+          subject: 'X',
+          proposerCategory: 'Y',
+          committee: 'Z',
+          proposalReason: '',
+          contentBillNumber: null,
+          contentProposer: null,
+          contentProposalDate: null,
+          contentCommittee: null,
+          contentReferralDate: null,
+          contentNoticePeriod: null,
+          contentProposalSession: null,
+          lifecycleStatus: 'active',
+          sourceDeletedAt: null,
+        },
+      ] as any),
+    } as any;
+
+    const service = new ChangeTrackingService(
+      changeEventRepository,
+      changeDetailRepository,
+      archiveRepository,
+      undefined as any,
+    );
+
+    const report = await service.runScheduledChainAudit('daily');
+
+    // The audit must query the archive repository to seed the initial state
+    expect(archiveRepository.find).toHaveBeenCalled();
+    expect(report.failureCount).toBe(0);
+    expect(report.eventCount).toBe(0);
+  });
 });
