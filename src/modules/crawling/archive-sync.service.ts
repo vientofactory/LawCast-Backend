@@ -695,14 +695,17 @@ export class ArchiveSyncService implements OnModuleInit {
   // ─────────────────────────────────────────────────────────────────────────
 
   async runIsDoneSync(trigger: string): Promise<IsDoneSyncResult | null> {
+    // No cross-phase guard: isDone sync only runs every 6h, so it must not be
+    // deferred by other write-heavy phases holding the lock at tick time.
+    // SQLite runs in WAL mode with a busy_timeout, so overlapping writes are
+    // safe; the tracker's own `isRunning` flag still prevents re-entrancy.
     return this.runPhase(
       'isDone sync',
       this.isDoneSync,
       trigger,
       () => this.reconcileIsDone(),
       (r) => `fetched=${r.fetchedDoneCount} marked=${r.markedDoneCount}`,
-      /* crossPhaseGuard */ true,
-      this.getWriteHeavyPhaseEntries(),
+      /* crossPhaseGuard */ false,
     );
   }
 

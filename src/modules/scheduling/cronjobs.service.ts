@@ -308,13 +308,26 @@ export class CronJobsService {
   }
 
   // Reconciles ended notices and updates isDone state.
+  // Runs on schedule (every 6h) even while other cron/archive-sync work is
+  // busy: it only fires a few times a day, so deferring it to the next lock
+  // window can leave notices in a stale isDone state for hours. SQLite is
+  // configured with WAL + busy_timeout, so overlapping writes are safe.
   @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC, {
     timeZone: CRON_TIMEZONE,
   })
   async handleIsDoneSync(): Promise<void> {
-    if (this.shouldSkipArchiveSyncCron('isDone sync')) {
-      return;
+    if (this.crawlingService.isSchedulerBusy({ includeBackground: true })) {
+      logAndBridge({
+        method: 'debugDev',
+        message:
+          'isDone sync running despite crawling scheduler lock (critical scheduled sync)',
+        logger: this.logger,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        context: CronJobsService.name,
+        discordBridge: this.discordBridge,
+      });
     }
+
     await this.execute('isDone sync', () =>
       this.archiveSyncService.runIsDoneSync('cron').then(() => {}),
     );
