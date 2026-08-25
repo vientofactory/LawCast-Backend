@@ -740,6 +740,17 @@ describe('Diffchain API (e2e)', () => {
     nextSnapshot.lifecycleStatus = 'active';
     nextSnapshot.sourceDeletedAt = null;
 
+    // Mirror the archive row fields that buildAuditSeedSnapshot reads,
+    // so the audit's reconstructed state matches the write path.
+    nextSnapshot.contentId = `content-${params.noticeNum}`;
+    nextSnapshot.billNumber = `BILL-${params.noticeNum}`;
+    nextSnapshot.proposer = '테스트 의원';
+    nextSnapshot.proposalDate = '2026-07-01';
+    nextSnapshot.contentCommittee = '정무위원회';
+    nextSnapshot.referralDate = '2026-07-02';
+    nextSnapshot.noticePeriod = '2026-07-01 ~ 2026-07-10';
+    nextSnapshot.proposalSession = '제22대';
+
     for (const detail of params.details) {
       nextSnapshot[detail.fieldPath] =
         detail.afterValue === undefined ? null : detail.afterValue;
