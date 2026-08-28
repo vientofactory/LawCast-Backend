@@ -884,16 +884,18 @@ export class NoticeArchiveService {
       // When summary_state table is unavailable we intentionally skip write.
     }
 
-    // When the existing record is already source_deleted, preserve its
-    // lifecycle status in the diff event to avoid emitting a spurious
-    // "restoration" event that flips the bill back to active.
+    // When the existing record is already source_deleted (detected via
+    // the change event chain, not the DB column which remains immutable),
+    // preserve its lifecycle status in the diff event to avoid emitting a
+    // spurious "restoration" event that flips the bill back to active.
+    const baselineLifecycleStatus = baselineSnapshot?.lifecycleStatus;
     const isAlreadySourceDeleted =
-      existing && beforeRow?.lifecycleStatus === 'source_deleted';
+      existing && baselineLifecycleStatus === 'source_deleted';
     const diffLifecycleStatus = isAlreadySourceDeleted
       ? ('source_deleted' as NoticeLifecycleStatus)
       : coreFields.lifecycleStatus;
     const diffSourceDeletedAt = isAlreadySourceDeleted
-      ? (beforeRow?.sourceDeletedAt ?? null)
+      ? (baselineSnapshot?.sourceDeletedAt ?? null)
       : coreFields.sourceDeletedAt;
 
     await this.appendTrackedDiffEvent(
@@ -1213,17 +1215,6 @@ export class NoticeArchiveService {
       afterSnapshot,
       subject: beforeRow.subject,
     });
-
-    // Persist the lifecycle status to the DB row so that subsequent reads
-    // via getTrackedRowByNoticeNum see 'source_deleted' directly, rather
-    // than relying solely on the change event chain.
-    await this.archiveRepository.update(
-      { noticeNum },
-      {
-        lifecycleStatus: 'source_deleted',
-        sourceDeletedAt: new Date(deletedAt),
-      },
-    );
 
     if (this.summaryStateRepository) {
       const currentState = await this.summaryStateRepository.findOne({
