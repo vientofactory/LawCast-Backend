@@ -266,7 +266,7 @@ export class ArchiveOrchestratorScreenshotCoordinator {
           screenshot,
           'jpeg',
         );
-        LoggerUtils.debug(
+        LoggerUtils.debugDev(
           'ArchiveOrchestratorService',
           `Screenshot stored for notice ${notice.num} (${screenshot.length.toLocaleString()} Bytes)`,
         );

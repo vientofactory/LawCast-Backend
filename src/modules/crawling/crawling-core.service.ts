@@ -21,6 +21,10 @@ import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { BrowserLeaseManagerService } from './browser-lease-manager.service';
 import { recoverCompetentAuthorityName } from './utils/competent-authority-autocomplete.utils';
+import {
+  navigateWithWaitingroomBypass,
+  isWaitingroomRedirectError,
+} from './utils/waitingroom-bypass';
 
 /**
  * Enriched error that attaches crawl phase, page index, and bill number
@@ -341,28 +345,77 @@ export class CrawlingCoreService {
   }
 
   /**
+   * Wraps an async operation with Waitingroom-aware retry.
+   * When a 307 redirect (Waitingroom) is detected, waits with backoff and
+   * retries the operation up to MAX_WAITINGROOM_RETRIES times.
+   */
+  private async withWaitingroomRetry<T>(
+    fn: () => Promise<T>,
+    context: string,
+  ): Promise<T> {
+    const maxRetries = APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES;
+    const baseDelay = APP_CONSTANTS.CRAWLING.WAITINGROOM_RETRY_DELAY_MS;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        if (!isWaitingroomRedirectError(error) || attempt >= maxRetries) {
+          throw error;
+        }
+        const backoffMs = baseDelay * (attempt + 1);
+        LoggerUtils.debugDev(
+          CrawlingCoreService.name,
+          `${context}: Waitingroom redirect (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${backoffMs}ms…`,
+        );
+        await new Promise<void>((r) => setTimeout(r, backoffMs));
+      }
+    }
+    // Unreachable — loop always returns or throws.
+    throw new Error('unreachable');
+  }
+
+  /**
    * Fetches all pages of active NSM bills from 국민참여입법센터 (opinion.lawmaking.go.kr) via NsmLmSts.
+   *
+   * Includes Waitingroom redirect retry: when a 307 response is detected,
+   * the client is recreated after a back-off delay and the stream restarts.
+   * Callers should deduplicate by bill number (already done in crawlAllPages).
    */
   async *getAllNsmPages(
     query?: Omit<INsmSearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
   ): AsyncGenerator<INsmSearchResult> {
-    const client = this.createNsmClient();
+    const maxRetries = APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES;
+    const baseDelay = APP_CONSTANTS.CRAWLING.WAITINGROOM_RETRY_DELAY_MS;
     let currentPage = 0;
-    try {
-      for await (const page of client.getAllPages(query, options)) {
-        currentPage++;
-        yield page;
+
+    for (let wrAttempt = 0; wrAttempt <= maxRetries; wrAttempt++) {
+      try {
+        const client = this.createNsmClient();
+        for await (const page of client.getAllPages(query, options)) {
+          currentPage++;
+          yield page;
+        }
+        return; // success — exit retry loop
+      } catch (error) {
+        if (!isWaitingroomRedirectError(error) || wrAttempt >= maxRetries) {
+          throw new NsmCrawlContextError(
+            error instanceof Error ? error.message : String(error),
+            {
+              phase: 'nsm-list',
+              pageIndex: currentPage || undefined,
+              cause: error,
+            },
+          );
+        }
+        const backoffMs = baseDelay * (wrAttempt + 1);
+        this.logger.warn(
+          `NSM list crawl: Waitingroom redirect on page ${currentPage} (attempt ${wrAttempt + 1}/${maxRetries + 1}), retrying in ${backoffMs}ms…`,
+        );
+        await new Promise<void>((r) => setTimeout(r, backoffMs));
+        currentPage = 0; // reset for fresh stream
       }
-    } catch (error) {
-      throw new NsmCrawlContextError(
-        error instanceof Error ? error.message : String(error),
-        {
-          phase: 'nsm-list',
-          pageIndex: currentPage || undefined,
-          cause: error,
-        },
-      );
     }
   }
 
@@ -540,7 +593,10 @@ export class CrawlingCoreService {
    * @param billNo The 의안번호 of the bill (e.g. "2200001").
    */
   async getNsmDetail(billNo: string): Promise<INsmBillDetail> {
-    return this.createNsmClient().getDetail(billNo);
+    return this.withWaitingroomRetry(
+      () => this.createNsmClient().getDetail(billNo),
+      `NSM detail bill ${billNo}`,
+    );
   }
 
   /**
@@ -551,6 +607,8 @@ export class CrawlingCoreService {
    * referred to a standing committee. Streaming them here lets the system
    * detect new legislation well before the formal 입법예고 process begins.
    *
+   * Includes Waitingroom redirect retry (same strategy as getAllNsmPages).
+   *
    * @param query Optional NsmLmSts search filters (pageIndex is managed internally).
    * @param options Bulk-fetch options (delayMs, concurrency, maxPages).
    */
@@ -558,22 +616,36 @@ export class CrawlingCoreService {
     query?: Omit<INsmSearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
   ): AsyncGenerator<INsmSearchResult> {
-    const client = this.createNsmClient();
+    const maxRetries = APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES;
+    const baseDelay = APP_CONSTANTS.CRAWLING.WAITINGROOM_RETRY_DELAY_MS;
     let currentPage = 0;
-    try {
-      for await (const page of client.getAllPendingPages(query, options)) {
-        currentPage++;
-        yield page;
+
+    for (let wrAttempt = 0; wrAttempt <= maxRetries; wrAttempt++) {
+      try {
+        const client = this.createNsmClient();
+        for await (const page of client.getAllPendingPages(query, options)) {
+          currentPage++;
+          yield page;
+        }
+        return; // success — exit retry loop
+      } catch (error) {
+        if (!isWaitingroomRedirectError(error) || wrAttempt >= maxRetries) {
+          throw new NsmCrawlContextError(
+            error instanceof Error ? error.message : String(error),
+            {
+              phase: 'nsm-pending-list',
+              pageIndex: currentPage || undefined,
+              cause: error,
+            },
+          );
+        }
+        const backoffMs = baseDelay * (wrAttempt + 1);
+        this.logger.warn(
+          `NSM pending crawl: Waitingroom redirect on page ${currentPage} (attempt ${wrAttempt + 1}/${maxRetries + 1}), retrying in ${backoffMs}ms…`,
+        );
+        await new Promise<void>((r) => setTimeout(r, backoffMs));
+        currentPage = 0; // reset for fresh stream
       }
-    } catch (error) {
-      throw new NsmCrawlContextError(
-        error instanceof Error ? error.message : String(error),
-        {
-          phase: 'nsm-pending-list',
-          pageIndex: currentPage || undefined,
-          cause: error,
-        },
-      );
     }
   }
 
@@ -619,79 +691,11 @@ export class CrawlingCoreService {
           });
 
           // ── Navigate with Waitingroom bypass ──────────────────────────────
-          //
-          // opinion.lawmaking.go.kr serves a Waitingroom page
-          // that uses a JavaScript polling timer before redirecting to the real
-          // detail page.  Using `networkidle0` on the initial goto() resolves as
-          // soon as the Waitingroom itself becomes idle (before the JS redirect),
-          // so we end up capturing the wrong HTML.
-          //
-          // Fix:
-          //   1. Use `domcontentloaded` - resolves immediately on either the real
-          //      page or the Waitingroom without waiting for networkidle.
-          //   2. Inspect the page title.  If it's Waitingroom, call
-          //      waitForNavigation(networkidle0) to wait for the JS redirect.
-          //   3. Up to MAX_WAITINGROOM_RETRIES: if waitForNavigation times out,
-          //      reload the URL with a back-off delay and try again.
-
-          let response: { status: () => number } | null = null;
-          let waitingroomHits = 0;
-
-          response = await page.goto(detailUrl, {
-            waitUntil: 'domcontentloaded',
-            timeout: APP_CONSTANTS.CRAWLING.WAITINGROOM_GOTO_TIMEOUT_MS,
-          });
-
-          for (
-            let attempt = 0;
-            attempt <= APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES;
-            attempt++
-          ) {
-            const pageTitle = await page.title();
-            if (!pageTitle.toLowerCase().includes('waitingroom')) break;
-
-            waitingroomHits++;
-            LoggerUtils.debugDev(
-              CrawlingCoreService.name,
-              `NSM bill ${billNo}: Waitingroom hit (attempt ${
-                attempt + 1
-              }/${APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES + 1}), waiting for redirect…`,
-            );
-
-            if (attempt < APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES) {
-              try {
-                // Wait for the JS redirect to fire and the real page to load.
-                const nav = await page.waitForNavigation({
-                  waitUntil: 'networkidle0',
-                  timeout: APP_CONSTANTS.CRAWLING.WAITINGROOM_NAV_TIMEOUT_MS,
-                });
-                if (nav) response = nav;
-              } catch {
-                // waitForNavigation timed out - pause then reload.
-                await new Promise<void>((r) =>
-                  setTimeout(
-                    r,
-                    APP_CONSTANTS.CRAWLING.WAITINGROOM_RETRY_DELAY_MS *
-                      (attempt + 1),
-                  ),
-                );
-                response = await page.goto(detailUrl, {
-                  waitUntil: 'domcontentloaded',
-                  timeout: APP_CONSTANTS.CRAWLING.WAITINGROOM_GOTO_TIMEOUT_MS,
-                });
-              }
-            }
-          }
-
-          if (
-            waitingroomHits > APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES
-          ) {
-            this.logger.warn(
-              `NSM bill ${billNo}: Waitingroom not resolved after ${
-                APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES + 1
-              } attempts - HTML may be a Waitingroom page`,
-            );
-          }
+          const { response } = await navigateWithWaitingroomBypass(
+            page,
+            detailUrl,
+            { tag: `bill ${billNo}` },
+          );
 
           const html = await page.content();
           const responseUrl = page.url();
