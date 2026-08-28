@@ -297,19 +297,70 @@ export async function performPendingBillsCrawlInternal(
     }
   };
 
-  for await (const page of deps.crawlingCoreService.getAllNsmPages(
-    query,
-    crawlOptions,
-  )) {
-    collectPageItems(page.items ?? [], 'all');
+  // Wrap scans in try-catch so that source-missing detection runs
+  // even if the NSM crawl encounters non-retryable errors (e.g.
+  // Waitingroom 307 after Puppeteer fallback).  Retryable network
+  // errors (ECONNRESET) are re-thrown so the outer retry loop in
+  // handlePendingCronInternal can handle them.
+  try {
+    for await (const page of deps.crawlingCoreService.getAllNsmPages(
+      query,
+      crawlOptions,
+    )) {
+      collectPageItems(page.items ?? [], 'all');
+    }
+
+    for await (const page of deps.crawlingCoreService.getAllNsmPendingPages(
+      query,
+      crawlOptions,
+    )) {
+      collectPageItems(page.items ?? [], 'pending');
+    }
+  } catch (error) {
+    if (deps.isRetryableNetworkError(error)) {
+      throw error;
+    }
+    deps.logger.warn(
+      `NSM pending crawl scan error (continuing with partial data): ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
-  for await (const page of deps.crawlingCoreService.getAllNsmPendingPages(
-    query,
-    crawlOptions,
-  )) {
-    collectPageItems(page.items ?? [], 'pending');
+  // ── NSM source-missing detection (cron path) ──────────────────────
+  // rawItemMap contains every unique NSM bill number seen during the
+  // full list crawl. Any active NSM-originated archive row (contentId
+  // IS NULL) not in this set has been removed from 국민참여입법센터.
+  if (rawItemMap.size > 0) {
+    const sourceDeletedCount =
+      await deps.noticeArchiveService.markSourceDeletedByMissingNsmNums(
+        new Set(rawItemMap.keys()),
+      );
+    if (sourceDeletedCount > 0) {
+      deps.logger.log(
+        `NSM pending cron marked ${sourceDeletedCount} notice(s) as source_deleted (seenNsmNums=${rawItemMap.size})`,
+      );
+    }
   }
+  // ──────────────────────────────────────────────────────────────────
+
+  // ── NSM detail-page probe (cron path) ───────────────────────────
+  // Bills that国民참여입법센터 still lists but deleted on detail page.
+  try {
+    const NSM_DETAIL_PROBE_BATCH_SIZE = 5;
+    const detailProbeDeletedCount =
+      await deps.archiveOrchestratorService.probeExistingNsmBillsForSourceDeletion(
+        NSM_DETAIL_PROBE_BATCH_SIZE,
+      );
+    if (detailProbeDeletedCount > 0) {
+      deps.logger.log(
+        `NSM detail probe confirmed ${detailProbeDeletedCount} deleted bill(s)`,
+      );
+    }
+  } catch (error) {
+    deps.logger.warn(
+      `NSM detail probe failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  // ──────────────────────────────────────────────────────────────────
 
   if (nsmNotices.length === 0) return;
 

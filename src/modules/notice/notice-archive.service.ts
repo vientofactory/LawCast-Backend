@@ -884,6 +884,18 @@ export class NoticeArchiveService {
       // When summary_state table is unavailable we intentionally skip write.
     }
 
+    // When the existing record is already source_deleted, preserve its
+    // lifecycle status in the diff event to avoid emitting a spurious
+    // "restoration" event that flips the bill back to active.
+    const isAlreadySourceDeleted =
+      existing && beforeRow?.lifecycleStatus === 'source_deleted';
+    const diffLifecycleStatus = isAlreadySourceDeleted
+      ? ('source_deleted' as NoticeLifecycleStatus)
+      : coreFields.lifecycleStatus;
+    const diffSourceDeletedAt = isAlreadySourceDeleted
+      ? (beforeRow?.sourceDeletedAt ?? null)
+      : coreFields.sourceDeletedAt;
+
     await this.appendTrackedDiffEvent(
       notice.num,
       NoticeChangeSource.ARCHIVE_UPSERT,
@@ -903,8 +915,8 @@ export class NoticeArchiveService {
         contentNoticePeriod: coreFields.contentNoticePeriod,
         contentProposalSession: coreFields.contentProposalSession,
         isDone: resolvedIsDone,
-        lifecycleStatus: coreFields.lifecycleStatus,
-        sourceDeletedAt: coreFields.sourceDeletedAt,
+        lifecycleStatus: diffLifecycleStatus,
+        sourceDeletedAt: diffSourceDeletedAt,
       },
     );
   }
@@ -1014,8 +1026,154 @@ export class NoticeArchiveService {
   async markSourceDeletedByMissingPalNums(
     seenPalActiveNums: Set<number>,
   ): Promise<number> {
-    void seenPalActiveNums;
-    return 0;
+    if (seenPalActiveNums.size === 0) {
+      return 0;
+    }
+
+    // Only consider PAL-originated rows (contentId IS NOT NULL) that are
+    // currently lifecycle_status = 'active'.  NSM-only rows (contentId NULL)
+    // are not part of the PAL universe and must not be marked deleted.
+    const activePalRows = await this.archiveRepository.find({
+      where: {
+        lifecycleStatus: 'active',
+        contentId: Not(IsNull()),
+      },
+      select: {
+        noticeNum: true,
+        subject: true,
+      },
+    });
+
+    const missingNums = activePalRows
+      .filter((row) => !seenPalActiveNums.has(row.noticeNum))
+      .map((row) => row.noticeNum);
+
+    if (missingNums.length === 0) {
+      return 0;
+    }
+
+    let markedCount = 0;
+    for (const noticeNum of missingNums) {
+      try {
+        await this.appendSourceDeletedEventByNoticeNum(noticeNum);
+        markedCount++;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `markSourceDeletedByMissingPalNums: failed to mark notice ${noticeNum} as source_deleted: ${message}`,
+        );
+      }
+    }
+
+    return markedCount;
+  }
+
+  /**
+   * Marks active NSM-originated archive rows (contentId IS NULL) whose
+   * noticeNum is absent from `seenNsmActiveNums` as source_deleted.
+   *
+   * This catches bills that have been removed from 국민참여입법센터 entirely
+   * (not just from a detail page). It runs at the end of the pending-sync
+   * phase after the full NSM list crawl is complete.
+   */
+  async markSourceDeletedByMissingNsmNums(
+    seenNsmActiveNums: Set<number>,
+  ): Promise<number> {
+    if (seenNsmActiveNums.size === 0) {
+      return 0;
+    }
+
+    // Only NSM-originated rows (contentId IS NOT NULL means PAL-originated,
+    // so contentId IS NULL means NSM-only) that are currently active.
+    const activeNsmRows = await this.archiveRepository.find({
+      where: {
+        lifecycleStatus: 'active',
+        contentId: IsNull(),
+      },
+      select: {
+        noticeNum: true,
+        subject: true,
+      },
+    });
+
+    const missingNums = activeNsmRows
+      .filter((row) => !seenNsmActiveNums.has(row.noticeNum))
+      .map((row) => row.noticeNum);
+
+    LoggerUtils.debugDev(
+      'NoticeArchiveService',
+      `markSourceDeletedByMissingNsmNums: seenNsmNums=${seenNsmActiveNums.size}, activeNsmRows=${activeNsmRows.length}, missing=${missingNums.length}`,
+    );
+
+    if (missingNums.length === 0) {
+      return 0;
+    }
+
+    let markedCount = 0;
+    for (const noticeNum of missingNums) {
+      try {
+        await this.appendSourceDeletedEventByNoticeNum(noticeNum);
+        markedCount++;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `markSourceDeletedByMissingNsmNums: failed to mark notice ${noticeNum} as source_deleted: ${message}`,
+        );
+      }
+    }
+
+    return markedCount;
+  }
+
+  /**
+   * Returns a batch of active NSM-originated archive rows (contentId IS NULL)
+   * for detail-page probe.  Each row has noticeNum and contentBillNumber so
+   * the caller can issue an NSM detail-page request to check for deletion.
+   */
+  async getActiveNsmBillsForProbe(
+    limit: number,
+  ): Promise<Array<{ noticeNum: number; contentBillNumber: string | null }>> {
+    if (limit <= 0) return [];
+
+    // Priority 1: probe ALL bills whose detail page was never successfully
+    // captured (content_bill_number IS NULL).  These are the strongest
+    // candidates for having been deleted on国民참여입법센터.
+    // There are typically <50 such bills, so this is fast.
+    const highPriority = await this.archiveRepository.find({
+      where: {
+        lifecycleStatus: 'active',
+        contentId: IsNull(),
+        contentBillNumber: IsNull(),
+      },
+      select: {
+        noticeNum: true,
+        contentBillNumber: true,
+      },
+      order: { noticeNum: 'DESC' },
+    });
+
+    if (highPriority.length >= limit) {
+      return highPriority.slice(0, limit);
+    }
+
+    // Priority 2: fill remaining slots from the broader pool.
+    const remaining = limit - highPriority.length;
+    if (remaining <= 0) return highPriority;
+
+    const filler = await this.archiveRepository.find({
+      where: {
+        lifecycleStatus: 'active',
+        contentId: IsNull(),
+      },
+      select: {
+        noticeNum: true,
+        contentBillNumber: true,
+      },
+      order: { noticeNum: 'ASC' },
+      take: remaining,
+    });
+
+    return [...highPriority, ...filler];
   }
 
   async appendSourceDeletedEventByNoticeNum(noticeNum: number): Promise<void> {
@@ -1055,6 +1213,17 @@ export class NoticeArchiveService {
       afterSnapshot,
       subject: beforeRow.subject,
     });
+
+    // Persist the lifecycle status to the DB row so that subsequent reads
+    // via getTrackedRowByNoticeNum see 'source_deleted' directly, rather
+    // than relying solely on the change event chain.
+    await this.archiveRepository.update(
+      { noticeNum },
+      {
+        lifecycleStatus: 'source_deleted',
+        sourceDeletedAt: new Date(deletedAt),
+      },
+    );
 
     if (this.summaryStateRepository) {
       const currentState = await this.summaryStateRepository.findOne({

@@ -450,18 +450,39 @@ export class NotificationBatchService {
       return [];
     }
 
-    const noticePeriodEndedPayloads = payloads.filter((payload) =>
-      payload.changedFields.includes('isDone'),
+    // source_deleted is identified first so other categories can exclude it
+    // and avoid duplicate notifications (e.g. a newly source_deleted bill
+    // also has isDone changed from false→true, which would otherwise hit
+    // both noticePeriodEnded and sourceDeleted paths).
+    const sourceDeletedPayloads = payloads.filter(
+      (payload) =>
+        payload.source === 'archive:source-missing' ||
+        (payload.changedFields.includes('lifecycleStatus') &&
+          payload.changedFields.includes('sourceDeletedAt')),
+    );
+    const isSourceDeletedNum = new Set(
+      sourceDeletedPayloads.map((p) => p.noticeNum),
+    );
+    const isSourceDeleted = (payload: ChangeNotificationPayload) =>
+      isSourceDeletedNum.has(payload.noticeNum);
+
+    const noticePeriodEndedPayloads = payloads.filter(
+      (payload) =>
+        payload.changedFields.includes('isDone') && !isSourceDeleted(payload),
     );
     const nsmToPalTransitionPayloads = payloads.filter(
       (payload) =>
         !payload.changedFields.includes('isDone') &&
-        payload.isNsmToPalTransition === true,
+        payload.source !== 'archive:source-missing' &&
+        payload.isNsmToPalTransition === true &&
+        !isSourceDeleted(payload),
     );
     const regularPayloads = payloads.filter(
       (payload) =>
         !payload.changedFields.includes('isDone') &&
-        payload.isNsmToPalTransition !== true,
+        payload.source !== 'archive:source-missing' &&
+        payload.isNsmToPalTransition !== true &&
+        !isSourceDeleted(payload),
     );
 
     let activeWebhooks: Awaited<ReturnType<typeof this.webhookService.findAll>>;
@@ -726,6 +747,97 @@ export class NotificationBatchService {
               activeWebhooks,
               (webhooks) =>
                 this.notificationService.sendDiscordNsmToPalTransitionBatch(
+                  payload,
+                  webhooks,
+                  abortSignal,
+                ),
+              {
+                itemLabel: `${payload.noticeNum}:${payload.subject}`,
+                itemType: 'change',
+              },
+            );
+
+          const webPushDispatch = await this.dispatchToWebPush(
+            activePushSubscriptions,
+            (subscriptions) =>
+              this.webPushNotificationService.sendChangeBatch(
+                payload,
+                subscriptions,
+              ),
+          );
+
+          return {
+            noticeNum: payload.noticeNum,
+            subject: payload.subject,
+            totalWebhooks: activeWebhooks.length,
+            totalPushSubscriptions: webPushDispatch.targetCount,
+            successCount,
+            failedCount,
+            deactivated,
+            temporaryFailures,
+            webPushSuccessCount: webPushDispatch.successCount,
+            webPushFailedCount: webPushDispatch.failedCount,
+            webPushDeactivatedCount: webPushDispatch.deactivatedCount,
+          };
+        });
+      }
+    }
+
+    if (sourceDeletedPayloads.length > 0) {
+      if (sourceDeletedPayloads.length > 1) {
+        jobs.push(async (abortSignal: AbortSignal) => {
+          const uniqueNoticeCount = new Set(
+            sourceDeletedPayloads.map((payload) => payload.noticeNum),
+          ).size;
+          const { successCount, failedCount, deactivated, temporaryFailures } =
+            await this.dispatchToWebhooks(
+              activeWebhooks,
+              (webhooks) =>
+                this.notificationService.sendDiscordSourceDeletedDigestBatch(
+                  sourceDeletedPayloads,
+                  webhooks,
+                  abortSignal,
+                ),
+              {
+                itemLabel: `${sourceDeletedPayloads.length} source-deleted events across ${uniqueNoticeCount} notices`,
+                itemType: 'change',
+              },
+            );
+
+          const webPushDispatch = await this.dispatchToWebPush(
+            activePushSubscriptions,
+            (subscriptions) =>
+              this.webPushNotificationService.sendChangeDigestBatch(
+                sourceDeletedPayloads,
+                subscriptions,
+                { ended: false, sourceDeleted: true },
+              ),
+          );
+
+          return {
+            noticeNum: sourceDeletedPayloads[0].noticeNum,
+            subject: `법률안 무효화(삭제) ${sourceDeletedPayloads.length}건 요약`,
+            totalWebhooks: activeWebhooks.length,
+            totalPushSubscriptions: webPushDispatch.targetCount,
+            successCount,
+            failedCount,
+            deactivated,
+            temporaryFailures,
+            webPushSuccessCount: webPushDispatch.successCount,
+            webPushFailedCount: webPushDispatch.failedCount,
+            webPushDeactivatedCount: webPushDispatch.deactivatedCount,
+            aggregatedEventCount: sourceDeletedPayloads.length,
+            aggregatedNoticeCount: uniqueNoticeCount,
+          };
+        });
+      } else {
+        jobs.push(async (abortSignal: AbortSignal) => {
+          const payload = sourceDeletedPayloads[0];
+          const { successCount, failedCount, deactivated, temporaryFailures } =
+            await this.dispatchToWebhooks(
+              activeWebhooks,
+              (webhooks) =>
+                this.notificationService.sendDiscordSourceDeletedBatch(
                   payload,
                   webhooks,
                   abortSignal,

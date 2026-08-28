@@ -141,16 +141,24 @@ export class WebPushNotificationService {
             timeline: 'true',
           });
 
+    const isSourceDeleted =
+      payload.source === 'archive:source-missing' ||
+      (payload.changedFields.includes('lifecycleStatus') &&
+        payload.changedFields.includes('sourceDeletedAt'));
     const title = isDoneChanged
       ? '입법예고 기간 종료 감지'
-      : payload.isNsmToPalTransition
-        ? '국회 입법예고로 이관 감지'
-        : '입법예고 변경 감지';
+      : isSourceDeleted
+        ? '법률안 무효화(삭제) 감지'
+        : payload.isNsmToPalTransition
+          ? '국회 입법예고로 이관 감지'
+          : '입법예고 변경 감지';
     const type = isDoneChanged
       ? 'notice_period_ended'
-      : payload.isNsmToPalTransition
-        ? 'notice_nsm_to_pal_transition'
-        : 'notice_changed';
+      : isSourceDeleted
+        ? 'notice_source_deleted'
+        : payload.isNsmToPalTransition
+          ? 'notice_nsm_to_pal_transition'
+          : 'notice_changed';
 
     return this.sendBatch(
       subscriptions,
@@ -172,7 +180,11 @@ export class WebPushNotificationService {
   async sendChangeDigestBatch(
     payloads: ChangeNotificationPayload[],
     subscriptions: WebPushSubscription[],
-    options: { ended: boolean; nsmToPalTransition?: boolean },
+    options: {
+      ended: boolean;
+      nsmToPalTransition?: boolean;
+      sourceDeleted?: boolean;
+    },
   ): Promise<WebPushDispatchSummary> {
     const noticeNums = Array.from(
       new Set(payloads.map((payload) => payload.noticeNum)),
@@ -184,14 +196,18 @@ export class WebPushNotificationService {
 
     const title = options.ended
       ? `입법예고 종료 ${payloads.length}건`
-      : options.nsmToPalTransition
-        ? `국회 입법예고로 이관 ${payloads.length}건`
-        : `입법예고 변경 ${payloads.length}건`;
+      : options.sourceDeleted
+        ? `법률안 무효화(삭제) ${payloads.length}건`
+        : options.nsmToPalTransition
+          ? `국회 입법예고로 이관 ${payloads.length}건`
+          : `입법예고 변경 ${payloads.length}건`;
     const type = options.ended
       ? 'notice_period_ended_digest'
-      : options.nsmToPalTransition
-        ? 'notice_nsm_to_pal_transition_digest'
-        : 'notice_changed_digest';
+      : options.sourceDeleted
+        ? 'notice_source_deleted_digest'
+        : options.nsmToPalTransition
+          ? 'notice_nsm_to_pal_transition_digest'
+          : 'notice_changed_digest';
 
     return this.sendBatch(
       subscriptions,

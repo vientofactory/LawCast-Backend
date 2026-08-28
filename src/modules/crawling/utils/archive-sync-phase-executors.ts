@@ -994,23 +994,12 @@ export async function executeFullSyncPhase(
       );
     }
 
-    const sourceDeletedCount =
-      await deps.noticeArchiveService.markSourceDeletedByMissingPalNums(
-        seenPalActiveNums,
-      );
-    if (sourceDeletedCount > 0) {
-      LoggerUtils.log(
-        'ArchiveSyncService',
-        `Marked ${sourceDeletedCount} notice(s) as source_deleted after PAL full sync reconciliation`,
-      );
-    }
-
     await enqueueFullSyncApplyTasks(deps, applyTasks);
     void runFullSyncApplyWorker(deps, options);
 
     LoggerUtils.log(
       'ArchiveSyncService',
-      `Full sync progress done: pages=${totalPagesScanned}, scanned=${totalNoticesScanned}, newlyArchived=${newlyArchivedCount}, stagedApply=${stagedApplyCount}, stagedUpgrade=${stagedUpgradeCount}, applyQueue=${fullSyncQueueLengthSnapshot}, palSeen=${seenPalActiveNums.size}, sourceDeleted=${sourceDeletedCount}`,
+      `Full sync progress done: pages=${totalPagesScanned}, scanned=${totalNoticesScanned}, newlyArchived=${newlyArchivedCount}, stagedApply=${stagedApplyCount}, stagedUpgrade=${stagedUpgradeCount}, applyQueue=${fullSyncQueueLengthSnapshot}, palSeen=${seenPalActiveNums.size}`,
     );
 
     return { totalPagesScanned, totalNoticesScanned, newlyArchivedCount };
@@ -1121,13 +1110,72 @@ export async function executePendingSyncPhase(
     // Serialize streams to avoid triggering the Waitingroom with concurrent
     // requests from the same IP. The NSM site enqueues IPs that hit it too
     // aggressively, so running both streams in parallel compounds the issue.
-    await scanAllStream();
-    await scanPendingStream();
+    let scanError: unknown = null;
+    try {
+      await scanAllStream();
+      await scanPendingStream();
+    } catch (error) {
+      scanError = error;
+      LoggerUtils.log(
+        'ArchiveSyncService',
+        `Pending sync scan encountered error: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const scanElapsedMs = Date.now() - scanStartedAt;
     LoggerUtils.log(
       'ArchiveSyncService',
       `Pending sync scan done: allPages=${allPagesScanned}, pendingPages=${pendingPagesScanned}, allItems=${allItemsObserved}, pendingItems=${pendingItemsObserved}, unique=${nsmNotices.length}, scanMs=${scanElapsedMs}`,
     );
+
+    // ── NSM source-missing detection ──────────────────────────────────
+    // Run BEFORE classification/archival so that deleted bills are marked
+    // even when the scan is partial or fails (e.g. Waitingroom 307).
+    // rawItemMap accumulates items incrementally during the scan — even
+    // a partial scan provides valid evidence of which bills still exist
+    // on NSM.  Bills not yet scanned will be caught on the next run.
+    const seenNsmActiveNums = new Set(rawItemMap.keys());
+    let sourceDeletedCount = 0;
+    if (seenNsmActiveNums.size > 0) {
+      sourceDeletedCount =
+        await deps.noticeArchiveService.markSourceDeletedByMissingNsmNums(
+          seenNsmActiveNums,
+        );
+      if (sourceDeletedCount > 0) {
+        LoggerUtils.log(
+          'ArchiveSyncService',
+          `Pending sync marked ${sourceDeletedCount} notice(s) as source_deleted after NSM reconciliation (seenNsmNums=${seenNsmActiveNums.size})`,
+        );
+      }
+    }
+    // ──────────────────────────────────────────────────────────────────
+
+    // ── NSM detail-page probe ─────────────────────────────────────────
+    // Bills that are still in the NSM list but deleted on the detail page
+    // (e.g.国民참여입법센터 list API returns them but detail shows
+    // "안건정보가 없습니다") are not caught by list-based detection.
+    // Probe ALL content_bill_number IS NULL bills (typically <50) since
+    // these are the strongest deletion candidates (detail page never captured).
+    const NSM_DETAIL_PROBE_BATCH_SIZE = 50;
+    let detailProbeDeletedCount = 0;
+    try {
+      detailProbeDeletedCount =
+        await deps.archiveOrchestratorService.probeExistingNsmBillsForSourceDeletion(
+          NSM_DETAIL_PROBE_BATCH_SIZE,
+        );
+      if (detailProbeDeletedCount > 0) {
+        LoggerUtils.log(
+          'ArchiveSyncService',
+          `NSM detail probe confirmed ${detailProbeDeletedCount} deleted bill(s)`,
+        );
+      }
+    } catch (error) {
+      LoggerUtils.log(
+        'ArchiveSyncService',
+        `NSM detail probe failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    sourceDeletedCount += detailProbeDeletedCount;
+    // ──────────────────────────────────────────────────────────────────
 
     const totalScanned = nsmNotices.length;
 
@@ -1140,7 +1188,18 @@ export async function executePendingSyncPhase(
         'ArchiveSyncService',
         `Pending sync timing: totalMs=${Date.now() - pendingPhaseStartedAt}, scanMs=${scanElapsedMs}, classifyMs=0, archiveMs=0`,
       );
-      return { totalScanned: 0, newlyArchivedCount: 0 };
+      return { totalScanned: 0, newlyArchivedCount: 0, sourceDeletedCount };
+    }
+
+    if (scanError) {
+      // The scan failed (e.g. Waitingroom 307 after Puppeteer fallback).
+      // We already ran source-missing detection with whatever items were
+      // collected.  Skip archival of new items but return partial results.
+      LoggerUtils.log(
+        'ArchiveSyncService',
+        'Pending sync skipping archival due to scan error, source-missing detection already completed',
+      );
+      return { totalScanned, newlyArchivedCount: 0, sourceDeletedCount };
     }
 
     const classifyStartedAt = Date.now();
@@ -1206,6 +1265,7 @@ export async function executePendingSyncPhase(
       `Pending sync delegated recompare handling to pending change-detection workflow (trigger=${runtime?.trigger ?? 'manual'})`,
     );
     const archiveElapsedMs = Date.now() - archiveStartedAt;
+
     const totalElapsedMs = Date.now() - pendingPhaseStartedAt;
 
     logAndBridge({
@@ -1213,12 +1273,14 @@ export async function executePendingSyncPhase(
       method: 'log',
       message:
         `Pending sync done - scanned=${totalScanned} new=${newNsmNotices.length} ` +
-        `newPending=${newPendingNotices.length} syncOnly=${newSyncOnlyItems.length} `,
+        `newPending=${newPendingNotices.length} syncOnly=${newSyncOnlyItems.length} ` +
+        `sourceDeleted=${sourceDeletedCount}`,
       context: ARCHIVE_SYNC_CONTEXT,
       discordBridge: deps.discordBridge,
       bridgeMessage:
         `Pending sync complete - scanned=${totalScanned} new=${newNsmNotices.length} ` +
-        `newPending=${newPendingNotices.length} syncOnly=${newSyncOnlyItems.length} `,
+        `newPending=${newPendingNotices.length} syncOnly=${newSyncOnlyItems.length} ` +
+        `sourceDeleted=${sourceDeletedCount}`,
     });
 
     LoggerUtils.debugDev(
@@ -1226,7 +1288,7 @@ export async function executePendingSyncPhase(
       `Pending sync timing: totalMs=${totalElapsedMs}, scanMs=${scanElapsedMs}, classifyMs=${classifyElapsedMs}, archiveMs=${archiveElapsedMs}`,
     );
 
-    return { totalScanned, newlyArchivedCount };
+    return { totalScanned, newlyArchivedCount, sourceDeletedCount };
   } finally {
     await deps.noticeArchiveService.endChangeNotificationCollection();
   }

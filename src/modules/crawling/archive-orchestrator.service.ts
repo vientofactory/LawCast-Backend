@@ -680,6 +680,28 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
             } catch (error) {
               const message =
                 error instanceof Error ? error.message : String(error);
+
+              // If the bill is confirmed deleted on NSM, mark source_deleted
+              // and skip the upsert — restoring it to active would be incorrect.
+              if (error instanceof NsmBillDeletedError) {
+                await this.appendSourceDeletedAndFlushNotifications(notice.num);
+                logAndBridge({
+                  logger: this.logger,
+                  method: 'warn',
+                  message: `captureNsmDetailFull detected deleted bill ${item.billNo} during NSM archive, marked source_deleted`,
+                  context: ArchiveOrchestratorService.name,
+                  discordBridge: this.discordBridge,
+                  bridgeLevel: BridgeLogLevel.WARN,
+                  bridgeMessage: `NSM archive detected deleted bill **${item.billNo}** (notice=${notice.num}), marked source_deleted`,
+                  metadata: {
+                    billNo: item.billNo,
+                    noticeNum: notice.num,
+                    detectedAs: SourceDeletionDetectedAs.SOURCE_DELETED,
+                  },
+                });
+                return null;
+              }
+
               logAndBridge({
                 logger: this.logger,
                 method: 'warn',
@@ -983,9 +1005,17 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
   private async appendSourceDeletedAndFlushNotifications(
     noticeNum: number,
   ): Promise<void> {
-    await this.noticeArchiveService.appendSourceDeletedEventByNoticeNum(
-      noticeNum,
-    );
+    try {
+      await this.noticeArchiveService.appendSourceDeletedEventByNoticeNum(
+        noticeNum,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `failed to append source_deleted event for notice ${noticeNum}: ${message}`,
+      );
+      return;
+    }
 
     try {
       await this.noticeArchiveService.flushQueuedChangeNotifications();
@@ -995,6 +1025,88 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         `failed to flush change notifications after source_deleted invalidation for notice ${noticeNum}: ${message}`,
       );
     }
+  }
+
+  /**
+   * Probes a batch of existing archived NSM bills via their detail pages to
+   * detect bills that国民참여입법센터 has deleted but the list API still returns.
+   *
+   * This catches the gap where markSourceDeletedByMissingNsmNums (list-based)
+   * misses bills that are still in the NSM list but have "안건정보가 없습니다"
+   * on their detail page.
+   *
+   * Uses captureNsmDetailFull (Puppeteer) which handles the Waitingroom.
+   * Bills that throw NsmBillDeletedError are confirmed deleted.
+   */
+  async probeExistingNsmBillsForSourceDeletion(
+    limit: number = 50,
+  ): Promise<number> {
+    // Probe ALL content_bill_number IS NULL bills first (high priority),
+    // then fill remaining slots with rotating broader pool.
+    const candidates =
+      await this.noticeArchiveService.getActiveNsmBillsForProbe(limit);
+
+    if (candidates.length === 0) return 0;
+
+    this.logger.log(
+      `NSM detail probe starting: ${candidates.length} candidates [${candidates
+        .slice(0, 5)
+        .map((c) => c.noticeNum)
+        .join(', ')}${candidates.length > 5 ? '...' : ''}]`,
+    );
+
+    let markedCount = 0;
+    let probedCount = 0;
+    for (const candidate of candidates) {
+      const billNo =
+        candidate.contentBillNumber ?? candidate.noticeNum.toString();
+      probedCount++;
+
+      try {
+        await this.crawlingCoreService.captureNsmDetailFull(billNo);
+        // No error — bill is alive on NSM detail page.
+        LoggerUtils.debugDev(
+          'ArchiveOrchestratorService',
+          `NSM detail probe [${probedCount}/${candidates.length}] bill ${billNo}: alive`,
+        );
+      } catch (error) {
+        if (error instanceof NsmBillDeletedError) {
+          await this.appendSourceDeletedAndFlushNotifications(
+            candidate.noticeNum,
+          );
+          markedCount++;
+          this.logger.warn(
+            `NSM detail probe [${probedCount}/${candidates.length}] confirmed deleted bill ${billNo} (notice=${candidate.noticeNum}), marked source_deleted`,
+          );
+        } else {
+          // Puppeteer failed (timeout, Waitingroom) — fall back to
+          // lightweight HTTP probe which can detect deleted bills without
+          // needing a full browser session.
+          const probeMessage =
+            await this.crawlingCoreService.probeNsmDeletedBillAlert(billNo);
+          if (probeMessage) {
+            await this.appendSourceDeletedAndFlushNotifications(
+              candidate.noticeNum,
+            );
+            markedCount++;
+            this.logger.warn(
+              `NSM detail probe [${probedCount}/${candidates.length}] confirmed deleted bill ${billNo} via HTTP fallback (notice=${candidate.noticeNum}): ${probeMessage}`,
+            );
+          } else {
+            const msg = error instanceof Error ? error.message : String(error);
+            LoggerUtils.debugDev(
+              'ArchiveOrchestratorService',
+              `NSM detail probe [${probedCount}/${candidates.length}] bill ${billNo}: skipped (${msg.slice(0, 80)})`,
+            );
+          }
+        }
+      }
+    }
+
+    this.logger.log(
+      `NSM detail probe done: probed=${probedCount}, marked=${markedCount}`,
+    );
+    return markedCount;
   }
 
   /**

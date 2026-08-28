@@ -117,6 +117,7 @@ export interface ChainIntegrityAuditResult {
 export interface PendingSyncResult {
   totalScanned: number;
   newlyArchivedCount: number;
+  sourceDeletedCount: number;
 }
 
 export type FullSyncStatus = PhaseStatus<FullSyncResult>;
@@ -668,7 +669,8 @@ export class ArchiveSyncService implements OnModuleInit {
       this.pendingSync,
       trigger,
       () => this.executePendingSync(trigger),
-      (r) => `scanned=${r.totalScanned} archived=${r.newlyArchivedCount}`,
+      (r) =>
+        `scanned=${r.totalScanned} archived=${r.newlyArchivedCount} sourceDeleted=${r.sourceDeletedCount}`,
       /* crossPhaseGuard */ true,
       this.getWriteHeavyPhaseEntries(),
     );

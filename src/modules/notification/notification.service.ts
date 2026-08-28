@@ -264,6 +264,44 @@ export class NotificationService {
     });
   }
 
+  async sendDiscordSourceDeletedBatch(
+    payload: ChangeNotificationPayload,
+    webhooks: Webhook[],
+    abortSignal?: AbortSignal,
+  ): Promise<NotificationSendResult[]> {
+    const embed = this.createSourceDeletedEmbed(payload);
+    return this.sendDiscordEmbedBatch(embed, webhooks, {
+      username: 'LawCast 법률안 무효화 알림',
+      context: 'source deleted notification',
+      abortSignal,
+    });
+  }
+
+  async sendDiscordSourceDeletedDigestBatch(
+    payloads: ChangeNotificationPayload[],
+    webhooks: Webhook[],
+    abortSignal?: AbortSignal,
+  ): Promise<NotificationSendResult[]> {
+    if (payloads.length === 0) {
+      return [];
+    }
+
+    if (payloads.length === 1) {
+      return this.sendDiscordSourceDeletedBatch(
+        payloads[0],
+        webhooks,
+        abortSignal,
+      );
+    }
+
+    const embed = this.createSourceDeletedDigestEmbed(payloads);
+    return this.sendDiscordEmbedBatch(embed, webhooks, {
+      username: 'LawCast 법률안 무효화 알림',
+      context: 'source deleted digest notification',
+      abortSignal,
+    });
+  }
+
   async sendDiscordAdminAnnouncementBatch(
     payload: AdminAnnouncementPayload,
     webhooks: Webhook[],
@@ -530,6 +568,70 @@ export class NotificationService {
       .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
       .setTimestamp()
       .setFooter('LawCast 알림 서비스', '');
+  }
+
+  private createSourceDeletedEmbed(
+    payload: ChangeNotificationPayload,
+  ): MessageBuilder {
+    const detailUrl = this.buildFrontendNoticeDetailUrlByNoticeNum(
+      payload.noticeNum,
+      { timeline: 'true' },
+    );
+
+    return new MessageBuilder()
+      .setTitle('법률안 무효화(삭제) 감지')
+      .setDescription(
+        '국민참여입법센터에서 해당 법률안이 삭제(무효화)된 것으로 확인되었습니다.',
+      )
+      .addField('법률안명', payload.subject, false)
+      .addField('의안번호', String(payload.noticeNum), true)
+      .addField('자세히 보기', `[변경 추적 상세](${detailUrl})`, false)
+      .setColor(0xef4444) // Red
+      .setTimestamp()
+      .setFooter('LawCast 법률안 무효화 알림', '');
+  }
+
+  private createSourceDeletedDigestEmbed(
+    payloads: ChangeNotificationPayload[],
+  ): MessageBuilder {
+    const uniqueNoticeNums = Array.from(
+      new Set(payloads.map((payload) => payload.noticeNum)),
+    );
+
+    const detailParams: Record<string, string> = {
+      digest: '1',
+      jumpToFirst: '1',
+      comparableOnly: 'true',
+      excludeLegacyGenesisSource: 'true',
+      limit: '50',
+    };
+
+    const detailUrl = this.buildFrontendNoticeChangesUrl(detailParams);
+
+    const itemLines: string[] = [];
+    for (const payload of payloads.slice(0, 6)) {
+      itemLines.push(`• **[${payload.noticeNum}]** ${payload.subject}`);
+    }
+
+    if (payloads.length > 6) {
+      itemLines.push(`... 외 ${payloads.length - 6}건`);
+    }
+
+    return new MessageBuilder()
+      .setTitle(`법률안 무효화(삭제) 감지 (${payloads.length}건)`)
+      .setDescription(
+        `국민참여입법센터에서 삭제(무효화)된 ${payloads.length.toLocaleString()}건을 하나로 요약했습니다.`,
+      )
+      .addField(
+        '영향 법률안 수',
+        `${uniqueNoticeNums.length.toLocaleString()}건`,
+        true,
+      )
+      .addField('자세히 보기', `[무효화 내역 모아보기](${detailUrl})`, true)
+      .addField('감지 항목', this.truncateForEmbed(itemLines.join('\n')), false)
+      .setColor(0xef4444) // Red
+      .setTimestamp()
+      .setFooter('LawCast 법률안 무효화 알림', '');
   }
 
   private createChangeDigestNotificationEmbed(
