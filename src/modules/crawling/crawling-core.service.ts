@@ -387,14 +387,20 @@ export class CrawlingCoreService {
     options?: IBulkOptions,
   ): AsyncGenerator<INsmSearchResult> {
     const maxRetries = APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES;
-    const baseDelay = APP_CONSTANTS.CRAWLING.WAITINGROOM_RETRY_DELAY_MS;
+    const cooldownMs = APP_CONSTANTS.CRAWLING.WAITINGROOM_COOLDOWN_MS;
     let currentPage = 0;
+    let yieldedPages = 0;
 
     for (let wrAttempt = 0; wrAttempt <= maxRetries; wrAttempt++) {
       try {
         const client = this.createNsmClient();
+        let pageIndex = 0;
         for await (const page of client.getAllPages(query, options)) {
-          currentPage++;
+          pageIndex++;
+          currentPage = pageIndex;
+          // Skip pages already yielded to avoid duplicate processing on retry.
+          if (pageIndex <= yieldedPages) continue;
+          yieldedPages = pageIndex;
           yield page;
         }
         return; // success — exit retry loop
@@ -409,12 +415,13 @@ export class CrawlingCoreService {
             },
           );
         }
-        const backoffMs = baseDelay * (wrAttempt + 1);
+        const backoffMs =
+          cooldownMs +
+          APP_CONSTANTS.CRAWLING.WAITINGROOM_RETRY_DELAY_MS * (wrAttempt + 1);
         this.logger.warn(
-          `NSM list crawl: Waitingroom redirect on page ${currentPage} (attempt ${wrAttempt + 1}/${maxRetries + 1}), retrying in ${backoffMs}ms…`,
+          `NSM list crawl: Waitingroom redirect on page ${currentPage} (attempt ${wrAttempt + 1}/${maxRetries + 1}), cooling down ${backoffMs}ms…`,
         );
         await new Promise<void>((r) => setTimeout(r, backoffMs));
-        currentPage = 0; // reset for fresh stream
       }
     }
   }
@@ -617,14 +624,19 @@ export class CrawlingCoreService {
     options?: IBulkOptions,
   ): AsyncGenerator<INsmSearchResult> {
     const maxRetries = APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES;
-    const baseDelay = APP_CONSTANTS.CRAWLING.WAITINGROOM_RETRY_DELAY_MS;
+    const cooldownMs = APP_CONSTANTS.CRAWLING.WAITINGROOM_COOLDOWN_MS;
     let currentPage = 0;
+    let yieldedPages = 0;
 
     for (let wrAttempt = 0; wrAttempt <= maxRetries; wrAttempt++) {
       try {
         const client = this.createNsmClient();
+        let pageIndex = 0;
         for await (const page of client.getAllPendingPages(query, options)) {
-          currentPage++;
+          pageIndex++;
+          currentPage = pageIndex;
+          if (pageIndex <= yieldedPages) continue;
+          yieldedPages = pageIndex;
           yield page;
         }
         return; // success — exit retry loop
@@ -639,12 +651,13 @@ export class CrawlingCoreService {
             },
           );
         }
-        const backoffMs = baseDelay * (wrAttempt + 1);
+        const backoffMs =
+          cooldownMs +
+          APP_CONSTANTS.CRAWLING.WAITINGROOM_RETRY_DELAY_MS * (wrAttempt + 1);
         this.logger.warn(
-          `NSM pending crawl: Waitingroom redirect on page ${currentPage} (attempt ${wrAttempt + 1}/${maxRetries + 1}), retrying in ${backoffMs}ms…`,
+          `NSM pending crawl: Waitingroom redirect on page ${currentPage} (attempt ${wrAttempt + 1}/${maxRetries + 1}), cooling down ${backoffMs}ms…`,
         );
         await new Promise<void>((r) => setTimeout(r, backoffMs));
-        currentPage = 0; // reset for fresh stream
       }
     }
   }

@@ -228,6 +228,15 @@ export const APP_CONSTANTS = {
       process.env.CRAWLING_WAITINGROOM_RETRY_DELAY_MS,
       5_000,
     ),
+    /** Cooldown (ms) applied after a Waitingroom redirect is detected before retrying.
+     * This is distinct from WAITINGROOM_RETRY_DELAY_MS (linear backoff between retries).
+     * The NSM site enqueues IPs that trigger the waitingroom, so immediate retries
+     * re-trigger the queue. Based on probe measurements (~24s wait), 30s gives
+     * the server time to clear the IP from the queue. */
+    WAITINGROOM_COOLDOWN_MS: parseIntWithDefault(
+      process.env.CRAWLING_WAITINGROOM_COOLDOWN_MS,
+      30_000,
+    ),
     /** Timeout (ms) for page.goto() during Waitingroom bypass. Based on probe measurements:
      * observed wait up to ~24s, so 45s gives ~2x headroom for slow days. */
     WAITINGROOM_GOTO_TIMEOUT_MS: parseIntWithDefault(

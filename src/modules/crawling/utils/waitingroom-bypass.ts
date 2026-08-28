@@ -141,7 +141,14 @@ export async function navigateWithWaitingroomBypass(
  */
 export function isWaitingroomRedirectError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
-  return /307.*redirect|temporary redirect/i.test(msg);
+  // Match the pal-crawl HTTP client format: "Invalid response: 307 Temporary Redirect"
+  // Also handle any wrapped errors (e.g. NsmCrawlContextError) by checking the cause.
+  if (/307|temporary.?redirect/i.test(msg)) return true;
+  // NsmCrawlContextError wraps the original error; check cause chain.
+  if (error instanceof Error && 'cause' in error && error.cause) {
+    return isWaitingroomRedirectError(error.cause);
+  }
+  return false;
 }
 
 /** Simple delay helper (same as delayMs in async-delay.utils but local). */

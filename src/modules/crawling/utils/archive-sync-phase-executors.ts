@@ -1118,7 +1118,11 @@ export async function executePendingSyncPhase(
     };
 
     const scanStartedAt = Date.now();
-    await Promise.all([scanAllStream(), scanPendingStream()]);
+    // Serialize streams to avoid triggering the Waitingroom with concurrent
+    // requests from the same IP. The NSM site enqueues IPs that hit it too
+    // aggressively, so running both streams in parallel compounds the issue.
+    await scanAllStream();
+    await scanPendingStream();
     const scanElapsedMs = Date.now() - scanStartedAt;
     LoggerUtils.log(
       'ArchiveSyncService',
