@@ -67,18 +67,22 @@ describe('NotificationBatchService E2E', () => {
         {
           provide: BatchProcessingService,
           useValue: {
-            executeBatch: jest.fn(async (jobs: Function[]) => {
-              const results: any[] = [];
-              for (const job of jobs) {
-                try {
-                  const data = await job(new AbortController().signal);
-                  results.push({ success: true, data });
-                } catch (error) {
-                  results.push({ success: false, data: {} });
+            executeBatch: jest.fn(
+              async (
+                jobs: Array<(signal: AbortSignal) => Promise<unknown>>,
+              ) => {
+                const results: Array<{ success: boolean; data: unknown }> = [];
+                for (const job of jobs) {
+                  try {
+                    const data = await job(new AbortController().signal);
+                    results.push({ success: true, data });
+                  } catch (_error) {
+                    results.push({ success: false, data: {} });
+                  }
                 }
-              }
-              return results;
-            }),
+                return results;
+              },
+            ),
             updateRecentJobMetadata: jest.fn(),
           },
         },

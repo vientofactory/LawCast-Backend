@@ -639,7 +639,7 @@ export class CrawlingCoreService {
 
           response = await page.goto(detailUrl, {
             waitUntil: 'domcontentloaded',
-            timeout: 30_000,
+            timeout: APP_CONSTANTS.CRAWLING.WAITINGROOM_GOTO_TIMEOUT_MS,
           });
 
           for (
@@ -663,7 +663,7 @@ export class CrawlingCoreService {
                 // Wait for the JS redirect to fire and the real page to load.
                 const nav = await page.waitForNavigation({
                   waitUntil: 'networkidle0',
-                  timeout: 30_000,
+                  timeout: APP_CONSTANTS.CRAWLING.WAITINGROOM_NAV_TIMEOUT_MS,
                 });
                 if (nav) response = nav;
               } catch {
@@ -677,7 +677,7 @@ export class CrawlingCoreService {
                 );
                 response = await page.goto(detailUrl, {
                   waitUntil: 'domcontentloaded',
-                  timeout: 30_000,
+                  timeout: APP_CONSTANTS.CRAWLING.WAITINGROOM_GOTO_TIMEOUT_MS,
                 });
               }
             }

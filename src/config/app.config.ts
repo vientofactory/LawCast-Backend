@@ -220,8 +220,26 @@ export const APP_CONSTANTS = {
       'Cache-Control': 'no-cache',
     },
     // Waiting room handling for NsmLmSts (opinion.lawmaking.go.kr)
-    MAX_WAITINGROOM_RETRIES: 3,
-    WAITINGROOM_RETRY_DELAY_MS: 5_000,
+    MAX_WAITINGROOM_RETRIES: parseIntWithDefault(
+      process.env.CRAWLING_WAITINGROOM_MAX_RETRIES,
+      3,
+    ),
+    WAITINGROOM_RETRY_DELAY_MS: parseIntWithDefault(
+      process.env.CRAWLING_WAITINGROOM_RETRY_DELAY_MS,
+      5_000,
+    ),
+    /** Timeout (ms) for page.goto() during Waitingroom bypass. Based on probe measurements:
+     * observed wait up to ~24s, so 45s gives ~2x headroom for slow days. */
+    WAITINGROOM_GOTO_TIMEOUT_MS: parseIntWithDefault(
+      process.env.CRAWLING_WAITINGROOM_GOTO_TIMEOUT_MS,
+      45_000,
+    ),
+    /** Timeout (ms) for waitForNavigation(networkidle0) inside Waitingroom loop.
+     * Matches the goto timeout for consistency. */
+    WAITINGROOM_NAV_TIMEOUT_MS: parseIntWithDefault(
+      process.env.CRAWLING_WAITINGROOM_NAV_TIMEOUT_MS,
+      45_000,
+    ),
   },
   SCREENSHOT: {
     /** Headless Chromium viewport width (px). Narrower viewport → smaller file. */
