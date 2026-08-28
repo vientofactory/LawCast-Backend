@@ -90,7 +90,7 @@ export async function navigateWithWaitingroomBypass(
     const tag = opts.tag ? ` [${opts.tag}]` : '';
     LoggerUtils.debugDev(
       LOGGER_CTX,
-      `Waitingroom hit${tag} (attempt ${attempt + 1}/${cfg.maxRetries + 1}), waiting for redirect…`,
+      `Waitingroom hit${tag} (attempt ${attempt + 1}/${cfg.maxRetries + 1}), waiting for redirect...`,
     );
 
     if (attempt < cfg.maxRetries) {
@@ -132,6 +132,25 @@ export async function navigateWithWaitingroomBypass(
   }
 
   return { response, waitingroomHits, waitingroomTotalWaitMs };
+}
+
+/**
+ * Navigates a Puppeteer page to `url` with Waitingroom bypass and returns
+ * the final HTML content.
+ *
+ * This is the primary escape hatch for HTTP-level (pal-crawl) requests that
+ * hit a Waitingroom 307 redirect. The HTTP client cannot execute JavaScript,
+ * so it can never follow the Waitingroom's client-side redirect. Puppeteer
+ * can.
+ */
+export async function fetchPageHtmlViaBrowser(
+  page: Page,
+  url: string,
+  opts: WaitingroomNavigateOptions = {},
+): Promise<{ html: string; response: HTTPResponse | null }> {
+  const { response } = await navigateWithWaitingroomBypass(page, url, opts);
+  const html = await page.content();
+  return { html, response };
 }
 
 /**

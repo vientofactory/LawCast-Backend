@@ -363,7 +363,7 @@ export class DiscordBridgeOperationsCommandsService {
     }
 
     const raw = JSON.stringify(history, null, 2);
-    const truncated = raw.length > 3800 ? raw.slice(0, 3797) + '…' : raw;
+    const truncated = raw.length > 3800 ? raw.slice(0, 3797) + '...' : raw;
 
     const embed = new EmbedBuilder()
       .setColor(0x3b82f6)
@@ -389,7 +389,7 @@ export class DiscordBridgeOperationsCommandsService {
     });
 
     const raw = JSON.stringify(stats, null, 2);
-    const truncated = raw.length > 3800 ? raw.slice(0, 3797) + '…' : raw;
+    const truncated = raw.length > 3800 ? raw.slice(0, 3797) + '...' : raw;
 
     const embed = new EmbedBuilder()
       .setColor(0x3b82f6)

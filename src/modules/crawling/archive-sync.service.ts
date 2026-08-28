@@ -253,7 +253,7 @@ export class ArchiveSyncService implements OnModuleInit {
   onModuleInit(): void {
     LoggerUtils.logDev(
       ArchiveSyncService.name,
-      'Scheduling bootstrap sync pipeline in background…',
+      'Scheduling bootstrap sync pipeline in background...',
     );
     void this.runBootstrapPipeline();
   }

@@ -14,6 +14,7 @@ import {
   type ITableData,
   type PalCrawlConfig,
 } from 'pal-crawl';
+import { URL } from 'node:url';
 import sharp from 'sharp';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type CachedNotice } from '../../types/cache.types';
@@ -23,6 +24,7 @@ import { BrowserLeaseManagerService } from './browser-lease-manager.service';
 import { recoverCompetentAuthorityName } from './utils/competent-authority-autocomplete.utils';
 import {
   navigateWithWaitingroomBypass,
+  fetchPageHtmlViaBrowser,
   isWaitingroomRedirectError,
 } from './utils/waitingroom-bypass';
 
@@ -128,6 +130,159 @@ export class CrawlingCoreService {
 
   private createNsmClient(): NsmLmSts {
     return new NsmLmSts(this.crawlConfig);
+  }
+
+  /**
+   * Builds the NSM list page URL, replicating NsmLmSts.buildListUrl (which is
+   * private). Used by the Puppeteer-based fallback when the HTTP client hits
+   * a Waitingroom 307.
+   */
+  private static buildNsmListUrl(
+    query: Omit<INsmSearchQuery, 'pageIndex'> & { pageIndex?: number } = {},
+  ): URL {
+    const url = new URL(
+      '/gcom/nsmLmSts/out',
+      'https://opinion.lawmaking.go.kr',
+    );
+    const entries: Array<[string, unknown]> = [
+      ['pageIndex', query.pageIndex],
+      ['pageSize', query.pageSize],
+      ['sugCd', query.sugCd],
+      ['endSugCd', query.endSugCd],
+      ['sgtCls', query.sgtCls],
+      ['cptOfiOrgCd', query.cptOfiOrgCd],
+      ['rslRsltNmL', query.rslRsltNmL],
+      ['rslRsltNmR', query.rslRsltNmR],
+      ['scCptPpostCmt', query.scCptPpostCmt],
+      ['searchStDtNew', query.searchStDtNew],
+      ['searchEdDtNew', query.searchEdDtNew],
+      ['scPpsUsr', query.scPpsUsr],
+      ['issLawitmYn', query.issLawitmYn],
+      ['stDt', query.stDt],
+      ['edDt', query.edDt],
+      ['sortCol', query.sortCol],
+      ['sortOrder', query.sortOrder],
+    ];
+    if (query.scBlNmSct) {
+      url.searchParams.set('scBlNm', 'scBlNm_blNm');
+      entries.push(['scBlNmSct', query.scBlNmSct]);
+    }
+    for (const [key, value] of entries) {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(key, String(value));
+      }
+    }
+    return url;
+  }
+
+  /**
+   * Puppeteer-based fallback for NSM list page crawling.
+   *
+   * When the HTTP client (pal-crawl NsmLmSts) hits a Waitingroom 307 redirect,
+   * it cannot execute the Waitingroom's JavaScript and will keep failing. This
+   * method uses a headless browser to navigate through the Waitingroom, extract
+   * the HTML, and parse it with NsmLmStsParser.
+   *
+   * @param query NSM search query parameters.
+   * @param options Bulk-fetch options.
+   * @param startPageIndex Page index to start from (pages before this are skipped).
+   * @param label Label for the browser lease (e.g. 'nsm-list' or 'nsm-pending-list').
+   */
+  private async *fetchNsmListPagesViaBrowser(
+    query: Omit<INsmSearchQuery, 'pageIndex'>,
+    options: IBulkOptions | undefined,
+    startPageIndex: number,
+    label: string,
+  ): AsyncGenerator<INsmSearchResult> {
+    const parser = new NsmLmStsParser();
+    const crawlOptions = {
+      delayMs:
+        options?.delayMs ?? APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS,
+      concurrency: Math.max(1, options?.concurrency ?? 1),
+      maxPages: options?.maxPages,
+    };
+
+    // We need a browser session. Create a throwaway NsmLmSts to use its
+    // closeBrowser() for cleanup inside runWithLease.
+    const session = new NsmLmSts(this.crawlConfig);
+
+    const allPages = await this.browserLeaseManager.runWithLease(
+      `${label}-browser-fallback`,
+      session,
+      async () => {
+        await session.initBrowser();
+        const browser = session.browser;
+        const page = await browser.newPage();
+
+        try {
+          const delay = crawlOptions.delayMs;
+          let pageIndex = 1;
+          let pagesCollected = 0;
+          const results: INsmSearchResult[] = [];
+
+          for (;;) {
+            if (delay > 0 && pageIndex > 1) {
+              await new Promise<void>((r) => setTimeout(r, delay));
+            }
+
+            const url = CrawlingCoreService.buildNsmListUrl({
+              ...query,
+              pageIndex,
+            });
+
+            const { html } = await fetchPageHtmlViaBrowser(
+              page,
+              url.toString(),
+              { tag: `${label}-page-${pageIndex}` },
+            );
+
+            const parsed = parser.parseList(html);
+
+            // Skip pages already yielded before the 307.
+            if (pageIndex <= startPageIndex) {
+              pageIndex++;
+              if (
+                parsed.items.length === 0 ||
+                pageIndex > (parsed.totalPages ?? 1)
+              )
+                break;
+              continue;
+            }
+
+            results.push({
+              ...parsed,
+              currentPage: pageIndex,
+              totalPages: parsed.totalPages,
+            });
+            pagesCollected++;
+
+            LoggerUtils.debugDev(
+              CrawlingCoreService.name,
+              `${label} browser-fallback page ${pageIndex}/${parsed.totalPages}: items=${parsed.items.length}`,
+            );
+
+            if (
+              parsed.items.length === 0 ||
+              pageIndex >= (parsed.totalPages ?? 1) ||
+              (crawlOptions.maxPages !== undefined &&
+                pagesCollected >= crawlOptions.maxPages)
+            ) {
+              break;
+            }
+
+            pageIndex++;
+          }
+
+          return results;
+        } finally {
+          await page.close();
+        }
+      },
+    );
+
+    for (const page of allPages) {
+      yield page;
+    }
   }
 
   /**
@@ -366,7 +521,7 @@ export class CrawlingCoreService {
         const backoffMs = baseDelay * (attempt + 1);
         LoggerUtils.debugDev(
           CrawlingCoreService.name,
-          `${context}: Waitingroom redirect (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${backoffMs}ms…`,
+          `${context}: Waitingroom redirect (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${backoffMs}ms...`,
         );
         await new Promise<void>((r) => setTimeout(r, backoffMs));
       }
@@ -387,7 +542,6 @@ export class CrawlingCoreService {
     options?: IBulkOptions,
   ): AsyncGenerator<INsmSearchResult> {
     const maxRetries = APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES;
-    const cooldownMs = APP_CONSTANTS.CRAWLING.WAITINGROOM_COOLDOWN_MS;
     let currentPage = 0;
     let yieldedPages = 0;
 
@@ -405,7 +559,7 @@ export class CrawlingCoreService {
         }
         return; // success — exit retry loop
       } catch (error) {
-        if (!isWaitingroomRedirectError(error) || wrAttempt >= maxRetries) {
+        if (!isWaitingroomRedirectError(error)) {
           throw new NsmCrawlContextError(
             error instanceof Error ? error.message : String(error),
             {
@@ -415,13 +569,20 @@ export class CrawlingCoreService {
             },
           );
         }
-        const backoffMs =
-          cooldownMs +
-          APP_CONSTANTS.CRAWLING.WAITINGROOM_RETRY_DELAY_MS * (wrAttempt + 1);
+
+        // The HTTP client cannot bypass the Waitingroom (it cannot execute JS).
+        // On the first Waitingroom hit, switch to a Puppeteer-based fallback
+        // that can wait through the Waitingroom's JS redirect.
         this.logger.warn(
-          `NSM list crawl: Waitingroom redirect on page ${currentPage} (attempt ${wrAttempt + 1}/${maxRetries + 1}), cooling down ${backoffMs}ms…`,
+          `NSM list crawl: Waitingroom redirect on page ${currentPage} (attempt ${wrAttempt + 1}/${maxRetries + 1}), switching to browser fallback...`,
         );
-        await new Promise<void>((r) => setTimeout(r, backoffMs));
+        yield* this.fetchNsmListPagesViaBrowser(
+          query ?? {},
+          options,
+          yieldedPages,
+          'nsm-list',
+        );
+        return;
       }
     }
   }
@@ -600,9 +761,55 @@ export class CrawlingCoreService {
    * @param billNo The 의안번호 of the bill (e.g. "2200001").
    */
   async getNsmDetail(billNo: string): Promise<INsmBillDetail> {
-    return this.withWaitingroomRetry(
-      () => this.createNsmClient().getDetail(billNo),
-      `NSM detail bill ${billNo}`,
+    try {
+      return await this.withWaitingroomRetry(
+        () => this.createNsmClient().getDetail(billNo),
+        `NSM detail bill ${billNo}`,
+      );
+    } catch (error) {
+      if (!isWaitingroomRedirectError(error)) {
+        throw error;
+      }
+
+      // HTTP client cannot bypass Waitingroom — fall back to Puppeteer.
+      this.logger.warn(
+        `NSM detail bill ${billNo}: Waitingroom 307 after HTTP retries, switching to browser fallback`,
+      );
+
+      return this.fetchNsmDetailViaBrowser(billNo);
+    }
+  }
+
+  /**
+   * Puppeteer-based fallback for fetching a single NSM bill detail page.
+   * Used when the HTTP client hits a Waitingroom 307.
+   */
+  private async fetchNsmDetailViaBrowser(
+    billNo: string,
+  ): Promise<INsmBillDetail> {
+    const normalized = billNo.trim();
+    const detailUrl = buildNsmDetailUrl(normalized);
+    const parser = new NsmLmStsParser();
+
+    const session = new NsmLmSts(this.crawlConfig);
+
+    return this.browserLeaseManager.runWithLease(
+      `getNsmDetail(${normalized})-browser-fallback`,
+      session,
+      async () => {
+        await session.initBrowser();
+        const browser = session.browser;
+        const page = await browser.newPage();
+
+        try {
+          const { html } = await fetchPageHtmlViaBrowser(page, detailUrl, {
+            tag: `bill ${normalized}`,
+          });
+          return parser.parseDetail(html);
+        } finally {
+          await page.close();
+        }
+      },
     );
   }
 
@@ -624,7 +831,6 @@ export class CrawlingCoreService {
     options?: IBulkOptions,
   ): AsyncGenerator<INsmSearchResult> {
     const maxRetries = APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES;
-    const cooldownMs = APP_CONSTANTS.CRAWLING.WAITINGROOM_COOLDOWN_MS;
     let currentPage = 0;
     let yieldedPages = 0;
 
@@ -641,7 +847,7 @@ export class CrawlingCoreService {
         }
         return; // success — exit retry loop
       } catch (error) {
-        if (!isWaitingroomRedirectError(error) || wrAttempt >= maxRetries) {
+        if (!isWaitingroomRedirectError(error)) {
           throw new NsmCrawlContextError(
             error instanceof Error ? error.message : String(error),
             {
@@ -651,13 +857,20 @@ export class CrawlingCoreService {
             },
           );
         }
-        const backoffMs =
-          cooldownMs +
-          APP_CONSTANTS.CRAWLING.WAITINGROOM_RETRY_DELAY_MS * (wrAttempt + 1);
+
         this.logger.warn(
-          `NSM pending crawl: Waitingroom redirect on page ${currentPage} (attempt ${wrAttempt + 1}/${maxRetries + 1}), cooling down ${backoffMs}ms…`,
+          `NSM pending crawl: Waitingroom redirect on page ${currentPage} (attempt ${wrAttempt + 1}/${maxRetries + 1}), switching to browser fallback...`,
         );
-        await new Promise<void>((r) => setTimeout(r, backoffMs));
+        yield* this.fetchNsmListPagesViaBrowser(
+          { ...query, rslRsltNmL: '900101' } as Omit<
+            INsmSearchQuery,
+            'pageIndex'
+          >,
+          options,
+          yieldedPages,
+          'nsm-pending-list',
+        );
+        return;
       }
     }
   }

@@ -247,7 +247,7 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
 
       if (Object.keys(data).length > 0) {
         const raw = JSON.stringify(data, null, 2);
-        const truncated = raw.length > 950 ? raw.slice(0, 947) + '…' : raw;
+        const truncated = raw.length > 950 ? raw.slice(0, 947) + '...' : raw;
         embed.addFields({
           name: 'Details',
           value: `\`\`\`json\n${truncated}\n\`\`\``,
@@ -439,7 +439,7 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
 
     if (data && Object.keys(data).length > 0) {
       const raw = JSON.stringify(data, null, 2);
-      const truncated = raw.length > 950 ? raw.slice(0, 947) + '…' : raw;
+      const truncated = raw.length > 950 ? raw.slice(0, 947) + '...' : raw;
       embed.addFields({
         name: 'Details',
         value: `\`\`\`json\n${truncated}\n\`\`\``,
