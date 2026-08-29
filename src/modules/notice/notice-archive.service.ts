@@ -1195,27 +1195,10 @@ export class NoticeArchiveService {
     const alreadySourceDeleted =
       typeof beforeSnapshot.lifecycleStatus === 'string' &&
       beforeSnapshot.lifecycleStatus === 'source_deleted';
-    if (alreadySourceDeleted) {
-      return;
-    }
 
-    const deletedAt = new Date().toISOString();
-    const afterSnapshot = {
-      ...beforeSnapshot,
-      isDone: true,
-      lifecycleStatus: 'source_deleted',
-      sourceDeletedAt: deletedAt,
-    };
-
-    await this.appendExplicitEventWithDiff({
-      noticeNum,
-      source: NoticeChangeSource.ARCHIVE_SOURCE_MISSING,
-      eventType: CHANGE_EVENT_TYPE.INVALIDATED,
-      beforeSnapshot,
-      afterSnapshot,
-      subject: beforeRow.subject,
-    });
-
+    // Ensure summary_state has isDone=true even when the change event
+    // already exists — a prior marking may have created the event but
+    // failed to flip the summary marker.
     if (this.summaryStateRepository) {
       const currentState = await this.summaryStateRepository.findOne({
         where: { noticeNum },
@@ -1240,6 +1223,27 @@ export class NoticeArchiveService {
         });
       }
     }
+
+    if (alreadySourceDeleted) {
+      return;
+    }
+
+    const deletedAt = new Date().toISOString();
+    const afterSnapshot = {
+      ...beforeSnapshot,
+      isDone: true,
+      lifecycleStatus: 'source_deleted',
+      sourceDeletedAt: deletedAt,
+    };
+
+    await this.appendExplicitEventWithDiff({
+      noticeNum,
+      source: NoticeChangeSource.ARCHIVE_SOURCE_MISSING,
+      eventType: CHANGE_EVENT_TYPE.INVALIDATED,
+      beforeSnapshot,
+      afterSnapshot,
+      subject: beforeRow.subject,
+    });
   }
 
   /**
