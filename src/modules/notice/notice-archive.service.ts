@@ -3090,7 +3090,9 @@ export class NoticeArchiveService {
       isDone: row.isDone,
       lifecycleStatus: row.lifecycleStatus,
       sourceDeletedAt: row.sourceDeletedAt
-        ? row.sourceDeletedAt.toISOString()
+        ? typeof row.sourceDeletedAt === 'string'
+          ? row.sourceDeletedAt
+          : row.sourceDeletedAt.toISOString()
         : null,
     };
   }
