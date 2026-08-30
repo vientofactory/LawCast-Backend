@@ -45,6 +45,8 @@ export class CrawlingSchedulerService implements OnModuleInit {
   private isProcessing = false;
   private isPendingProcessing = false;
   private isInitialized = false;
+  private lastPalCronRunAt: string | null = null;
+  private lastNsmPendingCronRunAt: string | null = null;
   private readonly activeBackgroundTasks = new Set<string>();
   private readonly summarySupport: CrawlingSchedulerSummarySupport;
   private readonly proposalRetrySupport: CrawlingSchedulerProposalRetry;
@@ -178,6 +180,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
         bridgeMessage: `Crawling process failed: ${(error as Error).message}`,
       });
     } finally {
+      this.lastPalCronRunAt = new Date().toISOString();
       this.isProcessing = false;
     }
   }
@@ -256,6 +259,8 @@ export class CrawlingSchedulerService implements OnModuleInit {
     isInitialized: boolean;
     isProcessing: boolean;
     isPendingProcessing: boolean;
+    lastPalCronRunAt: string | null;
+    lastNsmPendingCronRunAt: string | null;
     activeBackgroundTaskCount: number;
     activeBackgroundTasks: string[];
   } {
@@ -263,6 +268,8 @@ export class CrawlingSchedulerService implements OnModuleInit {
       isInitialized: this.isInitialized,
       isProcessing: this.isProcessing,
       isPendingProcessing: this.isPendingProcessing,
+      lastPalCronRunAt: this.lastPalCronRunAt,
+      lastNsmPendingCronRunAt: this.lastNsmPendingCronRunAt,
       activeBackgroundTaskCount: this.activeBackgroundTasks.size,
       activeBackgroundTasks: Array.from(this.activeBackgroundTasks).sort(),
     };
@@ -474,11 +481,11 @@ export class CrawlingSchedulerService implements OnModuleInit {
    * Core logic for crawling and dispatching notifications.
    *
    * ─ Fast path (isProcessing lock held) ───────────────────────────────────
-   *   Crawl → detect new notices → immediate cache update (preserving existing summaries).
+   *   Crawl -> detect new notices -> immediate cache update (preserving existing summaries).
    *   Completes within seconds, so it never conflicts with the 5-minute cron cycle.
    *
    * ─ Background path (runs after lock is released) ────────────────────────
-   *   AI summary generation → archiving → cache re-update → notification dispatch.
+   *   AI summary generation -> archiving -> cache re-update -> notification dispatch.
    *   Long-running work (Ollama calls, HTTP archiving) is offloaded so that the
    *   next cron cycle can start on schedule without being blocked.
    */
@@ -591,7 +598,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
         },
       });
 
-      // ── Background path: AI summary → archiving → cache re-update → notifications ──
+      // ── Background path: AI summary -> archiving -> cache re-update -> notifications ──
       // Runs independently after the isProcessing lock is released, so it never blocks the cron cycle.
       this.runBackgroundTask('process-new-notices', async () => {
         try {
@@ -956,6 +963,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
         PENDING_CRAWL_RETRY_BASE_MS,
       );
     } finally {
+      this.lastNsmPendingCronRunAt = new Date().toISOString();
       this.isPendingProcessing = false;
     }
   }

@@ -387,9 +387,9 @@ export class CrawlingCoreService {
 
   /**
    * Derives the proposer category (제안자 구분) from the proposer name string.
-   * - 위원장 → '위원장'
-   * - Contains '의원' → '의원'
-   * - Otherwise (government ministry/department name) → '정부'
+   * - 위원장 -> '위원장'
+   * - Contains '의원' -> '의원'
+   * - Otherwise (government ministry/department name) -> '정부'
    */
   static extractProposerCategory(proposer: string): string {
     const s = proposer.trim();

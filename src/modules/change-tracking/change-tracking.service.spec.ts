@@ -1797,7 +1797,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     expect(report.eventCount).toBe(2);
   });
 
-  it('seeds initial state from archive row for v1→v2 chains where contentId was not tracked in v1', async () => {
+  it('seeds initial state from archive row for v1->v2 chains where contentId was not tracked in v1', async () => {
     // Regression: notice 2219721 had v1 archive:upsert without contentId detail,
     // but the DB row has contentId. The write path (buildDiffBaselineSnapshot)
     // reads contentId from the row, so the audit must do the same.

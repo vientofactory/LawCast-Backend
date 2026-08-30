@@ -358,7 +358,6 @@ export class ApiController {
       { nodeEnv: this.nodeEnv },
       this.webhookService,
       this.crawlingService,
-      this.batchProcessingService,
       this.noticeArchiveService,
       this.archiveSyncService,
       this.changeTrackingService,

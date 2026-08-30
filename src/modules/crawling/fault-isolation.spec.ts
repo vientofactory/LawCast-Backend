@@ -189,7 +189,7 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
 
   // ── initializeCache failures ──────────────────────────────────────────────
 
-  it('DB failure (getSummaryStateByNoticeNums) during initializeCache → cache still updated', async () => {
+  it('DB failure (getSummaryStateByNoticeNums) during initializeCache -> cache still updated', async () => {
     noticeArchiveService.getSummaryStateByNoticeNums.mockRejectedValue(
       new Error('SQLite: SQLITE_BUSY'),
     );
@@ -200,7 +200,7 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
     expect(cacheService.updateCache).toHaveBeenCalledTimes(1);
   });
 
-  it('Ollama failure (enrichNoticesWithSummary) during initializeCache → cache falls back to raw notices', async () => {
+  it('Ollama failure (enrichNoticesWithSummary) during initializeCache -> cache falls back to raw notices', async () => {
     summaryGenerationService.enrichNoticesWithSummary.mockRejectedValue(
       new Error('Ollama: connection refused'),
     );
@@ -217,7 +217,7 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
     }
   });
 
-  it('Archive failure (archiveNotices) during initializeCache → cache still updated', async () => {
+  it('Archive failure (archiveNotices) during initializeCache -> cache still updated', async () => {
     archiveOrchestratorService.archiveNotices.mockRejectedValue(
       new Error('DB write error'),
     );
@@ -229,7 +229,7 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
 
   // ── handleCron (performCrawlingAndNotification) failures ──────────────────
 
-  it('pal-crawl throws during cron → handleCron does not throw, isProcessing reset to false', async () => {
+  it('pal-crawl throws during cron -> handleCron does not throw, isProcessing reset to false', async () => {
     crawlingCoreService.crawlAllPages.mockRejectedValue(
       new Error('pal-crawl: timeout'),
     );
@@ -240,7 +240,7 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
     expect((service as any).isProcessing).toBe(false);
   });
 
-  it('Redis failure (findNewNotices) during cron → falls back to archive-based dedup, cache updated', async () => {
+  it('Redis failure (findNewNotices) during cron -> falls back to archive-based dedup, cache updated', async () => {
     (service as any).isInitialized = true;
     cacheService.getRecentNotices.mockResolvedValue([]);
     crawlingCoreService.crawlAllPages.mockResolvedValue(tableData);
@@ -258,7 +258,7 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
     expect(cacheService.updateCache).toHaveBeenCalled();
   });
 
-  it('DB failure (getSummaryStateByNoticeNums) during cron with new notices → falls back to empty map, notifications still sent', async () => {
+  it('DB failure (getSummaryStateByNoticeNums) during cron with new notices -> falls back to empty map, notifications still sent', async () => {
     (service as any).isInitialized = true;
     cacheService.getRecentNotices.mockResolvedValue([]);
     crawlingCoreService.crawlAllPages.mockResolvedValue(tableData);
@@ -283,7 +283,7 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
     ).toHaveBeenCalledTimes(1);
   });
 
-  it('Ollama failure during cron with new notices → raw notices used, cache+notifications proceed', async () => {
+  it('Ollama failure during cron with new notices -> raw notices used, cache+notifications proceed', async () => {
     (service as any).isInitialized = true;
     cacheService.getRecentNotices.mockResolvedValue([]);
     crawlingCoreService.crawlAllPages.mockResolvedValue(tableData);
@@ -309,7 +309,7 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
     ).toHaveBeenCalledTimes(1);
   });
 
-  it('Archive failure during cron with new notices → cache and notifications not blocked', async () => {
+  it('Archive failure during cron with new notices -> cache and notifications not blocked', async () => {
     (service as any).isInitialized = true;
     cacheService.getRecentNotices.mockResolvedValue([]);
     crawlingCoreService.crawlAllPages.mockResolvedValue(tableData);
@@ -421,7 +421,7 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
       },
     });
 
-  it('pal-crawl getContent throws → notice still archived (with empty proposalReason)', async () => {
+  it('pal-crawl getContent throws -> notice still archived (with empty proposalReason)', async () => {
     crawlingCoreService.getContent.mockRejectedValue(
       new Error('pal-crawl: parse error'),
     );
@@ -437,7 +437,7 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
     expect(savedPayload.proposalReason).toBe('');
   });
 
-  it('pal-crawl getContent returns null → notice archived with empty proposalReason', async () => {
+  it('pal-crawl getContent returns null -> notice archived with empty proposalReason', async () => {
     crawlingCoreService.getContent.mockResolvedValue(null as any);
     mockOkFetch();
 
@@ -449,7 +449,7 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
     expect(savedPayload.proposalReason).toBe('');
   });
 
-  it('HTTP page capture (fetch) fails → notice still archived (with null sourceHtml)', async () => {
+  it('HTTP page capture (fetch) fails -> notice still archived (with null sourceHtml)', async () => {
     mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
 
     const count = await service.archiveNotices([makeCachedNotice(1)]);
@@ -460,7 +460,7 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
     expect(savedPayload.sourceHtml).toBeNull();
   });
 
-  it('DB upsert fails for one notice in batch → other notices still succeed', async () => {
+  it('DB upsert fails for one notice in batch -> other notices still succeed', async () => {
     mockOkFetch();
     noticeArchiveService.upsertNoticeArchive
       .mockRejectedValueOnce(new Error('DB: constraint violation'))
@@ -474,7 +474,7 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
     expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalledTimes(2);
   });
 
-  it('pal-crawl throws for some notices, DB upsert fails for others → surviving notices counted', async () => {
+  it('pal-crawl throws for some notices, DB upsert fails for others -> surviving notices counted', async () => {
     crawlingCoreService.getContent
       .mockRejectedValueOnce(new Error('network error'))
       .mockResolvedValueOnce({
@@ -595,7 +595,7 @@ describe('[Fault Isolation] NotificationBatchService', () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  it('DB failure loading webhooks → executeNotificationBatch returns [] without throwing', async () => {
+  it('DB failure loading webhooks -> executeNotificationBatch returns [] without throwing', async () => {
     webhookService.findAll.mockRejectedValue(
       new Error('SQLite: no such table'),
     );
@@ -607,17 +607,17 @@ describe('[Fault Isolation] NotificationBatchService', () => {
     ).not.toHaveBeenCalled();
   });
 
-  it('WebhookService.findAll returns null → executeNotificationBatch handles empty webhook list gracefully', async () => {
+  it('WebhookService.findAll returns null -> executeNotificationBatch handles empty webhook list gracefully', async () => {
     webhookService.findAll.mockResolvedValue(null as any);
 
-    // null resolved by `?? []` in service; jobs run with 0 webhooks → returns
+    // null resolved by `?? []` in service; jobs run with 0 webhooks -> returns
     // results array (not empty, but each notice is processed with 0 webhooks)
     await expect(
       service.executeNotificationBatch([notice]),
     ).resolves.not.toThrow();
   });
 
-  it('No active webhooks → processNotificationBatch resolves with a batch ID (no crash)', async () => {
+  it('No active webhooks -> processNotificationBatch resolves with a batch ID (no crash)', async () => {
     webhookService.findAll.mockResolvedValue([]);
 
     const batchId = await service.processNotificationBatch([notice]);
@@ -743,7 +743,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
 
   // ── executeFullSync (Phase 1) ─────────────────────────────────────────────
 
-  it('pal-crawl getAllPages throws mid-stream → runFullSync throws (phase tracker set to failed)', async () => {
+  it('pal-crawl getAllPages throws mid-stream -> runFullSync throws (phase tracker set to failed)', async () => {
     crawlingCoreService.getAllPages.mockImplementation(() =>
       makeFailingPageGenerator([makeSearchResult([1, 2])], 0),
     );
@@ -755,7 +755,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(service.getFullSyncStatus().status).toBe('failed');
   });
 
-  it('pal-crawl returns page with null items → full sync completes with 0 scanned', async () => {
+  it('pal-crawl returns page with null items -> full sync completes with 0 scanned', async () => {
     crawlingCoreService.getAllPages.mockImplementation(() =>
       makePageGenerator([{ ...makeSearchResult([]), items: null as any }]),
     );
@@ -860,7 +860,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     );
   });
 
-  it('pal-crawl streams one valid page then throws → safeRun swallows error in bootstrap, next phase runs', async () => {
+  it('pal-crawl streams one valid page then throws -> safeRun swallows error in bootstrap, next phase runs', async () => {
     // Replace crawlingCoreService mock with a generator that yields 1 page then throws
     crawlingCoreService.getAllPages.mockImplementation(() =>
       makeFailingPageGenerator([makeSearchResult([1])], 1),
@@ -869,7 +869,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
       [],
     );
 
-    // runFullSync will fail (partial data collected) → runPhase re-throws →
+    // runFullSync will fail (partial data collected) -> runPhase re-throws ->
     // safeRun in bootstrap pipeline swallows it
     const safeRunSpy = jest.spyOn(service as any, 'safeRun');
     await (service as any).runBootstrapPipeline();
@@ -928,7 +928,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
 
   // ── reconcileIsDone (Phase 2) ─────────────────────────────────────────────
 
-  it('pal-crawl searchDone throws on first page → runIsDoneSync throws (phase tracker set to failed)', async () => {
+  it('pal-crawl searchDone throws on first page -> runIsDoneSync throws (phase tracker set to failed)', async () => {
     crawlingCoreService.searchDone.mockRejectedValue(
       new Error('pal-crawl: simulated network failure'),
     );
@@ -940,7 +940,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(service.getIsDoneSyncStatus().status).toBe('failed');
   }, 10_000); // allow time for per-page retry backoff
 
-  it('pal-crawl searchDone returns null items → reconcileIsDone completes, markNoticesDoneByNums called with []', async () => {
+  it('pal-crawl searchDone returns null items -> reconcileIsDone completes, markNoticesDoneByNums called with []', async () => {
     crawlingCoreService.searchDone.mockResolvedValue({
       ...makeSearchResult([]),
       items: null as any,
@@ -953,14 +953,14 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(result!.fetchedDoneCount).toBe(0);
   });
 
-  it('DB markNoticesDoneByNums throws → runIsDoneSync throws (phase tracker set to failed)', async () => {
+  it('DB markNoticesDoneByNums throws -> runIsDoneSync throws (phase tracker set to failed)', async () => {
     crawlingCoreService.searchDone.mockResolvedValue(makeSearchResult([1, 2]));
     noticeArchiveService.markNoticesDoneByNums.mockRejectedValue(
       new Error('DB: write timeout'),
     );
 
-    // markNoticesDoneByNums throws inside for-await loop → propagates through
-    // runPhase → status set to 'failed', exception re-thrown
+    // markNoticesDoneByNums throws inside for-await loop -> propagates through
+    // runPhase -> status set to 'failed', exception re-thrown
     await expect(service.runIsDoneSync('fault-test')).rejects.toThrow(
       'DB: write timeout',
     );
@@ -969,7 +969,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
 
   // ── executeSummaryBackfill (Phase 4) ──────────────────────────────────────
 
-  it('Ollama generateSummaryForNotice throws for one item in batch → remaining items still processed, phase completes', async () => {
+  it('Ollama generateSummaryForNotice throws for one item in batch -> remaining items still processed, phase completes', async () => {
     const batchItems = [
       { ...makeCachedNotice(10), aiSummaryStatus: 'not_requested' as const },
       { ...makeCachedNotice(11), aiSummaryStatus: 'not_requested' as const },
@@ -1067,7 +1067,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(queue).toHaveLength(1);
   });
 
-  it('DB updateSummaryStateByNoticeNum throws for one item → other items in batch still updated, phase completes', async () => {
+  it('DB updateSummaryStateByNoticeNum throws for one item -> other items in batch still updated, phase completes', async () => {
     const batchItems = [
       { ...makeCachedNotice(20), aiSummaryStatus: 'not_requested' as const },
       { ...makeCachedNotice(21), aiSummaryStatus: 'not_requested' as const },
@@ -1127,7 +1127,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     );
   });
 
-  it('AI summary disabled → unified summary backfill skips without DB/cache access', async () => {
+  it('AI summary disabled -> unified summary backfill skips without DB/cache access', async () => {
     summaryGenerationService.isAiSummaryEnabled.mockReturnValue(false);
 
     const backfill = await service.runSummaryBackfill('fault-test');
@@ -1150,7 +1150,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
 
   // ── unified unavailable retry path (inside summary backfill) ─────────────
 
-  it('Ollama throws for unavailable-retry item → item counted as stillFailed in unified phase', async () => {
+  it('Ollama throws for unavailable-retry item -> item counted as stillFailed in unified phase', async () => {
     const batchItems = [
       { ...makeCachedNotice(30), aiSummaryStatus: 'unavailable' as const },
       { ...makeCachedNotice(31), aiSummaryStatus: 'unavailable' as const },
@@ -1183,7 +1183,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     );
   });
 
-  it('DB updateSummaryStateByNoticeNum throws in unavailable-retry branch → unified phase still completes', async () => {
+  it('DB updateSummaryStateByNoticeNum throws in unavailable-retry branch -> unified phase still completes', async () => {
     const batchItems = [
       { ...makeCachedNotice(40), aiSummaryStatus: 'unavailable' as const },
     ];
@@ -1260,7 +1260,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
 
   // ── Concurrent phase guard ────────────────────────────────────────────────
 
-  it('Running the same phase twice concurrently → second call returns null (skipped), first completes normally', async () => {
+  it('Running the same phase twice concurrently -> second call returns null (skipped), first completes normally', async () => {
     let resolveFirst!: () => void;
     const firstCallBlocker = new Promise<void>((resolve) => {
       resolveFirst = resolve;
@@ -1287,7 +1287,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(firstResult).not.toBeNull();
   });
 
-  it('Running different phases concurrently with cross-phase guard → second phase returns null (skipped)', async () => {
+  it('Running different phases concurrently with cross-phase guard -> second phase returns null (skipped)', async () => {
     let resolveFirst!: () => void;
     const firstCallBlocker = new Promise<void>((resolve) => {
       resolveFirst = resolve;
@@ -1333,7 +1333,7 @@ describe('[Fault Isolation] CrawlingCoreService.crawlAllPages partial failure', 
    * rather than discarding everything.
    */
 
-  it('stream error after collecting items → partial data returned (not thrown)', async () => {
+  it('stream error after collecting items -> partial data returned (not thrown)', async () => {
     // We cannot easily instantiate CrawlingCoreService directly without real
     // pal-crawl config, so we test the behaviour via a minimal integration
     // using a spy on getAllPages.

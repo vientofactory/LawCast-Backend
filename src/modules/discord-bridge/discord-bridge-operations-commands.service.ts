@@ -151,8 +151,6 @@ export class DiscordBridgeOperationsCommandsService {
       await import('../health/runtime-stats.service');
     const { WebhookService } = await import('../webhook/webhook.service');
     const { CrawlingService } = await import('../crawling/crawling.service');
-    const { BatchProcessingService } =
-      await import('../shared/batch-processing.service');
     const { NoticeArchiveService } =
       await import('../notice/notice-archive.service');
     const { ArchiveSyncService } =
@@ -163,9 +161,6 @@ export class DiscordBridgeOperationsCommandsService {
     });
     const webhookSvc = this.moduleRef.get(WebhookService, { strict: false });
     const crawlingSvc = this.moduleRef.get(CrawlingService, { strict: false });
-    const batchSvc = this.moduleRef.get(BatchProcessingService, {
-      strict: false,
-    });
     const archiveSvc = this.moduleRef.get(NoticeArchiveService, {
       strict: false,
     });
@@ -177,7 +172,6 @@ export class DiscordBridgeOperationsCommandsService {
       { nodeEnv: process.env.NODE_ENV },
       webhookSvc,
       crawlingSvc,
-      batchSvc,
       archiveSvc,
       archiveSyncSvc,
     );
@@ -207,7 +201,6 @@ export class DiscordBridgeOperationsCommandsService {
       isInitialized: boolean;
     };
     const archive = stats.archive;
-    const batch = stats.batchProcessing as { jobCount: number };
     const ollama = stats.ollama as {
       model: string;
       summary: {
@@ -254,7 +247,6 @@ export class DiscordBridgeOperationsCommandsService {
           value: fmtBool(cache.isInitialized),
           inline: true,
         },
-        { name: 'Batch Jobs', value: String(batch.jobCount), inline: true },
         { name: 'Ollama Model', value: ollama.model ?? 'N/A', inline: true },
         {
           name: 'Ollama Health',

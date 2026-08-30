@@ -1146,6 +1146,7 @@ export class NoticeArchiveService {
         lifecycleStatus: 'active',
         contentId: IsNull(),
         contentBillNumber: IsNull(),
+        sourceDeletedAt: IsNull(),
       },
       select: {
         noticeNum: true,
@@ -1166,6 +1167,7 @@ export class NoticeArchiveService {
       where: {
         lifecycleStatus: 'active',
         contentId: IsNull(),
+        sourceDeletedAt: IsNull(),
       },
       select: {
         noticeNum: true,
@@ -1244,6 +1246,24 @@ export class NoticeArchiveService {
       afterSnapshot,
       subject: beforeRow.subject,
     });
+
+    // Persist lifecycle_status + source_deleted_at on the archive row itself
+    // so probe queries (getActiveNsmBillsForProbe) no longer return this bill.
+    // Without this the DB row stays lifecycleStatus='active' and the probe
+    // re-discovers the same deleted bills every cycle.
+    try {
+      const parsedDeletedAt = new Date(deletedAt);
+      await this.archiveRepository.update({ noticeNum }, {
+        lifecycleStatus: 'source_deleted',
+        sourceDeletedAt: Number.isNaN(parsedDeletedAt.getTime())
+          ? new Date()
+          : parsedDeletedAt,
+      } as any);
+    } catch (updateErr) {
+      this.logger.warn(
+        `Failed to persist source_deleted on archive row ${noticeNum}: ${(updateErr as Error).message}`,
+      );
+    }
   }
 
   /**

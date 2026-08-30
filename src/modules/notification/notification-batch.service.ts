@@ -452,7 +452,7 @@ export class NotificationBatchService {
 
     // source_deleted is identified first so other categories can exclude it
     // and avoid duplicate notifications (e.g. a newly source_deleted bill
-    // also has isDone changed from false→true, which would otherwise hit
+    // also has isDone changed from false->true, which would otherwise hit
     // both noticePeriodEnded and sourceDeleted paths).
     const sourceDeletedPayloads = payloads.filter(
       (payload) =>

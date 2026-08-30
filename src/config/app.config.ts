@@ -251,7 +251,7 @@ export const APP_CONSTANTS = {
     ),
   },
   SCREENSHOT: {
-    /** Headless Chromium viewport width (px). Narrower viewport → smaller file. */
+    /** Headless Chromium viewport width (px). Narrower viewport -> smaller file. */
     WIDTH: 1280,
     /** Initial viewport height (px). Actual capture height is determined by fullPage. */
     HEIGHT: 900,

@@ -1,5 +1,5 @@
 /**
- * Waitingroom HTTP → Puppeteer fallback e2e tests
+ * Waitingroom HTTP -> Puppeteer fallback e2e tests
  *
  * These tests verify that when the HTTP client (pal-crawl NsmLmSts) encounters
  * a Waitingroom 307 redirect, the code correctly falls back to a Puppeteer-based
@@ -180,7 +180,7 @@ type MockNsmLmSts = ReturnType<typeof createMockNsmLmSts>;
 
 // ─── Test suite ──────────────────────────────────────────────────────────────
 
-describe('CrawlingCoreService — Waitingroom HTTP→Puppeteer fallback (e2e)', () => {
+describe('CrawlingCoreService — Waitingroom HTTP->Puppeteer fallback (e2e)', () => {
   let service: CrawlingCoreService;
   let browserLeaseManager: BrowserLeaseManagerService;
 
@@ -241,7 +241,7 @@ describe('CrawlingCoreService — Waitingroom HTTP→Puppeteer fallback (e2e)', 
 
   describe('getAllNsmPages', () => {
     it('falls back to Puppeteer when HTTP throws 307', async () => {
-      // Instance 0: HTTP path → throws307
+      // Instance 0: HTTP path -> throws307
       // Instance 1: Puppeteer fallback (used by fetchNsmListPagesViaBrowser)
       mockInstances.push(
         createMockNsmLmSts({ getAllPagesError: WAITINGROOM_307_ERROR }),

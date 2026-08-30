@@ -270,8 +270,8 @@ export class NoticesQueryService {
     }
 
     // Interpret user-supplied dates in KST (UTC+9) since this is a Korean
-    // service. e.g., "2026-05-30" start → 2026-05-29T15:00:00.000Z (UTC)
-    //                              end   → 2026-05-30T14:59:59.999Z (UTC)
+    // service. e.g., "2026-05-30" start -> 2026-05-29T15:00:00.000Z (UTC)
+    //                              end   -> 2026-05-30T14:59:59.999Z (UTC)
     const timeSuffix = endOfDay ? 'T23:59:59.999+09:00' : 'T00:00:00.000+09:00';
     const parsed = new Date(`${raw}${timeSuffix}`);
     return Number.isNaN(parsed.getTime()) ? undefined : parsed;

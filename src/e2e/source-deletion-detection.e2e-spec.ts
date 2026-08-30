@@ -2,13 +2,13 @@
  * E2E tests for source deletion detection across all three paths:
  *
  * Path 1: archiveNsmBillItems — NsmBillDeletedError during NSM detail capture
- *          → appendSourceDeletedEventByNoticeNum called, upsert SKIPPED
+ *          -> appendSourceDeletedEventByNoticeNum called, upsert SKIPPED
  *
  * Path 2: upsertNoticeArchive — existing source_deleted record re-crawled
- *          → diff event preserves source_deleted (no spurious restoration)
+ *          -> diff event preserves source_deleted (no spurious restoration)
  *
  * Path 3: markSourceDeletedByMissingPalNums — PAL full sync reconciliation
- *          → active PAL-origin rows absent from seenPalActiveNums → source_deleted
+ *          -> active PAL-origin rows absent from seenPalActiveNums -> source_deleted
  *
  * Covers bill 2214911 scenario: deleted from 국민참여입법센터, must not be
  * restored to active during subsequent sync cycles.
@@ -138,7 +138,7 @@ describe('Source deletion detection (bill 2214911 scenario)', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════
-  // Path 1: archiveNsmBillItems — NsmBillDeletedError → source_deleted
+  // Path 1: archiveNsmBillItems — NsmBillDeletedError -> source_deleted
   // ═══════════════════════════════════════════════════════════════════════
   describe('Path 1: archiveNsmBillItems skips upsert on NsmBillDeletedError', () => {
     it('marks bill as source_deleted and does NOT call upsertNoticeArchive', async () => {

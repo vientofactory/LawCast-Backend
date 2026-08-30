@@ -344,8 +344,12 @@ export async function performPendingBillsCrawlInternal(
 
   // ── NSM detail-page probe (cron path) ───────────────────────────
   // Bills that国民참여입법센터 still lists but deleted on detail page.
+  // With ~19,500 NSM bills, batch size 20 covers the full pool in ~14 days
+  // (at 20-min cron intervals: 20 bills x 3 cycles/hr x 24 hr = 1,440/day,
+  // but content_bill_number IS NULL bills are probed first, so effective
+  // coverage is faster for the highest-risk candidates).
   try {
-    const NSM_DETAIL_PROBE_BATCH_SIZE = 5;
+    const NSM_DETAIL_PROBE_BATCH_SIZE = 20;
     const detailProbeDeletedCount =
       await deps.archiveOrchestratorService.probeExistingNsmBillsForSourceDeletion(
         NSM_DETAIL_PROBE_BATCH_SIZE,

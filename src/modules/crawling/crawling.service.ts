@@ -120,6 +120,8 @@ export class CrawlingService {
     isInitialized: boolean;
     isProcessing: boolean;
     isPendingProcessing: boolean;
+    lastPalCronRunAt: string | null;
+    lastNsmPendingCronRunAt: string | null;
     activeBackgroundTaskCount: number;
     activeBackgroundTasks: string[];
   } {
