@@ -297,11 +297,12 @@ export async function performPendingBillsCrawlInternal(
     }
   };
 
-  // Wrap scans in try-catch so that source-missing detection runs
-  // even if the NSM crawl encounters non-retryable errors (e.g.
-  // Waitingroom 307 after Puppeteer fallback).  Retryable network
+  // Wrap scans in try-catch so that subsequent phases (new bill archive)
+  // can still run even if the NSM crawl encounters non-retryable errors
+  // (e.g. Waitingroom 307 after Puppeteer fallback).  Retryable network
   // errors (ECONNRESET) are re-thrown so the outer retry loop in
   // handlePendingCronInternal can handle them.
+  let scanError: unknown = null;
   try {
     for await (const page of deps.crawlingCoreService.getAllNsmPages(
       query,
@@ -320,16 +321,23 @@ export async function performPendingBillsCrawlInternal(
     if (deps.isRetryableNetworkError(error)) {
       throw error;
     }
+    scanError = error;
     deps.logger.warn(
       `NSM pending crawl scan error (continuing with partial data): ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
   // ── NSM source-missing detection (cron path) ──────────────────────
-  // rawItemMap contains every unique NSM bill number seen during the
-  // full list crawl. Any active NSM-originated archive row (contentId
-  // IS NULL) not in this set has been removed from 국민참여입법센터.
-  if (rawItemMap.size > 0) {
+  // Only run when the full list crawl completed without errors.  A
+  // partial scan means some pages were never visited, so bills on those
+  // pages would be absent from rawItemMap and falsely marked as
+  // source_deleted.  Missing bills will be caught on the next successful
+  // crawl run.
+  if (scanError) {
+    deps.logger.warn(
+      `Skipping NSM source-missing detection: scan error occurred (${rawItemMap.size} items collected, scan incomplete)`,
+    );
+  } else if (rawItemMap.size > 0) {
     const sourceDeletedCount =
       await deps.noticeArchiveService.markSourceDeletedByMissingNsmNums(
         new Set(rawItemMap.keys()),

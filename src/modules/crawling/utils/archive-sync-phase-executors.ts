@@ -1128,14 +1128,18 @@ export async function executePendingSyncPhase(
     );
 
     // ── NSM source-missing detection ──────────────────────────────────
-    // Run BEFORE classification/archival so that deleted bills are marked
-    // even when the scan is partial or fails (e.g. Waitingroom 307).
-    // rawItemMap accumulates items incrementally during the scan — even
-    // a partial scan provides valid evidence of which bills still exist
-    // on NSM.  Bills not yet scanned will be caught on the next run.
+    // Runs AFTER the full list crawl completes successfully.  A partial
+    // scan (e.g. Waitingroom 307 after Puppeteer fallback) means some
+    // pages were never visited, so bills on those pages would be falsely
+    // absent from seenNsmActiveNums and incorrectly marked source_deleted.
     const seenNsmActiveNums = new Set(rawItemMap.keys());
     let sourceDeletedCount = 0;
-    if (seenNsmActiveNums.size > 0) {
+    if (scanError) {
+      LoggerUtils.log(
+        'ArchiveSyncService',
+        `Skipping NSM source-missing detection: scan error occurred (${seenNsmActiveNums.size} items collected, scan incomplete)`,
+      );
+    } else if (seenNsmActiveNums.size > 0) {
       sourceDeletedCount =
         await deps.noticeArchiveService.markSourceDeletedByMissingNsmNums(
           seenNsmActiveNums,
@@ -1193,11 +1197,12 @@ export async function executePendingSyncPhase(
 
     if (scanError) {
       // The scan failed (e.g. Waitingroom 307 after Puppeteer fallback).
-      // We already ran source-missing detection with whatever items were
-      // collected.  Skip archival of new items but return partial results.
+      // Source-missing detection was already skipped above due to the
+      // incomplete scan.  Skip archival of new items and return partial
+      // results so that the next successful run covers the missing bills.
       LoggerUtils.log(
         'ArchiveSyncService',
-        'Pending sync skipping archival due to scan error, source-missing detection already completed',
+        'Pending sync skipping archival and source-missing detection due to scan error',
       );
       return { totalScanned, newlyArchivedCount: 0, sourceDeletedCount };
     }
