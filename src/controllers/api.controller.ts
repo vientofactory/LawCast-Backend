@@ -366,6 +366,12 @@ export class ApiController {
     return ApiResponseUtils.success(stats);
   }
 
+  @Get('crawling-transparency')
+  async getCrawlingTransparency() {
+    const transparency = await this.runtimeStatsService.getTransparencyStats();
+    return ApiResponseUtils.success(transparency);
+  }
+
   @Get('batch/status')
   async getBatchStatus() {
     const status = this.batchProcessingService.getBatchStatusForApi({

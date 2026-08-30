@@ -1,5 +1,14 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { WebhookService } from '../webhook/webhook.service';
 import { CrawlingService } from '../crawling/crawling.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
@@ -7,6 +16,8 @@ import { ArchiveSyncService } from '../crawling/archive-sync.service';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 import { WebPushSubscriptionService } from '../notification/web-push-subscription.service';
 import { APP_CONSTANTS } from '../../config/app.config';
+import { NoticeArchive } from '../notice/notice-archive.entity';
+import { NoticeChangeEvent } from '../change-tracking/notice-change-event.entity';
 import cronstrue from 'cronstrue/i18n';
 
 /**
@@ -52,6 +63,17 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
   private eventLoopStats: any = null;
   private intervalId: NodeJS.Timeout | null = null;
   private readonly measurementInterval = 2000;
+
+  private static readonly TRANSPARENCY_CACHE_KEY = 'transparency:stats';
+  private static readonly TRANSPARENCY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+  constructor(
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    @InjectRepository(NoticeArchive)
+    private readonly archiveRepo: Repository<NoticeArchive>,
+    @InjectRepository(NoticeChangeEvent)
+    private readonly changeEventRepo: Repository<NoticeChangeEvent>,
+  ) {}
 
   onModuleInit() {
     this.startEventLoopMonitor();
@@ -173,6 +195,151 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /**
+   * Returns aggregated statistics for the crawling transparency page.
+   * Includes source breakdowns, lifecycle counts, change event stats,
+   * and crawler schedule information.
+   */
+  async getTransparencyStats() {
+    // Return cached result if still fresh to avoid repeated DB aggregations.
+    const cached = await this.cacheManager.get<Record<string, unknown>>(
+      RuntimeStatsService.TRANSPARENCY_CACHE_KEY,
+    );
+    if (cached) return cached;
+
+    // Run all independent DB aggregations in parallel to minimize latency.
+    // Three queries target notice_archives, two target notice_change_events.
+    const [archiveAgg, eventAgg] = await Promise.all([
+      // ── Archive aggregation: total, PAL/NSM split, lifecycle breakdown ──
+      (async () => {
+        const [total, lifecycleRows, palCount] = await Promise.all([
+          this.archiveRepo.count(),
+          this.archiveRepo
+            .createQueryBuilder('a')
+            .select('a.lifecycle_status', 'status')
+            .addSelect('COUNT(*)', 'count')
+            .groupBy('a.lifecycle_status')
+            .getRawMany<{ status: string; count: string }>(),
+          this.archiveRepo
+            .createQueryBuilder('a')
+            .where('a.contentId IS NOT NULL')
+            .getCount(),
+        ]);
+        return {
+          total,
+          byLifecycle: Object.fromEntries(
+            lifecycleRows.map((r) => [r.status, Number(r.count)]),
+          ),
+          palCount, // contentId NOT NULL = PAL-registered bills
+          nsmCount: total - palCount, // contentId IS NULL = NSM-originated
+        };
+      })(),
+      // ── Change event aggregation: type + source breakdown ──
+      (async () => {
+        const [typeRows, sourceRows] = await Promise.all([
+          this.changeEventRepo
+            .createQueryBuilder('e')
+            .select('e.event_type', 'type')
+            .addSelect('COUNT(*)', 'count')
+            .groupBy('e.event_type')
+            .getRawMany<{ type: string; count: string }>(),
+          this.changeEventRepo
+            .createQueryBuilder('e')
+            .select('e.source', 'source')
+            .addSelect('COUNT(*)', 'count')
+            .groupBy('e.source')
+            .getRawMany<{ source: string; count: string }>(),
+        ]);
+        return {
+          total: typeRows.reduce((s, r) => s + Number(r.count), 0),
+          byType: Object.fromEntries(
+            typeRows.map((r) => [r.type, Number(r.count)]),
+          ),
+          bySource: Object.fromEntries(
+            sourceRows.map((r) => [r.source ?? 'unknown', Number(r.count)]),
+          ),
+        };
+      })(),
+    ]);
+
+    const palCron = APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK;
+    const nsmCron = APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK;
+    const isDoneCron = APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC;
+
+    const result = {
+      noticeSources: [
+        {
+          id: 'pal',
+          name: '국회 입법예고 게시판',
+          url: 'https://pal.assembly.go.kr',
+          description: '국회에서 발의된 법률안과 입법예고 정보를 수집합니다.',
+          noticeCount: archiveAgg.palCount,
+          intervalMs: CRON_INTERVAL_MAP[palCron] ?? 0,
+          intervalLabel: resolveCronDisplay(palCron).description,
+        },
+        {
+          id: 'nsm',
+          name: '국민참여입법센터 입법진행현황',
+          url: 'https://opinion.lawmaking.go.kr',
+          description:
+            '국민참여입법센터의 입법진행현황(국회입법현황)을 수집합니다.',
+          noticeCount: archiveAgg.nsmCount,
+          intervalMs: CRON_INTERVAL_MAP[nsmCron] ?? 0,
+          intervalLabel: resolveCronDisplay(nsmCron).description,
+        },
+      ],
+      collection: {
+        totalNotices: archiveAgg.total,
+        byLifecycle: archiveAgg.byLifecycle,
+        bySource: eventAgg.bySource,
+      },
+      changeTracking: {
+        totalEvents: eventAgg.total,
+        byType: eventAgg.byType,
+      },
+      schedules: [
+        {
+          id: 'pal-crawl',
+          name: '국회 입법예고 수집',
+          intervalMs: CRON_INTERVAL_MAP[palCron] ?? 0,
+          intervalLabel: resolveCronDisplay(palCron).description,
+          description:
+            '국회 입법예고 게시판을 주기적으로 확인하여 신규·변경 의안을 감지합니다.',
+        },
+        {
+          id: 'nsm-pending',
+          name: '국민참여입법센터 입법진행현황 수집',
+          intervalMs: CRON_INTERVAL_MAP[nsmCron] ?? 0,
+          intervalLabel: resolveCronDisplay(nsmCron).description,
+          description:
+            '국민참여입법센터의 입법진행현황(국회입법현황)을 주기적으로 수집합니다.',
+        },
+        {
+          id: 'isdone-sync',
+          name: '입법예고 종료 확인',
+          intervalMs: CRON_INTERVAL_MAP[isDoneCron] ?? 0,
+          intervalLabel: resolveCronDisplay(isDoneCron).description,
+          description:
+            '입법예고 기간이 종료된 의안의 종료 여부를 동기화합니다.',
+        },
+      ],
+      transferFlow: {
+        description:
+          '국민참여입법센터의 입법진행현황에서 국회입법현황으로 이관된 의안이 있으면, 크롤러가 이를 자동으로 감지하여 동기화합니다.',
+        nsmToPalIndicator:
+          '국회입법현황에서 의안으로 등록된 경우, 크롤러가 자동으로 동기화하여 관리합니다.',
+      },
+    } as const;
+
+    await this.cacheManager.set(
+      RuntimeStatsService.TRANSPARENCY_CACHE_KEY,
+      result,
+      RuntimeStatsService.TRANSPARENCY_CACHE_TTL_MS,
+    );
+
+    return result;
+  }
+
   private buildCrawlersStatus(
     crawlingService: CrawlingService,
     archiveSyncService?: ArchiveSyncService,
@@ -206,7 +373,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         },
       },
       nsmPendingCrawler: {
-        name: '국민참여입법센터 크롤러',
+        name: '국민참여입법센터 입법진행현황 크롤러',
         source: 'opinion.lawmaking.go.kr',
         status: schedulerState.isPendingProcessing
           ? ('running' as const)
