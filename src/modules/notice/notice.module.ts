@@ -5,6 +5,7 @@ import { NoticeArchiveSnapshotState } from './notice-archive-summary-state.entit
 import { NoticeArchiveIntegrityCheck } from './notice-archive-integrity-check.entity';
 import { NoticeArchiveIntegrityState } from './notice-archive-integrity-state.entity';
 import { NoticeArchiveService } from './notice-archive.service';
+import { ProposalStatisticsService } from './proposal-statistics.service';
 import { ChangeTrackingModule } from '../change-tracking/change-tracking.module';
 
 @Module({
@@ -17,7 +18,7 @@ import { ChangeTrackingModule } from '../change-tracking/change-tracking.module'
     ]),
     ChangeTrackingModule,
   ],
-  providers: [NoticeArchiveService],
-  exports: [NoticeArchiveService],
+  providers: [NoticeArchiveService, ProposalStatisticsService],
+  exports: [NoticeArchiveService, ProposalStatisticsService],
 })
 export class NoticeModule {}

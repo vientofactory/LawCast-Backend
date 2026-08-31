@@ -6,6 +6,7 @@ import { CacheModule } from '@nestjs/cache-manager';
 import { createKeyv } from '@keyv/redis';
 import { ApiController } from './controllers/api.controller';
 import { Webhook } from './modules/webhook/webhook.entity';
+import { ApiProposalStatsController } from './controllers/api-proposal-stats.controller';
 import { NoticeArchive } from './modules/notice/notice-archive.entity';
 import { NoticeArchiveSnapshotState } from './modules/notice/notice-archive-summary-state.entity';
 import { NoticeArchiveIntegrityCheck } from './modules/notice/notice-archive-integrity-check.entity';
@@ -92,6 +93,6 @@ import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.
     OllamaModule,
     DiscordBridgeModule,
   ],
-  controllers: [ApiController],
+  controllers: [ApiController, ApiProposalStatsController],
 })
 export class AppModule {}
