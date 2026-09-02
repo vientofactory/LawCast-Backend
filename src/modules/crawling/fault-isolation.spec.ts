@@ -167,7 +167,6 @@ describe('[Fault Isolation] CrawlingSchedulerService', () => {
               .fn()
               .mockResolvedValue(undefined),
             getExistingNoticeNumSet: jest.fn().mockResolvedValue(new Set()),
-            markSourceDeletedByMissingPalNums: jest.fn().mockResolvedValue(0),
             markSourceDeletedByMissingNsmNums: jest.fn().mockResolvedValue(0),
           },
         },
@@ -685,7 +684,6 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
             getArchivedNullContentIdNums: jest
               .fn()
               .mockResolvedValue(new Set()),
-            markSourceDeletedByMissingPalNums: jest.fn().mockResolvedValue(0),
             markSourceDeletedByMissingNsmNums: jest.fn().mockResolvedValue(0),
             upgradePendingNotices: jest.fn().mockResolvedValue(0),
           },

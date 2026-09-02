@@ -1,14 +1,11 @@
 /**
- * E2E tests for source deletion detection across all three paths:
+ * E2E tests for source deletion detection:
  *
  * Path 1: archiveNsmBillItems — NsmBillDeletedError during NSM detail capture
  *          -> appendSourceDeletedEventByNoticeNum called, upsert SKIPPED
  *
  * Path 2: upsertNoticeArchive — existing source_deleted record re-crawled
  *          -> diff event preserves source_deleted (no spurious restoration)
- *
- * Path 3: markSourceDeletedByMissingPalNums — PAL full sync reconciliation
- *          -> active PAL-origin rows absent from seenPalActiveNums -> source_deleted
  *
  * Covers bill 2214911 scenario: deleted from 국민참여입법센터, must not be
  * restored to active during subsequent sync cycles.
@@ -101,7 +98,6 @@ describe('Source deletion detection (bill 2214911 scenario)', () => {
             getAllPalNoticesForScreenshotRequeue: jest
               .fn()
               .mockResolvedValue([]),
-            markSourceDeletedByMissingPalNums: jest.fn().mockResolvedValue(0),
             markSourceDeletedByMissingNsmNums: jest.fn().mockResolvedValue(0),
           },
         },
@@ -145,6 +141,10 @@ describe('Source deletion detection (bill 2214911 scenario)', () => {
       (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
         new NsmBillDeletedError('2214911', '안건정보가 없습니다.'),
       );
+      // Deletion is only confirmed after an independent HTTP probe.
+      (
+        crawlingCoreService.probeNsmDeletedBillAlert as jest.Mock
+      ).mockResolvedValue('안건정보가 없습니다.');
 
       const result = await service.archiveNsmBillItems([deletedNsmBillItem]);
 
@@ -227,6 +227,10 @@ describe('Source deletion detection (bill 2214911 scenario)', () => {
       (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
         undefined,
       );
+      // Deletion is only confirmed after an independent HTTP probe.
+      (
+        crawlingCoreService.probeNsmDeletedBillAlert as jest.Mock
+      ).mockResolvedValue('안건정보가 없습니다.');
 
       const result = await service.archiveNsmBillItems([
         deletedNsmBillItem,
@@ -300,30 +304,6 @@ describe('Source deletion detection (bill 2214911 scenario)', () => {
       expect(
         noticeArchiveService.appendSourceDeletedEventByNoticeNum,
       ).not.toHaveBeenCalled();
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // Path 3: markSourceDeletedByMissingPalNums — PAL full sync reconciliation
-  // ═══════════════════════════════════════════════════════════════════════
-  describe('Path 3: markSourceDeletedByMissingPalNums (PAL reconciliation)', () => {
-    it('is implemented (not a no-op) and delegates to the real service', async () => {
-      // The old implementation was a no-op returning 0.
-      // The new implementation queries active PAL rows and marks missing ones.
-      (
-        noticeArchiveService.markSourceDeletedByMissingPalNums as jest.Mock
-      ).mockResolvedValueOnce(3);
-
-      const seenPalNums = new Set([100, 200, 300]);
-      const result =
-        await noticeArchiveService.markSourceDeletedByMissingPalNums(
-          seenPalNums,
-        );
-
-      expect(result).toBe(3);
-      expect(
-        noticeArchiveService.markSourceDeletedByMissingPalNums,
-      ).toHaveBeenCalledWith(seenPalNums);
     });
   });
 });

@@ -1027,51 +1027,6 @@ export class NoticeArchiveService {
     return result.affected ?? 0;
   }
 
-  async markSourceDeletedByMissingPalNums(
-    seenPalActiveNums: Set<number>,
-  ): Promise<number> {
-    if (seenPalActiveNums.size === 0) {
-      return 0;
-    }
-
-    // Only consider PAL-originated rows (contentId IS NOT NULL) that are
-    // currently lifecycle_status = 'active'.  NSM-only rows (contentId NULL)
-    // are not part of the PAL universe and must not be marked deleted.
-    const activePalRows = await this.archiveRepository.find({
-      where: {
-        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
-        contentId: Not(IsNull()),
-      },
-      select: {
-        noticeNum: true,
-        subject: true,
-      },
-    });
-
-    const missingNums = activePalRows
-      .filter((row) => !seenPalActiveNums.has(row.noticeNum))
-      .map((row) => row.noticeNum);
-
-    if (missingNums.length === 0) {
-      return 0;
-    }
-
-    let markedCount = 0;
-    for (const noticeNum of missingNums) {
-      try {
-        await this.appendSourceDeletedEventByNoticeNum(noticeNum);
-        markedCount++;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn(
-          `markSourceDeletedByMissingPalNums: failed to mark notice ${noticeNum} as source_deleted: ${message}`,
-        );
-      }
-    }
-
-    return markedCount;
-  }
-
   /**
    * Marks active NSM-originated archive rows (contentId IS NULL) whose
    * noticeNum is absent from `seenNsmActiveNums` as source_deleted.

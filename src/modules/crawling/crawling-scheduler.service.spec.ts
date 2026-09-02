@@ -111,7 +111,6 @@ describe('CrawlingSchedulerService', () => {
             updateSummaryStateByNoticeNum: jest.fn(),
             getExistingNoticeNumSet: jest.fn(),
             getArchivedNullContentIdNums: jest.fn(),
-            markSourceDeletedByMissingPalNums: jest.fn().mockResolvedValue(0),
             markSourceDeletedByMissingNsmNums: jest.fn().mockResolvedValue(0),
           },
         },
