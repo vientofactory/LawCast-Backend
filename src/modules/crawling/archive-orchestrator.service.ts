@@ -681,9 +681,37 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
               const message =
                 error instanceof Error ? error.message : String(error);
 
-              // If the bill is confirmed deleted on NSM, mark source_deleted
-              // and skip the upsert — restoring it to active would be incorrect.
+              // A single Puppeteer-observed deletion signal can be a false
+              // positive (session/anti-bot error pages reuse the same
+              // template), so require an independent HTTP probe confirmation
+              // before marking source_deleted — mirrors the backfill path.
               if (error instanceof NsmBillDeletedError) {
+                const probeAlertMessage =
+                  await this.crawlingCoreService.probeNsmDeletedBillAlert(
+                    item.billNo,
+                  );
+
+                if (!probeAlertMessage) {
+                  logAndBridge({
+                    logger: this.logger,
+                    method: 'warn',
+                    message: `captureNsmDetailFull deletion signal not confirmed for bill ${item.billNo} during NSM archive; skipped source_deleted event`,
+                    context: ArchiveOrchestratorService.name,
+                    discordBridge: this.discordBridge,
+                    bridgeLevel: BridgeLogLevel.WARN,
+                    bridgeMessage: `NSM archive deletion signal was not confirmed for bill **${item.billNo}** (notice=${notice.num}); skipped source_deleted event`,
+                    metadata: {
+                      billNo: item.billNo,
+                      noticeNum: notice.num,
+                      responseUrl: error.responseUrl,
+                      detectedAs: SourceDeletionDetectedAs.UNCONFIRMED,
+                      detectionMethod:
+                        SourceDeletionDetectionMethod.NSM_ERROR_WITHOUT_HTTP_PROBE_CONFIRMATION,
+                    },
+                  });
+                  return null;
+                }
+
                 await this.appendSourceDeletedAndFlushNotifications(notice.num);
                 logAndBridge({
                   logger: this.logger,
@@ -696,7 +724,10 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
                   metadata: {
                     billNo: item.billNo,
                     noticeNum: notice.num,
+                    responseUrl: error.responseUrl,
                     detectedAs: SourceDeletionDetectedAs.SOURCE_DELETED,
+                    detectionMethod:
+                      SourceDeletionDetectionMethod.NSM_ERROR_CONFIRMED_VIA_HTTP_PROBE,
                   },
                 });
                 return null;
@@ -1036,7 +1067,8 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
    * on their detail page.
    *
    * Uses captureNsmDetailFull (Puppeteer) which handles the Waitingroom.
-   * Bills that throw NsmBillDeletedError are confirmed deleted.
+   * A capture failure (NsmBillDeletedError or otherwise) is only confirmed
+   * as deletion via a separate, independent HTTP probe.
    */
   async probeExistingNsmBillsForSourceDeletion(
     limit: number = 50,
@@ -1048,12 +1080,19 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
 
     if (candidates.length === 0) return 0;
 
-    this.logger.log(
-      `NSM detail probe starting: ${candidates.length} candidates [${candidates
+    logAndBridge({
+      logger: this.logger,
+      method: 'log',
+      message: `NSM detail probe starting: ${candidates.length} candidates [${candidates
         .slice(0, 5)
         .map((c) => c.noticeNum)
         .join(', ')}${candidates.length > 5 ? '...' : ''}]`,
-    );
+      context: ArchiveOrchestratorService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.DEBUG,
+      bridgeMessage: `NSM detail probe starting: **${candidates.length}** candidate(s)`,
+      metadata: { candidateCount: candidates.length },
+    });
 
     let markedCount = 0;
     let probedCount = 0;
@@ -1070,42 +1109,69 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
           `NSM detail probe [${probedCount}/${candidates.length}] bill ${billNo}: alive`,
         );
       } catch (error) {
-        if (error instanceof NsmBillDeletedError) {
+        // Regardless of whether Puppeteer threw NsmBillDeletedError or some
+        // other error (timeout, Waitingroom), a single capture is not enough
+        // evidence of deletion — session/anti-bot error pages can reuse the
+        // same "안건정보가 없습니다" template. Always require an independent
+        // HTTP probe confirmation before marking source_deleted.
+        const detectionMethod =
+          error instanceof NsmBillDeletedError
+            ? SourceDeletionDetectionMethod.NSM_ERROR_CONFIRMED_VIA_HTTP_PROBE
+            : SourceDeletionDetectionMethod.HTTP_PROBE_AFTER_TIMEOUT;
+        const probeMessage =
+          await this.crawlingCoreService.probeNsmDeletedBillAlert(billNo);
+        if (probeMessage) {
           await this.appendSourceDeletedAndFlushNotifications(
             candidate.noticeNum,
           );
           markedCount++;
-          this.logger.warn(
-            `NSM detail probe [${probedCount}/${candidates.length}] confirmed deleted bill ${billNo} (notice=${candidate.noticeNum}), marked source_deleted`,
-          );
+          logAndBridge({
+            logger: this.logger,
+            method: 'warn',
+            message: `NSM detail probe [${probedCount}/${candidates.length}] confirmed deleted bill ${billNo} via HTTP probe (notice=${candidate.noticeNum}): ${probeMessage}`,
+            context: ArchiveOrchestratorService.name,
+            discordBridge: this.discordBridge,
+            bridgeLevel: BridgeLogLevel.WARN,
+            bridgeMessage: `NSM detail probe confirmed deleted bill **${billNo}** (notice=${candidate.noticeNum}), marked source_deleted: ${probeMessage}`,
+            metadata: {
+              billNo,
+              noticeNum: candidate.noticeNum,
+              detectedAs: SourceDeletionDetectedAs.SOURCE_DELETED,
+              detectionMethod,
+            },
+          });
         } else {
-          // Puppeteer failed (timeout, Waitingroom) — fall back to
-          // lightweight HTTP probe which can detect deleted bills without
-          // needing a full browser session.
-          const probeMessage =
-            await this.crawlingCoreService.probeNsmDeletedBillAlert(billNo);
-          if (probeMessage) {
-            await this.appendSourceDeletedAndFlushNotifications(
-              candidate.noticeNum,
-            );
-            markedCount++;
-            this.logger.warn(
-              `NSM detail probe [${probedCount}/${candidates.length}] confirmed deleted bill ${billNo} via HTTP fallback (notice=${candidate.noticeNum}): ${probeMessage}`,
-            );
-          } else {
-            const msg = error instanceof Error ? error.message : String(error);
-            LoggerUtils.debugDev(
-              'ArchiveOrchestratorService',
-              `NSM detail probe [${probedCount}/${candidates.length}] bill ${billNo}: skipped (${msg.slice(0, 80)})`,
-            );
-          }
+          const msg = error instanceof Error ? error.message : String(error);
+          logAndBridge({
+            logger: this.logger,
+            method: 'debug',
+            message: `NSM detail probe [${probedCount}/${candidates.length}] bill ${billNo}: skipped (${msg.slice(0, 80)})`,
+            context: ArchiveOrchestratorService.name,
+            discordBridge: this.discordBridge,
+            bridgeLevel: BridgeLogLevel.VERBOSE,
+            bridgeMessage: `NSM detail probe deletion signal was not confirmed for bill **${billNo}** (notice=${candidate.noticeNum})`,
+            metadata: {
+              billNo,
+              noticeNum: candidate.noticeNum,
+              detectedAs: SourceDeletionDetectedAs.UNCONFIRMED,
+              detectionMethod:
+                SourceDeletionDetectionMethod.NSM_ERROR_WITHOUT_HTTP_PROBE_CONFIRMATION,
+            },
+          });
         }
       }
     }
 
-    this.logger.log(
-      `NSM detail probe done: probed=${probedCount}, marked=${markedCount}`,
-    );
+    logAndBridge({
+      logger: this.logger,
+      method: 'log',
+      message: `NSM detail probe done: probed=${probedCount}, marked=${markedCount}`,
+      context: ArchiveOrchestratorService.name,
+      discordBridge: this.discordBridge,
+      bridgeLevel: BridgeLogLevel.DEBUG,
+      bridgeMessage: `NSM detail probe done: probed **${probedCount}**, marked **${markedCount}**`,
+      metadata: { probedCount, markedCount },
+    });
     return markedCount;
   }
 

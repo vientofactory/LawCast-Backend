@@ -128,6 +128,7 @@ describe('ArchiveOrchestratorService', () => {
             getAllPalNoticesForScreenshotRequeue: jest
               .fn()
               .mockResolvedValue([]),
+            getActiveNsmBillsForProbe: jest.fn().mockResolvedValue([]),
           },
         },
         {
@@ -1203,6 +1204,151 @@ describe('ArchiveOrchestratorService', () => {
           reason: NsmArchiveReason.EXISTING_PENDING_RECOMPARE,
         }),
       );
+    });
+
+    it('marks source_deleted only after an independent HTTP probe confirms the NsmBillDeletedError signal', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new NsmBillDeletedError('2219776', '안건정보가 없습니다.'),
+      );
+      (
+        crawlingCoreService.probeNsmDeletedBillAlert as jest.Mock
+      ).mockResolvedValue('안건정보가 없습니다.');
+
+      const result = await service.archiveNsmBillItems([mockNsmBillItem]);
+
+      expect(result).toEqual([]);
+      expect(crawlingCoreService.probeNsmDeletedBillAlert).toHaveBeenCalledWith(
+        '2219776',
+      );
+      expect(
+        noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+      ).toHaveBeenCalledWith(2219776);
+      expect(noticeArchiveService.upsertNoticeArchive).not.toHaveBeenCalled();
+    });
+
+    it('does not mark source_deleted when a single Puppeteer capture reports deletion but the HTTP probe cannot confirm it', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new NsmBillDeletedError('2219776', '안건정보가 없습니다.'),
+      );
+      (
+        crawlingCoreService.probeNsmDeletedBillAlert as jest.Mock
+      ).mockResolvedValue(null);
+
+      const result = await service.archiveNsmBillItems([mockNsmBillItem]);
+
+      expect(result).toEqual([]);
+      expect(crawlingCoreService.probeNsmDeletedBillAlert).toHaveBeenCalledWith(
+        '2219776',
+      );
+      expect(
+        noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+      ).not.toHaveBeenCalled();
+      expect(noticeArchiveService.upsertNoticeArchive).not.toHaveBeenCalled();
+      expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
+        BridgeLogLevel.WARN,
+        'ArchiveOrchestratorService',
+        expect.stringContaining('deletion signal was not confirmed'),
+        expect.objectContaining({
+          billNo: '2219776',
+          detectedAs: SourceDeletionDetectedAs.UNCONFIRMED,
+          detectionMethod:
+            SourceDeletionDetectionMethod.NSM_ERROR_WITHOUT_HTTP_PROBE_CONFIRMATION,
+        }),
+      );
+    });
+  });
+
+  describe('probeExistingNsmBillsForSourceDeletion', () => {
+    const candidate = { noticeNum: 2219776, contentBillNumber: '2219776' };
+
+    it('marks source_deleted when NsmBillDeletedError is confirmed by a follow-up HTTP probe', async () => {
+      (
+        noticeArchiveService.getActiveNsmBillsForProbe as jest.Mock
+      ).mockResolvedValue([candidate]);
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new NsmBillDeletedError('2219776', '안건정보가 없습니다.'),
+      );
+      (
+        crawlingCoreService.probeNsmDeletedBillAlert as jest.Mock
+      ).mockResolvedValue('안건정보가 없습니다.');
+
+      const markedCount =
+        await service.probeExistingNsmBillsForSourceDeletion(50);
+
+      expect(markedCount).toBe(1);
+      expect(crawlingCoreService.probeNsmDeletedBillAlert).toHaveBeenCalledWith(
+        '2219776',
+      );
+      expect(
+        noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+      ).toHaveBeenCalledWith(2219776);
+    });
+
+    it('does not mark source_deleted when NsmBillDeletedError cannot be confirmed by the HTTP probe', async () => {
+      (
+        noticeArchiveService.getActiveNsmBillsForProbe as jest.Mock
+      ).mockResolvedValue([candidate]);
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new NsmBillDeletedError('2219776', '안건정보가 없습니다.'),
+      );
+      (
+        crawlingCoreService.probeNsmDeletedBillAlert as jest.Mock
+      ).mockResolvedValue(null);
+
+      const markedCount =
+        await service.probeExistingNsmBillsForSourceDeletion(50);
+
+      expect(markedCount).toBe(0);
+      expect(
+        noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('marks source_deleted for a non-NsmBillDeletedError capture failure once the HTTP probe confirms it', async () => {
+      (
+        noticeArchiveService.getActiveNsmBillsForProbe as jest.Mock
+      ).mockResolvedValue([candidate]);
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new Error('Navigation timeout of 30000 ms exceeded'),
+      );
+      (
+        crawlingCoreService.probeNsmDeletedBillAlert as jest.Mock
+      ).mockResolvedValue('안건정보가 없습니다.');
+
+      const markedCount =
+        await service.probeExistingNsmBillsForSourceDeletion(50);
+
+      expect(markedCount).toBe(1);
+      expect(
+        noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+      ).toHaveBeenCalledWith(2219776);
+    });
+
+    it('does not mark source_deleted when the bill is alive (no error from captureNsmDetailFull)', async () => {
+      (
+        noticeArchiveService.getActiveNsmBillsForProbe as jest.Mock
+      ).mockResolvedValue([candidate]);
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '<html>nsm detail</html>',
+          screenshot: null,
+          detail: null,
+          responseUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219776/detailRP',
+          statusCode: 200,
+        },
+      );
+
+      const markedCount =
+        await service.probeExistingNsmBillsForSourceDeletion(50);
+
+      expect(markedCount).toBe(0);
+      expect(
+        crawlingCoreService.probeNsmDeletedBillAlert,
+      ).not.toHaveBeenCalled();
+      expect(
+        noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+      ).not.toHaveBeenCalled();
     });
   });
 });

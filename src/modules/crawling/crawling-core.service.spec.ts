@@ -3,11 +3,20 @@ import { BrowserLeaseManagerService } from './browser-lease-manager.service';
 import {
   CrawlingCoreService,
   NsmBillDeletedError,
+  NsmWaitingroomUnresolvedError,
 } from './crawling-core.service';
 import { NsmLmSts, NsmLmStsParser, PalCrawl, type ITableData } from 'pal-crawl';
+import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 
 // pal-crawl 모듈을 모킹
 jest.mock('pal-crawl');
+jest.mock('../../utils/http-fetch.utils', () => ({
+  fetchHtmlPage: jest.fn(),
+}));
+
+const mockFetchHtmlPage = fetchHtmlPage as jest.MockedFunction<
+  typeof fetchHtmlPage
+>;
 
 describe('CrawlingCoreService', () => {
   let service: CrawlingCoreService;
@@ -260,6 +269,21 @@ describe('CrawlingCoreService', () => {
   });
 
   describe('browser lease coverage', () => {
+    it('throws NsmWaitingroomUnresolvedError (not NsmBillDeletedError) when the Waitingroom is never bypassed, even if the leftover HTML looks like a deleted page', async () => {
+      mockPage.title.mockResolvedValue('Waitingroom');
+      mockPage.content.mockResolvedValue(`
+        <html>
+          <body>
+            <script>alert("안건정보가 없습니다."); history.back();</script>
+          </body>
+        </html>
+      `);
+
+      await expect(
+        service.captureNsmDetailFull('2219887'),
+      ).rejects.toBeInstanceOf(NsmWaitingroomUnresolvedError);
+    });
+
     it('throws NsmBillDeletedError only when alert and deleted structure are both present', async () => {
       mockPage.content.mockResolvedValue(`
         <html>
@@ -352,6 +376,54 @@ describe('CrawlingCoreService', () => {
       expect(mockPalCrawl.getContentScreenshot).toHaveBeenCalledWith(
         'content-123',
       );
+    });
+  });
+
+  describe('probeNsmDeletedBillAlert', () => {
+    afterEach(() => {
+      mockFetchHtmlPage.mockReset();
+    });
+
+    it('confirms deletion when the fetched detail page has the alert and no core structure', async () => {
+      mockFetchHtmlPage.mockResolvedValue({
+        data: `
+          <html>
+            <head><title>안건정보</title></head>
+            <body>
+              <script>alert("안건정보가 없습니다."); history.back();</script>
+            </body>
+          </html>
+        `,
+      } as any);
+
+      const result = await service.probeNsmDeletedBillAlert('2219887');
+
+      expect(result).toBe('안건정보가 없습니다.');
+    });
+
+    it('does not confirm deletion when the fetch lands on an unresolved Waitingroom page, even if the alert text happens to appear', async () => {
+      mockFetchHtmlPage.mockResolvedValue({
+        data: `
+          <html>
+            <head><title>Waitingroom</title></head>
+            <body>
+              <script>alert("안건정보가 없습니다."); history.back();</script>
+            </body>
+          </html>
+        `,
+      } as any);
+
+      const result = await service.probeNsmDeletedBillAlert('2219887');
+
+      expect(result).toBeNull();
+    });
+
+    it('returns null when the HTTP fetch throws', async () => {
+      mockFetchHtmlPage.mockRejectedValue(new Error('network error'));
+
+      const result = await service.probeNsmDeletedBillAlert('2219887');
+
+      expect(result).toBeNull();
     });
   });
 });

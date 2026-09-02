@@ -48,6 +48,16 @@ export async function isWaitingroomPage(page: Page): Promise<boolean> {
 }
 
 /**
+ * String-based equivalent of `isWaitingroomPage`, for callers that only have
+ * raw HTML (e.g. an HTTP-fetched response) rather than a live `Page`.
+ */
+export function isWaitingroomHtml(html: string): boolean {
+  if (!html) return false;
+  const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+  return titleMatch ? WAITINGROOM_TITLE_PATTERN.test(titleMatch[1]) : false;
+}
+
+/**
  * Navigates a Puppeteer page to `url` with Waitingroom bypass.
  *
  * The Waitingroom on opinion.lawmaking.go.kr uses a JavaScript polling timer

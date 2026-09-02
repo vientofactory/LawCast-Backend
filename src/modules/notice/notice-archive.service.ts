@@ -1077,9 +1077,19 @@ export class NoticeArchiveService {
    * This catches bills that have been removed from 국민참여입법센터 entirely
    * (not just from a detail page). It runs at the end of the pending-sync
    * phase after the full NSM list crawl is complete.
+   *
+   * Absence from one list scan is NOT sufficient evidence of deletion (a
+   * bill can legitimately drop off the "current status" listing while its
+   * detail page still exists, or a page can be missed by a flaky scan).
+   * `confirmDeletion`, when provided, is called with the bill's detail-page
+   * number and must independently confirm the deletion (e.g. via an HTTP
+   * probe) before the row is actually marked; candidates it rejects are
+   * left active for the next cycle instead of being marked on list-absence
+   * alone.
    */
   async markSourceDeletedByMissingNsmNums(
     seenNsmActiveNums: Set<number>,
+    confirmDeletion?: (billNo: string) => Promise<boolean>,
   ): Promise<number> {
     if (seenNsmActiveNums.size === 0) {
       return 0;
@@ -1095,31 +1105,44 @@ export class NoticeArchiveService {
       select: {
         noticeNum: true,
         subject: true,
+        contentBillNumber: true,
       },
     });
 
-    const missingNums = activeNsmRows
-      .filter((row) => !seenNsmActiveNums.has(row.noticeNum))
-      .map((row) => row.noticeNum);
+    const missingRows = activeNsmRows.filter(
+      (row) => !seenNsmActiveNums.has(row.noticeNum),
+    );
 
     LoggerUtils.debugDev(
       'NoticeArchiveService',
-      `markSourceDeletedByMissingNsmNums: seenNsmNums=${seenNsmActiveNums.size}, activeNsmRows=${activeNsmRows.length}, missing=${missingNums.length}`,
+      `markSourceDeletedByMissingNsmNums: seenNsmNums=${seenNsmActiveNums.size}, activeNsmRows=${activeNsmRows.length}, missing=${missingRows.length}`,
     );
 
-    if (missingNums.length === 0) {
+    if (missingRows.length === 0) {
       return 0;
     }
 
     let markedCount = 0;
-    for (const noticeNum of missingNums) {
+    for (const row of missingRows) {
+      if (confirmDeletion) {
+        const billNo = row.contentBillNumber ?? row.noticeNum.toString();
+        const confirmed = await confirmDeletion(billNo);
+        if (!confirmed) {
+          LoggerUtils.debugDev(
+            'NoticeArchiveService',
+            `markSourceDeletedByMissingNsmNums: notice ${row.noticeNum} missing from list scan but not confirmed deleted on detail page; left active`,
+          );
+          continue;
+        }
+      }
+
       try {
-        await this.appendSourceDeletedEventByNoticeNum(noticeNum);
+        await this.appendSourceDeletedEventByNoticeNum(row.noticeNum);
         markedCount++;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.logger.warn(
-          `markSourceDeletedByMissingNsmNums: failed to mark notice ${noticeNum} as source_deleted: ${message}`,
+          `markSourceDeletedByMissingNsmNums: failed to mark notice ${row.noticeNum} as source_deleted: ${message}`,
         );
       }
     }
@@ -1137,45 +1160,41 @@ export class NoticeArchiveService {
   ): Promise<Array<{ noticeNum: number; contentBillNumber: string | null }>> {
     if (limit <= 0) return [];
 
-    // Priority 1: probe ALL bills whose detail page was never successfully
-    // captured (content_bill_number IS NULL).  These are the strongest
-    // candidates for having been deleted on国民참여입법센터.
-    // There are typically <50 such bills, so this is fast.
-    const highPriority = await this.archiveRepository.find({
-      where: {
-        lifecycleStatus: 'active',
-        contentId: IsNull(),
-        contentBillNumber: IsNull(),
-        sourceDeletedAt: IsNull(),
-      },
-      select: {
-        noticeNum: true,
-        contentBillNumber: true,
-      },
-      order: { noticeNum: 'DESC' },
-    });
+    // Priority 1: probe bills whose detail page was never successfully
+    // captured (content_bill_number IS NULL) - the strongest candidates for
+    // having been deleted on国民참여입법센터. Random order (rather than a
+    // fixed noticeNum DESC slice) so that when this pool is >= limit, the
+    // same top-N rows aren't probed forever while the rest of the pool never
+    // gets checked.
+    const highPriority = await this.archiveRepository
+      .createQueryBuilder('archive')
+      .where('archive.lifecycleStatus = :status', { status: 'active' })
+      .andWhere('archive.contentId IS NULL')
+      .andWhere('archive.contentBillNumber IS NULL')
+      .andWhere('archive.sourceDeletedAt IS NULL')
+      .select(['archive.noticeNum', 'archive.contentBillNumber'])
+      .orderBy('RANDOM()')
+      .limit(limit)
+      .getMany();
 
     if (highPriority.length >= limit) {
       return highPriority.slice(0, limit);
     }
 
-    // Priority 2: fill remaining slots from the broader pool.
+    // Priority 2: fill remaining slots from the broader pool, random order
+    // for the same eventual-coverage reason as Priority 1.
     const remaining = limit - highPriority.length;
     if (remaining <= 0) return highPriority;
 
-    const filler = await this.archiveRepository.find({
-      where: {
-        lifecycleStatus: 'active',
-        contentId: IsNull(),
-        sourceDeletedAt: IsNull(),
-      },
-      select: {
-        noticeNum: true,
-        contentBillNumber: true,
-      },
-      order: { noticeNum: 'ASC' },
-      take: remaining,
-    });
+    const filler = await this.archiveRepository
+      .createQueryBuilder('archive')
+      .where('archive.lifecycleStatus = :status', { status: 'active' })
+      .andWhere('archive.contentId IS NULL')
+      .andWhere('archive.sourceDeletedAt IS NULL')
+      .select(['archive.noticeNum', 'archive.contentBillNumber'])
+      .orderBy('RANDOM()')
+      .limit(remaining)
+      .getMany();
 
     return [...highPriority, ...filler];
   }

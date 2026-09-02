@@ -334,18 +334,31 @@ export async function performPendingBillsCrawlInternal(
   // source_deleted.  Missing bills will be caught on the next successful
   // crawl run.
   if (scanError) {
-    deps.logger.warn(
-      `Skipping NSM source-missing detection: scan error occurred (${rawItemMap.size} items collected, scan incomplete)`,
-    );
+    logAndBridge({
+      logger: deps.logger,
+      method: 'warn',
+      message: `Skipping NSM source-missing detection: scan error occurred (${rawItemMap.size} items collected, scan incomplete)`,
+      context: 'CrawlingSchedulerService',
+      discordBridge: deps.discordBridge,
+      bridgeMessage: `Skipping NSM source-missing detection: scan error occurred (**${rawItemMap.size}** items collected, scan incomplete)`,
+    });
   } else if (rawItemMap.size > 0) {
     const sourceDeletedCount =
       await deps.noticeArchiveService.markSourceDeletedByMissingNsmNums(
         new Set(rawItemMap.keys()),
+        async (billNo) =>
+          (await deps.crawlingCoreService.probeNsmDeletedBillAlert(billNo)) !==
+          null,
       );
     if (sourceDeletedCount > 0) {
-      deps.logger.log(
-        `NSM pending cron marked ${sourceDeletedCount} notice(s) as source_deleted (seenNsmNums=${rawItemMap.size})`,
-      );
+      logAndBridge({
+        logger: deps.logger,
+        method: 'warn',
+        message: `NSM pending cron marked ${sourceDeletedCount} notice(s) as source_deleted (seenNsmNums=${rawItemMap.size})`,
+        context: 'CrawlingSchedulerService',
+        discordBridge: deps.discordBridge,
+        bridgeMessage: `NSM pending cron marked **${sourceDeletedCount}** notice(s) as source_deleted after NSM list reconciliation (seenNsmNums=${rawItemMap.size})`,
+      });
     }
   }
   // ──────────────────────────────────────────────────────────────────
@@ -363,14 +376,24 @@ export async function performPendingBillsCrawlInternal(
         NSM_DETAIL_PROBE_BATCH_SIZE,
       );
     if (detailProbeDeletedCount > 0) {
-      deps.logger.log(
-        `NSM detail probe confirmed ${detailProbeDeletedCount} deleted bill(s)`,
-      );
+      logAndBridge({
+        logger: deps.logger,
+        method: 'warn',
+        message: `NSM detail probe confirmed ${detailProbeDeletedCount} deleted bill(s)`,
+        context: 'CrawlingSchedulerService',
+        discordBridge: deps.discordBridge,
+        bridgeMessage: `NSM detail probe confirmed **${detailProbeDeletedCount}** deleted bill(s) (marked source_deleted)`,
+      });
     }
   } catch (error) {
-    deps.logger.warn(
-      `NSM detail probe failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    logAndBridge({
+      logger: deps.logger,
+      method: 'warn',
+      message: `NSM detail probe failed: ${error instanceof Error ? error.message : String(error)}`,
+      context: 'CrawlingSchedulerService',
+      discordBridge: deps.discordBridge,
+      bridgeMessage: `NSM detail probe failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
   }
   // ──────────────────────────────────────────────────────────────────
 

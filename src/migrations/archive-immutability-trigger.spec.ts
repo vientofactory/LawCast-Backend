@@ -133,7 +133,6 @@ describe('notice_archives immutability trigger', () => {
 
   it.each([
     ['subject', '변조된 제목'],
-    ['lifecycle_status', 'source_deleted'],
     ['integrity_check_passed', 1],
     ['archived_at', '2026-01-01 00:00:00'],
   ])('still rejects mutating %s', async (column, value) => {
@@ -143,6 +142,67 @@ describe('notice_archives immutability trigger', () => {
       dataSource.query(
         `UPDATE "notice_archives" SET "${column}" = ? WHERE "noticeNum" = ?`,
         [value, 2203643],
+      ),
+    ).rejects.toThrow(/immutable after initial snapshot archive/);
+  });
+
+  it.each([['source_deleted'], ['renumbered']])(
+    'allows the one-time active -> %s lifecycle transition',
+    async (target) => {
+      await insertRow();
+
+      await expect(
+        dataSource.query(
+          `UPDATE "notice_archives"
+             SET "lifecycle_status" = ?, "source_deleted_at" = ?
+           WHERE "noticeNum" = ?`,
+          [target, '2026-09-02 00:00:00', 2203643],
+        ),
+      ).resolves.not.toThrow();
+
+      const [row] = await dataSource.query(
+        `SELECT "lifecycle_status", "source_deleted_at" FROM "notice_archives" WHERE "noticeNum" = ?`,
+        [2203643],
+      );
+      expect(row.lifecycle_status).toBe(target);
+      expect(row.source_deleted_at).toBe('2026-09-02 00:00:00');
+    },
+  );
+
+  it('rejects reverting an already-transitioned lifecycle_status back to active', async () => {
+    await insertRow({
+      lifecycle_status: 'source_deleted',
+      source_deleted_at: '2026-09-01 00:00:00',
+    });
+
+    await expect(
+      dataSource.query(
+        `UPDATE "notice_archives" SET "lifecycle_status" = 'active' WHERE "noticeNum" = ?`,
+        [2203643],
+      ),
+    ).rejects.toThrow(/immutable after initial snapshot archive/);
+  });
+
+  it('rejects transitioning to an unrecognized lifecycle_status value', async () => {
+    await insertRow();
+
+    await expect(
+      dataSource.query(
+        `UPDATE "notice_archives" SET "lifecycle_status" = 'bogus' WHERE "noticeNum" = ?`,
+        [2203643],
+      ),
+    ).rejects.toThrow(/immutable after initial snapshot archive/);
+  });
+
+  it('rejects a lifecycle transition bundled with mutating another immutable column', async () => {
+    await insertRow();
+
+    await expect(
+      dataSource.query(
+        `UPDATE "notice_archives"
+           SET "lifecycle_status" = 'source_deleted', "source_deleted_at" = ?, "subject" = ?
+         WHERE "noticeNum" = ?`,
+        ['2026-09-02 00:00:00', '변조된 제목', 2203643],
       ),
     ).rejects.toThrow(/immutable after initial snapshot archive/);
   });

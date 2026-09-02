@@ -26,6 +26,8 @@ import {
   navigateWithWaitingroomBypass,
   fetchPageHtmlViaBrowser,
   isWaitingroomRedirectError,
+  isWaitingroomPage,
+  isWaitingroomHtml,
 } from './utils/waitingroom-bypass';
 
 /**
@@ -97,6 +99,22 @@ export class NsmBillDeletedError extends Error {
     this.billNo = billNo;
     this.alertMessage = alertMessage;
     this.responseUrl = options?.responseUrl;
+  }
+}
+
+/**
+ * Thrown when the Waitingroom could not be bypassed within the retry budget.
+ * The captured page is not the real detail page, so it must never be fed
+ * into deletion detection (or detail parsing) — distinct from
+ * `NsmBillDeletedError` so callers never mistake it for a confirmed deletion.
+ */
+export class NsmWaitingroomUnresolvedError extends Error {
+  readonly billNo: string;
+
+  constructor(billNo: string) {
+    super(`NSM bill ${billNo}: Waitingroom was not resolved before capture`);
+    this.name = 'NsmWaitingroomUnresolvedError';
+    this.billNo = billNo;
   }
 }
 
@@ -318,6 +336,12 @@ export class CrawlingCoreService {
    */
   private detectNsmDeletedBillFromHtml(html: string): NsmDeletionCheck {
     if (!html) {
+      return { confirmed: false, alertMessage: null };
+    }
+
+    // A page still stuck on the Waitingroom (rate-limit/anti-bot queue) is
+    // never the real detail page; never let it be mistaken for a deletion.
+    if (isWaitingroomHtml(html)) {
       return { confirmed: false, alertMessage: null };
     }
 
@@ -922,6 +946,13 @@ export class CrawlingCoreService {
             detailUrl,
             { tag: `bill ${billNo}` },
           );
+
+          // If the Waitingroom retry budget was exhausted, this is not the
+          // real detail page — bail out before any deletion check or parsing
+          // can run against it.
+          if (await isWaitingroomPage(page)) {
+            throw new NsmWaitingroomUnresolvedError(billNo);
+          }
 
           const html = await page.content();
           const responseUrl = page.url();

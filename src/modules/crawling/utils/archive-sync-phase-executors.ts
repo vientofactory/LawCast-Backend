@@ -1135,20 +1135,33 @@ export async function executePendingSyncPhase(
     const seenNsmActiveNums = new Set(rawItemMap.keys());
     let sourceDeletedCount = 0;
     if (scanError) {
-      LoggerUtils.log(
-        'ArchiveSyncService',
-        `Skipping NSM source-missing detection: scan error occurred (${seenNsmActiveNums.size} items collected, scan incomplete)`,
-      );
+      logAndBridge({
+        logger: archiveSyncLogger,
+        method: 'log',
+        message: `Skipping NSM source-missing detection: scan error occurred (${seenNsmActiveNums.size} items collected, scan incomplete)`,
+        context: ARCHIVE_SYNC_CONTEXT,
+        discordBridge: deps.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+        bridgeMessage: `Skipping NSM source-missing detection: scan error occurred (**${seenNsmActiveNums.size}** items collected, scan incomplete)`,
+      });
     } else if (seenNsmActiveNums.size > 0) {
       sourceDeletedCount =
         await deps.noticeArchiveService.markSourceDeletedByMissingNsmNums(
           seenNsmActiveNums,
+          async (billNo) =>
+            (await deps.crawlingCoreService.probeNsmDeletedBillAlert(
+              billNo,
+            )) !== null,
         );
       if (sourceDeletedCount > 0) {
-        LoggerUtils.log(
-          'ArchiveSyncService',
-          `Pending sync marked ${sourceDeletedCount} notice(s) as source_deleted after NSM reconciliation (seenNsmNums=${seenNsmActiveNums.size})`,
-        );
+        logAndBridge({
+          logger: archiveSyncLogger,
+          method: 'warn',
+          message: `Pending sync marked ${sourceDeletedCount} notice(s) as source_deleted after NSM reconciliation (seenNsmNums=${seenNsmActiveNums.size})`,
+          context: ARCHIVE_SYNC_CONTEXT,
+          discordBridge: deps.discordBridge,
+          bridgeMessage: `Pending sync marked **${sourceDeletedCount}** notice(s) as source_deleted after NSM list reconciliation (seenNsmNums=${seenNsmActiveNums.size})`,
+        });
       }
     }
     // ──────────────────────────────────────────────────────────────────
@@ -1167,16 +1180,24 @@ export async function executePendingSyncPhase(
           NSM_DETAIL_PROBE_BATCH_SIZE,
         );
       if (detailProbeDeletedCount > 0) {
-        LoggerUtils.log(
-          'ArchiveSyncService',
-          `NSM detail probe confirmed ${detailProbeDeletedCount} deleted bill(s)`,
-        );
+        logAndBridge({
+          logger: archiveSyncLogger,
+          method: 'warn',
+          message: `NSM detail probe confirmed ${detailProbeDeletedCount} deleted bill(s)`,
+          context: ARCHIVE_SYNC_CONTEXT,
+          discordBridge: deps.discordBridge,
+          bridgeMessage: `NSM detail probe confirmed **${detailProbeDeletedCount}** deleted bill(s) (marked source_deleted)`,
+        });
       }
     } catch (error) {
-      LoggerUtils.log(
-        'ArchiveSyncService',
-        `NSM detail probe failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      logAndBridge({
+        logger: archiveSyncLogger,
+        method: 'warn',
+        message: `NSM detail probe failed: ${error instanceof Error ? error.message : String(error)}`,
+        context: ARCHIVE_SYNC_CONTEXT,
+        discordBridge: deps.discordBridge,
+        bridgeMessage: `NSM detail probe failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
     }
     sourceDeletedCount += detailProbeDeletedCount;
     // ──────────────────────────────────────────────────────────────────
