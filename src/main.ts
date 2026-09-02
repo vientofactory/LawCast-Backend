@@ -113,7 +113,7 @@ async function gracefulShutdown(
   loggerContext: string,
   exitCode = 0,
 ): Promise<void> {
-  const shutdownTimeout = 30000; // 30 seconds
+  const shutdownTimeout = 45000;
   let shutdownTimer: NodeJS.Timeout;
 
   try {
@@ -189,10 +189,28 @@ function initShutdownHandlers(
   loggerContext: string,
   discordBridge: DiscordBridgeService,
 ): void {
-  process.on('SIGTERM', async () => {
+  // Guards against overlapping gracefulShutdown() runs when multiple signals
+  // arrive close together (e.g. SIGTERM followed by SIGINT), and lets a repeated
+  // signal force an immediate exit instead of waiting out the full timeout.
+  let shuttingDown = false;
+
+  const triggerShutdown = async (
+    signalName: string,
+    exitCode = 0,
+  ): Promise<void> => {
+    if (shuttingDown) {
+      LoggerUtils.warn(
+        loggerContext,
+        `${signalName} received again while shutdown is already in progress, forcing immediate exit...`,
+      );
+      process.exit(1);
+      return;
+    }
+    shuttingDown = true;
+
     LoggerUtils.log(
       loggerContext,
-      'SIGTERM received, starting graceful shutdown...',
+      `${signalName} received, starting graceful shutdown... (send again to force-quit)`,
     );
     await gracefulShutdown(
       app,
@@ -200,21 +218,16 @@ function initShutdownHandlers(
       crawlingSchedulerService,
       archiveSyncService,
       loggerContext,
+      exitCode,
     );
+  };
+
+  process.on('SIGTERM', () => {
+    void triggerShutdown('SIGTERM');
   });
 
-  process.on('SIGINT', async () => {
-    LoggerUtils.log(
-      loggerContext,
-      'SIGINT received, starting graceful shutdown...',
-    );
-    await gracefulShutdown(
-      app,
-      batchProcessingService,
-      crawlingSchedulerService,
-      archiveSyncService,
-      loggerContext,
-    );
+  process.on('SIGINT', () => {
+    void triggerShutdown('SIGINT');
   });
 
   // Node.js runtime warnings (e.g. MaxListenersExceeded, DeprecationWarning)
@@ -241,14 +254,7 @@ function initShutdownHandlers(
       error.message,
       error,
     );
-    await gracefulShutdown(
-      app,
-      batchProcessingService,
-      crawlingSchedulerService,
-      archiveSyncService,
-      loggerContext,
-      1,
-    );
+    await triggerShutdown('UncaughtException', 1);
   });
 
   process.on('unhandledRejection', async (reason, promise) => {
@@ -268,14 +274,7 @@ function initShutdownHandlers(
       message,
       reason,
     );
-    await gracefulShutdown(
-      app,
-      batchProcessingService,
-      crawlingSchedulerService,
-      archiveSyncService,
-      loggerContext,
-      1,
-    );
+    await triggerShutdown('UnhandledRejection', 1);
   });
 }
 
