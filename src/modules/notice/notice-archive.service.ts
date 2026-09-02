@@ -2572,6 +2572,7 @@ export class NoticeArchiveService {
       where: {
         screenshotBlob: IsNull(),
         contentId: Not(IsNull()),
+        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
       },
       order: { noticeNum: 'ASC' },
       take: limit,
@@ -2598,7 +2599,10 @@ export class NoticeArchiveService {
   > {
     const rows = await this.archiveRepository.find({
       select: { noticeNum: true, contentId: true },
-      where: { contentId: Not(IsNull()) },
+      where: {
+        contentId: Not(IsNull()),
+        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
+      },
       order: { noticeNum: 'ASC' },
     });
 
@@ -2626,6 +2630,7 @@ export class NoticeArchiveService {
       where: {
         screenshotBlob: IsNull(),
         contentId: IsNull(),
+        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
       },
       order: { noticeNum: 'ASC' },
       take: limit,
