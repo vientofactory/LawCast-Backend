@@ -10,7 +10,10 @@ import {
   NoticeChangeDetail,
   type ChangeDetailType,
 } from './notice-change-detail.entity';
-import { NoticeArchive } from '../notice/notice-archive.entity';
+import {
+  NoticeArchive,
+  NOTICE_LIFECYCLE_STATUS,
+} from '../notice/notice-archive.entity';
 import {
   canonicalStringify,
   computeDiff,
@@ -790,8 +793,8 @@ export class ChangeTrackingService {
       String(sourceDeletedAt).trim().length > 0;
 
     if (
-      lifecycleStatus === 'source_deleted' ||
-      lifecycleStatus === 'renumbered' ||
+      lifecycleStatus === NOTICE_LIFECYCLE_STATUS.SOURCE_DELETED ||
+      lifecycleStatus === NOTICE_LIFECYCLE_STATUS.RENUMBERED ||
       lifecycleStatus === 'invalidated' ||
       hasSourceDeletedAt
     ) {

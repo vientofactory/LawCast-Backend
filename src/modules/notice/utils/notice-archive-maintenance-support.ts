@@ -3,7 +3,10 @@ import {
   type AISummaryStatus,
   type CachedNotice,
 } from '../../../types/cache.types';
-import { NoticeArchive } from '../notice-archive.entity';
+import {
+  NoticeArchive,
+  NOTICE_LIFECYCLE_STATUS,
+} from '../notice-archive.entity';
 import { NoticeArchiveSnapshotState } from '../notice-archive-summary-state.entity';
 import {
   buildArchiveWhereConditions,
@@ -52,7 +55,9 @@ export async function getNsmProposalReasonRetryCandidates(
       'na.attachmentHwpFile AS attachmentHwpFile',
     ])
     .where('na.contentId IS NULL')
-    .andWhere('na.lifecycle_status = :status', { status: 'active' })
+    .andWhere('na.lifecycle_status = :status', {
+      status: NOTICE_LIFECYCLE_STATUS.ACTIVE,
+    })
     .andWhere("(na.proposalReason IS NULL OR TRIM(na.proposalReason) = '')")
     .andWhere(
       `NOT EXISTS (

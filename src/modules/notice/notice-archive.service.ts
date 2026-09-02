@@ -21,6 +21,7 @@ import {
 import { AI_SUMMARY_STATUS } from '../crawling/utils/ai-summary-status.utils';
 import {
   NoticeArchive,
+  NOTICE_LIFECYCLE_STATUS,
   type NoticeLifecycleStatus,
 } from '../notice/notice-archive.entity';
 import { NoticeArchiveIntegrityCheck } from './notice-archive-integrity-check.entity';
@@ -761,7 +762,7 @@ export class NoticeArchiveService {
       httpContentType: normalizedHttpMetadata?.contentType ?? null,
       httpEtag: normalizedHttpMetadata?.etag ?? null,
       httpLastModified: normalizedHttpMetadata?.lastModified ?? null,
-      lifecycleStatus: 'active' as NoticeLifecycleStatus,
+      lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
       sourceDeletedAt: null,
     };
     const hasExplicitSummary =
@@ -781,7 +782,7 @@ export class NoticeArchiveService {
         const invalidatedSnapshot = {
           ...beforeSnapshot,
           isDone: true,
-          lifecycleStatus: 'renumbered',
+          lifecycleStatus: NOTICE_LIFECYCLE_STATUS.RENUMBERED,
         };
         await this.appendExplicitEventWithDiff({
           noticeNum: previousNoticeNum,
@@ -890,9 +891,10 @@ export class NoticeArchiveService {
     // spurious "restoration" event that flips the bill back to active.
     const baselineLifecycleStatus = baselineSnapshot?.lifecycleStatus;
     const isAlreadySourceDeleted =
-      existing && baselineLifecycleStatus === 'source_deleted';
+      existing &&
+      baselineLifecycleStatus === NOTICE_LIFECYCLE_STATUS.SOURCE_DELETED;
     const diffLifecycleStatus = isAlreadySourceDeleted
-      ? ('source_deleted' as NoticeLifecycleStatus)
+      ? NOTICE_LIFECYCLE_STATUS.SOURCE_DELETED
       : coreFields.lifecycleStatus;
     const diffSourceDeletedAt = isAlreadySourceDeleted
       ? (baselineSnapshot?.sourceDeletedAt ?? null)
@@ -1037,7 +1039,7 @@ export class NoticeArchiveService {
     // are not part of the PAL universe and must not be marked deleted.
     const activePalRows = await this.archiveRepository.find({
       where: {
-        lifecycleStatus: 'active',
+        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
         contentId: Not(IsNull()),
       },
       select: {
@@ -1099,7 +1101,7 @@ export class NoticeArchiveService {
     // so contentId IS NULL means NSM-only) that are currently active.
     const activeNsmRows = await this.archiveRepository.find({
       where: {
-        lifecycleStatus: 'active',
+        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
         contentId: IsNull(),
       },
       select: {
@@ -1168,7 +1170,9 @@ export class NoticeArchiveService {
     // gets checked.
     const highPriority = await this.archiveRepository
       .createQueryBuilder('archive')
-      .where('archive.lifecycleStatus = :status', { status: 'active' })
+      .where('archive.lifecycleStatus = :status', {
+        status: NOTICE_LIFECYCLE_STATUS.ACTIVE,
+      })
       .andWhere('archive.contentId IS NULL')
       .andWhere('archive.contentBillNumber IS NULL')
       .andWhere('archive.sourceDeletedAt IS NULL')
@@ -1188,7 +1192,9 @@ export class NoticeArchiveService {
 
     const filler = await this.archiveRepository
       .createQueryBuilder('archive')
-      .where('archive.lifecycleStatus = :status', { status: 'active' })
+      .where('archive.lifecycleStatus = :status', {
+        status: NOTICE_LIFECYCLE_STATUS.ACTIVE,
+      })
       .andWhere('archive.contentId IS NULL')
       .andWhere('archive.sourceDeletedAt IS NULL')
       .select(['archive.noticeNum', 'archive.contentBillNumber'])
@@ -1215,7 +1221,7 @@ export class NoticeArchiveService {
 
     const alreadySourceDeleted =
       typeof beforeSnapshot.lifecycleStatus === 'string' &&
-      beforeSnapshot.lifecycleStatus === 'source_deleted';
+      beforeSnapshot.lifecycleStatus === NOTICE_LIFECYCLE_STATUS.SOURCE_DELETED;
 
     // Ensure summary_state has isDone=true even when the change event
     // already exists — a prior marking may have created the event but
@@ -1253,7 +1259,7 @@ export class NoticeArchiveService {
     const afterSnapshot = {
       ...beforeSnapshot,
       isDone: true,
-      lifecycleStatus: 'source_deleted',
+      lifecycleStatus: NOTICE_LIFECYCLE_STATUS.SOURCE_DELETED,
       sourceDeletedAt: deletedAt,
     };
 
@@ -1273,7 +1279,7 @@ export class NoticeArchiveService {
     try {
       const parsedDeletedAt = new Date(deletedAt);
       await this.archiveRepository.update({ noticeNum }, {
-        lifecycleStatus: 'source_deleted',
+        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.SOURCE_DELETED,
         sourceDeletedAt: Number.isNaN(parsedDeletedAt.getTime())
           ? new Date()
           : parsedDeletedAt,
@@ -1882,9 +1888,9 @@ export class NoticeArchiveService {
       const latestLifecycleStatus = fields.get('lifecycleStatus') ?? null;
       if (
         'lifecycleStatus' in row &&
-        (latestLifecycleStatus === 'active' ||
-          latestLifecycleStatus === 'source_deleted' ||
-          latestLifecycleStatus === 'renumbered')
+        (latestLifecycleStatus === NOTICE_LIFECYCLE_STATUS.ACTIVE ||
+          latestLifecycleStatus === NOTICE_LIFECYCLE_STATUS.SOURCE_DELETED ||
+          latestLifecycleStatus === NOTICE_LIFECYCLE_STATUS.RENUMBERED)
       ) {
         row.lifecycleStatus = latestLifecycleStatus;
       }
@@ -2437,9 +2443,9 @@ export class NoticeArchiveService {
       case 'lifecycleStatus': {
         const normalized = toStringOrNull(value);
         if (
-          normalized === 'active' ||
-          normalized === 'source_deleted' ||
-          normalized === 'renumbered'
+          normalized === NOTICE_LIFECYCLE_STATUS.ACTIVE ||
+          normalized === NOTICE_LIFECYCLE_STATUS.SOURCE_DELETED ||
+          normalized === NOTICE_LIFECYCLE_STATUS.RENUMBERED
         ) {
           detail.notice.lifecycleStatus = normalized;
         }
@@ -2806,7 +2812,7 @@ export class NoticeArchiveService {
         where: {
           sourceHtml: IsNull(),
           contentId: Not(IsNull()),
-          lifecycleStatus: 'active',
+          lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
         },
         order: { noticeNum: 'DESC' },
         take: limit,
@@ -2816,7 +2822,7 @@ export class NoticeArchiveService {
         where: {
           sourceHtml: IsNull(),
           contentId: IsNull(),
-          lifecycleStatus: 'active',
+          lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
         },
         order: { noticeNum: 'DESC' },
         take: limit,
@@ -3575,7 +3581,14 @@ export class NoticeArchiveService {
 
     const uniqueNums = Array.from(new Set(nums));
     const rows = await this.archiveRepository.find({
-      where: { noticeNum: In(uniqueNums), contentId: IsNull() },
+      // lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE keeps already-source_deleted/renumbered
+      // rows out of the recompare candidate pool, so a confirmed-deleted
+      // bill isn't re-captured (and re-logged) on every cron cycle.
+      where: {
+        noticeNum: In(uniqueNums),
+        contentId: IsNull(),
+        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
+      },
       select: { noticeNum: true },
     });
 
@@ -3627,7 +3640,7 @@ export class NoticeArchiveService {
               noticeNum,
               'lifecycleStatus',
             );
-          if (lifecycle === 'source_deleted') {
+          if (lifecycle === NOTICE_LIFECYCLE_STATUS.SOURCE_DELETED) {
             sourceDeletedNums.add(noticeNum);
           }
         } catch {

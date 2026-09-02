@@ -6,7 +6,19 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 
-export type NoticeLifecycleStatus = 'active' | 'source_deleted' | 'renumbered';
+/**
+ * Terminal lifecycle states a `notice_archives` row may hold. Use these
+ * constants instead of raw string literals so call sites can't drift from
+ * the values the immutability trigger and diffchain logic actually expect.
+ */
+export const NOTICE_LIFECYCLE_STATUS = {
+  ACTIVE: 'active',
+  SOURCE_DELETED: 'source_deleted',
+  RENUMBERED: 'renumbered',
+} as const;
+
+export type NoticeLifecycleStatus =
+  (typeof NOTICE_LIFECYCLE_STATUS)[keyof typeof NOTICE_LIFECYCLE_STATUS];
 
 @Entity('notice_archives')
 @Index('idx_notice_archives_notice_num', ['noticeNum'], { unique: true })
