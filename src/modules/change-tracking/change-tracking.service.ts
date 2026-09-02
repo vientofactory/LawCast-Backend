@@ -263,6 +263,28 @@ export class ChangeTrackingService {
     );
   }
 
+  /**
+   * Returns every noticeNum that has ever had an INVALIDATED event
+   * (source_deleted/renumbered). Used to reconcile `notice_archives` rows
+   * whose `lifecycle_status` column drifted from the diffchain (e.g. rows
+   * marked before the immutability trigger allowed the transition).
+   */
+  async getNoticeNumsWithInvalidatedEvent(): Promise<Set<number>> {
+    const rows = await this.changeEventRepository
+      .createQueryBuilder('event')
+      .select('DISTINCT event.notice_num', 'noticeNum')
+      .where('event.event_type = :eventType', {
+        eventType: CHANGE_EVENT_TYPE.INVALIDATED,
+      })
+      .getRawMany<{ noticeNum: number | string }>();
+
+    return new Set(
+      rows
+        .map((row) => Number.parseInt(String(row.noticeNum), 10))
+        .filter((value) => Number.isInteger(value) && value > 0),
+    );
+  }
+
   async getChangeEventCountsByNoticeNums(
     noticeNums: number[],
   ): Promise<Map<number, number>> {

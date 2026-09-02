@@ -62,6 +62,9 @@ describe('NoticeArchiveService', () => {
       getNoticeNumsWithAnyEvent: jest
         .fn<(...args: any[]) => Promise<Set<number>>>()
         .mockResolvedValue(new Set()),
+      getNoticeNumsWithInvalidatedEvent: jest
+        .fn<(...args: any[]) => Promise<Set<number>>>()
+        .mockResolvedValue(new Set()),
       buildDiffEvent: jest.fn((input: any) => {
         const diff = computeDiff(input.beforeSnapshot, input.afterSnapshot);
         const lifecycleStatus =
@@ -1928,6 +1931,85 @@ describe('NoticeArchiveService', () => {
         [3201],
         'contentId',
       );
+    });
+  });
+
+  describe('reconcileStaleLifecycleStatuses', () => {
+    it('returns 0 when no notice has ever had an invalidated event', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest.fn<(...args: any[]) => Promise<any[]>>(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.reconcileStaleLifecycleStatuses();
+
+      expect(result).toBe(0);
+      expect(repositoryMock.find).not.toHaveBeenCalled();
+    });
+
+    it('fixes a row whose column is still active despite a confirmed diffchain deletion', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<any[]>>()
+          .mockResolvedValue([{ noticeNum: 2214911 }]),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getNoticeNumsWithInvalidatedEvent.mockResolvedValue(
+        new Set([2214911]),
+      );
+      changeTrackingService.getLatestFieldAfterValue.mockImplementation(
+        async (_noticeNum: number, fieldPath: string) =>
+          fieldPath === 'lifecycleStatus'
+            ? 'source_deleted'
+            : '2026-08-31T16:12:54.000Z',
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.reconcileStaleLifecycleStatuses();
+
+      expect(result).toBe(1);
+      expect(repositoryMock.update as jest.Mock).toHaveBeenCalledWith(
+        { noticeNum: 2214911 },
+        expect.objectContaining({ lifecycleStatus: 'source_deleted' }),
+      );
+    });
+
+    it('leaves a row untouched when the diffchain does not confirm a terminal lifecycle status', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<any[]>>()
+          .mockResolvedValue([{ noticeNum: 2200004 }]),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getNoticeNumsWithInvalidatedEvent.mockResolvedValue(
+        new Set([2200004]),
+      );
+      changeTrackingService.getLatestFieldAfterValue.mockResolvedValue(null);
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        undefined as any,
+        changeTrackingService as any,
+      );
+
+      const result = await service.reconcileStaleLifecycleStatuses();
+
+      expect(result).toBe(0);
+      expect(repositoryMock.update as jest.Mock).not.toHaveBeenCalled();
     });
   });
 

@@ -1292,6 +1292,75 @@ export class NoticeArchiveService {
   }
 
   /**
+   * One-time-per-run repair for rows whose diffchain already recorded an
+   * INVALIDATED (source_deleted/renumbered) event but whose `notice_archives`
+   * row still shows `lifecycle_status='active'` - the state left behind by
+   * rows marked before the immutability trigger allowed this transition.
+   * Without this repair, every probe/candidate-selection query that trusts
+   * the `lifecycle_status` column keeps re-discovering and re-logging these
+   * already-deleted bills forever. Safe to call repeatedly; only touches
+   * rows where the column is confirmed stale against the diffchain.
+   */
+  async reconcileStaleLifecycleStatuses(): Promise<number> {
+    if (!this.changeTrackingService) return 0;
+
+    const invalidatedNums =
+      await this.changeTrackingService.getNoticeNumsWithInvalidatedEvent();
+    if (invalidatedNums.size === 0) return 0;
+
+    const staleRows = await this.archiveRepository.find({
+      where: {
+        noticeNum: In(Array.from(invalidatedNums)),
+        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
+      },
+      select: { noticeNum: true },
+    });
+
+    if (staleRows.length === 0) return 0;
+
+    let fixedCount = 0;
+    for (const row of staleRows) {
+      try {
+        const latestLifecycleStatus =
+          await this.changeTrackingService.getLatestFieldAfterValue(
+            row.noticeNum,
+            'lifecycleStatus',
+          );
+
+        if (
+          latestLifecycleStatus !== NOTICE_LIFECYCLE_STATUS.SOURCE_DELETED &&
+          latestLifecycleStatus !== NOTICE_LIFECYCLE_STATUS.RENUMBERED
+        ) {
+          continue;
+        }
+
+        const latestSourceDeletedAt =
+          await this.changeTrackingService.getLatestFieldAfterValue(
+            row.noticeNum,
+            'sourceDeletedAt',
+          );
+        const parsedDeletedAt = latestSourceDeletedAt
+          ? new Date(latestSourceDeletedAt)
+          : new Date();
+
+        await this.archiveRepository.update({ noticeNum: row.noticeNum }, {
+          lifecycleStatus: latestLifecycleStatus,
+          sourceDeletedAt: Number.isNaN(parsedDeletedAt.getTime())
+            ? new Date()
+            : parsedDeletedAt,
+        } as any);
+        fixedCount++;
+      } catch (error) {
+        this.logger.warn(
+          `reconcileStaleLifecycleStatuses: failed to fix notice ${row.noticeNum}: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    return fixedCount;
+  }
+
+  /**
    * Returns one page of noticeNums that are currently marked isDone=true,
    * ordered by noticeNum ASC. Used by the revert pass to scan only the
    * records that could potentially need reverting - skips isDone=false rows
@@ -1487,7 +1556,10 @@ export class NoticeArchiveService {
     }
 
     const archives = await this.archiveRepository.find({
-      where: { noticeNum: In(noticeNums) },
+      where: {
+        noticeNum: In(noticeNums),
+        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
+      },
       select: {
         noticeNum: true,
         subject: true,

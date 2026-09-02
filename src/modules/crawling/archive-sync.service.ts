@@ -279,6 +279,22 @@ export class ArchiveSyncService implements OnModuleInit {
         bridgeLevel: BridgeLogLevel.LOG,
       });
 
+      await this.safeRun('lifecycle status reconciliation', async () => {
+        const fixedCount =
+          await this.noticeArchiveService.reconcileStaleLifecycleStatuses();
+        if (fixedCount > 0) {
+          logAndBridge({
+            logger: archiveSyncLogger,
+            method: 'log',
+            message: `Reconciled ${fixedCount} stale lifecycle_status row(s) from diffchain`,
+            context: ArchiveSyncService.name,
+            discordBridge: this.discordBridge,
+            bridgeLevel: BridgeLogLevel.WARN,
+            bridgeMessage: `Reconciled **${fixedCount}** stale lifecycle_status row(s) that were still 'active' despite a confirmed diffchain deletion`,
+          });
+        }
+      });
+
       await this.safeRun('pending sync', () =>
         this.runPendingSync('bootstrap'),
       );
