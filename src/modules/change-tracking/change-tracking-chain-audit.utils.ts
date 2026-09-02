@@ -312,7 +312,24 @@ async function verifyNoticeChain(
   // overlays chain history. Without this, fields added to the schema
   // after earlier events (e.g. contentId in v2) would be null in the
   // audit while the write path used the DB row value.
-  let currentState: Record<string, unknown> = { ...(seedSnapshot ?? {}) };
+  //
+  // The seed must never win over the chain's own recorded history: a field
+  // that some event in this chain explicitly records (e.g. lifecycleStatus /
+  // sourceDeletedAt turning non-null on a later source_deleted event) has to
+  // start unset/null and be reconstructed purely by replaying events in
+  // order. Otherwise a field whose real transition happens at height N leaks
+  // backward into height 1..N-1's reconstructed state as soon as the archive
+  // row reflects that later value (e.g. after immutable-trigger reconciliation),
+  // inflating changedFieldCount/diffSummary/eventHash for every earlier event.
+  const fieldsTouchedByChain = new Set<string>();
+  for (const detail of details) {
+    fieldsTouchedByChain.add(detail.fieldPath);
+  }
+  const initialSeed = { ...(seedSnapshot ?? {}) };
+  for (const fieldPath of fieldsTouchedByChain) {
+    delete initialSeed[fieldPath];
+  }
+  let currentState: Record<string, unknown> = initialSeed;
 
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
