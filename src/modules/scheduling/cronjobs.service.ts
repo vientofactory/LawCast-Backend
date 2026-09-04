@@ -15,12 +15,54 @@ import { WebPushSubscriptionService } from '../notification/web-push-subscriptio
 
 const CRON_TIMEZONE = appConfig().cron.timezone;
 
+export type CronJobRunStatus = 'idle' | 'running' | 'failed';
+
+export interface CronJobRuntimeStatus {
+  taskName: string;
+  status: CronJobRunStatus;
+  lastRunAt: string | null;
+  lastError: string | null;
+}
+
+/**
+ * Maps every scheduled task name to its cron expression, so runtime status
+ * can be reported for periodic jobs beyond archive-sync's own phases.
+ */
+const CRON_JOB_TASK_EXPRESSIONS: Record<string, string> = {
+  'crawling and notification': APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK,
+  'pending bills crawl (NsmLmSts)':
+    APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK,
+  'proposalReason backfill drain':
+    APP_CONSTANTS.CRON.EXPRESSIONS.PROPOSAL_REASON_BACKFILL_DRAIN,
+  'isDone sync': APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC,
+  'webhook cleanup': APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP,
+  'webhook optimization': APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION,
+  'system monitoring': APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING,
+  'snapshot artifact backfill': APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN,
+  'integrity re-scan': APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN,
+  'change-tracking daily audit':
+    APP_CONSTANTS.CRON.EXPRESSIONS.CHANGE_TRACKING_DAILY_AUDIT,
+  'change-tracking weekly audit':
+    APP_CONSTANTS.CRON.EXPRESSIONS.CHANGE_TRACKING_WEEKLY_AUDIT,
+  'quick keyword refresh':
+    APP_CONSTANTS.CRON.EXPRESSIONS.QUICK_KEYWORDS_REFRESH,
+  'sqlite vacuum': APP_CONSTANTS.CRON.EXPRESSIONS.SQLITE_VACUUM,
+  'database mirror upload':
+    APP_CONSTANTS.CRON.EXPRESSIONS.DATABASE_MIRROR_UPLOAD,
+};
+
 @Injectable()
 export class CronJobsService {
   private readonly logger = LoggerUtils.getContextLogger(CronJobsService.name);
   private readonly changeTrackingAuditQueue: Array<'daily' | 'weekly'> = [];
   private readonly webPushCutoffDays = 14;
   private isDrainingChangeTrackingAuditQueue = false;
+  private readonly cronJobStates = new Map<string, CronJobRuntimeStatus>(
+    Object.keys(CRON_JOB_TASK_EXPRESSIONS).map((taskName) => [
+      taskName,
+      { taskName, status: 'idle', lastRunAt: null, lastError: null },
+    ]),
+  );
 
   constructor(
     private readonly dataSource: DataSource,
@@ -45,6 +87,9 @@ export class CronJobsService {
     taskName: string,
     task: () => Promise<void>,
   ): Promise<void> {
+    const state = this.getOrCreateCronJobState(taskName);
+    state.status = 'running';
+
     logAndBridge({
       method: 'debugDev',
       message: `Starting scheduled ${taskName}...`,
@@ -55,6 +100,9 @@ export class CronJobsService {
     });
     try {
       await task();
+      state.status = 'idle';
+      state.lastRunAt = new Date().toISOString();
+      state.lastError = null;
       logAndBridge({
         method: 'debugDev',
         message: `Completed scheduled ${taskName}.`,
@@ -64,6 +112,9 @@ export class CronJobsService {
         bridgeMessage: `Scheduled task completed: **${taskName}**`,
       });
     } catch (error) {
+      state.status = 'failed';
+      state.lastRunAt = new Date().toISOString();
+      state.lastError = error instanceof Error ? error.message : String(error);
       logAndBridge({
         method: 'error',
         message: `Scheduled ${taskName} failed:`,
@@ -74,6 +125,35 @@ export class CronJobsService {
         bridgeMessage: `Scheduled task failed: **${taskName}** - ${(error as Error).message}`,
       });
     }
+  }
+
+  private getOrCreateCronJobState(taskName: string): CronJobRuntimeStatus {
+    let state = this.cronJobStates.get(taskName);
+    if (!state) {
+      state = { taskName, status: 'idle', lastRunAt: null, lastError: null };
+      this.cronJobStates.set(taskName, state);
+    }
+    return state;
+  }
+
+  /**
+   * Returns runtime status (last run/failure) for every registered periodic
+   * task, in declaration order, for the system status API/UI.
+   */
+  getCronJobsStatus(): CronJobRuntimeStatus[] {
+    return Object.keys(CRON_JOB_TASK_EXPRESSIONS).map(
+      (taskName) =>
+        this.cronJobStates.get(taskName) ?? {
+          taskName,
+          status: 'idle' as const,
+          lastRunAt: null,
+          lastError: null,
+        },
+    );
+  }
+
+  getCronJobExpression(taskName: string): string | undefined {
+    return CRON_JOB_TASK_EXPRESSIONS[taskName];
   }
 
   /**

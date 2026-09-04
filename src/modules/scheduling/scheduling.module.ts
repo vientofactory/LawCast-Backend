@@ -17,5 +17,6 @@ import { CronJobsService } from './cronjobs.service';
     NotificationModule,
   ],
   providers: [CronJobsService],
+  exports: [CronJobsService],
 })
 export class SchedulingModule {}

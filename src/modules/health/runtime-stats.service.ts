@@ -18,6 +18,7 @@ import { WebPushSubscriptionService } from '../notification/web-push-subscriptio
 import { APP_CONSTANTS } from '../../config/app.config';
 import { NoticeArchive } from '../notice/notice-archive.entity';
 import { NoticeChangeEvent } from '../change-tracking/notice-change-event.entity';
+import type { CronJobsService } from '../scheduling/cronjobs.service';
 import cronstrue from 'cronstrue/i18n';
 
 /**
@@ -115,6 +116,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     archiveSyncService?: ArchiveSyncService,
     changeTrackingService?: ChangeTrackingService,
     webPushSubscriptionService?: WebPushSubscriptionService,
+    cronJobsService?: CronJobsService,
   ) {
     const nodeEnv = params.nodeEnv;
     if (!webhookService || !crawlingService || !noticeArchiveService) {
@@ -184,7 +186,11 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         : ollamaMetrics,
       aiSummaryEnabled: (await crawlingService.getOllamaMetrics()).enabled,
       nodeRuntime,
-      crawlers: this.buildCrawlersStatus(crawlingService, archiveSyncService),
+      crawlers: this.buildCrawlersStatus(
+        crawlingService,
+        archiveSyncService,
+        cronJobsService,
+      ),
     };
   }
 
@@ -343,6 +349,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
   private buildCrawlersStatus(
     crawlingService: CrawlingService,
     archiveSyncService?: ArchiveSyncService,
+    cronJobsService?: CronJobsService,
   ) {
     const schedulerState = crawlingService.getSchedulerExecutionState();
     const archiveState = archiveSyncService?.getExecutionState() ?? null;
@@ -401,6 +408,18 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         })),
         asyncApply: archiveState?.asyncApply ?? null,
       },
+      cronJobs: (cronJobsService?.getCronJobsStatus() ?? []).map((job) => {
+        const expression = cronJobsService?.getCronJobExpression(job.taskName);
+        return {
+          name: job.taskName,
+          status: job.status,
+          lastRunAt: job.lastRunAt,
+          lastError: job.lastError,
+          cron: expression
+            ? { expression, ...resolveCronDisplay(expression) }
+            : { expression: '', intervalMs: 0, description: '' },
+        };
+      }),
     };
   }
 }

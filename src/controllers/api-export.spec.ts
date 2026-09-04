@@ -17,6 +17,7 @@ import { ChangeTrackingService } from '../modules/change-tracking/change-trackin
 import { WebPushSubscriptionService } from '../modules/notification/web-push-subscription.service';
 import { WebPushNotificationService } from '../modules/notification/web-push-notification.service';
 import { WebPushRegistrationService } from '../modules/notification/web-push-registration.service';
+import { CronJobsService } from '../modules/scheduling/cronjobs.service';
 
 // NoticeArchiveService 모킹
 const mockBuildArchiveExportZip = jest.fn();
@@ -157,6 +158,13 @@ describe('ApiController archive export', () => {
               total: 0,
               totalPages: 0,
             }),
+          },
+        },
+        {
+          provide: CronJobsService,
+          useValue: {
+            getCronJobsStatus: jest.fn().mockReturnValue([]),
+            getCronJobExpression: jest.fn().mockReturnValue(undefined),
           },
         },
       ],

@@ -24,6 +24,7 @@ import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { NoticeSearchService } from '../modules/crawling/notice-search.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
+import { CronJobsService } from '../modules/scheduling/cronjobs.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;
@@ -294,6 +295,13 @@ describe('HTTP-Batch Processing Isolation', () => {
           useValue: mockNotificationBatchService,
         },
         { provide: RuntimeStatsService, useValue: mockRuntimeStatsService },
+        {
+          provide: CronJobsService,
+          useValue: {
+            getCronJobsStatus: jest.fn().mockReturnValue([]),
+            getCronJobExpression: jest.fn().mockReturnValue(undefined),
+          },
+        },
       ],
     }).compile();
 

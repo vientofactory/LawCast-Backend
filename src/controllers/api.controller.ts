@@ -31,6 +31,7 @@ import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
+import { CronJobsService } from '../modules/scheduling/cronjobs.service';
 import {
   CHANGE_EVENT_TYPE,
   type ChangeEventType,
@@ -65,6 +66,7 @@ export class ApiController {
     private readonly archiveSyncService: ArchiveSyncService,
     private readonly packagesService: PackagesService,
     private readonly changeTrackingService: ChangeTrackingService,
+    private readonly cronJobsService: CronJobsService,
   ) {}
 
   private readonly nodeEnv: string = this.configService.get<string>('nodeEnv');
@@ -362,6 +364,7 @@ export class ApiController {
       this.archiveSyncService,
       this.changeTrackingService,
       this.webPushSubscriptionService,
+      this.cronJobsService,
     );
     return ApiResponseUtils.success(stats);
   }
