@@ -112,8 +112,8 @@ export class DiscussionsController {
     @Param('commentId', ParseIntPipe) commentId: number,
     @Body() dto: DeleteCommentDto,
   ) {
-    const result = await this.discussionsService.deleteComment(commentId, dto);
-    return ApiResponseUtils.success(result, result.message);
+    const data = await this.discussionsService.deleteComment(commentId, dto);
+    return ApiResponseUtils.success(data, '의견이 성공적으로 삭제되었습니다.');
   }
 
   /**

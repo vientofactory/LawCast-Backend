@@ -116,14 +116,17 @@ describe('DiscussionsController', () => {
 
   describe('deleteComment', () => {
     it('should call service.deleteComment', async () => {
-      (service.deleteComment as jest.Mock).mockResolvedValue({
-        success: true,
-        message: '의견이 성공적으로 삭제되었습니다.',
-      });
+      const mockDeleted = {
+        id: 1,
+        isDeleted: true,
+        content: '작성자에 의해 삭제된 의견입니다.',
+      };
+      (service.deleteComment as jest.Mock).mockResolvedValue(mockDeleted);
 
       const dto = { password: 'pass' };
       const res = await controller.deleteComment(1, dto);
       expect(res.success).toBe(true);
+      expect(res.data).toEqual(mockDeleted);
       expect(res.message).toBe('의견이 성공적으로 삭제되었습니다.');
     });
   });

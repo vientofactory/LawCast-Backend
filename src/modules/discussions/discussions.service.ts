@@ -305,7 +305,7 @@ export class DiscussionsService {
   async deleteComment(
     commentId: number,
     dto: DeleteCommentDto,
-  ): Promise<{ success: boolean; message: string }> {
+  ): Promise<SanitizedComment> {
     const comment = await this.commentRepository.findOne({
       where: { id: commentId },
     });
@@ -315,7 +315,7 @@ export class DiscussionsService {
     }
 
     if (comment.isDeleted) {
-      return { success: true, message: '이미 삭제된 의견입니다.' };
+      return this.sanitizeComment(comment);
     }
 
     const isPasswordValid = PasswordSecurityUtil.verifyPassword(
@@ -329,9 +329,9 @@ export class DiscussionsService {
     }
 
     comment.isDeleted = true;
-    await this.commentRepository.save(comment);
+    const saved = await this.commentRepository.save(comment);
 
-    return { success: true, message: '의견이 성공적으로 삭제되었습니다.' };
+    return this.sanitizeComment(saved);
   }
 
   /**

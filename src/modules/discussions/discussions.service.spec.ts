@@ -193,13 +193,23 @@ describe('DiscussionsService', () => {
   });
 
   describe('deleteComment', () => {
-    it('should soft delete comment when password matches', async () => {
+    it('should soft delete comment when password matches and return sanitized comment', async () => {
       const { hash, salt } = PasswordSecurityUtil.hashPassword('deletePass');
       const mockComment = {
         id: 1,
+        threadId: 1,
+        noticeNum: 2200001,
+        sequence: 1,
+        authorNickname: '익명',
+        authorIpMasked: '123.45.***.***',
+        content: '원문 내용',
         passwordHash: hash,
         passwordSalt: salt,
         isDeleted: false,
+        isEdited: false,
+        editedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       };
 
       (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
@@ -209,7 +219,8 @@ describe('DiscussionsService', () => {
       });
 
       const res = await service.deleteComment(1, { password: 'deletePass' });
-      expect(res.success).toBe(true);
+      expect(res.isDeleted).toBe(true);
+      expect(res.content).toBe('작성자에 의해 삭제된 의견입니다.');
       expect(mockComment.isDeleted).toBe(true);
     });
   });
