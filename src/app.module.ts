@@ -14,6 +14,8 @@ import { NoticeArchiveIntegrityState } from './modules/notice/notice-archive-int
 import { NoticeChangeEvent } from './modules/change-tracking/notice-change-event.entity';
 import { NoticeChangeDetail } from './modules/change-tracking/notice-change-detail.entity';
 import { WebPushSubscription } from './modules/notification/web-push-subscription.entity';
+import { DiscussionThread } from './modules/discussions/entities/discussion-thread.entity';
+import { DiscussionComment } from './modules/discussions/entities/discussion-comment.entity';
 import { migrations } from './migrations';
 import appConfig from './config/app.config';
 // Feature modules
@@ -28,6 +30,7 @@ import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { OllamaModule } from './modules/ollama/ollama.module';
 import { DiscordBridgeModule } from './modules/discord-bridge/discord-bridge.module';
 import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.module';
+import { DiscussionsModule } from './modules/discussions/discussions.module';
 
 @Module({
   imports: [
@@ -70,6 +73,8 @@ import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.
           NoticeChangeEvent,
           NoticeChangeDetail,
           WebPushSubscription,
+          DiscussionThread,
+          DiscussionComment,
         ],
         synchronize: false,
         migrationsRun: false,
@@ -89,6 +94,7 @@ import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.
     HealthModule,
     SchedulingModule,
     ChangeTrackingModule,
+    DiscussionsModule,
     // Third-party integration modules
     OllamaModule,
     DiscordBridgeModule,
