@@ -9,20 +9,27 @@ import {
   Post,
   Query,
   Req,
+  UseFilters,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { DiscussionsService } from './discussions.service';
-import { CreateThreadDto } from './dto/create-thread.dto';
-import { CreateCommentDto } from './dto/create-comment.dto';
-import { UpdateCommentDto } from './dto/update-comment.dto';
-import { DeleteCommentDto } from './dto/delete-comment.dto';
-import { UpdateThreadStatusDto } from './dto/update-thread-status.dto';
-import { ApiResponseUtils } from '../../utils/api-response.utils';
-import { IpMaskingUtil } from './utils/ip-masking.util';
+import { DiscussionsService } from '../discussions.service';
+import { CreateThreadDto } from '../dto/create-thread.dto';
+import { CreateCommentDto } from '../dto/create-comment.dto';
+import { UpdateCommentDto } from '../dto/update-comment.dto';
+import { DeleteCommentDto } from '../dto/delete-comment.dto';
+import { UpdateThreadStatusDto } from '../dto/update-thread-status.dto';
+import { ApiResponseUtils } from '../../../utils/api-response.utils';
+import { IpMaskingUtil } from '../utils/ip-masking.util';
+import { DiscussionsRateLimitService } from '../discussions-rate-limit.service';
+import { DiscussionsRateLimitFilter } from './discussions-rate-limit.filter';
 
 @Controller('api')
+@UseFilters(DiscussionsRateLimitFilter)
 export class DiscussionsController {
-  constructor(private readonly discussionsService: DiscussionsService) {}
+  constructor(
+    private readonly discussionsService: DiscussionsService,
+    private readonly rateLimitService: DiscussionsRateLimitService,
+  ) {}
 
   /**
    * 법률안별 토론 스레드 목록 조회
@@ -30,9 +37,11 @@ export class DiscussionsController {
   @Get('notices/:num/discussions')
   async getNoticeThreads(
     @Param('num', ParseIntPipe) noticeNum: number,
+    @Req() req: Request,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
+    await this.rateLimitService.assertAllowed(req, 'read');
     const pageNum = page ? parseInt(page, 10) : 1;
     const limitNum = limit ? parseInt(limit, 10) : 20;
 
@@ -53,6 +62,7 @@ export class DiscussionsController {
     @Body() dto: CreateThreadDto,
     @Req() req: Request,
   ) {
+    await this.rateLimitService.assertAllowed(req, 'write');
     const clientIp = IpMaskingUtil.extractClientIp(req);
     const data = await this.discussionsService.createThread(
       noticeNum,
@@ -69,7 +79,11 @@ export class DiscussionsController {
    * 특정 토론 스레드 상세 및 전체 레스 목록 조회
    */
   @Get('discussions/threads/:threadId')
-  async getThreadDetail(@Param('threadId', ParseIntPipe) threadId: number) {
+  async getThreadDetail(
+    @Param('threadId', ParseIntPipe) threadId: number,
+    @Req() req: Request,
+  ) {
+    await this.rateLimitService.assertAllowed(req, 'read');
     const data = await this.discussionsService.getThreadDetail(threadId);
     return ApiResponseUtils.success(data);
   }
@@ -83,6 +97,7 @@ export class DiscussionsController {
     @Body() dto: CreateCommentDto,
     @Req() req: Request,
   ) {
+    await this.rateLimitService.assertAllowed(req, 'write');
     const clientIp = IpMaskingUtil.extractClientIp(req);
     const data = await this.discussionsService.addComment(
       threadId,
@@ -99,7 +114,9 @@ export class DiscussionsController {
   async updateComment(
     @Param('commentId', ParseIntPipe) commentId: number,
     @Body() dto: UpdateCommentDto,
+    @Req() req: Request,
   ) {
+    await this.rateLimitService.assertAllowed(req, 'write');
     const data = await this.discussionsService.updateComment(commentId, dto);
     return ApiResponseUtils.success(data, '의견이 성공적으로 수정되었습니다.');
   }
@@ -111,7 +128,9 @@ export class DiscussionsController {
   async deleteComment(
     @Param('commentId', ParseIntPipe) commentId: number,
     @Body() dto: DeleteCommentDto,
+    @Req() req: Request,
   ) {
+    await this.rateLimitService.assertAllowed(req, 'write');
     const data = await this.discussionsService.deleteComment(commentId, dto);
     return ApiResponseUtils.success(data, '의견이 성공적으로 삭제되었습니다.');
   }
@@ -123,7 +142,9 @@ export class DiscussionsController {
   async updateThreadStatus(
     @Param('threadId', ParseIntPipe) threadId: number,
     @Body() dto: UpdateThreadStatusDto,
+    @Req() req: Request,
   ) {
+    await this.rateLimitService.assertAllowed(req, 'write');
     const data = await this.discussionsService.updateThreadStatus(
       threadId,
       dto,
