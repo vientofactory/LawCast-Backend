@@ -5,6 +5,7 @@ import { DiscordBridgeModule } from '../discord-bridge/discord-bridge.module';
 import { ChangeTrackingModule } from '../change-tracking/change-tracking.module';
 import { DbMirrorModule } from '../db-mirror/db-mirror.module';
 import { NotificationModule } from '../notification/notification.module';
+import { DiscussionsModule } from '../discussions/discussions.module';
 import { CronJobsService } from './cronjobs.service';
 
 @Module({
@@ -15,6 +16,7 @@ import { CronJobsService } from './cronjobs.service';
     ChangeTrackingModule,
     DbMirrorModule,
     NotificationModule,
+    DiscussionsModule,
   ],
   providers: [CronJobsService],
   exports: [CronJobsService],

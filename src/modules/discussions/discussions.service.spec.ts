@@ -2,7 +2,10 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { DiscussionsService } from './discussions.service';
-import { DiscussionThread } from './entities/discussion-thread.entity';
+import {
+  DiscussionThread,
+  DiscussionThreadStatus,
+} from './entities/discussion-thread.entity';
 import { DiscussionComment } from './entities/discussion-comment.entity';
 import { UnauthorizedException } from '@nestjs/common';
 import { PasswordSecurityUtil } from './utils/password-security.util';
@@ -22,6 +25,7 @@ describe('DiscussionsService', () => {
       findAndCount: jest.fn(),
       findOne: jest.fn(),
       save: jest.fn(),
+      update: jest.fn(),
     };
     commentRepo = {
       find: jest.fn(),
@@ -53,6 +57,29 @@ describe('DiscussionsService', () => {
     service = module.get<DiscussionsService>(DiscussionsService);
   });
 
+  describe('closeIdleThreads', () => {
+    it('closes only open threads older than the idle threshold', async () => {
+      (threadRepo.update as jest.Mock).mockResolvedValue({ affected: 3 });
+
+      const affected = await service.closeIdleThreads();
+
+      expect(affected).toBe(3);
+      expect(threadRepo.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: DiscussionThreadStatus.OPEN,
+          updatedAt: expect.objectContaining({}),
+        }),
+        { status: DiscussionThreadStatus.CLOSED },
+      );
+    });
+
+    it('returns zero when no stale threads are found', async () => {
+      (threadRepo.update as jest.Mock).mockResolvedValue({ affected: 0 });
+
+      await expect(service.closeIdleThreads()).resolves.toBe(0);
+    });
+  });
+
   describe('getThreads', () => {
     it('should return paginated threads with sanitized fields', async () => {
       const mockThreads = [
@@ -60,7 +87,7 @@ describe('DiscussionsService', () => {
           id: 1,
           noticeNum: 2200001,
           title: '법안 토론 1',
-          status: 'open',
+          status: DiscussionThreadStatus.OPEN,
           authorNickname: '홍길동',
           authorIpMasked: '211.234.***.***',
           authorIpHash: 'hash',
@@ -92,7 +119,7 @@ describe('DiscussionsService', () => {
         id: 1,
         noticeNum: 2200001,
         title: '새 토론',
-        status: 'open',
+        status: DiscussionThreadStatus.OPEN,
         authorNickname: '익명',
         authorIpMasked: '123.45.***.***',
         commentCount: 1,

@@ -1,15 +1,15 @@
 import {
-  IsIn,
+  IsEnum,
   IsNotEmpty,
   IsString,
   MaxLength,
   MinLength,
 } from 'class-validator';
-import type { DiscussionThreadStatus } from '../entities/discussion-thread.entity';
+import { DiscussionThreadStatus } from '../entities/discussion-thread.entity';
 
 export class UpdateThreadStatusDto {
   @IsString()
-  @IsIn(['open', 'closed'], {
+  @IsEnum(DiscussionThreadStatus, {
     message: '상태값은 open 또는 closed여야 합니다.',
   })
   status: DiscussionThreadStatus;

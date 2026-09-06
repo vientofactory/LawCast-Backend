@@ -395,6 +395,7 @@ export const APP_CONSTANTS = {
       QUICK_KEYWORDS_REFRESH: '11 * * * *', // Every hour, refresh homepage keyword suggestions
       SQLITE_VACUUM: '31 5 * * 0', // Every Sunday at 05:31, after nightly maintenance tasks
       DATABASE_MIRROR_UPLOAD: process.env.FILE_MIRROR_CRON || '0 8 * * *', // Daily at 08:00, after nightly maintenance tasks
+      DISCUSSION_IDLE_CLOSE: '*/15 * * * *', // Every 15 minutes
     },
   },
 } as const;

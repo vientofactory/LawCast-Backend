@@ -33,6 +33,7 @@ describe('CronJobsService', () => {
       {} as any,
       {} as any,
       {} as any,
+      { closeIdleThreads: jest.fn().mockResolvedValue(3) } as any,
       webPushSubscriptionService as any,
       undefined as any,
     );
@@ -43,5 +44,37 @@ describe('CronJobsService', () => {
     expect(
       webPushSubscriptionService.cleanupInactiveSubscriptions,
     ).toHaveBeenCalledWith(14);
+  });
+
+  it('records discussion idle-close execution through the cron status wrapper', async () => {
+    const discussionsService = {
+      closeIdleThreads: jest.fn().mockResolvedValue(3),
+    };
+
+    const service = new CronJobsService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      discussionsService as any,
+      undefined as any,
+      undefined as any,
+    );
+
+    await service.handleDiscussionIdleClose();
+
+    expect(discussionsService.closeIdleThreads).toHaveBeenCalledTimes(1);
+    expect(service.getCronJobsStatus()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskName: 'discussion idle close',
+          status: 'idle',
+          lastRunAt: expect.any(String),
+          lastError: null,
+        }),
+      ]),
+    );
   });
 });

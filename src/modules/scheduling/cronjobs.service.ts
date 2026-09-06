@@ -12,6 +12,7 @@ import { DbMirrorService } from '../db-mirror/db-mirror.service';
 import { logAndBridge } from '../../utils/bridge-log.utils';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { WebPushSubscriptionService } from '../notification/web-push-subscription.service';
+import { DiscussionsService } from '../discussions/discussions.service';
 
 const CRON_TIMEZONE = appConfig().cron.timezone;
 
@@ -49,6 +50,7 @@ const CRON_JOB_TASK_EXPRESSIONS: Record<string, string> = {
   'sqlite vacuum': APP_CONSTANTS.CRON.EXPRESSIONS.SQLITE_VACUUM,
   'database mirror upload':
     APP_CONSTANTS.CRON.EXPRESSIONS.DATABASE_MIRROR_UPLOAD,
+  'discussion idle close': APP_CONSTANTS.CRON.EXPRESSIONS.DISCUSSION_IDLE_CLOSE,
 };
 
 @Injectable()
@@ -71,6 +73,7 @@ export class CronJobsService {
     private readonly archiveSyncService: ArchiveSyncService,
     private readonly changeTrackingService: ChangeTrackingService,
     private readonly dbMirrorService: DbMirrorService,
+    private readonly discussionsService: DiscussionsService,
     @Optional()
     private readonly webPushSubscriptionService: WebPushSubscriptionService,
     @Optional() private readonly discordBridge: DiscordBridgeService,
@@ -501,6 +504,22 @@ export class CronJobsService {
     await this.execute('quick keyword refresh', () =>
       this.crawlingService.refreshQuickKeywordSuggestions().then(() => {}),
     );
+  }
+
+  // Closes discussion threads that have had no new opinion during the idle window.
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.DISCUSSION_IDLE_CLOSE, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleDiscussionIdleClose(): Promise<void> {
+    await this.execute('discussion idle close', async () => {
+      const closedCount = await this.discussionsService.closeIdleThreads();
+      if (closedCount > 0) {
+        LoggerUtils.debugDev(
+          CronJobsService.name,
+          `Automatically closed ${closedCount} idle discussion thread(s).`,
+        );
+      }
+    });
   }
 
   // Reclaims SQLite free pages via VACUUM maintenance.

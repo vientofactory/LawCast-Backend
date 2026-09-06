@@ -5,10 +5,10 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, LessThan, Repository } from 'typeorm';
 import {
   DiscussionThread,
-  type DiscussionThreadStatus,
+  DiscussionThreadStatus,
 } from './entities/discussion-thread.entity';
 import { DiscussionComment } from './entities/discussion-comment.entity';
 import { CreateThreadDto } from './dto/create-thread.dto';
@@ -53,6 +53,11 @@ export interface ThreadDetailResponse {
 
 @Injectable()
 export class DiscussionsService {
+  private readonly idleCloseHours = Math.max(
+    1,
+    Number.parseInt(process.env.DISCUSSION_IDLE_CLOSE_HOURS || '24', 10) || 24,
+  );
+
   constructor(
     @InjectRepository(DiscussionThread)
     private readonly threadRepository: Repository<DiscussionThread>,
@@ -60,6 +65,16 @@ export class DiscussionsService {
     private readonly commentRepository: Repository<DiscussionComment>,
     private readonly dataSource: DataSource,
   ) {}
+
+  async closeIdleThreads(): Promise<number> {
+    const cutoff = new Date(Date.now() - this.idleCloseHours * 60 * 60 * 1000);
+    const result = await this.threadRepository.update(
+      { status: DiscussionThreadStatus.OPEN, updatedAt: LessThan(cutoff) },
+      { status: DiscussionThreadStatus.CLOSED },
+    );
+
+    return result.affected ?? 0;
+  }
 
   private sanitizeComment(comment: DiscussionComment): SanitizedComment {
     return {
@@ -167,7 +182,7 @@ export class DiscussionsService {
       const thread = manager.create(DiscussionThread, {
         noticeNum,
         title: dto.title.trim(),
-        status: 'open',
+        status: DiscussionThreadStatus.OPEN,
         authorNickname,
         authorIpMasked,
         authorIpHash,
@@ -224,7 +239,7 @@ export class DiscussionsService {
         throw new NotFoundException('존재하지 않는 토론 스레드입니다.');
       }
 
-      if (thread.status === 'closed') {
+      if (thread.status === DiscussionThreadStatus.CLOSED) {
         throw new BadRequestException(
           '닫힌 토론에는 새 의견을 작성할 수 없습니다.',
         );

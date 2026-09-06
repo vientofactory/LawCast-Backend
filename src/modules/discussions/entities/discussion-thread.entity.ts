@@ -9,7 +9,10 @@ import {
 } from 'typeorm';
 import { DiscussionComment } from './discussion-comment.entity';
 
-export type DiscussionThreadStatus = 'open' | 'closed';
+export enum DiscussionThreadStatus {
+  OPEN = 'open',
+  CLOSED = 'closed',
+}
 
 @Entity('discussion_threads')
 @Index('idx_discussion_threads_notice_num', ['noticeNum'])
@@ -27,7 +30,11 @@ export class DiscussionThread {
   @Column({ type: 'varchar', length: 255 })
   title: string;
 
-  @Column({ type: 'varchar', length: 20, default: 'open' })
+  @Column({
+    type: 'varchar',
+    length: 20,
+    default: DiscussionThreadStatus.OPEN,
+  })
   status: DiscussionThreadStatus;
 
   @Column({
