@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -21,6 +22,7 @@ import { DeleteCommentDto } from './dto/delete-comment.dto';
 import { UpdateThreadStatusDto } from './dto/update-thread-status.dto';
 import { IpMaskingUtil } from './utils/ip-masking.util';
 import { PasswordSecurityUtil } from './utils/password-security.util';
+import { DiscussionNotificationService } from './discussion-notification.service';
 
 export interface SanitizedComment {
   id: number;
@@ -59,7 +61,7 @@ export interface ThreadDetailResponse {
 export class DiscussionsService {
   private readonly idleCloseHours = Math.max(
     1,
-    Number.parseInt(process.env.DISCUSSION_IDLE_CLOSE_HOURS || '24', 10) || 24,
+    Number.parseInt(process.env.DISCUSSION_IDLE_CLOSE_HOURS ?? '24', 10) ?? 24,
   );
 
   constructor(
@@ -68,6 +70,8 @@ export class DiscussionsService {
     @InjectRepository(DiscussionComment)
     private readonly commentRepository: Repository<DiscussionComment>,
     private readonly dataSource: DataSource,
+    @Optional()
+    private readonly discussionNotificationService: DiscussionNotificationService,
   ) {}
 
   async closeIdleThreads(): Promise<number> {
@@ -153,7 +157,7 @@ export class DiscussionsService {
       messageType: DiscussionMessageType.SYSTEM,
       authorNickname: '시스템',
       authorIpMasked: '',
-      authorIpHash: '',
+      authorId: IpMaskingUtil.authorIdFromIp('system', `thread:${thread.id}`),
       passwordHash: '',
       passwordSalt: '',
       content,
@@ -228,7 +232,6 @@ export class DiscussionsService {
   ): Promise<ThreadDetailResponse> {
     const authorNickname = dto.authorNickname?.trim() || '익명';
     const authorIpMasked = IpMaskingUtil.maskIp(rawIp);
-    const authorIpHash = IpMaskingUtil.hashIp(rawIp);
     const { hash: passwordHash, salt: passwordSalt } =
       PasswordSecurityUtil.hashPassword(dto.password);
 
@@ -239,13 +242,19 @@ export class DiscussionsService {
         status: DiscussionThreadStatus.OPEN,
         authorNickname,
         authorIpMasked,
-        authorIpHash,
+        authorId: IpMaskingUtil.authorIdFromIp(rawIp, `thread:${noticeNum}`),
         passwordHash,
         passwordSalt,
         commentCount: 1,
       });
 
       const savedThread = await manager.save(DiscussionThread, thread);
+      const authorId = IpMaskingUtil.authorIdFromIp(
+        rawIp,
+        `thread:${savedThread.id}`,
+      );
+      await manager.update(DiscussionThread, savedThread.id, { authorId });
+      savedThread.authorId = authorId;
 
       const comment = manager.create(DiscussionComment, {
         threadId: savedThread.id,
@@ -254,7 +263,7 @@ export class DiscussionsService {
         messageType: DiscussionMessageType.USER,
         authorNickname,
         authorIpMasked,
-        authorIpHash,
+        authorId,
         passwordHash,
         passwordSalt,
         content: dto.content.trim(),
@@ -281,11 +290,10 @@ export class DiscussionsService {
   ): Promise<SanitizedComment> {
     const authorNickname = dto.authorNickname?.trim() || '익명';
     const authorIpMasked = IpMaskingUtil.maskIp(rawIp);
-    const authorIpHash = IpMaskingUtil.hashIp(rawIp);
     const { hash: passwordHash, salt: passwordSalt } =
       PasswordSecurityUtil.hashPassword(dto.password);
 
-    return await this.dataSource.transaction(async (manager) => {
+    const savedComment = await this.dataSource.transaction(async (manager) => {
       const thread = await manager.findOne(DiscussionThread, {
         where: { id: threadId },
       });
@@ -314,7 +322,7 @@ export class DiscussionsService {
         messageType: DiscussionMessageType.USER,
         authorNickname,
         authorIpMasked,
-        authorIpHash,
+        authorId: IpMaskingUtil.authorIdFromIp(rawIp, `thread:${thread.id}`),
         passwordHash,
         passwordSalt,
         content: dto.content.trim(),
@@ -329,8 +337,22 @@ export class DiscussionsService {
       thread.updatedAt = new Date();
       await manager.save(DiscussionThread, thread);
 
-      return this.sanitizeComment(savedComment);
+      return savedComment;
     });
+
+    try {
+      if (!this.discussionNotificationService) {
+        return this.sanitizeComment(savedComment);
+      }
+      await this.discussionNotificationService.notifyForQuotes(savedComment);
+    } catch (error) {
+      this.discussionNotificationService.logDispatchFailure(
+        savedComment.id,
+        error,
+      );
+    }
+
+    return this.sanitizeComment(savedComment);
   }
 
   /**

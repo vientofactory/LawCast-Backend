@@ -2,6 +2,10 @@ import { IpMaskingUtil } from './ip-masking.util';
 import type { Request } from 'express';
 
 describe('IpMaskingUtil', () => {
+  beforeAll(() => {
+    process.env.DISCUSSION_AUTHOR_ID_SECRET = 'test-author-id-secret';
+  });
+
   describe('maskIp', () => {
     it('should mask IPv4 preserving only first 2 octets', () => {
       expect(IpMaskingUtil.maskIp('123.45.67.89')).toBe('123.45.***.***');
@@ -64,6 +68,25 @@ describe('IpMaskingUtil', () => {
       expect(hash1).toBe(hash2);
       expect(hash1).not.toBe(hash3);
       expect(hash1).toHaveLength(64);
+    });
+  });
+
+  describe('authorIdFromIp', () => {
+    it('should return the same scoped one-way identifier for the same IP', () => {
+      const first = IpMaskingUtil.authorIdFromIp('123.45.67.89', 'thread:1');
+      const second = IpMaskingUtil.authorIdFromIp('123.45.67.89', 'thread:1');
+
+      expect(first).toBe(second);
+      expect(first).toMatch(/^[0-9a-f]{64}$/i);
+      expect(first).not.toBe(
+        IpMaskingUtil.authorIdFromIp('123.45.67.89', 'thread:2'),
+      );
+    });
+
+    it('should distinguish different IPs', () => {
+      expect(IpMaskingUtil.authorIdFromIp('123.45.67.89', 'thread:1')).not.toBe(
+        IpMaskingUtil.authorIdFromIp('123.45.67.90', 'thread:1'),
+      );
     });
   });
 });

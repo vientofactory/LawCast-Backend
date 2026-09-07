@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { DiscussionWebPushBinding } from './discussion-web-push-binding.entity';
 import { WebPushSubscription } from './web-push-subscription.entity';
 
 export interface UpsertWebPushSubscriptionInput {
@@ -8,6 +9,7 @@ export interface UpsertWebPushSubscriptionInput {
   p256dh: string;
   auth: string;
   userAgent?: string | null;
+  noticeNotificationsEnabled?: boolean;
 }
 
 export interface WebPushSubscriptionStats {
@@ -22,6 +24,9 @@ export class WebPushSubscriptionService {
   constructor(
     @InjectRepository(WebPushSubscription)
     private readonly subscriptionRepository: Repository<WebPushSubscription>,
+    @InjectRepository(DiscussionWebPushBinding)
+    @Optional()
+    private readonly discussionBindingRepository?: Repository<DiscussionWebPushBinding>,
   ) {}
 
   async createOrReactivate(
@@ -41,6 +46,9 @@ export class WebPushSubscriptionService {
       existing.auth = auth;
       existing.userAgent = userAgent;
       existing.isActive = true;
+      if (input.noticeNotificationsEnabled === true) {
+        existing.noticeNotificationsEnabled = true;
+      }
       existing.lastFailureReason = null;
       existing.failureCount = 0;
       return this.subscriptionRepository.save(existing);
@@ -52,6 +60,7 @@ export class WebPushSubscriptionService {
       auth,
       userAgent,
       isActive: true,
+      noticeNotificationsEnabled: input.noticeNotificationsEnabled ?? true,
       failureCount: 0,
       lastFailureReason: null,
     });
@@ -82,8 +91,123 @@ export class WebPushSubscriptionService {
 
   async findAllActive(): Promise<WebPushSubscription[]> {
     return this.subscriptionRepository.find({
-      where: { isActive: true },
+      where: { isActive: true, noticeNotificationsEnabled: true },
     });
+  }
+
+  async getNoticeNotificationsEnabled(endpoint: string): Promise<boolean> {
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { endpoint: endpoint.trim(), isActive: true },
+    });
+    return subscription?.noticeNotificationsEnabled === true;
+  }
+
+  async setNoticeNotificationsEnabled(
+    endpoint: string,
+    enabled: boolean,
+  ): Promise<void> {
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { endpoint: endpoint.trim() },
+    });
+    if (!subscription) return;
+
+    subscription.noticeNotificationsEnabled = enabled;
+    if (enabled) subscription.isActive = true;
+    await this.subscriptionRepository.save(subscription);
+  }
+
+  async bindToDiscussion(
+    subscriptionId: number,
+    threadId: number,
+    authorId: string,
+  ): Promise<void> {
+    if (!this.discussionBindingRepository) return;
+
+    const existing = await this.discussionBindingRepository.findOne({
+      where: { subscriptionId, threadId, authorId },
+    });
+
+    if (existing) {
+      existing.isActive = true;
+      await this.discussionBindingRepository.save(existing);
+      return;
+    }
+
+    await this.discussionBindingRepository.save(
+      this.discussionBindingRepository.create({
+        subscriptionId,
+        threadId,
+        authorId,
+        isActive: true,
+      }),
+    );
+  }
+
+  async findActiveForDiscussionAuthor(
+    threadId: number,
+    authorId: string,
+  ): Promise<WebPushSubscription[]> {
+    if (!this.discussionBindingRepository) return [];
+
+    const bindings = await this.discussionBindingRepository.find({
+      where: { threadId, authorId, isActive: true },
+    });
+    if (bindings.length === 0) return [];
+
+    const subscriptions = await this.subscriptionRepository.findByIds(
+      bindings.map((binding) => binding.subscriptionId),
+    );
+    const activeById = new Map(
+      subscriptions
+        .filter((subscription) => subscription.isActive)
+        .map((subscription) => [subscription.id, subscription]),
+    );
+    return bindings
+      .map((binding) => activeById.get(binding.subscriptionId))
+      .filter((subscription): subscription is WebPushSubscription =>
+        Boolean(subscription),
+      );
+  }
+
+  async isEndpointBoundToDiscussion(
+    endpoint: string,
+    threadId: number,
+    authorId: string,
+  ): Promise<boolean> {
+    if (!this.discussionBindingRepository) return false;
+
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { endpoint: endpoint.trim(), isActive: true },
+    });
+    if (!subscription) return false;
+
+    const binding = await this.discussionBindingRepository.findOne({
+      where: {
+        subscriptionId: subscription.id,
+        threadId,
+        authorId,
+        isActive: true,
+      },
+    });
+    return Boolean(binding);
+  }
+
+  async deactivateDiscussionBinding(
+    endpoint: string,
+    threadId: number,
+    authorId: string,
+  ): Promise<void> {
+    if (!this.discussionBindingRepository) return;
+
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { endpoint: endpoint.trim() },
+    });
+    if (!subscription) return;
+
+    await this.discussionBindingRepository.update(
+      { subscriptionId: subscription.id, threadId, authorId },
+      { isActive: false },
+    );
   }
 
   async getStatsForApi(): Promise<WebPushSubscriptionStats> {

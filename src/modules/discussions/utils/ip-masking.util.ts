@@ -1,8 +1,8 @@
-import { createHash } from 'crypto';
+import { createHash, createHmac } from 'crypto';
 import type { Request } from 'express';
 
 const IP_SALT =
-  process.env.DISCUSSION_IP_SALT || 'lawcast_discussion_salt_default';
+  process.env.DISCUSSION_IP_SALT ?? 'lawcast_discussion_salt_default';
 
 export class IpMaskingUtil {
   /**
@@ -94,5 +94,20 @@ export class IpMaskingUtil {
   static hashIp(rawIp: string): string {
     const ip = this.cleanIp(rawIp);
     return createHash('sha256').update(`${ip}:${IP_SALT}`).digest('hex');
+  }
+
+  /**
+   * Generates a stable, thread-scoped one-way HMAC identifier without storing the IP.
+   * The secret prevents offline IP candidate matching against persisted IDs.
+   */
+  static authorIdFromIp(rawIp: string, scope: string): string {
+    const authorIdSecret = process.env.DISCUSSION_AUTHOR_ID_SECRET;
+    if (!authorIdSecret) {
+      throw new Error('DISCUSSION_AUTHOR_ID_SECRET must be configured');
+    }
+    const ip = this.cleanIp(rawIp);
+    return createHmac('sha256', authorIdSecret)
+      .update(`${scope}:${ip}`)
+      .digest('hex');
   }
 }

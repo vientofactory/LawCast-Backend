@@ -14,6 +14,9 @@ import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { PasswordSecurityUtil } from './utils/password-security.util';
 
 describe('DiscussionsService', () => {
+  beforeAll(() => {
+    process.env.DISCUSSION_AUTHOR_ID_SECRET = 'test-author-id-secret';
+  });
   let service: DiscussionsService;
   let threadRepo: Partial<
     Record<keyof Repository<DiscussionThread>, jest.Mock>
@@ -132,6 +135,7 @@ describe('DiscussionsService', () => {
         title: '새 토론',
         status: DiscussionThreadStatus.OPEN,
         authorNickname: '익명',
+        authorId: 'test-author-id',
         authorIpMasked: '123.45.***.***',
         commentCount: 1,
         createdAt: new Date(),
@@ -143,6 +147,7 @@ describe('DiscussionsService', () => {
         noticeNum: 2200001,
         sequence: 1,
         authorNickname: '익명',
+        authorId: 'test-author-id',
         authorIpMasked: '123.45.***.***',
         content: '토론 시작합니다.',
         isDeleted: false,
@@ -151,10 +156,12 @@ describe('DiscussionsService', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
       };
+      const create = jest.fn().mockImplementation((_entity, dto) => dto);
 
       dataSource.transaction.mockImplementation(async (cb) => {
         const manager = {
-          create: jest.fn().mockImplementation((_entity, dto) => dto),
+          create,
+          update: jest.fn(),
           save: jest.fn().mockImplementation((entity) => {
             if (entity === DiscussionThread) return mockSavedThread;
             return mockSavedComment;
@@ -176,6 +183,7 @@ describe('DiscussionsService', () => {
       expect(result.thread.title).toBe('새 토론');
       expect(result.comments).toHaveLength(1);
       expect(result.comments[0].sequence).toBe(1);
+      expect(result.comments[0]).not.toHaveProperty('authorIpHash');
       expect(result.comments[0].content).toBe('토론 시작합니다.');
     });
   });

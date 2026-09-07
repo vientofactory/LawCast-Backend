@@ -14,6 +14,7 @@ import { NoticeArchiveIntegrityState } from './modules/notice/notice-archive-int
 import { NoticeChangeEvent } from './modules/change-tracking/notice-change-event.entity';
 import { NoticeChangeDetail } from './modules/change-tracking/notice-change-detail.entity';
 import { WebPushSubscription } from './modules/notification/web-push-subscription.entity';
+import { DiscussionWebPushBinding } from './modules/notification/discussion-web-push-binding.entity';
 import { DiscussionThread } from './modules/discussions/entities/discussion-thread.entity';
 import { DiscussionComment } from './modules/discussions/entities/discussion-comment.entity';
 import { migrations } from './migrations';
@@ -73,6 +74,7 @@ import { DiscussionsModule } from './modules/discussions/discussions.module';
           NoticeChangeEvent,
           NoticeChangeDetail,
           WebPushSubscription,
+          DiscussionWebPushBinding,
           DiscussionThread,
           DiscussionComment,
         ],

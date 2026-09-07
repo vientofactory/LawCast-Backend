@@ -3,6 +3,7 @@ import {
   Delete,
   Get,
   Post,
+  Patch,
   Body,
   Param,
   Query,
@@ -42,6 +43,9 @@ import { WebPushNotificationService } from '../modules/notification/web-push-not
 import { WebPushRegistrationService } from '../modules/notification/web-push-registration.service';
 import { CreateWebPushSubscriptionDto } from '../modules/notification/dto/create-web-push-subscription.dto';
 import { RemoveWebPushSubscriptionDto } from '../modules/notification/dto/remove-web-push-subscription.dto';
+import { UpdateWebPushPreferencesDto } from '../modules/notification/dto/update-web-push-preferences.dto';
+import { IpMaskingUtil } from '../modules/discussions/utils/ip-masking.util';
+import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
 import {
   parseIsoDate,
   parsePositiveInteger,
@@ -87,6 +91,73 @@ export class ApiController {
   async getWebPushPublicKey() {
     return ApiResponseUtils.success(
       this.webPushNotificationService.getPublicConfig(),
+    );
+  }
+
+  @Get('push/subscriptions/discussions/:threadId/status')
+  async getDiscussionWebPushStatus(
+    @Param('threadId', ParseIntPipe) threadId: number,
+    @Query('endpoint') endpoint: string,
+    @Req() req: Request,
+  ) {
+    if (!endpoint?.trim()) {
+      return ApiResponseUtils.success({ isBound: false });
+    }
+
+    const authorId = IpMaskingUtil.authorIdFromIp(
+      WebhookValidationUtils.extractClientIp(req),
+      `thread:${threadId}`,
+    );
+    const isBound =
+      await this.webPushSubscriptionService.isEndpointBoundToDiscussion(
+        endpoint,
+        threadId,
+        authorId,
+      );
+    return ApiResponseUtils.success({ isBound });
+  }
+
+  @Get('push/subscriptions/notice-status')
+  async getNoticeWebPushStatus(@Query('endpoint') endpoint: string) {
+    return ApiResponseUtils.success({
+      enabled: endpoint
+        ? await this.webPushSubscriptionService.getNoticeNotificationsEnabled(
+            endpoint,
+          )
+        : false,
+    });
+  }
+
+  @Patch('push/subscriptions/preferences')
+  async updateWebPushPreferences(@Body() dto: UpdateWebPushPreferencesDto) {
+    await this.webPushSubscriptionService.setNoticeNotificationsEnabled(
+      dto.endpoint,
+      dto.noticeNotificationsEnabled,
+    );
+    return ApiResponseUtils.success(
+      { noticeNotificationsEnabled: dto.noticeNotificationsEnabled },
+      '웹 푸시 알림 설정이 변경되었습니다.',
+    );
+  }
+
+  @Delete('push/subscriptions/discussions/:threadId')
+  async removeDiscussionWebPushBinding(
+    @Param('threadId', ParseIntPipe) threadId: number,
+    @Body() dto: RemoveWebPushSubscriptionDto,
+    @Req() req: Request,
+  ) {
+    const authorId = IpMaskingUtil.authorIdFromIp(
+      WebhookValidationUtils.extractClientIp(req),
+      `thread:${threadId}`,
+    );
+    await this.webPushSubscriptionService.deactivateDiscussionBinding(
+      dto.endpoint,
+      threadId,
+      authorId,
+    );
+    return ApiResponseUtils.success(
+      { success: true },
+      '이 스레드 인용 알림이 해지되었습니다.',
     );
   }
 

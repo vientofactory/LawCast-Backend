@@ -48,8 +48,8 @@ export class DiscussionThread {
   @Column({ name: 'author_ip_masked', type: 'varchar', length: 50 })
   authorIpMasked: string;
 
-  @Column({ name: 'author_ip_hash', type: 'varchar', length: 64 })
-  authorIpHash: string;
+  @Column({ name: 'author_id', type: 'varchar', length: 64 })
+  authorId: string;
 
   @Column({ name: 'password_hash', type: 'varchar', length: 128 })
   passwordHash: string;

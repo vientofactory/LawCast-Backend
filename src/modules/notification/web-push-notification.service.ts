@@ -177,6 +177,44 @@ export class WebPushNotificationService {
     );
   }
 
+  async sendQuoteBatch(
+    payload: {
+      noticeNum: number;
+      threadId: number;
+      quotedSequence: number;
+      quotingCommentId: number;
+      quotingAuthorNickname: string;
+    },
+    subscriptions: WebPushSubscription[],
+  ): Promise<WebPushDispatchSummary> {
+    const url =
+      buildFrontendUrl(
+        this.frontendUrls,
+        `/notices/${payload.noticeNum}/discussions/${payload.threadId}`,
+        { comment: String(payload.quotingCommentId) },
+      ) ??
+      this.frontendUrls[0] ??
+      '/';
+
+    return this.sendBatch(
+      subscriptions,
+      {
+        title: '의견이 인용되었습니다',
+        body: `${payload.quotingAuthorNickname}님이 #${payload.quotedSequence} 의견을 인용했습니다.`,
+        url,
+        tag: `lawcast-quote-${payload.threadId}-${payload.quotingCommentId}-${payload.quotedSequence}`,
+        data: {
+          noticeNum: payload.noticeNum,
+          threadId: payload.threadId,
+          quotedSequence: payload.quotedSequence,
+          quotingCommentId: payload.quotingCommentId,
+          type: 'opinion_quoted',
+        },
+      },
+      { urgency: 'normal' },
+    );
+  }
+
   async sendChangeDigestBatch(
     payloads: ChangeNotificationPayload[],
     subscriptions: WebPushSubscription[],
