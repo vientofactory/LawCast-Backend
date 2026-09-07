@@ -6,8 +6,11 @@ import {
   DiscussionThread,
   DiscussionThreadStatus,
 } from './entities/discussion-thread.entity';
-import { DiscussionComment } from './entities/discussion-comment.entity';
-import { UnauthorizedException } from '@nestjs/common';
+import {
+  DiscussionComment,
+  DiscussionMessageType,
+} from './entities/discussion-comment.entity';
+import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { PasswordSecurityUtil } from './utils/password-security.util';
 
 describe('DiscussionsService', () => {
@@ -24,6 +27,7 @@ describe('DiscussionsService', () => {
     threadRepo = {
       findAndCount: jest.fn(),
       findOne: jest.fn(),
+      find: jest.fn(),
       save: jest.fn(),
       update: jest.fn(),
     };
@@ -59,22 +63,29 @@ describe('DiscussionsService', () => {
 
   describe('closeIdleThreads', () => {
     it('closes only open threads older than the idle threshold', async () => {
-      (threadRepo.update as jest.Mock).mockResolvedValue({ affected: 3 });
+      const idleThreads = [
+        { id: 1, noticeNum: 2200001 },
+        { id: 2, noticeNum: 2200002 },
+        { id: 3, noticeNum: 2200003 },
+      ];
+      (threadRepo.find as jest.Mock).mockResolvedValue(idleThreads);
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback({
+          findOne: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockImplementation((_entity, value) => value),
+          save: jest.fn().mockResolvedValue(undefined),
+          update: jest.fn().mockResolvedValue({ affected: 1 }),
+        }),
+      );
 
       const affected = await service.closeIdleThreads();
 
       expect(affected).toBe(3);
-      expect(threadRepo.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: DiscussionThreadStatus.OPEN,
-          updatedAt: expect.objectContaining({}),
-        }),
-        { status: DiscussionThreadStatus.CLOSED },
-      );
+      expect(dataSource.transaction).toHaveBeenCalledTimes(3);
     });
 
     it('returns zero when no stale threads are found', async () => {
-      (threadRepo.update as jest.Mock).mockResolvedValue({ affected: 0 });
+      (threadRepo.find as jest.Mock).mockResolvedValue([]);
 
       await expect(service.closeIdleThreads()).resolves.toBe(0);
     });
@@ -170,6 +181,24 @@ describe('DiscussionsService', () => {
   });
 
   describe('updateComment', () => {
+    it('should reject edits to a system message', async () => {
+      const mockComment = {
+        id: 1,
+        messageType: DiscussionMessageType.SYSTEM,
+        isDeleted: false,
+      };
+
+      (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
+
+      await expect(
+        service.updateComment(1, {
+          password: 'any-password',
+          content: '수정 시도',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(commentRepo.save).not.toHaveBeenCalled();
+    });
+
     it('should throw UnauthorizedException if password does not match', async () => {
       const { hash, salt } =
         PasswordSecurityUtil.hashPassword('correctPassword');
@@ -220,6 +249,21 @@ describe('DiscussionsService', () => {
   });
 
   describe('deleteComment', () => {
+    it('should reject deletion of a system message', async () => {
+      const mockComment = {
+        id: 1,
+        messageType: DiscussionMessageType.SYSTEM,
+        isDeleted: false,
+      };
+
+      (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
+
+      await expect(
+        service.deleteComment(1, { password: 'any-password' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(commentRepo.save).not.toHaveBeenCalled();
+    });
+
     it('should soft delete comment when password matches and return sanitized comment', async () => {
       const { hash, salt } = PasswordSecurityUtil.hashPassword('deletePass');
       const mockComment = {
@@ -250,5 +294,63 @@ describe('DiscussionsService', () => {
       expect(res.content).toBe('작성자에 의해 삭제된 의견입니다.');
       expect(mockComment.isDeleted).toBe(true);
     });
+  });
+
+  describe('updateThreadStatus', () => {
+    it.each([
+      [
+        DiscussionThreadStatus.OPEN,
+        DiscussionThreadStatus.CLOSED,
+        '닫혔습니다',
+      ],
+      [
+        DiscussionThreadStatus.CLOSED,
+        DiscussionThreadStatus.OPEN,
+        '다시 열렸습니다',
+      ],
+    ])(
+      'appends a system message when changing %s to %s',
+      async (currentStatus, nextStatus, expectedAction) => {
+        const { hash, salt } = PasswordSecurityUtil.hashPassword('threadPass');
+        const thread = {
+          id: 1,
+          noticeNum: 2200001,
+          status: currentStatus,
+          passwordHash: hash,
+          passwordSalt: salt,
+          authorNickname: '익명',
+          authorIpMasked: '123.45.***.***',
+          commentCount: 1,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        const manager = {
+          findOne: jest
+            .fn()
+            .mockResolvedValueOnce(thread)
+            .mockResolvedValueOnce({ sequence: 1 }),
+          create: jest.fn().mockImplementation((_entity, value) => value),
+          save: jest.fn().mockImplementation((_entity, value) => value),
+        };
+        dataSource.transaction.mockImplementation(async (callback) =>
+          callback(manager),
+        );
+
+        const result = await service.updateThreadStatus(1, {
+          status: nextStatus,
+          password: 'threadPass',
+        });
+
+        expect(result.status).toBe(nextStatus);
+        expect(manager.create).toHaveBeenCalledWith(
+          DiscussionComment,
+          expect.objectContaining({
+            messageType: DiscussionMessageType.SYSTEM,
+            sequence: 2,
+            content: `발제자의 요청으로 토론이 ${expectedAction}.`,
+          }),
+        );
+      },
+    );
   });
 });

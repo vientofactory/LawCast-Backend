@@ -10,6 +10,11 @@ import {
 } from 'typeorm';
 import { DiscussionThread } from './discussion-thread.entity';
 
+export enum DiscussionMessageType {
+  USER = 'user',
+  SYSTEM = 'system',
+}
+
 @Entity('discussion_comments')
 @Index('idx_discussion_comments_thread_id', ['threadId'])
 @Index('idx_discussion_comments_notice_num', ['noticeNum'])
@@ -26,6 +31,14 @@ export class DiscussionComment {
 
   @Column({ type: 'integer' })
   sequence: number;
+
+  @Column({
+    name: 'message_type',
+    type: 'varchar',
+    length: 20,
+    default: DiscussionMessageType.USER,
+  })
+  messageType: DiscussionMessageType;
 
   @Column({
     name: 'author_nickname',

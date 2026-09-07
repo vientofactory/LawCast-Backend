@@ -22,6 +22,7 @@ import { AllowSnapshotArtifactFirstFill1755043201000 } from './202608130001-allo
 import { AddArchiveNoticeNumStartedAtIndex1755561601000 } from './202608190001-add-archive-notice-num-started-at-index.migration';
 import { AllowLifecycleStatusTransition1756800001000 } from './202609020001-allow-lifecycle-status-transition.migration';
 import { AddDiscussionsAndComments1757059201000 } from './202609050001-add-discussions-and-comments.migration';
+import { AddDiscussionMessageTypes1757059202000 } from './202609050002-add-discussion-message-types.migration';
 
 export const migrations: (new () => MigrationInterface)[] = [
   InitialSchemaMigration1744953900000,
@@ -47,4 +48,5 @@ export const migrations: (new () => MigrationInterface)[] = [
   AddArchiveNoticeNumStartedAtIndex1755561601000,
   AllowLifecycleStatusTransition1756800001000,
   AddDiscussionsAndComments1757059201000,
+  AddDiscussionMessageTypes1757059202000,
 ];

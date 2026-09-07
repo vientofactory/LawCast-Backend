@@ -37,7 +37,6 @@ const CRON_JOB_TASK_EXPRESSIONS: Record<string, string> = {
     APP_CONSTANTS.CRON.EXPRESSIONS.PROPOSAL_REASON_BACKFILL_DRAIN,
   'isDone sync': APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC,
   'webhook cleanup': APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP,
-  'webhook optimization': APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION,
   'system monitoring': APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING,
   'snapshot artifact backfill': APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN,
   'integrity re-scan': APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN,
@@ -423,16 +422,6 @@ export class CronJobsService {
   async handleWebhookCleanup(): Promise<void> {
     await this.execute('webhook cleanup', () =>
       this.webhookCleanupService.intelligentWebhookCleanup(),
-    );
-  }
-
-  // Runs periodic webhook health optimization.
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_OPTIMIZATION, {
-    timeZone: CRON_TIMEZONE,
-  })
-  async handleWebhookOptimization(): Promise<void> {
-    await this.execute('webhook optimization', () =>
-      this.webhookCleanupService.runSystemOptimization(),
     );
   }
 

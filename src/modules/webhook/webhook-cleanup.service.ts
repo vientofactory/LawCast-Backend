@@ -10,10 +10,9 @@ export class WebhookCleanupService {
 
   /**
    * Shared execution lock for all cleanup methods.
-   * All three cron-triggered methods (intelligentWebhookCleanup,
-   * runSystemOptimization, runSystemMonitoring) operate on the same
-   * webhook table, so only one should run at a time to prevent concurrent
-   * reads and deletes from interfering with each other.
+   * Both cron-triggered methods operate on the same webhook table, so only
+   * one should run at a time to prevent concurrent reads and deletes from
+   * interfering with each other.
    */
   private isRunning = false;
 
@@ -88,58 +87,6 @@ export class WebhookCleanupService {
         'Failed to perform intelligent webhook cleanup:',
         error,
       );
-    } finally {
-      this.isRunning = false;
-    }
-  }
-
-  /**
-   * System optimization task
-   * @returns void
-   */
-  async runSystemOptimization(): Promise<void> {
-    if (this.isRunning) {
-      this.logger.warn(
-        'Webhook cleanup already in progress, skipping runSystemOptimization',
-      );
-      return;
-    }
-    this.isRunning = true;
-    try {
-      this.logger.log('Starting weekly system optimization...');
-
-      const stats = await this.webhookService.getDetailedStats();
-      const efficiency =
-        stats.total > 0 ? (stats.active / stats.total) * 100 : 100;
-
-      // Clean up inactive webhooks for database defragmentation if efficiency is below 80%
-      if (efficiency < 80 && stats.inactive > 0) {
-        const deletedCount =
-          await this.webhookService.cleanupInactiveWebhooks();
-        this.logger.log(
-          `Weekly optimization: removed ${deletedCount} inactive webhooks for DB defragmentation`,
-        );
-      }
-
-      // Report final system state after optimization
-      const finalStats = await this.webhookService.getDetailedStats();
-      const finalEfficiency =
-        finalStats.total > 0
-          ? (finalStats.active / finalStats.total) * 100
-          : 100;
-
-      this.logger.log(
-        `Weekly optimization completed. Final system state: ${finalStats.active} active webhooks, ${finalEfficiency.toFixed(1)}% efficiency`,
-      );
-
-      // Warning log
-      if (finalStats.total > 2000) {
-        this.logger.warn(
-          `High webhook count detected: ${finalStats.total} total webhooks. Consider system review.`,
-        );
-      }
-    } catch (error) {
-      this.logger.error('Failed to perform weekly system optimization:', error);
     } finally {
       this.isRunning = false;
     }

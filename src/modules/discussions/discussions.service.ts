@@ -10,7 +10,10 @@ import {
   DiscussionThread,
   DiscussionThreadStatus,
 } from './entities/discussion-thread.entity';
-import { DiscussionComment } from './entities/discussion-comment.entity';
+import {
+  DiscussionComment,
+  DiscussionMessageType,
+} from './entities/discussion-comment.entity';
 import { CreateThreadDto } from './dto/create-thread.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
@@ -24,6 +27,7 @@ export interface SanitizedComment {
   threadId: number;
   noticeNum: number;
   sequence: number;
+  messageType: DiscussionMessageType;
   authorNickname: string;
   authorIpMasked: string;
   content: string;
@@ -68,12 +72,39 @@ export class DiscussionsService {
 
   async closeIdleThreads(): Promise<number> {
     const cutoff = new Date(Date.now() - this.idleCloseHours * 60 * 60 * 1000);
-    const result = await this.threadRepository.update(
-      { status: DiscussionThreadStatus.OPEN, updatedAt: LessThan(cutoff) },
-      { status: DiscussionThreadStatus.CLOSED },
-    );
+    const idleThreads = await this.threadRepository.find({
+      where: {
+        status: DiscussionThreadStatus.OPEN,
+        updatedAt: LessThan(cutoff),
+      },
+    });
 
-    return result.affected ?? 0;
+    let closedCount = 0;
+    for (const thread of idleThreads) {
+      await this.dataSource.transaction(async (manager) => {
+        const lastComment = await manager.findOne(DiscussionComment, {
+          where: { threadId: thread.id },
+          order: { sequence: 'DESC' },
+        });
+        const nextSequence = (lastComment?.sequence || 0) + 1;
+        const systemComment = manager.create(
+          DiscussionComment,
+          this.buildSystemCommentData(
+            thread,
+            nextSequence,
+            `새로운 의견이 ${this.idleCloseHours}시간 동안 등록되지 않아 토론이 자동으로 종료되었습니다.`,
+          ),
+        );
+        await manager.save(DiscussionComment, systemComment);
+        await manager.update(DiscussionThread, thread.id, {
+          status: DiscussionThreadStatus.CLOSED,
+          commentCount: nextSequence,
+        });
+        closedCount += 1;
+      });
+    }
+
+    return closedCount;
   }
 
   private sanitizeComment(comment: DiscussionComment): SanitizedComment {
@@ -82,6 +113,7 @@ export class DiscussionsService {
       threadId: comment.threadId,
       noticeNum: comment.noticeNum,
       sequence: comment.sequence,
+      messageType: comment.messageType,
       authorNickname: comment.authorNickname,
       authorIpMasked: comment.authorIpMasked,
       content: comment.isDeleted
@@ -106,6 +138,28 @@ export class DiscussionsService {
       commentCount: thread.commentCount,
       createdAt: thread.createdAt,
       updatedAt: thread.updatedAt,
+    };
+  }
+
+  private buildSystemCommentData(
+    thread: DiscussionThread,
+    sequence: number,
+    content: string,
+  ): Partial<DiscussionComment> {
+    return {
+      threadId: thread.id,
+      noticeNum: thread.noticeNum,
+      sequence,
+      messageType: DiscussionMessageType.SYSTEM,
+      authorNickname: '시스템',
+      authorIpMasked: '',
+      authorIpHash: '',
+      passwordHash: '',
+      passwordSalt: '',
+      content,
+      isDeleted: false,
+      isEdited: false,
+      editedAt: null,
     };
   }
 
@@ -197,6 +251,7 @@ export class DiscussionsService {
         threadId: savedThread.id,
         noticeNum,
         sequence: 1,
+        messageType: DiscussionMessageType.USER,
         authorNickname,
         authorIpMasked,
         authorIpHash,
@@ -256,6 +311,7 @@ export class DiscussionsService {
         threadId,
         noticeNum: thread.noticeNum,
         sequence: nextSequence,
+        messageType: DiscussionMessageType.USER,
         authorNickname,
         authorIpMasked,
         authorIpHash,
@@ -290,6 +346,10 @@ export class DiscussionsService {
 
     if (!comment) {
       throw new NotFoundException('존재하지 않는 의견입니다.');
+    }
+
+    if (comment.messageType === DiscussionMessageType.SYSTEM) {
+      throw new BadRequestException('시스템 메시지는 수정할 수 없습니다.');
     }
 
     if (comment.isDeleted) {
@@ -329,6 +389,10 @@ export class DiscussionsService {
       throw new NotFoundException('존재하지 않는 의견입니다.');
     }
 
+    if (comment.messageType === DiscussionMessageType.SYSTEM) {
+      throw new BadRequestException('시스템 메시지는 삭제할 수 없습니다.');
+    }
+
     if (comment.isDeleted) {
       return this.sanitizeComment(comment);
     }
@@ -356,29 +420,55 @@ export class DiscussionsService {
     threadId: number,
     dto: UpdateThreadStatusDto,
   ): Promise<SanitizedThread> {
-    const thread = await this.threadRepository.findOne({
-      where: { id: threadId },
-    });
+    return this.dataSource.transaction(async (manager) => {
+      const thread = await manager.findOne(DiscussionThread, {
+        where: { id: threadId },
+      });
 
-    if (!thread) {
-      throw new NotFoundException('존재하지 않는 토론 스레드입니다.');
-    }
+      if (!thread) {
+        throw new NotFoundException('존재하지 않는 토론 스레드입니다.');
+      }
 
-    const isPasswordValid = PasswordSecurityUtil.verifyPassword(
-      dto.password,
-      thread.passwordSalt,
-      thread.passwordHash,
-    );
-
-    if (!isPasswordValid) {
-      throw new UnauthorizedException(
-        '스레드 개설 비밀번호가 일치하지 않습니다.',
+      const isPasswordValid = PasswordSecurityUtil.verifyPassword(
+        dto.password,
+        thread.passwordSalt,
+        thread.passwordHash,
       );
-    }
 
-    thread.status = dto.status;
-    const saved = await this.threadRepository.save(thread);
+      if (!isPasswordValid) {
+        throw new UnauthorizedException(
+          '스레드 개설 비밀번호가 일치하지 않습니다.',
+        );
+      }
 
-    return this.sanitizeThread(saved);
+      if (thread.status === dto.status) {
+        return this.sanitizeThread(thread);
+      }
+
+      const lastComment = await manager.findOne(DiscussionComment, {
+        where: { threadId },
+        order: { sequence: 'DESC' },
+      });
+      const nextSequence = (lastComment?.sequence || 0) + 1;
+      const action =
+        dto.status === DiscussionThreadStatus.CLOSED
+          ? '닫혔습니다'
+          : '다시 열렸습니다';
+      const systemComment = manager.create(
+        DiscussionComment,
+        this.buildSystemCommentData(
+          thread,
+          nextSequence,
+          `발제자의 요청으로 토론이 ${action}.`,
+        ),
+      );
+      await manager.save(DiscussionComment, systemComment);
+
+      thread.status = dto.status;
+      thread.commentCount = nextSequence;
+      const saved = await manager.save(DiscussionThread, thread);
+
+      return this.sanitizeThread(saved);
+    });
   }
 }
