@@ -6,7 +6,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, LessThan, Repository } from 'typeorm';
+import { DataSource, LessThan, MoreThan, Repository } from 'typeorm';
 import {
   DiscussionThread,
   DiscussionThreadStatus,
@@ -55,6 +55,8 @@ export interface SanitizedThread {
 export interface ThreadDetailResponse {
   thread: SanitizedThread;
   comments: SanitizedComment[];
+  hasMore: boolean;
+  nextCursor: number | null;
 }
 
 @Injectable()
@@ -202,7 +204,11 @@ export class DiscussionsService {
   /**
    * Get discussion thread detail with all comments in sequence.
    */
-  async getThreadDetail(threadId: number): Promise<ThreadDetailResponse> {
+  async getThreadDetail(
+    threadId: number,
+    cursor = 0,
+    limit = 20,
+  ): Promise<ThreadDetailResponse> {
     const thread = await this.threadRepository.findOne({
       where: { id: threadId },
     });
@@ -211,14 +217,21 @@ export class DiscussionsService {
       throw new NotFoundException('존재하지 않는 토론 스레드입니다.');
     }
 
+    const safeCursor = Math.max(0, cursor);
+    const safeLimit = Math.min(100, Math.max(1, limit));
     const comments = await this.commentRepository.find({
-      where: { threadId },
+      where: { threadId, sequence: MoreThan(safeCursor) },
       order: { sequence: 'ASC' },
+      take: safeLimit + 1,
     });
+    const hasMore = comments.length > safeLimit;
+    const pageComments = hasMore ? comments.slice(0, safeLimit) : comments;
 
     return {
       thread: this.sanitizeThread(thread),
-      comments: comments.map((c) => this.sanitizeComment(c)),
+      comments: pageComments.map((c) => this.sanitizeComment(c)),
+      hasMore,
+      nextCursor: pageComments[pageComments.length - 1]?.sequence ?? null,
     };
   }
 
@@ -276,6 +289,8 @@ export class DiscussionsService {
       return {
         thread: this.sanitizeThread(savedThread),
         comments: [this.sanitizeComment(savedComment)],
+        hasMore: false,
+        nextCursor: savedComment.sequence,
       };
     });
   }

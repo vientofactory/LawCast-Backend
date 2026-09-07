@@ -81,10 +81,18 @@ export class DiscussionsController {
   @Get('discussions/threads/:threadId')
   async getThreadDetail(
     @Param('threadId', ParseIntPipe) threadId: number,
+    @Query('cursor') cursorParam: string | undefined,
+    @Query('limit') limitParam: string | undefined,
     @Req() req: Request,
   ) {
     await this.rateLimitService.assertAllowed(req, 'read');
-    const data = await this.discussionsService.getThreadDetail(threadId);
+    const cursor = cursorParam ? Number.parseInt(cursorParam, 10) : 0;
+    const limit = limitParam ? Number.parseInt(limitParam, 10) : 20;
+    const data = await this.discussionsService.getThreadDetail(
+      threadId,
+      Number.isFinite(cursor) ? cursor : 0,
+      Number.isFinite(limit) ? limit : 20,
+    );
     return ApiResponseUtils.success(data);
   }
 

@@ -253,6 +253,51 @@ describe('DiscussionsService', () => {
     });
   });
 
+  describe('getThreadDetail', () => {
+    it('should return one comment page and the next sequence cursor', async () => {
+      const thread = {
+        id: 1,
+        noticeNum: 2200001,
+        title: '페이지 토론',
+        status: DiscussionThreadStatus.OPEN,
+        authorNickname: '익명',
+        authorIpMasked: '123.45.***.***',
+        commentCount: 3,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      const comments = [1, 2, 3].map((sequence) => ({
+        id: sequence,
+        threadId: 1,
+        noticeNum: 2200001,
+        sequence,
+        messageType: DiscussionMessageType.USER,
+        authorNickname: '익명',
+        authorIpMasked: '123.45.***.***',
+        content: `의견 ${sequence}`,
+        isDeleted: false,
+        isEdited: false,
+        editedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }));
+
+      (threadRepo.findOne as jest.Mock).mockResolvedValue(thread);
+      (commentRepo.find as jest.Mock).mockResolvedValue(comments);
+
+      const result = await service.getThreadDetail(1, 0, 2);
+
+      expect(commentRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 3, order: { sequence: 'ASC' } }),
+      );
+      expect(result.comments.map((comment) => comment.sequence)).toEqual([
+        1, 2,
+      ]);
+      expect(result.hasMore).toBe(true);
+      expect(result.nextCursor).toBe(2);
+    });
+  });
+
   describe('updateComment', () => {
     it('should reject edits to a system message', async () => {
       const mockComment = {
