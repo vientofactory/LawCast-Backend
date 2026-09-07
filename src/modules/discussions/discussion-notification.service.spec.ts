@@ -61,7 +61,10 @@ describe('DiscussionNotificationService', () => {
         noticeNum: 100,
         threadId: 7,
         quotedSequence: 1,
+        quotingSequence: 3,
         quotingCommentId: 3,
+        quotingCommentContent:
+          '>>#1 의견에 답합니다. >>#2는 제외되어야 합니다.',
       }),
       [{ id: 11 }],
     );

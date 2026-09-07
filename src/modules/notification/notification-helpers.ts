@@ -8,6 +8,7 @@ export function buildFrontendUrl(
   frontendUrls: string[] | undefined,
   path: string,
   params?: Record<string, string>,
+  fragment?: string,
 ): string | null {
   const primaryFrontendUrl = findPrimaryFrontendUrl(frontendUrls);
   if (!primaryFrontendUrl) {
@@ -25,5 +26,6 @@ export function buildFrontendUrl(
         .join('&')}`
     : '';
 
-  return `${normalizedBaseUrl}${normalizedPath}${queryString}`;
+  const hash = fragment ? `#${encodeURIComponent(fragment)}` : '';
+  return `${normalizedBaseUrl}${normalizedPath}${queryString}${hash}`;
 }

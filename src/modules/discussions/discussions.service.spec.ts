@@ -188,6 +188,71 @@ describe('DiscussionsService', () => {
     });
   });
 
+  describe('addComment', () => {
+    it('returns the saved comment without waiting for quote notifications', async () => {
+      let resolveNotification!: () => void;
+      const notificationPromise = new Promise<void>((resolve) => {
+        resolveNotification = resolve;
+      });
+      const notifyForQuotes = jest.fn().mockReturnValue(notificationPromise);
+      const logDispatchFailure = jest.fn();
+      (service as any).discussionNotificationService = {
+        notifyForQuotes,
+        logDispatchFailure,
+      };
+
+      const thread = {
+        id: 7,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.OPEN,
+        commentCount: 1,
+        updatedAt: new Date(),
+      };
+      const savedComment = {
+        id: 8,
+        threadId: 7,
+        noticeNum: 2200001,
+        sequence: 2,
+        messageType: DiscussionMessageType.USER,
+        authorNickname: '테스터',
+        authorIpMasked: '127.0.***.***',
+        authorId: 'author-2',
+        content: '새 의견입니다.',
+        isDeleted: false,
+        isEdited: false,
+        editedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      const manager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(thread)
+          .mockResolvedValueOnce({ sequence: 1 }),
+        create: jest.fn().mockImplementation((_entity, value) => value),
+        save: jest
+          .fn()
+          .mockResolvedValueOnce(savedComment)
+          .mockResolvedValueOnce(thread),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.addComment(
+        7,
+        { password: 'password123', content: '새 의견입니다.' },
+        '127.0.0.1',
+      );
+
+      expect(result.id).toBe(8);
+      expect(notifyForQuotes).toHaveBeenCalledWith(savedComment);
+      expect(logDispatchFailure).not.toHaveBeenCalled();
+
+      resolveNotification();
+    });
+  });
+
   describe('updateComment', () => {
     it('should reject edits to a system message', async () => {
       const mockComment = {

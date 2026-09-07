@@ -340,16 +340,15 @@ export class DiscussionsService {
       return savedComment;
     });
 
-    try {
-      if (!this.discussionNotificationService) {
-        return this.sanitizeComment(savedComment);
-      }
-      await this.discussionNotificationService.notifyForQuotes(savedComment);
-    } catch (error) {
-      this.discussionNotificationService.logDispatchFailure(
-        savedComment.id,
-        error,
-      );
+    if (this.discussionNotificationService) {
+      void this.discussionNotificationService
+        .notifyForQuotes(savedComment)
+        .catch((error: unknown) => {
+          this.discussionNotificationService?.logDispatchFailure(
+            savedComment.id,
+            error,
+          );
+        });
     }
 
     return this.sanitizeComment(savedComment);

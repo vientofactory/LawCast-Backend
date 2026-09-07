@@ -48,8 +48,10 @@ export class DiscussionNotificationService {
           noticeNum: comment.noticeNum,
           threadId: comment.threadId,
           quotedSequence: referencedComment.sequence,
+          quotingSequence: comment.sequence,
           quotingCommentId: comment.id,
           quotingAuthorNickname: comment.authorNickname,
+          quotingCommentContent: comment.content,
         },
         subscriptions,
       );

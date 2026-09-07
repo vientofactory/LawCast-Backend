@@ -1,6 +1,6 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, LessThan, Repository } from 'typeorm';
 import { DiscussionWebPushBinding } from './discussion-web-push-binding.entity';
 import { WebPushSubscription } from './web-push-subscription.entity';
 
@@ -85,6 +85,17 @@ export class WebPushSubscriptionService {
   async deleteByEndpoint(endpoint: string): Promise<void> {
     const normalized = endpoint.trim();
     if (!normalized) return;
+
+    if (this.discussionBindingRepository) {
+      const subscription = await this.subscriptionRepository.findOne({
+        where: { endpoint: normalized },
+      });
+      if (subscription) {
+        await this.discussionBindingRepository.delete({
+          subscriptionId: subscription.id,
+        });
+      }
+    }
 
     await this.subscriptionRepository.delete({ endpoint: normalized });
   }
@@ -264,6 +275,24 @@ export class WebPushSubscriptionService {
     const safeDays = Math.max(1, Math.trunc(daysBefore) || 14);
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - safeDays);
+
+    if (this.discussionBindingRepository) {
+      const staleSubscriptions = await this.subscriptionRepository.find({
+        where: {
+          isActive: false,
+          updatedAt: LessThan(cutoffDate),
+        },
+      });
+      const staleSubscriptionIds = staleSubscriptions.map(
+        (subscription) => subscription.id,
+      );
+
+      if (staleSubscriptionIds.length > 0) {
+        await this.discussionBindingRepository.delete({
+          subscriptionId: In(staleSubscriptionIds),
+        });
+      }
+    }
 
     const result = await this.subscriptionRepository
       .createQueryBuilder()
