@@ -105,6 +105,33 @@ describe('DiscussionsService', () => {
     });
   });
 
+  describe('findClosedThreadIdsOlderThan', () => {
+    it('queries only closed threads older than the cutoff and returns their ids', async () => {
+      (threadRepo.find as jest.Mock).mockResolvedValue([{ id: 5 }, { id: 9 }]);
+
+      const ids = await service.findClosedThreadIdsOlderThan(7);
+
+      expect(ids).toEqual([5, 9]);
+      expect(threadRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: DiscussionThreadStatus.CLOSED,
+          }),
+          select: ['id'],
+        }),
+      );
+    });
+
+    it('normalizes a non-positive cutoff to at least one day', async () => {
+      (threadRepo.find as jest.Mock).mockResolvedValue([]);
+
+      await service.findClosedThreadIdsOlderThan(0);
+
+      const call = (threadRepo.find as jest.Mock).mock.calls[0][0];
+      expect(call.where.status).toBe(DiscussionThreadStatus.CLOSED);
+    });
+  });
+
   describe('getThreads', () => {
     it('should return paginated threads with sanitized fields', async () => {
       const mockThreads = [

@@ -395,6 +395,7 @@ export const APP_CONSTANTS = {
       SQLITE_VACUUM: '31 5 * * 0', // Every Sunday at 05:31, after nightly maintenance tasks
       DATABASE_MIRROR_UPLOAD: process.env.FILE_MIRROR_CRON || '0 8 * * *', // Daily at 08:00, after nightly maintenance tasks
       DISCUSSION_IDLE_CLOSE: '*/15 * * * *', // Every 15 minutes
+      DISCUSSION_WEB_PUSH_CLEANUP: '23 2 * * *', // Daily at 02:23, isolated from other nightly jobs
     },
   },
 } as const;

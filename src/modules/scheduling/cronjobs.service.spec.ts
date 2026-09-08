@@ -72,4 +72,61 @@ describe('CronJobsService', () => {
       ]),
     );
   });
+
+  it('removes discussion web push bindings for threads closed past the cutoff', async () => {
+    const discussionsService = {
+      findClosedThreadIdsOlderThan: jest.fn().mockResolvedValue([1, 2]),
+    };
+    const webPushSubscriptionService = {
+      deleteBindingsForThreadIds: jest.fn().mockResolvedValue(5),
+    };
+
+    const service = new CronJobsService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      discussionsService as any,
+      webPushSubscriptionService as any,
+      undefined as any,
+    );
+
+    await service.handleDiscussionWebPushCleanup();
+
+    expect(
+      discussionsService.findClosedThreadIdsOlderThan,
+    ).toHaveBeenCalledWith(7);
+    expect(
+      webPushSubscriptionService.deleteBindingsForThreadIds,
+    ).toHaveBeenCalledWith([1, 2]);
+  });
+
+  it('skips deleting bindings when no threads are past the cutoff', async () => {
+    const discussionsService = {
+      findClosedThreadIdsOlderThan: jest.fn().mockResolvedValue([]),
+    };
+    const webPushSubscriptionService = {
+      deleteBindingsForThreadIds: jest.fn(),
+    };
+
+    const service = new CronJobsService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      discussionsService as any,
+      webPushSubscriptionService as any,
+      undefined as any,
+    );
+
+    await service.handleDiscussionWebPushCleanup();
+
+    expect(
+      webPushSubscriptionService.deleteBindingsForThreadIds,
+    ).not.toHaveBeenCalled();
+  });
 });

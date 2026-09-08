@@ -50,6 +50,8 @@ const CRON_JOB_TASK_EXPRESSIONS: Record<string, string> = {
   'database mirror upload':
     APP_CONSTANTS.CRON.EXPRESSIONS.DATABASE_MIRROR_UPLOAD,
   'discussion idle close': APP_CONSTANTS.CRON.EXPRESSIONS.DISCUSSION_IDLE_CLOSE,
+  'discussion web push cleanup':
+    APP_CONSTANTS.CRON.EXPRESSIONS.DISCUSSION_WEB_PUSH_CLEANUP,
 };
 
 @Injectable()
@@ -57,6 +59,13 @@ export class CronJobsService {
   private readonly logger = LoggerUtils.getContextLogger(CronJobsService.name);
   private readonly changeTrackingAuditQueue: Array<'daily' | 'weekly'> = [];
   private readonly webPushCutoffDays = 14;
+  private readonly discussionWebPushBindingCutoffDays = Math.max(
+    1,
+    Number.parseInt(
+      process.env.DISCUSSION_WEB_PUSH_BINDING_CLEANUP_DAYS ?? '7',
+      10,
+    ) || 7,
+  );
   private isDrainingChangeTrackingAuditQueue = false;
   private readonly cronJobStates = new Map<string, CronJobRuntimeStatus>(
     Object.keys(CRON_JOB_TASK_EXPRESSIONS).map((taskName) => [
@@ -504,6 +513,37 @@ export class CronJobsService {
         LoggerUtils.debugDev(
           CronJobsService.name,
           `Automatically closed ${closedCount} idle discussion thread(s).`,
+        );
+      }
+    });
+  }
+
+  // Removes quote-notification web-push bindings for long-closed discussion threads.
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.DISCUSSION_WEB_PUSH_CLEANUP, {
+    timeZone: CRON_TIMEZONE,
+  })
+  async handleDiscussionWebPushCleanup(): Promise<void> {
+    await this.execute('discussion web push cleanup', async () => {
+      if (!this.webPushSubscriptionService) {
+        return;
+      }
+
+      const closedThreadIds =
+        await this.discussionsService.findClosedThreadIdsOlderThan(
+          this.discussionWebPushBindingCutoffDays,
+        );
+      if (closedThreadIds.length === 0) {
+        return;
+      }
+
+      const removedCount =
+        await this.webPushSubscriptionService.deleteBindingsForThreadIds(
+          closedThreadIds,
+        );
+      if (removedCount > 0) {
+        LoggerUtils.debugDev(
+          CronJobsService.name,
+          `Removed ${removedCount} discussion web push binding(s) for ${closedThreadIds.length} long-closed thread(s).`,
         );
       }
     });

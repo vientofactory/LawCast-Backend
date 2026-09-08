@@ -172,4 +172,42 @@ describe('WebPushSubscriptionService', () => {
       expect(save).toHaveBeenCalledWith(subscription);
     });
   });
+
+  describe('deleteBindingsForThreadIds', () => {
+    it('deletes bindings matching any of the given thread ids', async () => {
+      const bindingRepository = {
+        delete: jest.fn().mockResolvedValue({ affected: 4 }),
+      } as unknown as Repository<DiscussionWebPushBinding>;
+      const subscriptionRepository =
+        {} as unknown as Repository<WebPushSubscription>;
+
+      const service = new WebPushSubscriptionService(
+        subscriptionRepository,
+        bindingRepository,
+      );
+      const removed = await service.deleteBindingsForThreadIds([1, 2, 3]);
+
+      expect(removed).toBe(4);
+      expect(bindingRepository.delete).toHaveBeenCalledWith({
+        threadId: expect.objectContaining({ _type: 'in', _value: [1, 2, 3] }),
+      });
+    });
+
+    it('no-ops when there are no thread ids', async () => {
+      const bindingRepository = {
+        delete: jest.fn(),
+      } as unknown as Repository<DiscussionWebPushBinding>;
+      const subscriptionRepository =
+        {} as unknown as Repository<WebPushSubscription>;
+
+      const service = new WebPushSubscriptionService(
+        subscriptionRepository,
+        bindingRepository,
+      );
+      const removed = await service.deleteBindingsForThreadIds([]);
+
+      expect(removed).toBe(0);
+      expect(bindingRepository.delete).not.toHaveBeenCalled();
+    });
+  });
 });

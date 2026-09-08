@@ -120,6 +120,23 @@ export class DiscussionsService {
     return closedCount;
   }
 
+  /**
+   * Finds threads that have been closed for at least the given number of
+   * days, using the same updatedAt timestamp status changes stamp.
+   */
+  async findClosedThreadIdsOlderThan(daysBefore: number): Promise<number[]> {
+    const safeDays = Math.max(1, Math.trunc(daysBefore) || 1);
+    const cutoff = new Date(Date.now() - safeDays * 24 * 60 * 60 * 1000);
+    const threads = await this.threadRepository.find({
+      where: {
+        status: DiscussionThreadStatus.CLOSED,
+        updatedAt: LessThan(cutoff),
+      },
+      select: ['id'],
+    });
+    return threads.map((thread) => thread.id);
+  }
+
   private sanitizeComment(comment: DiscussionComment): SanitizedComment {
     return {
       id: comment.id,

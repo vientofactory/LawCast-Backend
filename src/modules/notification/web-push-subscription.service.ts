@@ -222,6 +222,22 @@ export class WebPushSubscriptionService {
     );
   }
 
+  /**
+   * Deletes discussion web-push bindings tied to the given thread ids, e.g.
+   * threads that have been closed for a long time and no longer need quote
+   * notifications.
+   */
+  async deleteBindingsForThreadIds(threadIds: number[]): Promise<number> {
+    if (!this.discussionBindingRepository || threadIds.length === 0) {
+      return 0;
+    }
+
+    const result = await this.discussionBindingRepository.delete({
+      threadId: In(threadIds),
+    });
+    return result.affected ?? 0;
+  }
+
   async getStatsForApi(): Promise<WebPushSubscriptionStats> {
     const [total, active, withFailures] = await Promise.all([
       this.subscriptionRepository.count(),
