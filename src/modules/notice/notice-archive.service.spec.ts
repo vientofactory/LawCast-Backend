@@ -964,6 +964,46 @@ describe('NoticeArchiveService', () => {
       ).not.toHaveBeenCalled();
     });
 
+    it('resets AI summary state when proposalReason changes in a diffchain update event', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const summaryStateRepository = createSummaryStateRepositoryMock();
+      summaryStateRepository.findOne.mockResolvedValue({ id: 7 });
+      const changeTrackingService = createChangeTrackingServiceMock();
+
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219776,
+          subject: '요약 재생성 테스트',
+          proposalReason: '기존 제안이유',
+          contentId: null,
+          contentBillNumber: '2219776',
+        }),
+      );
+
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        summaryStateRepository as any,
+        changeTrackingService as any,
+      );
+
+      await service.updateNsmHtmlAndDetail(2219776, {
+        html: '',
+        sha256: '',
+        proposalReason: '변경된 제안이유',
+        httpMetadata: null,
+      });
+
+      expect(summaryStateRepository.update).toHaveBeenCalledWith(
+        { id: 7 },
+        expect.objectContaining({
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested',
+        }),
+      );
+    });
+
     it('skips NSM detail and artifact backfill after the chain head is PAL-enriched', async () => {
       const repositoryMock = {
         ...createRepositoryMock(),

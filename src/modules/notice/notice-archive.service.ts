@@ -3246,6 +3246,12 @@ export class NoticeArchiveService {
           })),
         });
 
+      await this.resetSummaryStateForProposalReasonChange(
+        noticeNum,
+        built.eventType,
+        built.diff.details.map((detail) => detail.fieldPath),
+      );
+
       const subject =
         typeof afterSnapshot.subject === 'string'
           ? afterSnapshot.subject
@@ -3524,6 +3530,12 @@ export class NoticeArchiveService {
       },
     );
 
+    await this.resetSummaryStateForProposalReasonChange(
+      input.noticeNum,
+      built.eventType,
+      built.diff.details.map((detail) => detail.fieldPath),
+    );
+
     void this.changeTrackingService
       .dispatchChangeNotification({
         event,
@@ -3539,6 +3551,31 @@ export class NoticeArchiveService {
           `Failed to dispatch explicit ${input.eventType} notification for notice ${input.noticeNum}: ${(dispatchError as Error).message}`,
         );
       });
+  }
+
+  private async resetSummaryStateForProposalReasonChange(
+    noticeNum: number,
+    eventType: ChangeEventType,
+    changedFields: string[],
+  ): Promise<void> {
+    if (
+      !this.summaryStateRepository ||
+      eventType !== CHANGE_EVENT_TYPE.UPDATED ||
+      !changedFields.includes('proposalReason')
+    ) {
+      return;
+    }
+
+    try {
+      await this.persistSummaryState(noticeNum, {
+        aiSummary: null,
+        aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to reset AI summary state after proposalReason change for notice ${noticeNum}: ${(error as Error).message}`,
+      );
+    }
   }
 
   private coerceTrackedFieldValueForSnapshot(
