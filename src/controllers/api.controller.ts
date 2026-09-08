@@ -333,6 +333,7 @@ export class ApiController {
     @Query('fromDetectedAt') fromDetectedAtRaw?: string,
     @Query('toDetectedAt') toDetectedAtRaw?: string,
     @Query('anchorEventId') anchorEventIdRaw?: string,
+    @Query('cursor') cursor?: string,
   ) {
     const allowedEventTypes: ChangeEventType[] = [
       CHANGE_EVENT_TYPE.UPDATED,
@@ -371,6 +372,7 @@ export class ApiController {
       fromDetectedAt,
       toDetectedAt,
       anchorEventId,
+      cursor,
     });
 
     return ApiResponseUtils.success(result);

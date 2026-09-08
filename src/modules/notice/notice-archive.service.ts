@@ -1775,10 +1775,17 @@ export class NoticeArchiveService {
 
     this.applyArchiveSearchFilters(baseQb, params);
 
+    const hasArchiveFilters = Boolean(
+      params.search?.trim() || params.startDate || params.endDate,
+    );
     const total =
       params.knownTotal !== undefined
         ? params.knownTotal
-        : await baseQb.clone().getCount();
+        : hasArchiveFilters
+          ? await baseQb.clone().getCount()
+          : await this.summaryStateRepository.count({
+              where: { isDone: params.isDone },
+            });
     if (params.take <= 0) {
       return { total, noticeNums: [] };
     }

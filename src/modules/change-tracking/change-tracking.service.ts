@@ -112,6 +112,7 @@ interface RecentChangesQuery {
   fromDetectedAt?: Date;
   toDetectedAt?: Date;
   anchorEventId?: number;
+  cursor?: string;
 }
 
 export interface ChangeTimelineItem {
@@ -158,6 +159,7 @@ export interface RecentChangesResult {
   total: number;
   totalPages: number;
   anchorPage?: number | null;
+  nextCursor?: string | null;
 }
 
 export interface ComparableChangeSummary {
@@ -195,6 +197,29 @@ export class ChangeTrackingService {
   private readonly NOTIFICATION_SUPPRESSED_SOURCE_PREFIXES = [
     NoticeChangeSourcePrefix.BOOTSTRAP,
   ];
+
+  private parseRecentChangesCursor(
+    value?: string,
+  ): { detectedAt: Date; id: number } | null {
+    if (!value) return null;
+
+    const [detectedAtRaw, idRaw] = value.split('|');
+    const detectedAt = new Date(detectedAtRaw);
+    const id = Number.parseInt(idRaw, 10);
+    if (
+      Number.isNaN(detectedAt.getTime()) ||
+      !Number.isSafeInteger(id) ||
+      id <= 0
+    ) {
+      return null;
+    }
+
+    return { detectedAt, id };
+  }
+
+  private formatRecentChangesCursor(event: NoticeChangeEvent): string {
+    return `${event.detectedAt.toISOString()}|${event.id}`;
+  }
   private readonly queuedChangeNotifications: ChangeNotificationPayload[] = [];
   private flushTimer: NodeJS.Timeout | null = null;
   private isFlushingQueuedNotifications = false;
@@ -1472,9 +1497,34 @@ export class ChangeTrackingService {
       .orderBy('event.detectedAt', sqlSortOrder)
       .addOrderBy('event.id', sqlSortOrder);
 
-    builder.skip((page - 1) * limit).take(limit);
+    const cursor = this.parseRecentChangesCursor(query.cursor);
+    if (cursor) {
+      const comparison = sqlSortOrder === 'ASC' ? '>' : '<';
+      builder.andWhere(
+        `(event.detectedAt, event.id) ${comparison} (:cursorDetectedAt, :cursorEventId)`,
+        {
+          cursorDetectedAt: cursor.detectedAt,
+          cursorEventId: cursor.id,
+        },
+      );
+    } else {
+      builder.skip((page - 1) * limit);
+    }
 
-    const [items, total] = await builder.getManyAndCount();
+    builder.take(limit + 1);
+
+    let fetchedItems: NoticeChangeEvent[];
+    let total: number;
+    if (cursor) {
+      [fetchedItems, total] = await Promise.all([
+        builder.getMany(),
+        baseQueryBuilder.clone().getCount(),
+      ]);
+    } else {
+      [fetchedItems, total] = await builder.getManyAndCount();
+    }
+    const hasMore = fetchedItems.length > limit;
+    const items = hasMore ? fetchedItems.slice(0, limit) : fetchedItems;
 
     const noticeNumToSubject = new Map<number, string>();
     if (this.noticeArchiveRepository && items.length > 0) {
@@ -1509,6 +1559,10 @@ export class ChangeTrackingService {
       total,
       totalPages: total > 0 ? Math.ceil(total / limit) : 1,
       anchorPage,
+      nextCursor:
+        hasMore && items.length > 0
+          ? this.formatRecentChangesCursor(items[items.length - 1])
+          : null,
     };
   }
 

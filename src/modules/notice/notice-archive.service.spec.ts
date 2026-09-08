@@ -109,6 +109,7 @@ describe('NoticeArchiveService', () => {
   const createSummaryStateRepositoryMock = () => ({
     find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([]),
     findOne: jest.fn<(...args: any[]) => Promise<any>>(),
+    count: jest.fn<(...args: any[]) => Promise<number>>().mockResolvedValue(0),
     update: jest
       .fn<(...args: any[]) => Promise<any>>()
       .mockResolvedValue(undefined),
