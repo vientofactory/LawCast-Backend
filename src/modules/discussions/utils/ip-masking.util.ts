@@ -9,6 +9,11 @@ export class IpMaskingUtil {
    * Extract raw client IP from request headers or connection.
    */
   static extractClientIp(req: Request): string {
+    const forwardedClientIp = req.headers['x-lawcast-client-ip'];
+    if (typeof forwardedClientIp === 'string' && forwardedClientIp.trim()) {
+      return this.cleanIp(forwardedClientIp.trim());
+    }
+
     const cfIp = req.headers['cf-connecting-ip'];
     if (typeof cfIp === 'string' && cfIp.trim()) {
       return this.cleanIp(cfIp.trim());

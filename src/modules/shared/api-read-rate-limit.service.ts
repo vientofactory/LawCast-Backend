@@ -23,7 +23,9 @@ export class ApiReadRateLimitService {
   ): Promise<void> {
     const policy = this.policies[bucket];
     const rawIp = String(
-      request.ip ??
+      request.headers['x-lawcast-client-ip'] ??
+        request.headers['cf-connecting-ip'] ??
+        request.ip ??
         request.headers['x-forwarded-for'] ??
         request.socket.remoteAddress ??
         'unknown',

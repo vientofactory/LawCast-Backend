@@ -28,6 +28,17 @@ describe('IpMaskingUtil', () => {
   });
 
   describe('extractClientIp', () => {
+    it('should prioritize the trusted frontend proxy client IP', () => {
+      const mockReq = {
+        headers: {
+          'x-lawcast-client-ip': '198.51.100.10',
+          'cf-connecting-ip': '211.234.1.2',
+        },
+      } as unknown as Request;
+
+      expect(IpMaskingUtil.extractClientIp(mockReq)).toBe('198.51.100.10');
+    });
+
     it('should prioritize cf-connecting-ip', () => {
       const mockReq = {
         headers: {
