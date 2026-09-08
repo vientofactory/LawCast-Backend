@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Request } from 'express';
 import { HashguardService } from '../shared/hashguard.service';
 import { WebhookValidationUtils } from '../../utils/webhook-validation.utils';
@@ -6,6 +10,7 @@ import { ApiResponseUtils, ErrorContext } from '../../utils/api-response.utils';
 import { CreateWebPushSubscriptionDto } from './dto/create-web-push-subscription.dto';
 import { RemoveWebPushSubscriptionDto } from './dto/remove-web-push-subscription.dto';
 import { WebPushSubscriptionService } from './web-push-subscription.service';
+import { WebPushNotificationService } from './web-push-notification.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DiscussionThread } from '../discussions/entities/discussion-thread.entity';
@@ -16,6 +21,7 @@ export class WebPushRegistrationService {
   constructor(
     private readonly hashguardService: HashguardService,
     private readonly webPushSubscriptionService: WebPushSubscriptionService,
+    private readonly webPushNotificationService: WebPushNotificationService,
     @InjectRepository(DiscussionThread)
     private readonly discussionThreadRepository: Repository<DiscussionThread>,
   ) {}
@@ -25,6 +31,13 @@ export class WebPushRegistrationService {
     req: Request,
   ) {
     try {
+      if (!this.webPushNotificationService.isEnabled()) {
+        throw new ServiceUnavailableException({
+          success: false,
+          message: '웹 푸시 알림이 비활성화되어 있습니다.',
+        });
+      }
+
       const clientIp = WebhookValidationUtils.extractClientIp(req);
       const isProofValid = await this.hashguardService.verifyProof(
         createDto.proof,

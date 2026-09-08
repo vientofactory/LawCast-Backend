@@ -10,20 +10,21 @@ describe('WebPushNotificationService', () => {
     frontendUrls: ['http://localhost:5173'],
   };
 
-  function createService() {
+  function createService(overrides: Partial<typeof baseConfig> = {}) {
+    const config = { ...baseConfig, ...overrides };
     const configService = {
       get: jest.fn((key: string) => {
         switch (key) {
           case 'webPush.enabled':
-            return baseConfig.webPushEnabled;
+            return config.webPushEnabled;
           case 'webPush.vapidPublicKey':
-            return baseConfig.webPushVapidPublicKey;
+            return config.webPushVapidPublicKey;
           case 'webPush.vapidPrivateKey':
-            return baseConfig.webPushVapidPrivateKey;
+            return config.webPushVapidPrivateKey;
           case 'webPush.subject':
-            return baseConfig.webPushSubject;
+            return config.webPushSubject;
           case 'frontend.urls':
-            return baseConfig.frontendUrls;
+            return config.frontendUrls;
           default:
             return undefined;
         }
@@ -42,6 +43,57 @@ describe('WebPushNotificationService', () => {
 
     return { service, webPushSubscriptionService };
   }
+
+  it('exposes public config only when enabled with both VAPID keys', () => {
+    expect(createService().service.getPublicConfig()).toEqual({
+      enabled: true,
+      publicKey: 'test-public-key',
+    });
+
+    expect(
+      createService({ webPushVapidPrivateKey: '' }).service.getPublicConfig(),
+    ).toEqual({ enabled: false, publicKey: null });
+
+    expect(
+      createService({ webPushVapidPublicKey: '' }).service.getPublicConfig(),
+    ).toEqual({ enabled: false, publicKey: null });
+  });
+
+  it('skips dispatch as disabled when either VAPID key is missing', async () => {
+    const { service, webPushSubscriptionService } = createService({
+      webPushVapidPrivateKey: '',
+    });
+
+    (service as any).webPushClient = {
+      setVapidDetails: jest.fn(),
+      sendNotification: jest.fn(),
+    };
+
+    const summary = await service.sendNewNoticeBatch(
+      {
+        num: 101,
+        subject: '테스트 법률안',
+        proposerCategory: '정부',
+        committee: '법제사법위원회',
+        link: 'https://example.com/notice/101',
+        contentId: null,
+        attachments: { pdfFile: '', hwpFile: '' },
+      } as any,
+      [mockSubscription(1)],
+    );
+
+    expect(
+      (service as any).webPushClient.sendNotification,
+    ).not.toHaveBeenCalled();
+    expect(webPushSubscriptionService.markSuccess).not.toHaveBeenCalled();
+    expect(webPushSubscriptionService.markFailure).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({
+      targetCount: 1,
+      successCount: 0,
+      failedCount: 0,
+      deactivatedCount: 0,
+    });
+  });
 
   function mockSubscription(id: number): WebPushSubscription {
     return {

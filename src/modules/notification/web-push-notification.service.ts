@@ -52,6 +52,7 @@ export class WebPushNotificationService {
   );
   private readonly webPushEnabled: boolean;
   private readonly vapidPublicKey: string;
+  private readonly vapidPrivateKey: string;
   private readonly frontendUrls: string[];
   private readonly webPushSendConcurrency = 2;
   private readonly webPushMaxAttempts = 3;
@@ -66,11 +67,21 @@ export class WebPushNotificationService {
       this.configService.get<boolean>('webPush.enabled') === true;
     this.vapidPublicKey =
       this.configService.get<string>('webPush.vapidPublicKey') ?? '';
+    this.vapidPrivateKey =
+      this.configService.get<string>('webPush.vapidPrivateKey') ?? '';
     this.frontendUrls = this.configService.get<string[]>('frontend.urls') ?? [];
   }
 
+  isEnabled(): boolean {
+    return (
+      this.webPushEnabled &&
+      this.vapidPublicKey.trim().length > 0 &&
+      this.vapidPrivateKey.trim().length > 0
+    );
+  }
+
   getPublicConfig(): { enabled: boolean; publicKey: string | null } {
-    if (!this.webPushEnabled || !this.vapidPublicKey) {
+    if (!this.isEnabled()) {
       return { enabled: false, publicKey: null };
     }
 
@@ -292,7 +303,7 @@ export class WebPushNotificationService {
     payload: WebPushPayload,
     options: { urgency: WebPushUrgency },
   ): Promise<WebPushDispatchSummary> {
-    if (!this.webPushEnabled || subscriptions.length === 0) {
+    if (!this.isEnabled() || subscriptions.length === 0) {
       return {
         targetCount: subscriptions.length,
         successCount: 0,
@@ -492,7 +503,7 @@ export class WebPushNotificationService {
   }
 
   private async getWebPushClient(): Promise<WebPushLike | null> {
-    if (!this.webPushEnabled) {
+    if (!this.isEnabled()) {
       return null;
     }
 
@@ -503,10 +514,8 @@ export class WebPushNotificationService {
     const subject =
       this.configService.get<string>('webPush.subject') ||
       'mailto:lawcast@example.com';
-    const publicKey =
-      this.configService.get<string>('webPush.vapidPublicKey') || '';
-    const privateKey =
-      this.configService.get<string>('webPush.vapidPrivateKey') || '';
+    const publicKey = this.vapidPublicKey || '';
+    const privateKey = this.vapidPrivateKey || '';
 
     if (!publicKey || !privateKey) {
       this.logger.warn(

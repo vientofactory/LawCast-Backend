@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { DiscussionsService } from '../discussions.service';
+import { DiscussionThreadStatus } from '../entities/discussion-thread.entity';
 import { CreateThreadDto } from '../dto/create-thread.dto';
 import { CreateCommentDto } from '../dto/create-comment.dto';
 import { UpdateCommentDto } from '../dto/update-comment.dto';
@@ -49,6 +50,33 @@ export class DiscussionsController {
       noticeNum,
       pageNum,
       limitNum,
+    );
+    return ApiResponseUtils.success(data);
+  }
+
+  /**
+   * 전체 법률안에 걸친 토론 스레드 통합 목록 조회
+   */
+  @Get('discussions/threads')
+  async getAllThreads(
+    @Req() req: Request,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('status') status?: DiscussionThreadStatus,
+  ) {
+    await this.rateLimitService.assertAllowed(req, 'read');
+    const pageNum = page ? parseInt(page, 10) : 1;
+    const limitNum = limit ? parseInt(limit, 10) : 20;
+    const safeStatus =
+      status === DiscussionThreadStatus.OPEN ||
+      status === DiscussionThreadStatus.CLOSED
+        ? status
+        : undefined;
+
+    const data = await this.discussionsService.getAllThreads(
+      pageNum,
+      limitNum,
+      safeStatus,
     );
     return ApiResponseUtils.success(data);
   }

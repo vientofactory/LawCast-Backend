@@ -6,7 +6,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, LessThan, MoreThan, Repository } from 'typeorm';
+import { DataSource, In, LessThan, MoreThan, Repository } from 'typeorm';
 import {
   DiscussionThread,
   DiscussionThreadStatus,
@@ -15,6 +15,7 @@ import {
   DiscussionComment,
   DiscussionMessageType,
 } from './entities/discussion-comment.entity';
+import { NoticeArchive } from '../notice/notice-archive.entity';
 import { CreateThreadDto } from './dto/create-thread.dto';
 import { CreateCommentDto } from './dto/create-comment.dto';
 import { UpdateCommentDto } from './dto/update-comment.dto';
@@ -59,6 +60,10 @@ export interface ThreadDetailResponse {
   nextCursor: number | null;
 }
 
+export interface SanitizedThreadWithNotice extends SanitizedThread {
+  noticeSubject: string | null;
+}
+
 @Injectable()
 export class DiscussionsService {
   private readonly idleCloseHours = Math.max(
@@ -71,6 +76,8 @@ export class DiscussionsService {
     private readonly threadRepository: Repository<DiscussionThread>,
     @InjectRepository(DiscussionComment)
     private readonly commentRepository: Repository<DiscussionComment>,
+    @InjectRepository(NoticeArchive)
+    private readonly noticeArchiveRepository: Repository<NoticeArchive>,
     private readonly dataSource: DataSource,
     @Optional()
     private readonly discussionNotificationService: DiscussionNotificationService,
@@ -195,6 +202,53 @@ export class DiscussionsService {
 
     return {
       items: threads.map((t) => this.sanitizeThread(t)),
+      total,
+      page: safePage,
+      limit: safeLimit,
+    };
+  }
+
+  /**
+   * Get paginated discussion threads across all notices, with notice subjects
+   * attached, so they can be browsed from a single unified discussions page.
+   */
+  async getAllThreads(
+    page = 1,
+    limit = 20,
+    status?: DiscussionThreadStatus,
+  ): Promise<{
+    items: SanitizedThreadWithNotice[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(100, Math.max(1, limit));
+    const skip = (safePage - 1) * safeLimit;
+
+    const [threads, total] = await this.threadRepository.findAndCount({
+      where: status ? { status } : {},
+      order: { updatedAt: 'DESC' },
+      skip,
+      take: safeLimit,
+    });
+
+    const noticeNums = Array.from(new Set(threads.map((t) => t.noticeNum)));
+    const notices = noticeNums.length
+      ? await this.noticeArchiveRepository.find({
+          where: { noticeNum: In(noticeNums) },
+          select: ['noticeNum', 'subject'],
+        })
+      : [];
+    const subjectByNoticeNum = new Map(
+      notices.map((n) => [n.noticeNum, n.subject]),
+    );
+
+    return {
+      items: threads.map((t) => ({
+        ...this.sanitizeThread(t),
+        noticeSubject: subjectByNoticeNum.get(t.noticeNum) ?? null,
+      })),
       total,
       page: safePage,
       limit: safeLimit,

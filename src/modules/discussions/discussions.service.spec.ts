@@ -10,6 +10,7 @@ import {
   DiscussionComment,
   DiscussionMessageType,
 } from './entities/discussion-comment.entity';
+import { NoticeArchive } from '../notice/notice-archive.entity';
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { PasswordSecurityUtil } from './utils/password-security.util';
 
@@ -23,6 +24,9 @@ describe('DiscussionsService', () => {
   >;
   let commentRepo: Partial<
     Record<keyof Repository<DiscussionComment>, jest.Mock>
+  >;
+  let noticeArchiveRepo: Partial<
+    Record<keyof Repository<NoticeArchive>, jest.Mock>
   >;
   let dataSource: { transaction: jest.Mock };
 
@@ -39,6 +43,9 @@ describe('DiscussionsService', () => {
       findOne: jest.fn(),
       save: jest.fn(),
     };
+    noticeArchiveRepo = {
+      find: jest.fn(),
+    };
     dataSource = {
       transaction: jest.fn(),
     };
@@ -53,6 +60,10 @@ describe('DiscussionsService', () => {
         {
           provide: getRepositoryToken(DiscussionComment),
           useValue: commentRepo,
+        },
+        {
+          provide: getRepositoryToken(NoticeArchive),
+          useValue: noticeArchiveRepo,
         },
         {
           provide: DataSource,
@@ -124,6 +135,87 @@ describe('DiscussionsService', () => {
       expect((result.items[0] as any).passwordHash).toBeUndefined();
       expect((result.items[0] as any).passwordSalt).toBeUndefined();
       expect((result.items[0] as any).authorIpHash).toBeUndefined();
+    });
+  });
+
+  describe('getAllThreads', () => {
+    it('should attach notice subjects across multiple notices', async () => {
+      const mockThreads = [
+        {
+          id: 1,
+          noticeNum: 2200001,
+          title: '법안 토론 1',
+          status: DiscussionThreadStatus.OPEN,
+          authorNickname: '홍길동',
+          authorIpMasked: '211.234.***.***',
+          commentCount: 3,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        {
+          id: 2,
+          noticeNum: 2200002,
+          title: '법안 토론 2',
+          status: DiscussionThreadStatus.CLOSED,
+          authorNickname: '익명',
+          authorIpMasked: '123.45.***.***',
+          commentCount: 1,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ];
+
+      (threadRepo.findAndCount as jest.Mock).mockResolvedValue([
+        mockThreads,
+        2,
+      ]);
+      (noticeArchiveRepo.find as jest.Mock).mockResolvedValue([
+        { noticeNum: 2200001, subject: '첫 번째 법률안' },
+        { noticeNum: 2200002, subject: '두 번째 법률안' },
+      ]);
+
+      const result = await service.getAllThreads(1, 20);
+
+      expect(result.total).toBe(2);
+      expect(result.items[0].noticeSubject).toBe('첫 번째 법률안');
+      expect(result.items[1].noticeSubject).toBe('두 번째 법률안');
+    });
+
+    it('should filter by status when provided', async () => {
+      (threadRepo.findAndCount as jest.Mock).mockResolvedValue([[], 0]);
+      (noticeArchiveRepo.find as jest.Mock).mockResolvedValue([]);
+
+      await service.getAllThreads(1, 20, DiscussionThreadStatus.OPEN);
+
+      expect(threadRepo.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { status: DiscussionThreadStatus.OPEN },
+        }),
+      );
+    });
+
+    it('should return null notice subject when the notice is not found', async () => {
+      (threadRepo.findAndCount as jest.Mock).mockResolvedValue([
+        [
+          {
+            id: 1,
+            noticeNum: 2200099,
+            title: '삭제된 법률안 토론',
+            status: DiscussionThreadStatus.OPEN,
+            authorNickname: '익명',
+            authorIpMasked: '123.45.***.***',
+            commentCount: 1,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        ],
+        1,
+      ]);
+      (noticeArchiveRepo.find as jest.Mock).mockResolvedValue([]);
+
+      const result = await service.getAllThreads(1, 20);
+
+      expect(result.items[0].noticeSubject).toBeNull();
     });
   });
 

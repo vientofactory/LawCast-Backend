@@ -12,6 +12,7 @@ describe('DiscussionsController', () => {
   beforeEach(async () => {
     service = {
       getThreads: jest.fn(),
+      getAllThreads: jest.fn(),
       createThread: jest.fn(),
       getThreadDetail: jest.fn(),
       addComment: jest.fn(),
@@ -46,6 +47,34 @@ describe('DiscussionsController', () => {
       expect(res.success).toBe(true);
       expect(res.data).toEqual(mockResult);
       expect(service.getThreads).toHaveBeenCalledWith(2200001, 1, 20);
+    });
+  });
+
+  describe('getAllThreads', () => {
+    it('should return wrapped success response with cross-notice thread list', async () => {
+      const mockResult = { items: [], total: 0, page: 1, limit: 20 };
+      (service.getAllThreads as jest.Mock).mockResolvedValue(mockResult);
+
+      const res = await controller.getAllThreads({} as Request, '1', '20');
+      expect(res.success).toBe(true);
+      expect(res.data).toEqual(mockResult);
+      expect(service.getAllThreads).toHaveBeenCalledWith(1, 20, undefined);
+    });
+
+    it('should forward a valid status filter to the service', async () => {
+      const mockResult = { items: [], total: 0, page: 1, limit: 20 };
+      (service.getAllThreads as jest.Mock).mockResolvedValue(mockResult);
+
+      await controller.getAllThreads({} as Request, '1', '20', 'open' as any);
+      expect(service.getAllThreads).toHaveBeenCalledWith(1, 20, 'open');
+    });
+
+    it('should ignore an invalid status filter', async () => {
+      const mockResult = { items: [], total: 0, page: 1, limit: 20 };
+      (service.getAllThreads as jest.Mock).mockResolvedValue(mockResult);
+
+      await controller.getAllThreads({} as Request, '1', '20', 'bogus' as any);
+      expect(service.getAllThreads).toHaveBeenCalledWith(1, 20, undefined);
     });
   });
 
