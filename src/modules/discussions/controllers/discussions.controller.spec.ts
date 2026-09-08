@@ -47,6 +47,11 @@ describe('DiscussionsController', () => {
       expect(res.success).toBe(true);
       expect(res.data).toEqual(mockResult);
       expect(service.getThreads).toHaveBeenCalledWith(2200001, 1, 20);
+      expect(rateLimitService.assertAllowed).toHaveBeenCalledWith(
+        expect.anything(),
+        'read',
+        'notice-threads',
+      );
     });
   });
 
@@ -59,6 +64,11 @@ describe('DiscussionsController', () => {
       expect(res.success).toBe(true);
       expect(res.data).toEqual(mockResult);
       expect(service.getAllThreads).toHaveBeenCalledWith(1, 20, undefined);
+      expect(rateLimitService.assertAllowed).toHaveBeenCalledWith(
+        expect.anything(),
+        'read',
+        'all-threads',
+      );
     });
 
     it('should forward a valid status filter to the service', async () => {

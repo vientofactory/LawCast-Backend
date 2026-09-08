@@ -42,7 +42,7 @@ export class DiscussionsController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    await this.rateLimitService.assertAllowed(req, 'read');
+    await this.rateLimitService.assertAllowed(req, 'read', 'notice-threads');
     const pageNum = page ? parseInt(page, 10) : 1;
     const limitNum = limit ? parseInt(limit, 10) : 20;
 
@@ -64,7 +64,7 @@ export class DiscussionsController {
     @Query('limit') limit?: string,
     @Query('status') status?: DiscussionThreadStatus,
   ) {
-    await this.rateLimitService.assertAllowed(req, 'read');
+    await this.rateLimitService.assertAllowed(req, 'read', 'all-threads');
     const pageNum = page ? parseInt(page, 10) : 1;
     const limitNum = limit ? parseInt(limit, 10) : 20;
     const safeStatus =
@@ -113,7 +113,7 @@ export class DiscussionsController {
     @Query('limit') limitParam: string | undefined,
     @Req() req: Request,
   ) {
-    await this.rateLimitService.assertAllowed(req, 'read');
+    await this.rateLimitService.assertAllowed(req, 'read', 'thread-detail');
     const cursor = cursorParam ? Number.parseInt(cursorParam, 10) : 0;
     const limit = limitParam ? Number.parseInt(limitParam, 10) : 20;
     const data = await this.discussionsService.getThreadDetail(

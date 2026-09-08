@@ -4,6 +4,8 @@ import { CacheService } from '../cache/cache.service';
 import { IpMaskingUtil } from './utils/ip-masking.util';
 
 export type DiscussionRateLimitBucket = 'read' | 'write';
+export type DiscussionReadRateLimitScope =
+  'notice-threads' | 'all-threads' | 'thread-detail';
 
 interface RateLimitPolicy {
   maxRequests: number;
@@ -29,8 +31,9 @@ export class DiscussionsRateLimitService {
     DiscussionRateLimitBucket,
     RateLimitPolicy
   > = {
-    // Browsing is intentionally more permissive than mutations.
-    read: { maxRequests: 60, windowSeconds: 60 },
+    // Separate read scopes prevent normal list/detail navigation from sharing
+    // a small bucket while retaining a per-endpoint abuse boundary.
+    read: { maxRequests: 300, windowSeconds: 60 },
     write: { maxRequests: 10, windowSeconds: 60 },
   };
 
@@ -39,11 +42,13 @@ export class DiscussionsRateLimitService {
   async assertAllowed(
     request: Request,
     bucket: DiscussionRateLimitBucket,
+    scope?: DiscussionReadRateLimitScope,
   ): Promise<void> {
     const policy = this.policies[bucket];
     const clientIp = IpMaskingUtil.extractClientIp(request);
     const ipHash = IpMaskingUtil.hashIp(clientIp);
-    const key = `discussion_rate_limit:v1:${bucket}:${ipHash}`;
+    const scopeKey = bucket === 'read' ? (scope ?? 'default') : 'default';
+    const key = `discussion_rate_limit:v2:${bucket}:${scopeKey}:${ipHash}`;
     const currentCount = (await this.cacheService.getNumber(key)) ?? 0;
 
     if (currentCount >= policy.maxRequests) {

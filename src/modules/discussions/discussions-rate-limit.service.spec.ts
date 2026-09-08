@@ -21,7 +21,9 @@ describe('DiscussionsRateLimitService', () => {
     await service.assertAllowed(createRequest('123.45.67.89'), 'write');
 
     expect(cacheService.setNumber).toHaveBeenCalledWith(
-      expect.stringMatching(/^discussion_rate_limit:v1:write:[a-f0-9]{64}$/),
+      expect.stringMatching(
+        /^discussion_rate_limit:v2:write:default:[a-f0-9]{64}$/,
+      ),
       1,
       60_000,
     );
@@ -51,16 +53,22 @@ describe('DiscussionsRateLimitService', () => {
 
   it('uses a separate read bucket policy', async () => {
     const cacheService = {
-      getNumber: jest.fn().mockResolvedValue(59),
+      getNumber: jest.fn().mockResolvedValue(299),
       setNumber: jest.fn().mockResolvedValue(undefined),
     };
     const service = new DiscussionsRateLimitService(cacheService as never);
 
-    await service.assertAllowed(createRequest('123.45.67.89'), 'read');
+    await service.assertAllowed(
+      createRequest('123.45.67.89'),
+      'read',
+      'all-threads',
+    );
 
     expect(cacheService.setNumber).toHaveBeenCalledWith(
-      expect.stringMatching(/^discussion_rate_limit:v1:read:[a-f0-9]{64}$/),
-      60,
+      expect.stringMatching(
+        /^discussion_rate_limit:v2:read:all-threads:[a-f0-9]{64}$/,
+      ),
+      300,
       60_000,
     );
   });
