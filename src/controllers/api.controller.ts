@@ -47,6 +47,12 @@ import { UpdateWebPushPreferencesDto } from '../modules/notification/dto/update-
 import { IpMaskingUtil } from '../modules/discussions/utils/ip-masking.util';
 import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
 import {
+  assertNoticeNumsInput,
+  assertSearchLength,
+  assertValidPage,
+} from '../utils/request-limits.utils';
+import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
+import {
   parseIsoDate,
   parsePositiveInteger,
 } from '../utils/query-parsing.utils';
@@ -71,6 +77,7 @@ export class ApiController {
     private readonly packagesService: PackagesService,
     private readonly changeTrackingService: ChangeTrackingService,
     private readonly cronJobsService: CronJobsService,
+    private readonly apiReadRateLimitService: ApiReadRateLimitService,
   ) {}
 
   private readonly nodeEnv: string = this.configService.get<string>('nodeEnv');
@@ -197,6 +204,7 @@ export class ApiController {
 
   @Get('notices/archive')
   async getArchivedNotices(
+    @Req() req: Request,
     @Query(
       'page',
       new DefaultValuePipe(APP_CONSTANTS.API.PAGINATION.MIN_PAGE),
@@ -217,6 +225,10 @@ export class ApiController {
     @Query('fullText') fullTextRaw?: string,
     @Query('noticeNums') noticeNums?: string,
   ) {
+    assertValidPage(page);
+    assertSearchLength(search);
+    assertNoticeNumsInput(noticeNums);
+    await this.apiReadRateLimitService.assertAllowed(req, 'expensive');
     const isDone =
       isDoneRaw === 'true' ? true : isDoneRaw === 'false' ? false : undefined;
     const fullText = fullTextRaw === 'true';
@@ -236,6 +248,7 @@ export class ApiController {
 
   @Get('notices/search')
   async searchNotices(
+    @Req() req: Request,
     @Query('q') q: string,
     @Query(
       'page',
@@ -252,6 +265,9 @@ export class ApiController {
     @Query('includeDone') includeDoneRaw?: string,
     @Query('fullText') fullTextRaw?: string,
   ) {
+    assertValidPage(page);
+    assertSearchLength(q);
+    await this.apiReadRateLimitService.assertAllowed(req, 'expensive');
     const keyword = (q || '').trim();
     if (!keyword) {
       return ApiResponseUtils.success({
@@ -319,6 +335,7 @@ export class ApiController {
 
   @Get('notices/changes')
   async getRecentNoticeChanges(
+    @Req() req: Request,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
     @Query('search') search?: string,
@@ -335,6 +352,9 @@ export class ApiController {
     @Query('anchorEventId') anchorEventIdRaw?: string,
     @Query('cursor') cursor?: string,
   ) {
+    assertValidPage(page);
+    assertSearchLength(search);
+    await this.apiReadRateLimitService.assertAllowed(req, 'expensive');
     const allowedEventTypes: ChangeEventType[] = [
       CHANGE_EVENT_TYPE.UPDATED,
       CHANGE_EVENT_TYPE.INVALIDATED,

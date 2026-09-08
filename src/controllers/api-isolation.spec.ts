@@ -25,6 +25,7 @@ import { NoticeSearchService } from '../modules/crawling/notice-search.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
 import { CronJobsService } from '../modules/scheduling/cronjobs.service';
+import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;
@@ -301,6 +302,10 @@ describe('HTTP-Batch Processing Isolation', () => {
             getCronJobsStatus: jest.fn().mockReturnValue([]),
             getCronJobExpression: jest.fn().mockReturnValue(undefined),
           },
+        },
+        {
+          provide: ApiReadRateLimitService,
+          useValue: { assertAllowed: jest.fn() },
         },
       ],
     }).compile();

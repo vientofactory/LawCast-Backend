@@ -18,6 +18,7 @@ import { WebPushSubscriptionService } from '../modules/notification/web-push-sub
 import { WebPushNotificationService } from '../modules/notification/web-push-notification.service';
 import { WebPushRegistrationService } from '../modules/notification/web-push-registration.service';
 import { CronJobsService } from '../modules/scheduling/cronjobs.service';
+import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
 
 // NoticeArchiveService 모킹
 const mockBuildArchiveExportZip = jest.fn();
@@ -166,6 +167,10 @@ describe('ApiController archive export', () => {
             getCronJobsStatus: jest.fn().mockReturnValue([]),
             getCronJobExpression: jest.fn().mockReturnValue(undefined),
           },
+        },
+        {
+          provide: ApiReadRateLimitService,
+          useValue: { assertAllowed: jest.fn() },
         },
       ],
     }).compile();

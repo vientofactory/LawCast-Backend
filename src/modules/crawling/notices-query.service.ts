@@ -1,10 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type CachedNotice } from '../../types/cache.types';
 import { CrawlingService } from './crawling.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 import { normalizeNoticeNum } from '../../utils/notice-num.utils';
+import {
+  API_REQUEST_LIMITS,
+  assertNoticeNumsInput,
+} from '../../utils/request-limits.utils';
 
 interface ArchivedNoticesQuery {
   page: number;
@@ -282,11 +286,17 @@ export class NoticesQueryService {
       return [];
     }
 
+    assertNoticeNumsInput(raw);
     const unique = new Set<number>();
     for (const token of raw.split(',')) {
       const normalized = normalizeNoticeNum(token);
       if (normalized !== null) {
         unique.add(normalized);
+        if (unique.size > API_REQUEST_LIMITS.MAX_NOTICE_NUMS) {
+          throw new BadRequestException(
+            `noticeNums must not exceed ${API_REQUEST_LIMITS.MAX_NOTICE_NUMS} values.`,
+          );
+        }
       }
     }
 

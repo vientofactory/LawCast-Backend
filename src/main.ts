@@ -48,6 +48,10 @@ async function bootstrap() {
   // initialize global validation pipe with custom options
   app.useGlobalPipes(new ValidationPipe(getValidationPipeOptions()));
 
+  // Configure body parser limits for incoming requests
+  app.useBodyParser('json', { limit: '256kb' });
+  app.useBodyParser('urlencoded', { limit: '32kb', extended: true });
+
   // Enable CORS for frontend URLs
   app.enableCors({
     origin: frontendUrls,
