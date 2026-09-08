@@ -5,7 +5,6 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { HashguardService } from '../shared/hashguard.service';
-import { WebhookValidationUtils } from '../../utils/webhook-validation.utils';
 import { ApiResponseUtils, ErrorContext } from '../../utils/api-response.utils';
 import { CreateWebPushSubscriptionDto } from './dto/create-web-push-subscription.dto';
 import { RemoveWebPushSubscriptionDto } from './dto/remove-web-push-subscription.dto';
@@ -38,7 +37,7 @@ export class WebPushRegistrationService {
         });
       }
 
-      const clientIp = WebhookValidationUtils.extractClientIp(req);
+      const clientIp = IpMaskingUtil.extractClientIp(req);
       const isProofValid = await this.hashguardService.verifyProof(
         createDto.proof,
         clientIp,
