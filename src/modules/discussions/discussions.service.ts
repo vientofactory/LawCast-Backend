@@ -13,6 +13,7 @@ import {
 } from './entities/discussion-thread.entity';
 import {
   DiscussionComment,
+  DiscussionCommentDeletedBy,
   DiscussionMessageType,
 } from './entities/discussion-comment.entity';
 import { NoticeArchive } from '../notice/notice-archive.entity';
@@ -46,6 +47,7 @@ export interface SanitizedThread {
   noticeNum: number;
   title: string;
   status: DiscussionThreadStatus;
+  isLocked: boolean;
   authorNickname: string;
   authorIpMasked: string;
   commentCount: number;
@@ -147,7 +149,9 @@ export class DiscussionsService {
       authorNickname: comment.authorNickname,
       authorIpMasked: comment.authorIpMasked,
       content: comment.isDeleted
-        ? '작성자에 의해 삭제된 의견입니다.'
+        ? comment.deletedBy === DiscussionCommentDeletedBy.ADMIN
+          ? '관리자에 의해 삭제된 의견입니다.'
+          : '작성자에 의해 삭제된 의견입니다.'
         : comment.content,
       isDeleted: Boolean(comment.isDeleted),
       isEdited: Boolean(comment.isEdited),
@@ -163,6 +167,7 @@ export class DiscussionsService {
       noticeNum: thread.noticeNum,
       title: thread.title,
       status: thread.status,
+      isLocked: Boolean(thread.isLocked),
       authorNickname: thread.authorNickname,
       authorIpMasked: thread.authorIpMasked,
       commentCount: thread.commentCount,
@@ -388,6 +393,12 @@ export class DiscussionsService {
         throw new NotFoundException('존재하지 않는 토론 스레드입니다.');
       }
 
+      if (thread.isLocked) {
+        throw new BadRequestException(
+          '관리자에 의해 잠긴 토론에는 새 의견을 작성할 수 없습니다.',
+        );
+      }
+
       if (thread.status === DiscussionThreadStatus.CLOSED) {
         throw new BadRequestException(
           '닫힌 토론에는 새 의견을 작성할 수 없습니다.',
@@ -455,8 +466,13 @@ export class DiscussionsService {
       throw new NotFoundException('존재하지 않는 의견입니다.');
     }
 
-    if (comment.messageType === DiscussionMessageType.SYSTEM) {
-      throw new BadRequestException('시스템 메시지는 수정할 수 없습니다.');
+    if (
+      comment.messageType === DiscussionMessageType.SYSTEM ||
+      comment.messageType === DiscussionMessageType.ADMIN
+    ) {
+      throw new BadRequestException(
+        '시스템/관리자 메시지는 수정할 수 없습니다.',
+      );
     }
 
     if (comment.isDeleted) {
@@ -466,6 +482,11 @@ export class DiscussionsService {
     const thread = await this.threadRepository.findOne({
       where: { id: comment.threadId },
     });
+    if (thread?.isLocked) {
+      throw new BadRequestException(
+        '관리자에 의해 잠긴 토론의 의견은 수정할 수 없습니다.',
+      );
+    }
     if (thread?.status === DiscussionThreadStatus.CLOSED) {
       throw new BadRequestException('닫힌 토론의 의견은 수정할 수 없습니다.');
     }
@@ -503,8 +524,13 @@ export class DiscussionsService {
       throw new NotFoundException('존재하지 않는 의견입니다.');
     }
 
-    if (comment.messageType === DiscussionMessageType.SYSTEM) {
-      throw new BadRequestException('시스템 메시지는 삭제할 수 없습니다.');
+    if (
+      comment.messageType === DiscussionMessageType.SYSTEM ||
+      comment.messageType === DiscussionMessageType.ADMIN
+    ) {
+      throw new BadRequestException(
+        '시스템/관리자 메시지는 삭제할 수 없습니다.',
+      );
     }
 
     if (comment.isDeleted) {
@@ -514,6 +540,11 @@ export class DiscussionsService {
     const thread = await this.threadRepository.findOne({
       where: { id: comment.threadId },
     });
+    if (thread?.isLocked) {
+      throw new BadRequestException(
+        '관리자에 의해 잠긴 토론의 의견은 삭제할 수 없습니다.',
+      );
+    }
     if (thread?.status === DiscussionThreadStatus.CLOSED) {
       throw new BadRequestException('닫힌 토론의 의견은 삭제할 수 없습니다.');
     }
@@ -529,6 +560,7 @@ export class DiscussionsService {
     }
 
     comment.isDeleted = true;
+    comment.deletedBy = DiscussionCommentDeletedBy.AUTHOR;
     const saved = await this.commentRepository.save(comment);
 
     return this.sanitizeComment(saved);
@@ -548,6 +580,12 @@ export class DiscussionsService {
 
       if (!thread) {
         throw new NotFoundException('존재하지 않는 토론 스레드입니다.');
+      }
+
+      if (thread.isLocked) {
+        throw new BadRequestException(
+          '관리자에 의해 잠긴 토론은 상태를 변경할 수 없습니다.',
+        );
       }
 
       const isPasswordValid = PasswordSecurityUtil.verifyPassword(
@@ -590,6 +628,198 @@ export class DiscussionsService {
       const saved = await manager.save(DiscussionThread, thread);
 
       return this.sanitizeThread(saved);
+    });
+  }
+
+  /**
+   * Force-sets a thread's status without password verification, for
+   * moderation use only (e.g. the Discord admin bridge). Bypasses the
+   * normal author-password check entirely.
+   */
+  async adminSetThreadStatus(
+    threadId: number,
+    status: DiscussionThreadStatus,
+  ): Promise<SanitizedThread> {
+    return this.dataSource.transaction(async (manager) => {
+      const thread = await manager.findOne(DiscussionThread, {
+        where: { id: threadId },
+      });
+
+      if (!thread) {
+        throw new NotFoundException('존재하지 않는 토론 스레드입니다.');
+      }
+
+      // Reopening a locked thread must also clear the lock: otherwise the
+      // thread ends up "open" yet still flagged as locked, a state with no
+      // way back to normal except the separate unlock action, which admins
+      // reaching for the more obvious "force open" button won't expect.
+      const willAlsoUnlock =
+        status === DiscussionThreadStatus.OPEN && thread.isLocked;
+
+      if (thread.status === status && !willAlsoUnlock) {
+        return this.sanitizeThread(thread);
+      }
+
+      const lastComment = await manager.findOne(DiscussionComment, {
+        where: { threadId },
+        order: { sequence: 'DESC' },
+      });
+      const nextSequence = (lastComment?.sequence || 0) + 1;
+      const action =
+        status === DiscussionThreadStatus.CLOSED
+          ? '닫혔습니다'
+          : willAlsoUnlock
+            ? '잠금 해제와 함께 다시 열렸습니다'
+            : '다시 열렸습니다';
+      const systemComment = manager.create(
+        DiscussionComment,
+        this.buildSystemCommentData(
+          thread,
+          nextSequence,
+          `관리자에 의해 토론이 ${action}.`,
+        ),
+      );
+      await manager.save(DiscussionComment, systemComment);
+
+      thread.status = status;
+      if (willAlsoUnlock) {
+        thread.isLocked = false;
+      }
+      thread.commentCount = nextSequence;
+      const saved = await manager.save(DiscussionThread, thread);
+
+      return this.sanitizeThread(saved);
+    });
+  }
+
+  /**
+   * Force-locks or unlocks a thread, for moderation use only. Locking always
+   * closes the thread and prevents the original author from reopening it
+   * themselves; unlocking only clears the lock, it does not reopen anything.
+   */
+  async adminSetThreadLock(
+    threadId: number,
+    locked: boolean,
+  ): Promise<SanitizedThread> {
+    return this.dataSource.transaction(async (manager) => {
+      const thread = await manager.findOne(DiscussionThread, {
+        where: { id: threadId },
+      });
+
+      if (!thread) {
+        throw new NotFoundException('존재하지 않는 토론 스레드입니다.');
+      }
+
+      const isNoOp =
+        thread.isLocked === locked &&
+        (!locked || thread.status === DiscussionThreadStatus.CLOSED);
+      if (isNoOp) {
+        return this.sanitizeThread(thread);
+      }
+
+      const lastComment = await manager.findOne(DiscussionComment, {
+        where: { threadId },
+        order: { sequence: 'DESC' },
+      });
+      const nextSequence = (lastComment?.sequence || 0) + 1;
+      const willAlsoClose =
+        locked && thread.status !== DiscussionThreadStatus.CLOSED;
+      const message = willAlsoClose
+        ? '관리자에 의해 토론이 잠기고 닫혔습니다.'
+        : locked
+          ? '관리자에 의해 토론이 잠겼습니다.'
+          : '관리자에 의해 토론 잠금이 해제되었습니다.';
+
+      const systemComment = manager.create(
+        DiscussionComment,
+        this.buildSystemCommentData(thread, nextSequence, message),
+      );
+      await manager.save(DiscussionComment, systemComment);
+
+      if (willAlsoClose) {
+        thread.status = DiscussionThreadStatus.CLOSED;
+      }
+      thread.isLocked = locked;
+      thread.commentCount = nextSequence;
+      const saved = await manager.save(DiscussionThread, thread);
+
+      return this.sanitizeThread(saved);
+    });
+  }
+
+  /**
+   * Force-hides (soft deletes) a comment without password verification and
+   * regardless of thread status, for moderation use only. System messages
+   * still cannot be hidden.
+   */
+  async adminHideComment(commentId: number): Promise<SanitizedComment> {
+    const comment = await this.commentRepository.findOne({
+      where: { id: commentId },
+    });
+
+    if (!comment) {
+      throw new NotFoundException('존재하지 않는 의견입니다.');
+    }
+
+    if (comment.messageType === DiscussionMessageType.SYSTEM) {
+      throw new BadRequestException('시스템 메시지는 숨길 수 없습니다.');
+    }
+
+    if (comment.isDeleted) {
+      return this.sanitizeComment(comment);
+    }
+
+    comment.isDeleted = true;
+    comment.deletedBy = DiscussionCommentDeletedBy.ADMIN;
+    const saved = await this.commentRepository.save(comment);
+    return this.sanitizeComment(saved);
+  }
+
+  /**
+   * Posts an official admin message into a thread, bypassing the normal
+   * closed-thread restriction. Admin messages hide the author IP and cannot
+   * be edited or deleted by regular users, same as system messages.
+   */
+  async adminPostMessage(
+    threadId: number,
+    content: string,
+    authorNickname = '운영진',
+  ): Promise<SanitizedComment> {
+    return this.dataSource.transaction(async (manager) => {
+      const thread = await manager.findOne(DiscussionThread, {
+        where: { id: threadId },
+      });
+
+      if (!thread) {
+        throw new NotFoundException('존재하지 않는 토론 스레드입니다.');
+      }
+
+      const lastComment = await manager.findOne(DiscussionComment, {
+        where: { threadId },
+        order: { sequence: 'DESC' },
+      });
+      const nextSequence = (lastComment?.sequence || 0) + 1;
+
+      const comment = manager.create(DiscussionComment, {
+        threadId: thread.id,
+        noticeNum: thread.noticeNum,
+        sequence: nextSequence,
+        messageType: DiscussionMessageType.ADMIN,
+        authorNickname: authorNickname.trim() || '운영진',
+        authorIpMasked: '',
+        authorId: IpMaskingUtil.authorIdFromIp('admin', `thread:${thread.id}`),
+        passwordHash: '',
+        passwordSalt: '',
+        content: content.trim(),
+        isDeleted: false,
+        isEdited: false,
+      });
+      const savedComment = await manager.save(DiscussionComment, comment);
+
+      thread.commentCount = nextSequence;
+      await manager.save(DiscussionThread, thread);
+
+      return this.sanitizeComment(savedComment);
     });
   }
 }

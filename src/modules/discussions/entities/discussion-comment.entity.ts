@@ -13,6 +13,12 @@ import { DiscussionThread } from './discussion-thread.entity';
 export enum DiscussionMessageType {
   USER = 'user',
   SYSTEM = 'system',
+  ADMIN = 'admin',
+}
+
+export enum DiscussionCommentDeletedBy {
+  AUTHOR = 'author',
+  ADMIN = 'admin',
 }
 
 @Entity('discussion_comments')
@@ -65,6 +71,14 @@ export class DiscussionComment {
 
   @Column({ name: 'is_deleted', type: 'boolean', default: false })
   isDeleted: boolean;
+
+  @Column({
+    name: 'deleted_by',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+  })
+  deletedBy: DiscussionCommentDeletedBy | null;
 
   @Column({ name: 'is_edited', type: 'boolean', default: false })
   isEdited: boolean;

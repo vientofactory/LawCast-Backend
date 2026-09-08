@@ -66,6 +66,9 @@ export class DiscussionThread {
   @Column({ name: 'comment_count', type: 'integer', default: 1 })
   commentCount: number;
 
+  @Column({ name: 'is_locked', type: 'boolean', default: false })
+  isLocked: boolean;
+
   @OneToMany(() => DiscussionComment, (comment) => comment.thread)
   comments: DiscussionComment[];
 

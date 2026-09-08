@@ -376,6 +376,28 @@ describe('DiscussionsService', () => {
 
       resolveNotification();
     });
+
+    it('rejects new opinions on a locked thread even if its status is still open', async () => {
+      const thread = {
+        id: 7,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.OPEN,
+        isLocked: true,
+        commentCount: 1,
+      };
+      const manager = { findOne: jest.fn().mockResolvedValue(thread) };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      await expect(
+        service.addComment(
+          7,
+          { password: 'password123', content: '새 의견입니다.' },
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
   });
 
   describe('getThreadDetail', () => {
@@ -469,6 +491,34 @@ describe('DiscussionsService', () => {
       expect(commentRepo.save).not.toHaveBeenCalled();
     });
 
+    it('should reject edits once the parent thread is locked, even if reopened', async () => {
+      const { hash, salt } =
+        PasswordSecurityUtil.hashPassword('correctPassword');
+      const mockComment = {
+        id: 1,
+        threadId: 1,
+        passwordHash: hash,
+        passwordSalt: salt,
+        content: '기존 내용',
+        isDeleted: false,
+      };
+
+      (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
+      (threadRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 1,
+        status: DiscussionThreadStatus.OPEN,
+        isLocked: true,
+      });
+
+      await expect(
+        service.updateComment(1, {
+          password: 'correctPassword',
+          content: '수정 시도',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(commentRepo.save).not.toHaveBeenCalled();
+    });
+
     it('should throw UnauthorizedException if password does not match', async () => {
       const { hash, salt } =
         PasswordSecurityUtil.hashPassword('correctPassword');
@@ -547,6 +597,7 @@ describe('DiscussionsService', () => {
         passwordHash: hash,
         passwordSalt: salt,
         isDeleted: false,
+        deletedBy: null as string | null,
         isEdited: false,
         editedAt: null,
         createdAt: new Date(),
@@ -563,6 +614,7 @@ describe('DiscussionsService', () => {
       expect(res.isDeleted).toBe(true);
       expect(res.content).toBe('작성자에 의해 삭제된 의견입니다.');
       expect(mockComment.isDeleted).toBe(true);
+      expect(mockComment.deletedBy).toBe('author');
     });
 
     it('should reject deletion once the parent thread is closed', async () => {
@@ -580,6 +632,30 @@ describe('DiscussionsService', () => {
       (threadRepo.findOne as jest.Mock).mockResolvedValue({
         id: 1,
         status: DiscussionThreadStatus.CLOSED,
+      });
+
+      await expect(
+        service.deleteComment(1, { password: 'deletePass' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(commentRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('should reject deletion once the parent thread is locked, even if reopened', async () => {
+      const { hash, salt } = PasswordSecurityUtil.hashPassword('deletePass');
+      const mockComment = {
+        id: 1,
+        threadId: 1,
+        passwordHash: hash,
+        passwordSalt: salt,
+        content: '원문 내용',
+        isDeleted: false,
+      };
+
+      (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
+      (threadRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 1,
+        status: DiscussionThreadStatus.OPEN,
+        isLocked: true,
       });
 
       await expect(
@@ -645,5 +721,401 @@ describe('DiscussionsService', () => {
         );
       },
     );
+
+    it('rejects any status change on a locked thread', async () => {
+      const { hash, salt } = PasswordSecurityUtil.hashPassword('threadPass');
+      const thread = {
+        id: 1,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.CLOSED,
+        isLocked: true,
+        passwordHash: hash,
+        passwordSalt: salt,
+      };
+      const manager = { findOne: jest.fn().mockResolvedValue(thread) };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      await expect(
+        service.updateThreadStatus(1, {
+          status: DiscussionThreadStatus.OPEN,
+          password: 'threadPass',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('adminSetThreadStatus', () => {
+    it('force-closes an open thread and appends an admin system message', async () => {
+      const thread = {
+        id: 1,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.OPEN,
+        commentCount: 1,
+      };
+      const manager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(thread)
+          .mockResolvedValueOnce({ sequence: 1 }),
+        create: jest.fn().mockImplementation((_entity, value) => value),
+        save: jest
+          .fn()
+          .mockImplementation((_entity, value) => Promise.resolve(value)),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.adminSetThreadStatus(
+        1,
+        DiscussionThreadStatus.CLOSED,
+      );
+
+      expect(result.status).toBe(DiscussionThreadStatus.CLOSED);
+      expect(manager.create).toHaveBeenCalledWith(
+        DiscussionComment,
+        expect.objectContaining({
+          messageType: DiscussionMessageType.SYSTEM,
+          content: '관리자에 의해 토론이 닫혔습니다.',
+        }),
+      );
+    });
+
+    it('is a no-op when the thread already has the requested status', async () => {
+      const thread = {
+        id: 1,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.CLOSED,
+        commentCount: 1,
+      };
+      const manager = {
+        findOne: jest.fn().mockResolvedValue(thread),
+        create: jest.fn(),
+        save: jest.fn(),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.adminSetThreadStatus(
+        1,
+        DiscussionThreadStatus.CLOSED,
+      );
+
+      expect(result.status).toBe(DiscussionThreadStatus.CLOSED);
+      expect(manager.create).not.toHaveBeenCalled();
+    });
+
+    it('clears a stale lock when force-opening a locked thread (reproduces #2 stuck-locked bug)', async () => {
+      const thread = {
+        id: 2,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.CLOSED,
+        isLocked: true,
+        commentCount: 12,
+      };
+      const manager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(thread)
+          .mockResolvedValueOnce({ sequence: 12 }),
+        create: jest.fn().mockImplementation((_entity, value) => value),
+        save: jest
+          .fn()
+          .mockImplementation((_entity, value) => Promise.resolve(value)),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.adminSetThreadStatus(
+        2,
+        DiscussionThreadStatus.OPEN,
+      );
+
+      expect(result.status).toBe(DiscussionThreadStatus.OPEN);
+      expect(result.isLocked).toBe(false);
+      expect(manager.create).toHaveBeenCalledWith(
+        DiscussionComment,
+        expect.objectContaining({
+          content: '관리자에 의해 토론이 잠금 해제와 함께 다시 열렸습니다.',
+        }),
+      );
+    });
+
+    it('does not touch the lock when force-opening an already-unlocked thread that has the same status', async () => {
+      const thread = {
+        id: 1,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.OPEN,
+        isLocked: false,
+        commentCount: 1,
+      };
+      const manager = {
+        findOne: jest.fn().mockResolvedValue(thread),
+        create: jest.fn(),
+        save: jest.fn(),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.adminSetThreadStatus(
+        1,
+        DiscussionThreadStatus.OPEN,
+      );
+
+      expect(result.isLocked).toBe(false);
+      expect(manager.create).not.toHaveBeenCalled();
+    });
+
+    it('throws when the thread does not exist', async () => {
+      const manager = { findOne: jest.fn().mockResolvedValue(null) };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      await expect(
+        service.adminSetThreadStatus(999, DiscussionThreadStatus.CLOSED),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('adminHideComment', () => {
+    it('hides a normal user comment without password verification and marks it admin-hidden', async () => {
+      const mockComment = {
+        id: 10,
+        messageType: DiscussionMessageType.USER,
+        isDeleted: false,
+        content: '원문',
+      };
+      (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
+      (commentRepo.save as jest.Mock).mockImplementation((c) =>
+        Promise.resolve(c),
+      );
+
+      const result = await service.adminHideComment(10);
+
+      expect(result.isDeleted).toBe(true);
+      expect(result.content).toBe('관리자에 의해 삭제된 의견입니다.');
+      expect(commentRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ deletedBy: 'admin' }),
+      );
+    });
+
+    it('rejects hiding a system message', async () => {
+      (commentRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 11,
+        messageType: DiscussionMessageType.SYSTEM,
+        isDeleted: false,
+      });
+
+      await expect(service.adminHideComment(11)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(commentRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('throws when the comment does not exist', async () => {
+      (commentRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(service.adminHideComment(999)).rejects.toThrow();
+    });
+  });
+
+  describe('adminSetThreadLock', () => {
+    it('locks and closes an open thread in one step', async () => {
+      const thread = {
+        id: 1,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.OPEN,
+        isLocked: false,
+        commentCount: 1,
+      };
+      const manager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(thread)
+          .mockResolvedValueOnce({ sequence: 1 }),
+        create: jest.fn().mockImplementation((_entity, value) => value),
+        save: jest.fn().mockImplementation((_entity, value) => value),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.adminSetThreadLock(1, true);
+
+      expect(result.isLocked).toBe(true);
+      expect(result.status).toBe(DiscussionThreadStatus.CLOSED);
+      expect(manager.create).toHaveBeenCalledWith(
+        DiscussionComment,
+        expect.objectContaining({
+          messageType: DiscussionMessageType.SYSTEM,
+          content: '관리자에 의해 토론이 잠기고 닫혔습니다.',
+        }),
+      );
+    });
+
+    it('locks an already-closed thread without changing its status', async () => {
+      const thread = {
+        id: 1,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.CLOSED,
+        isLocked: false,
+        commentCount: 1,
+      };
+      const manager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(thread)
+          .mockResolvedValueOnce({ sequence: 1 }),
+        create: jest.fn().mockImplementation((_entity, value) => value),
+        save: jest.fn().mockImplementation((_entity, value) => value),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.adminSetThreadLock(1, true);
+
+      expect(result.isLocked).toBe(true);
+      expect(result.status).toBe(DiscussionThreadStatus.CLOSED);
+      expect(manager.create).toHaveBeenCalledWith(
+        DiscussionComment,
+        expect.objectContaining({
+          content: '관리자에 의해 토론이 잠겼습니다.',
+        }),
+      );
+    });
+
+    it('unlocks a locked thread without reopening it', async () => {
+      const thread = {
+        id: 1,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.CLOSED,
+        isLocked: true,
+        commentCount: 2,
+      };
+      const manager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(thread)
+          .mockResolvedValueOnce({ sequence: 2 }),
+        create: jest.fn().mockImplementation((_entity, value) => value),
+        save: jest.fn().mockImplementation((_entity, value) => value),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.adminSetThreadLock(1, false);
+
+      expect(result.isLocked).toBe(false);
+      expect(result.status).toBe(DiscussionThreadStatus.CLOSED);
+      expect(manager.create).toHaveBeenCalledWith(
+        DiscussionComment,
+        expect.objectContaining({
+          content: '관리자에 의해 토론 잠금이 해제되었습니다.',
+        }),
+      );
+    });
+
+    it('is a no-op when unlocking an already-unlocked thread', async () => {
+      const thread = {
+        id: 1,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.OPEN,
+        isLocked: false,
+        commentCount: 1,
+      };
+      const manager = { findOne: jest.fn().mockResolvedValue(thread) };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.adminSetThreadLock(1, false);
+
+      expect(result.isLocked).toBe(false);
+      expect(manager.findOne).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws when the thread does not exist', async () => {
+      const manager = { findOne: jest.fn().mockResolvedValue(null) };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      await expect(service.adminSetThreadLock(999, true)).rejects.toThrow();
+    });
+  });
+
+  describe('adminPostMessage', () => {
+    it('posts an admin message that hides the IP and cannot be edited by users', async () => {
+      const thread = { id: 1, noticeNum: 2200001 };
+      const manager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(thread)
+          .mockResolvedValueOnce({ sequence: 3 }),
+        create: jest.fn().mockImplementation((_entity, value) => value),
+        save: jest
+          .fn()
+          .mockImplementation((_entity, value) => Promise.resolve(value)),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.adminPostMessage(1, '공지 내용입니다.');
+
+      expect(result.messageType).toBe(DiscussionMessageType.ADMIN);
+      expect(result.authorIpMasked).toBe('');
+      expect(result.sequence).toBe(4);
+      expect(manager.create).toHaveBeenCalledWith(
+        DiscussionComment,
+        expect.objectContaining({
+          messageType: DiscussionMessageType.ADMIN,
+          authorNickname: '운영진',
+          content: '공지 내용입니다.',
+        }),
+      );
+    });
+
+    it('uses a custom author label when provided', async () => {
+      const thread = { id: 1, noticeNum: 2200001 };
+      const manager = {
+        findOne: jest
+          .fn()
+          .mockResolvedValueOnce(thread)
+          .mockResolvedValueOnce(null),
+        create: jest.fn().mockImplementation((_entity, value) => value),
+        save: jest
+          .fn()
+          .mockImplementation((_entity, value) => Promise.resolve(value)),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.adminPostMessage(
+        1,
+        '공지',
+        '법제사법위원회',
+      );
+
+      expect(result.authorNickname).toBe('법제사법위원회');
+    });
+
+    it('throws when the thread does not exist', async () => {
+      const manager = { findOne: jest.fn().mockResolvedValue(null) };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      await expect(service.adminPostMessage(999, '내용')).rejects.toThrow();
+    });
   });
 });

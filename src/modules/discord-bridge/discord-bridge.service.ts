@@ -59,6 +59,135 @@ const SLASH_COMMAND_DEFINITIONS = [
     description: 'Manually trigger a database dump upload for testing',
   },
   {
+    name: 'discussion-admin',
+    description: 'Moderate anonymous discussion threads and opinions',
+    options: [
+      {
+        name: 'list',
+        description: 'Browse discussion threads with an interactive panel',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'status',
+            description: 'Filter by thread status',
+            type: ApplicationCommandOptionType.String,
+            required: false,
+            choices: [
+              { name: 'Open', value: 'open' },
+              { name: 'Closed', value: 'closed' },
+            ],
+          },
+          {
+            name: 'page',
+            description: 'Page number to open (default 1)',
+            type: ApplicationCommandOptionType.Integer,
+            required: false,
+            min_value: 1,
+          },
+        ],
+      },
+      {
+        name: 'close',
+        description: 'Force-close a discussion thread',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'thread_id',
+            description: 'Thread ID to close',
+            type: ApplicationCommandOptionType.Integer,
+            required: true,
+            min_value: 1,
+          },
+        ],
+      },
+      {
+        name: 'open',
+        description: 'Force-reopen a discussion thread',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'thread_id',
+            description: 'Thread ID to reopen',
+            type: ApplicationCommandOptionType.Integer,
+            required: true,
+            min_value: 1,
+          },
+        ],
+      },
+      {
+        name: 'lock',
+        description:
+          'Force-lock a thread so the original poster cannot reopen it',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'thread_id',
+            description: 'Thread ID to lock',
+            type: ApplicationCommandOptionType.Integer,
+            required: true,
+            min_value: 1,
+          },
+        ],
+      },
+      {
+        name: 'unlock',
+        description: 'Remove the moderation lock from a thread',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'thread_id',
+            description: 'Thread ID to unlock',
+            type: ApplicationCommandOptionType.Integer,
+            required: true,
+            min_value: 1,
+          },
+        ],
+      },
+      {
+        name: 'hide-comment',
+        description: 'Force-hide (soft delete) a single opinion/quote',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'comment_id',
+            description: 'Comment ID to hide',
+            type: ApplicationCommandOptionType.Integer,
+            required: true,
+            min_value: 1,
+          },
+        ],
+      },
+      {
+        name: 'post-message',
+        description: 'Post an official admin message into a discussion thread',
+        type: ApplicationCommandOptionType.Subcommand,
+        options: [
+          {
+            name: 'thread_id',
+            description: 'Thread ID to post into',
+            type: ApplicationCommandOptionType.Integer,
+            required: true,
+            min_value: 1,
+          },
+          {
+            name: 'message',
+            description: 'Admin message content',
+            type: ApplicationCommandOptionType.String,
+            required: true,
+            max_length: 2000,
+          },
+          {
+            name: 'label',
+            description: 'Author display name (default: 운영진)',
+            type: ApplicationCommandOptionType.String,
+            required: false,
+            max_length: 50,
+          },
+        ],
+      },
+    ],
+  },
+  {
     name: 'loglevel',
     description: 'Get or set the log level for the log channel',
     options: [
@@ -671,6 +800,7 @@ export class DiscordBridgeService implements OnModuleInit, OnModuleDestroy {
     const isSupportedInteraction =
       interaction.isChatInputCommand() ||
       interaction.isButton() ||
+      interaction.isStringSelectMenu() ||
       interaction.isModalSubmit();
     if (!isSupportedInteraction) return;
 
