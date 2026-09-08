@@ -16,6 +16,7 @@ import { type DiscordBridgeService } from '../../discord-bridge/discord-bridge.s
 import { type CrawlingSchedulerProposalRetry } from './crawling-scheduler-proposal-retry';
 import { delayMs } from '../../../utils/async-delay.utils';
 import { logAndBridge } from '../../../utils/bridge-log.utils';
+import { AI_SUMMARY_STATUS } from './ai-summary-status.utils';
 
 interface PendingErrorDiagnostics {
   message: string;
@@ -515,7 +516,7 @@ export async function processNewNsmSyncOnlyBillsInBackgroundInternal(
   const cachePayload = archivedNotices.map((notice) => ({
     ...notice,
     aiSummary: null,
-    aiSummaryStatus: 'not_requested' as const,
+    aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
   }));
 
   try {
@@ -567,7 +568,7 @@ export async function processPendingBillsInBackgroundInternal(
     noticesWithoutReason.map((notice) => ({
       ...notice,
       aiSummary: null,
-      aiSummaryStatus: 'not_supported' as const,
+      aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
     }));
 
   if (noticesWithoutReasonForNotification.length > 0) {
@@ -650,7 +651,7 @@ export async function processPendingBillsInBackgroundInternal(
             return {
               ...notice,
               aiSummary: null,
-              aiSummaryStatus: 'not_requested' as const,
+              aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
             };
           }
         })

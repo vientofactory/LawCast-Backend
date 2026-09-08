@@ -922,7 +922,7 @@ export async function executeFullSyncPhase(
           notice: {
             ...n,
             aiSummary: null,
-            aiSummaryStatus: 'not_requested' as const,
+            aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
           },
           reason: ArchiveReason.FULL_SYNC_NEW_NOTICES,
         }));

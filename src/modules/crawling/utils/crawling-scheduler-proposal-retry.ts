@@ -75,7 +75,7 @@ export class CrawlingSchedulerProposalRetry {
           {
             ...notice,
             aiSummary: null,
-            aiSummaryStatus: 'not_supported' as const,
+            aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
           },
         ])
         .catch(() => undefined);
@@ -236,7 +236,7 @@ export class CrawlingSchedulerProposalRetry {
           evicted.map((item) => ({
             ...item.notice,
             aiSummary: null,
-            aiSummaryStatus: 'not_supported' as const,
+            aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
           })),
         )
         .catch(() => undefined);

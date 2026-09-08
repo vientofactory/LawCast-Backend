@@ -77,7 +77,7 @@ export class SummaryGenerationService {
           return {
             ...notice,
             aiSummary: cachedSummary,
-            aiSummaryStatus: 'ready',
+            aiSummaryStatus: AI_SUMMARY_STATUS.READY,
           };
         }
 

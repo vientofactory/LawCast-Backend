@@ -10,6 +10,7 @@ import {
   type CachedNotice,
   type QuickKeywordSuggestionsCache,
 } from '../../types/cache.types';
+import { AI_SUMMARY_STATUS } from '../crawling/utils/ai-summary-status.utils';
 
 @Injectable()
 export class CacheService implements OnModuleDestroy {
@@ -113,7 +114,7 @@ export class CacheService implements OnModuleDestroy {
         ) {
           dedupedNotices.set(notice.num, {
             ...existingNotice,
-            aiSummaryStatus: 'ready',
+            aiSummaryStatus: AI_SUMMARY_STATUS.READY,
             aiSummary: notice.aiSummary ?? existingNotice.aiSummary ?? null,
           });
         }

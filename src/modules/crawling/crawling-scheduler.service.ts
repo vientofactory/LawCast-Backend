@@ -23,6 +23,7 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { CrawlingSchedulerSummarySupport } from './utils/crawling-scheduler-summary-support';
 import { CrawlingSchedulerProposalRetry } from './utils/crawling-scheduler-proposal-retry';
 import { handlePendingCronInternal } from './utils/crawling-scheduler-pending-support';
+import { AI_SUMMARY_STATUS } from './utils/ai-summary-status.utils';
 
 const { PENDING_CRAWL_MAX_RETRIES, PENDING_CRAWL_RETRY_BASE_MS } =
   APP_CONSTANTS.ARCHIVE_SYNC;
@@ -459,7 +460,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       noticesWithSummary = crawledData.map((notice) => ({
         ...notice,
         aiSummary: null,
-        aiSummaryStatus: 'not_requested' as const,
+        aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
       }));
     }
 
@@ -564,7 +565,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       return {
         ...notice,
         aiSummary: null,
-        aiSummaryStatus: 'not_requested' as const,
+        aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
       };
     });
     await this.cacheService.updateCache(noticesWithExistingSummary);
@@ -696,7 +697,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
       newNoticesWithSummary = newNotices.map((notice) => ({
         ...notice,
         aiSummary: null,
-        aiSummaryStatus: 'not_requested' as const,
+        aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
       }));
     }
 
@@ -738,7 +739,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
         return {
           ...notice,
           aiSummary: null,
-          aiSummaryStatus: 'not_requested' as const,
+          aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
         };
       }
 

@@ -18,6 +18,7 @@ import {
   type ArchiveNumCompareCountQuery,
   type ArchiveSummaryState,
 } from '../notice-archive.service';
+import { AI_SUMMARY_STATUS } from 'src/modules/crawling/utils/ai-summary-status.utils';
 
 export interface NoticeArchiveMaintenanceDeps {
   archiveRepository: Repository<NoticeArchive>;
@@ -112,7 +113,7 @@ export async function getNsmProposalReasonRetryCandidates(
         hwpFile: row.attachmentHwpFile ?? '',
       },
       aiSummary: null,
-      aiSummaryStatus: 'not_supported',
+      aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
     },
     billNo: row.contentBillNumber?.trim() || null,
   }));

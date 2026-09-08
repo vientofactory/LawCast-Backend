@@ -29,6 +29,7 @@ import {
   isWaitingroomPage,
   isWaitingroomHtml,
 } from './utils/waitingroom-bypass';
+import { AI_SUMMARY_STATUS } from './utils/ai-summary-status.utils';
 
 /**
  * Enriched error that attaches crawl phase, page index, and bill number
@@ -452,7 +453,7 @@ export class CrawlingCoreService {
       contentId: null,
       attachments: { pdfFile: null, hwpFile: null },
       aiSummary: null,
-      aiSummaryStatus: 'not_requested' as const,
+      aiSummaryStatus: AI_SUMMARY_STATUS.NOT_REQUESTED,
     };
   }
 
