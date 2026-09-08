@@ -1,6 +1,6 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, LessThan, Repository } from 'typeorm';
+import { In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
 import { DiscussionWebPushBinding } from './discussion-web-push-binding.entity';
 import { WebPushSubscription } from './web-push-subscription.entity';
 
@@ -21,6 +21,7 @@ export interface WebPushSubscriptionStats {
 
 @Injectable()
 export class WebPushSubscriptionService {
+  public readonly webPushFailureDeactivationThreshold = 5;
   constructor(
     @InjectRepository(WebPushSubscription)
     private readonly subscriptionRepository: Repository<WebPushSubscription>,
@@ -252,24 +253,29 @@ export class WebPushSubscriptionService {
     subscriptionId: number,
     reason: string,
     options: { deactivate?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     const existing = await this.subscriptionRepository.findOne({
       where: { id: subscriptionId },
     });
-    if (!existing) return;
+    if (!existing) return false;
 
     existing.failureCount = (existing.failureCount || 0) + 1;
     existing.lastFailureReason = reason.slice(0, 1000);
-    if (options.deactivate === true) {
+    const shouldDeactivate =
+      options.deactivate === true ||
+      existing.failureCount >= this.webPushFailureDeactivationThreshold;
+    if (shouldDeactivate) {
       existing.isActive = false;
     }
 
     await this.subscriptionRepository.save(existing);
+    return shouldDeactivate;
   }
 
   /**
-   * Deletes inactive subscriptions older than the given day threshold.
-   * This is used by the monitoring cron to gradually clean stale endpoints.
+   * Deletes inactive or repeatedly failing subscriptions. Inactive endpoints
+   * are retained for the given day threshold; exhausted endpoints are removed
+   * immediately so they cannot remain active after repeated delivery failures.
    */
   async cleanupInactiveSubscriptions(daysBefore: number = 14): Promise<number> {
     const safeDays = Math.max(1, Math.trunc(daysBefore) || 14);
@@ -278,10 +284,14 @@ export class WebPushSubscriptionService {
 
     if (this.discussionBindingRepository) {
       const staleSubscriptions = await this.subscriptionRepository.find({
-        where: {
-          isActive: false,
-          updatedAt: LessThan(cutoffDate),
-        },
+        where: [
+          { isActive: false, updatedAt: LessThan(cutoffDate) },
+          {
+            failureCount: MoreThanOrEqual(
+              this.webPushFailureDeactivationThreshold,
+            ),
+          },
+        ],
       });
       const staleSubscriptionIds = staleSubscriptions.map(
         (subscription) => subscription.id,
@@ -298,8 +308,14 @@ export class WebPushSubscriptionService {
       .createQueryBuilder()
       .delete()
       .from(WebPushSubscription)
-      .where('is_active = :isActive', { isActive: false })
-      .andWhere('updated_at < :cutoffDate', { cutoffDate })
+      .where(
+        '(is_active = :isActive AND updated_at < :cutoffDate) OR failure_count >= :failureThreshold',
+        {
+          isActive: false,
+          cutoffDate,
+          failureThreshold: this.webPushFailureDeactivationThreshold,
+        },
+      )
       .execute();
 
     return result.affected || 0;

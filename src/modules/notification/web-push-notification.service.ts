@@ -382,7 +382,7 @@ export class WebPushNotificationService {
 
         const message = error instanceof Error ? error.message : String(error);
 
-        await this.webPushSubscriptionService.markFailure(
+        const deactivated = await this.webPushSubscriptionService.markFailure(
           subscription.id,
           message,
           { deactivate: shouldDeactivate },
@@ -390,10 +390,10 @@ export class WebPushNotificationService {
 
         LoggerUtils.debugDev(
           WebPushNotificationService.name,
-          `Web push send failed subscription=${subscription.id} status=${statusCode ?? 'unknown'} deactivate=${shouldDeactivate}`,
+          `Web push send failed subscription=${subscription.id} status=${statusCode ?? 'unknown'} deactivate=${deactivated}`,
         );
 
-        return { success: false, deactivated: shouldDeactivate };
+        return { success: false, deactivated };
       }
     }
 

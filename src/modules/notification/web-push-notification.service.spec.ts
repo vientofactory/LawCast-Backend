@@ -32,7 +32,7 @@ describe('WebPushNotificationService', () => {
 
     const webPushSubscriptionService = {
       markSuccess: jest.fn().mockResolvedValue(undefined),
-      markFailure: jest.fn().mockResolvedValue(undefined),
+      markFailure: jest.fn().mockResolvedValue(false),
     };
 
     const service = new WebPushNotificationService(
@@ -96,6 +96,7 @@ describe('WebPushNotificationService', () => {
 
   it('does not retry permanent failure (410) and marks subscription as deactivated', async () => {
     const { service, webPushSubscriptionService } = createService();
+    webPushSubscriptionService.markFailure.mockResolvedValue(true);
 
     const goneError = Object.assign(new Error('Gone'), {
       statusCode: 410,

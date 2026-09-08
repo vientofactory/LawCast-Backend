@@ -64,9 +64,7 @@ describe('WebPushSubscriptionService', () => {
           delete: jest.fn().mockReturnValue({
             from: jest.fn().mockReturnValue({
               where: jest.fn().mockReturnValue({
-                andWhere: jest.fn().mockReturnValue({
-                  execute: jest.fn().mockResolvedValue({ affected: 2 }),
-                }),
+                execute: jest.fn().mockResolvedValue({ affected: 2 }),
               }),
             }),
           }),
@@ -92,8 +90,7 @@ describe('WebPushSubscriptionService', () => {
 
     it('should delete only inactive subscriptions older than cutoff and return affected count', async () => {
       const execute = jest.fn().mockResolvedValue({ affected: 3 });
-      const andWhere = jest.fn().mockReturnValue({ execute });
-      const where = jest.fn().mockReturnValue({ andWhere });
+      const where = jest.fn().mockReturnValue({ execute });
       const from = jest.fn().mockReturnValue({ where });
       const deleteFn = jest.fn().mockReturnValue({ from });
       const createQueryBuilder = jest.fn().mockReturnValue({
@@ -111,19 +108,20 @@ describe('WebPushSubscriptionService', () => {
       expect(createQueryBuilder).toHaveBeenCalledTimes(1);
       expect(deleteFn).toHaveBeenCalledTimes(1);
       expect(from).toHaveBeenCalledWith(WebPushSubscription);
-      expect(where).toHaveBeenCalledWith('is_active = :isActive', {
-        isActive: false,
-      });
-      expect(andWhere).toHaveBeenCalledWith('updated_at < :cutoffDate', {
-        cutoffDate: expect.any(Date),
-      });
+      expect(where).toHaveBeenCalledWith(
+        '(is_active = :isActive AND updated_at < :cutoffDate) OR failure_count >= :failureThreshold',
+        {
+          isActive: false,
+          cutoffDate: expect.any(Date),
+          failureThreshold: service.webPushFailureDeactivationThreshold,
+        },
+      );
       expect(execute).toHaveBeenCalledTimes(1);
     });
 
     it('should normalize invalid retention input to at least one day', async () => {
       const execute = jest.fn().mockResolvedValue({ affected: 0 });
-      const andWhere = jest.fn().mockReturnValue({ execute });
-      const where = jest.fn().mockReturnValue({ andWhere });
+      const where = jest.fn().mockReturnValue({ execute });
       const from = jest.fn().mockReturnValue({ where });
       const deleteFn = jest.fn().mockReturnValue({ from });
       const createQueryBuilder = jest.fn().mockReturnValue({
@@ -137,9 +135,41 @@ describe('WebPushSubscriptionService', () => {
       const service = new WebPushSubscriptionService(repository);
       await service.cleanupInactiveSubscriptions(0);
 
-      expect(andWhere).toHaveBeenCalledWith('updated_at < :cutoffDate', {
-        cutoffDate: expect.any(Date),
-      });
+      expect(where).toHaveBeenCalledWith(
+        '(is_active = :isActive AND updated_at < :cutoffDate) OR failure_count >= :failureThreshold',
+        {
+          isActive: false,
+          cutoffDate: expect.any(Date),
+          failureThreshold: service.webPushFailureDeactivationThreshold,
+        },
+      );
+    });
+  });
+
+  describe('markFailure', () => {
+    it('deactivates a subscription after repeated delivery failures', async () => {
+      const save = jest.fn();
+      const findOne = jest.fn();
+      const repository = {
+        findOne,
+        save,
+      } as unknown as Repository<WebPushSubscription>;
+      const service = new WebPushSubscriptionService(repository);
+      const subscription = {
+        id: 12,
+        failureCount: service.webPushFailureDeactivationThreshold - 1,
+        isActive: true,
+      } as WebPushSubscription;
+      findOne.mockResolvedValue(subscription);
+      save.mockResolvedValue(subscription);
+      const deactivated = await service.markFailure(12, 'Push service failed');
+
+      expect(deactivated).toBe(true);
+      expect(subscription.failureCount).toBe(
+        service.webPushFailureDeactivationThreshold,
+      );
+      expect(subscription.isActive).toBe(false);
+      expect(save).toHaveBeenCalledWith(subscription);
     });
   });
 });
