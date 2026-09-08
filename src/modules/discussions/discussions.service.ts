@@ -446,6 +446,13 @@ export class DiscussionsService {
       throw new BadRequestException('이미 삭제된 의견은 수정할 수 없습니다.');
     }
 
+    const thread = await this.threadRepository.findOne({
+      where: { id: comment.threadId },
+    });
+    if (thread?.status === DiscussionThreadStatus.CLOSED) {
+      throw new BadRequestException('닫힌 토론의 의견은 수정할 수 없습니다.');
+    }
+
     const isPasswordValid = PasswordSecurityUtil.verifyPassword(
       dto.password,
       comment.passwordSalt,
@@ -485,6 +492,13 @@ export class DiscussionsService {
 
     if (comment.isDeleted) {
       return this.sanitizeComment(comment);
+    }
+
+    const thread = await this.threadRepository.findOne({
+      where: { id: comment.threadId },
+    });
+    if (thread?.status === DiscussionThreadStatus.CLOSED) {
+      throw new BadRequestException('닫힌 토론의 의견은 삭제할 수 없습니다.');
     }
 
     const isPasswordValid = PasswordSecurityUtil.verifyPassword(

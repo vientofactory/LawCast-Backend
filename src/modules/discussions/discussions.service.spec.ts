@@ -415,6 +415,33 @@ describe('DiscussionsService', () => {
       expect(commentRepo.save).not.toHaveBeenCalled();
     });
 
+    it('should reject edits once the parent thread is closed', async () => {
+      const { hash, salt } =
+        PasswordSecurityUtil.hashPassword('correctPassword');
+      const mockComment = {
+        id: 1,
+        threadId: 1,
+        passwordHash: hash,
+        passwordSalt: salt,
+        content: '기존 내용',
+        isDeleted: false,
+      };
+
+      (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
+      (threadRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 1,
+        status: DiscussionThreadStatus.CLOSED,
+      });
+
+      await expect(
+        service.updateComment(1, {
+          password: 'correctPassword',
+          content: '수정 시도',
+        }),
+      ).rejects.toThrow(BadRequestException);
+      expect(commentRepo.save).not.toHaveBeenCalled();
+    });
+
     it('should throw UnauthorizedException if password does not match', async () => {
       const { hash, salt } =
         PasswordSecurityUtil.hashPassword('correctPassword');
@@ -509,6 +536,29 @@ describe('DiscussionsService', () => {
       expect(res.isDeleted).toBe(true);
       expect(res.content).toBe('작성자에 의해 삭제된 의견입니다.');
       expect(mockComment.isDeleted).toBe(true);
+    });
+
+    it('should reject deletion once the parent thread is closed', async () => {
+      const { hash, salt } = PasswordSecurityUtil.hashPassword('deletePass');
+      const mockComment = {
+        id: 1,
+        threadId: 1,
+        passwordHash: hash,
+        passwordSalt: salt,
+        content: '원문 내용',
+        isDeleted: false,
+      };
+
+      (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
+      (threadRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 1,
+        status: DiscussionThreadStatus.CLOSED,
+      });
+
+      await expect(
+        service.deleteComment(1, { password: 'deletePass' }),
+      ).rejects.toThrow(BadRequestException);
+      expect(commentRepo.save).not.toHaveBeenCalled();
     });
   });
 
