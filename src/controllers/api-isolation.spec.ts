@@ -26,6 +26,7 @@ import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
 import { CronJobsService } from '../modules/scheduling/cronjobs.service';
 import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
+import { IpMaskingUtil } from '../modules/discussions/utils/ip-masking.util';
 
 describe('HTTP-Batch Processing Isolation', () => {
   let controller: ApiController;
@@ -234,6 +235,8 @@ describe('HTTP-Batch Processing Isolation', () => {
           useValue: {
             createOrReactivate: jest.fn(),
             deleteByEndpoint: jest.fn(),
+            isEndpointBoundToDiscussion: jest.fn().mockResolvedValue(false),
+            deactivateDiscussionBinding: jest.fn(),
             getStatsForApi: jest.fn().mockResolvedValue({
               total: 3,
               active: 2,
@@ -323,6 +326,66 @@ describe('HTTP-Batch Processing Isolation', () => {
     if (module) {
       await module.close();
     }
+  });
+
+  describe('Discussion web push authorId derivation', () => {
+    beforeAll(() => {
+      process.env.DISCUSSION_AUTHOR_ID_SECRET = 'test-author-id-secret';
+    });
+
+    it('checks status using the proxy-forwarded client IP, not the raw socket IP', async () => {
+      const webPushSubscriptionService = module.get<WebPushSubscriptionService>(
+        WebPushSubscriptionService,
+      );
+
+      await controller.getDiscussionWebPushStatus(
+        42,
+        'https://push.example/subscription/1',
+        {
+          headers: { 'cf-connecting-ip': '203.0.113.10' },
+          ip: '10.0.0.5',
+        } as any,
+      );
+
+      const expectedAuthorId = IpMaskingUtil.authorIdFromIp(
+        '203.0.113.10',
+        'thread:42',
+      );
+      expect(
+        webPushSubscriptionService.isEndpointBoundToDiscussion,
+      ).toHaveBeenCalledWith(
+        'https://push.example/subscription/1',
+        42,
+        expectedAuthorId,
+      );
+    });
+
+    it('removes the binding using the proxy-forwarded client IP, not the raw socket IP', async () => {
+      const webPushSubscriptionService = module.get<WebPushSubscriptionService>(
+        WebPushSubscriptionService,
+      );
+
+      await controller.removeDiscussionWebPushBinding(
+        42,
+        { endpoint: 'https://push.example/subscription/1' },
+        {
+          headers: { 'cf-connecting-ip': '203.0.113.10' },
+          ip: '10.0.0.5',
+        } as any,
+      );
+
+      const expectedAuthorId = IpMaskingUtil.authorIdFromIp(
+        '203.0.113.10',
+        'thread:42',
+      );
+      expect(
+        webPushSubscriptionService.deactivateDiscussionBinding,
+      ).toHaveBeenCalledWith(
+        'https://push.example/subscription/1',
+        42,
+        expectedAuthorId,
+      );
+    });
   });
 
   describe('API Responsiveness During Batch Processing', () => {

@@ -45,7 +45,6 @@ import { CreateWebPushSubscriptionDto } from '../modules/notification/dto/create
 import { RemoveWebPushSubscriptionDto } from '../modules/notification/dto/remove-web-push-subscription.dto';
 import { UpdateWebPushPreferencesDto } from '../modules/notification/dto/update-web-push-preferences.dto';
 import { IpMaskingUtil } from '../modules/discussions/utils/ip-masking.util';
-import { WebhookValidationUtils } from '../utils/webhook-validation.utils';
 import {
   assertNoticeNumsInput,
   assertSearchLength,
@@ -112,7 +111,7 @@ export class ApiController {
     }
 
     const authorId = IpMaskingUtil.authorIdFromIp(
-      WebhookValidationUtils.extractClientIp(req),
+      IpMaskingUtil.extractClientIp(req),
       `thread:${threadId}`,
     );
     const isBound =
@@ -154,7 +153,7 @@ export class ApiController {
     @Req() req: Request,
   ) {
     const authorId = IpMaskingUtil.authorIdFromIp(
-      WebhookValidationUtils.extractClientIp(req),
+      IpMaskingUtil.extractClientIp(req),
       `thread:${threadId}`,
     );
     await this.webPushSubscriptionService.deactivateDiscussionBinding(
