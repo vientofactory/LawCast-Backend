@@ -32,7 +32,7 @@ describe('WebPushNotificationService', () => {
 
     const webPushSubscriptionService = {
       markSuccess: jest.fn().mockResolvedValue(undefined),
-      markFailure: jest.fn().mockResolvedValue(undefined),
+      markFailure: jest.fn().mockResolvedValue(false),
     };
 
     const service = new WebPushNotificationService(
@@ -96,6 +96,7 @@ describe('WebPushNotificationService', () => {
 
   it('does not retry permanent failure (410) and marks subscription as deactivated', async () => {
     const { service, webPushSubscriptionService } = createService();
+    webPushSubscriptionService.markFailure.mockResolvedValue(true);
 
     const goneError = Object.assign(new Error('Gone'), {
       statusCode: 410,
@@ -131,5 +132,39 @@ describe('WebPushNotificationService', () => {
       failedCount: 1,
       deactivatedCount: 1,
     });
+  });
+
+  it('removes a leading quote marker and truncates quoted opinion content', async () => {
+    const { service } = createService();
+    const sendNotification = jest.fn().mockResolvedValue(undefined);
+    (service as any).webPushClient = {
+      setVapidDetails: jest.fn(),
+      sendNotification,
+    };
+
+    await service.sendQuoteBatch(
+      {
+        noticeNum: 303,
+        threadId: 12,
+        quotedSequence: 1,
+        quotingSequence: 2,
+        quotingCommentId: 8,
+        quotingAuthorNickname: '인용자',
+        quotingCommentContent: `>>#1\n${'본문 내용 '.repeat(80)}`,
+      },
+      [mockSubscription(3)],
+    );
+
+    const payload = JSON.parse(sendNotification.mock.calls[0][1]) as {
+      body: string;
+      url: string;
+    };
+    expect(payload.body).toContain('"본문 내용');
+    expect(payload.body).not.toContain('" >>#1');
+    expect(payload.body.length).toBeLessThan(260);
+    expect(payload.body).toContain('…"');
+    expect(payload.url).toBe(
+      'http://localhost:5173/notices/303/discussions/12#res-2',
+    );
   });
 });

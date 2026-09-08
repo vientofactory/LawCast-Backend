@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
+import { DiscussionWebPushBinding } from './discussion-web-push-binding.entity';
 import { WebPushSubscription } from './web-push-subscription.entity';
 
 export interface UpsertWebPushSubscriptionInput {
@@ -8,6 +9,7 @@ export interface UpsertWebPushSubscriptionInput {
   p256dh: string;
   auth: string;
   userAgent?: string | null;
+  noticeNotificationsEnabled?: boolean;
 }
 
 export interface WebPushSubscriptionStats {
@@ -19,9 +21,13 @@ export interface WebPushSubscriptionStats {
 
 @Injectable()
 export class WebPushSubscriptionService {
+  public readonly webPushFailureDeactivationThreshold = 5;
   constructor(
     @InjectRepository(WebPushSubscription)
     private readonly subscriptionRepository: Repository<WebPushSubscription>,
+    @InjectRepository(DiscussionWebPushBinding)
+    @Optional()
+    private readonly discussionBindingRepository?: Repository<DiscussionWebPushBinding>,
   ) {}
 
   async createOrReactivate(
@@ -41,6 +47,9 @@ export class WebPushSubscriptionService {
       existing.auth = auth;
       existing.userAgent = userAgent;
       existing.isActive = true;
+      if (input.noticeNotificationsEnabled === true) {
+        existing.noticeNotificationsEnabled = true;
+      }
       existing.lastFailureReason = null;
       existing.failureCount = 0;
       return this.subscriptionRepository.save(existing);
@@ -52,6 +61,7 @@ export class WebPushSubscriptionService {
       auth,
       userAgent,
       isActive: true,
+      noticeNotificationsEnabled: input.noticeNotificationsEnabled ?? true,
       failureCount: 0,
       lastFailureReason: null,
     });
@@ -77,13 +87,139 @@ export class WebPushSubscriptionService {
     const normalized = endpoint.trim();
     if (!normalized) return;
 
+    if (this.discussionBindingRepository) {
+      const subscription = await this.subscriptionRepository.findOne({
+        where: { endpoint: normalized },
+      });
+      if (subscription) {
+        await this.discussionBindingRepository.delete({
+          subscriptionId: subscription.id,
+        });
+      }
+    }
+
     await this.subscriptionRepository.delete({ endpoint: normalized });
   }
 
   async findAllActive(): Promise<WebPushSubscription[]> {
     return this.subscriptionRepository.find({
-      where: { isActive: true },
+      where: { isActive: true, noticeNotificationsEnabled: true },
     });
+  }
+
+  async getNoticeNotificationsEnabled(endpoint: string): Promise<boolean> {
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { endpoint: endpoint.trim(), isActive: true },
+    });
+    return subscription?.noticeNotificationsEnabled === true;
+  }
+
+  async setNoticeNotificationsEnabled(
+    endpoint: string,
+    enabled: boolean,
+  ): Promise<void> {
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { endpoint: endpoint.trim() },
+    });
+    if (!subscription) return;
+
+    subscription.noticeNotificationsEnabled = enabled;
+    if (enabled) subscription.isActive = true;
+    await this.subscriptionRepository.save(subscription);
+  }
+
+  async bindToDiscussion(
+    subscriptionId: number,
+    threadId: number,
+    authorId: string,
+  ): Promise<void> {
+    if (!this.discussionBindingRepository) return;
+
+    const existing = await this.discussionBindingRepository.findOne({
+      where: { subscriptionId, threadId, authorId },
+    });
+
+    if (existing) {
+      existing.isActive = true;
+      await this.discussionBindingRepository.save(existing);
+      return;
+    }
+
+    await this.discussionBindingRepository.save(
+      this.discussionBindingRepository.create({
+        subscriptionId,
+        threadId,
+        authorId,
+        isActive: true,
+      }),
+    );
+  }
+
+  async findActiveForDiscussionAuthor(
+    threadId: number,
+    authorId: string,
+  ): Promise<WebPushSubscription[]> {
+    if (!this.discussionBindingRepository) return [];
+
+    const bindings = await this.discussionBindingRepository.find({
+      where: { threadId, authorId, isActive: true },
+    });
+    if (bindings.length === 0) return [];
+
+    const subscriptions = await this.subscriptionRepository.findByIds(
+      bindings.map((binding) => binding.subscriptionId),
+    );
+    const activeById = new Map(
+      subscriptions
+        .filter((subscription) => subscription.isActive)
+        .map((subscription) => [subscription.id, subscription]),
+    );
+    return bindings
+      .map((binding) => activeById.get(binding.subscriptionId))
+      .filter((subscription): subscription is WebPushSubscription =>
+        Boolean(subscription),
+      );
+  }
+
+  async isEndpointBoundToDiscussion(
+    endpoint: string,
+    threadId: number,
+    authorId: string,
+  ): Promise<boolean> {
+    if (!this.discussionBindingRepository) return false;
+
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { endpoint: endpoint.trim(), isActive: true },
+    });
+    if (!subscription) return false;
+
+    const binding = await this.discussionBindingRepository.findOne({
+      where: {
+        subscriptionId: subscription.id,
+        threadId,
+        authorId,
+        isActive: true,
+      },
+    });
+    return Boolean(binding);
+  }
+
+  async deactivateDiscussionBinding(
+    endpoint: string,
+    threadId: number,
+    authorId: string,
+  ): Promise<void> {
+    if (!this.discussionBindingRepository) return;
+
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { endpoint: endpoint.trim() },
+    });
+    if (!subscription) return;
+
+    await this.discussionBindingRepository.update(
+      { subscriptionId: subscription.id, threadId, authorId },
+      { isActive: false },
+    );
   }
 
   async getStatsForApi(): Promise<WebPushSubscriptionStats> {
@@ -117,36 +253,69 @@ export class WebPushSubscriptionService {
     subscriptionId: number,
     reason: string,
     options: { deactivate?: boolean } = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     const existing = await this.subscriptionRepository.findOne({
       where: { id: subscriptionId },
     });
-    if (!existing) return;
+    if (!existing) return false;
 
     existing.failureCount = (existing.failureCount || 0) + 1;
     existing.lastFailureReason = reason.slice(0, 1000);
-    if (options.deactivate === true) {
+    const shouldDeactivate =
+      options.deactivate === true ||
+      existing.failureCount >= this.webPushFailureDeactivationThreshold;
+    if (shouldDeactivate) {
       existing.isActive = false;
     }
 
     await this.subscriptionRepository.save(existing);
+    return shouldDeactivate;
   }
 
   /**
-   * Deletes inactive subscriptions older than the given day threshold.
-   * This is used by the monitoring cron to gradually clean stale endpoints.
+   * Deletes inactive or repeatedly failing subscriptions. Inactive endpoints
+   * are retained for the given day threshold; exhausted endpoints are removed
+   * immediately so they cannot remain active after repeated delivery failures.
    */
   async cleanupInactiveSubscriptions(daysBefore: number = 14): Promise<number> {
     const safeDays = Math.max(1, Math.trunc(daysBefore) || 14);
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - safeDays);
 
+    if (this.discussionBindingRepository) {
+      const staleSubscriptions = await this.subscriptionRepository.find({
+        where: [
+          { isActive: false, updatedAt: LessThan(cutoffDate) },
+          {
+            failureCount: MoreThanOrEqual(
+              this.webPushFailureDeactivationThreshold,
+            ),
+          },
+        ],
+      });
+      const staleSubscriptionIds = staleSubscriptions.map(
+        (subscription) => subscription.id,
+      );
+
+      if (staleSubscriptionIds.length > 0) {
+        await this.discussionBindingRepository.delete({
+          subscriptionId: In(staleSubscriptionIds),
+        });
+      }
+    }
+
     const result = await this.subscriptionRepository
       .createQueryBuilder()
       .delete()
       .from(WebPushSubscription)
-      .where('is_active = :isActive', { isActive: false })
-      .andWhere('updated_at < :cutoffDate', { cutoffDate })
+      .where(
+        '(is_active = :isActive AND updated_at < :cutoffDate) OR failure_count >= :failureThreshold',
+        {
+          isActive: false,
+          cutoffDate,
+          failureThreshold: this.webPushFailureDeactivationThreshold,
+        },
+      )
       .execute();
 
     return result.affected || 0;

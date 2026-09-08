@@ -8,7 +8,12 @@ import { WebPushSubscription } from './web-push-subscription.entity';
 import { WebPushSubscriptionService } from './web-push-subscription.service';
 import { buildFrontendUrl } from './notification-helpers';
 
-type WebPushUrgency = 'very-low' | 'low' | 'normal' | 'normal';
+export enum WebPushUrgency {
+  VERY_LOW = 'very-low',
+  LOW = 'low',
+  NORMAL = 'normal',
+  HIGH = 'high',
+}
 
 type WebPushLike = {
   setVapidDetails(subject: string, publicKey: string, privateKey: string): void;
@@ -93,7 +98,7 @@ export class WebPushNotificationService {
         tag: `lawcast-new-${notice.num}`,
         data: { noticeNum: notice.num, type: 'notice_new' },
       },
-      { urgency: 'normal' },
+      { urgency: WebPushUrgency.NORMAL },
     );
   }
 
@@ -121,7 +126,7 @@ export class WebPushNotificationService {
         tag: `lawcast-new-digest-${Date.now()}`,
         data: { noticeNums, type: 'notice_new_digest' },
       },
-      { urgency: 'normal' },
+      { urgency: WebPushUrgency.NORMAL },
     );
   }
 
@@ -173,8 +178,64 @@ export class WebPushNotificationService {
           type,
         },
       },
-      { urgency: 'normal' },
+      { urgency: WebPushUrgency.NORMAL },
     );
+  }
+
+  async sendQuoteBatch(
+    payload: {
+      noticeNum: number;
+      threadId: number;
+      quotedSequence: number;
+      quotingSequence: number;
+      quotingCommentId: number;
+      quotingAuthorNickname: string;
+      quotingCommentContent: string;
+    },
+    subscriptions: WebPushSubscription[],
+  ): Promise<WebPushDispatchSummary> {
+    const url =
+      buildFrontendUrl(
+        this.frontendUrls,
+        `/notices/${payload.noticeNum}/discussions/${payload.threadId}`,
+        undefined,
+        `res-${payload.quotingSequence}`,
+      ) ??
+      this.frontendUrls[0] ??
+      '/';
+
+    const commentPreview = this.createNotificationPreview(
+      payload.quotingCommentContent,
+    );
+
+    return this.sendBatch(
+      subscriptions,
+      {
+        title: '의견이 인용되었습니다',
+        body: `${payload.quotingAuthorNickname}님이 #${payload.quotedSequence} 의견을 인용했습니다: "${commentPreview}"`,
+        url,
+        tag: `lawcast-quote-${payload.threadId}-${payload.quotingCommentId}-${payload.quotedSequence}`,
+        data: {
+          noticeNum: payload.noticeNum,
+          threadId: payload.threadId,
+          quotedSequence: payload.quotedSequence,
+          quotingSequence: payload.quotingSequence,
+          quotingCommentId: payload.quotingCommentId,
+          type: 'opinion_quoted',
+        },
+      },
+      { urgency: WebPushUrgency.NORMAL },
+    );
+  }
+
+  private createNotificationPreview(content: string): string {
+    const normalized = content
+      .replace(/^(?:(?:>>|>)\s*#?\d+\s*)+/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const maxLength = 180;
+    if (normalized.length <= maxLength) return normalized;
+    return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
   }
 
   async sendChangeDigestBatch(
@@ -222,7 +283,7 @@ export class WebPushNotificationService {
           type,
         },
       },
-      { urgency: 'normal' },
+      { urgency: WebPushUrgency.NORMAL },
     );
   }
 
@@ -321,7 +382,7 @@ export class WebPushNotificationService {
 
         const message = error instanceof Error ? error.message : String(error);
 
-        await this.webPushSubscriptionService.markFailure(
+        const deactivated = await this.webPushSubscriptionService.markFailure(
           subscription.id,
           message,
           { deactivate: shouldDeactivate },
@@ -329,10 +390,10 @@ export class WebPushNotificationService {
 
         LoggerUtils.debugDev(
           WebPushNotificationService.name,
-          `Web push send failed subscription=${subscription.id} status=${statusCode ?? 'unknown'} deactivate=${shouldDeactivate}`,
+          `Web push send failed subscription=${subscription.id} status=${statusCode ?? 'unknown'} deactivate=${deactivated}`,
         );
 
-        return { success: false, deactivated: shouldDeactivate };
+        return { success: false, deactivated };
       }
     }
 

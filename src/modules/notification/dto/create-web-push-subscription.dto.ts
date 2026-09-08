@@ -1,4 +1,12 @@
-import { IsNotEmpty, IsString, IsUrl, MaxLength } from 'class-validator';
+import {
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUrl,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class CreateWebPushSubscriptionDto {
   @IsString({ message: 'Endpoint must be a string' })
@@ -24,4 +32,9 @@ export class CreateWebPushSubscriptionDto {
   @IsNotEmpty({ message: 'Proof token is required' })
   @MaxLength(3000, { message: 'Proof token is too long' })
   proof: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  threadId?: number;
 }

@@ -21,6 +21,10 @@ import { OptimizeRecentChangesQueries1754899201000 } from './202608110001-optimi
 import { AllowSnapshotArtifactFirstFill1755043201000 } from './202608130001-allow-snapshot-artifact-first-fill.migration';
 import { AddArchiveNoticeNumStartedAtIndex1755561601000 } from './202608190001-add-archive-notice-num-started-at-index.migration';
 import { AllowLifecycleStatusTransition1756800001000 } from './202609020001-allow-lifecycle-status-transition.migration';
+import { AddDiscussionsAndComments1757059201000 } from './202609050001-add-discussions-and-comments.migration';
+import { AddDiscussionMessageTypes1757059202000 } from './202609050002-add-discussion-message-types.migration';
+import { AddDiscussionWebPushBindings1757203200000 } from './202609070001-add-discussion-web-push-bindings.migration';
+import { AddWebPushNotificationPreference1757203201000 } from './202609070002-add-web-push-notification-preference.migration';
 
 export const migrations: (new () => MigrationInterface)[] = [
   InitialSchemaMigration1744953900000,
@@ -45,4 +49,8 @@ export const migrations: (new () => MigrationInterface)[] = [
   AllowSnapshotArtifactFirstFill1755043201000,
   AddArchiveNoticeNumStartedAtIndex1755561601000,
   AllowLifecycleStatusTransition1756800001000,
+  AddDiscussionsAndComments1757059201000,
+  AddDiscussionMessageTypes1757059202000,
+  AddDiscussionWebPushBindings1757203200000,
+  AddWebPushNotificationPreference1757203201000,
 ];

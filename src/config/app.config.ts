@@ -385,8 +385,7 @@ export const APP_CONSTANTS = {
       CRAWLING_CHECK: '2-59/10 * * * *', // Every 10 minutes, shifted to avoid minute-0 contention
       PENDING_CRAWLING_CHECK: '6-59/20 * * * *', // Every 20 minutes, staggered from main crawl
       WEBHOOK_CLEANUP: '1 0 * * *', // Every day at 00:01
-      WEBHOOK_OPTIMIZATION: '1 2 * * *', // Every day at 02:01
-      SYSTEM_MONITORING: '0 * * * *', // Every hour
+      WEB_PUSH_CLEANUP: '0 * * * *', // Every hour
       IS_DONE_SYNC: '13 */6 * * *', // Every 6 hours, staggered away from heavy minute-0 jobs
       PROPOSAL_REASON_BACKFILL_DRAIN: '9-59/15 * * * *', // Every 15 minutes at 9/24/39/54, staggered from crawl/pending/isDone
       INTEGRITY_RESCAN: '43 3 * * *', // Daily at 03:43, isolated from top-of-hour workload
@@ -395,6 +394,7 @@ export const APP_CONSTANTS = {
       QUICK_KEYWORDS_REFRESH: '11 * * * *', // Every hour, refresh homepage keyword suggestions
       SQLITE_VACUUM: '31 5 * * 0', // Every Sunday at 05:31, after nightly maintenance tasks
       DATABASE_MIRROR_UPLOAD: process.env.FILE_MIRROR_CRON || '0 8 * * *', // Daily at 08:00, after nightly maintenance tasks
+      DISCUSSION_IDLE_CLOSE: '*/15 * * * *', // Every 15 minutes
     },
   },
 } as const;

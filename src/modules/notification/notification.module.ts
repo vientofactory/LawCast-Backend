@@ -9,9 +9,11 @@ import { NotificationBatchService } from './notification-batch.service';
 import { NotificationOrchestratorService } from './notification-orchestrator.service';
 import { WebhookRegistrationService } from './webhook-registration.service';
 import { WebPushSubscription } from './web-push-subscription.entity';
+import { DiscussionWebPushBinding } from './discussion-web-push-binding.entity';
 import { WebPushSubscriptionService } from './web-push-subscription.service';
 import { WebPushNotificationService } from './web-push-notification.service';
 import { WebPushRegistrationService } from './web-push-registration.service';
+import { DiscussionThread } from '../discussions/entities/discussion-thread.entity';
 
 @Module({
   imports: [
@@ -19,7 +21,11 @@ import { WebPushRegistrationService } from './web-push-registration.service';
     SharedModule,
     WebhookModule,
     DiscordBridgeModule,
-    TypeOrmModule.forFeature([WebPushSubscription]),
+    TypeOrmModule.forFeature([
+      WebPushSubscription,
+      DiscussionWebPushBinding,
+      DiscussionThread,
+    ]),
   ],
   providers: [
     NotificationService,

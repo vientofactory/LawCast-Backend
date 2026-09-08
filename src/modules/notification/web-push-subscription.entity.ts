@@ -15,6 +15,10 @@ import {
   'isActive',
   'updatedAt',
 ])
+@Index('idx_web_push_subscriptions_notice_notifications', [
+  'isActive',
+  'noticeNotificationsEnabled',
+])
 export class WebPushSubscription {
   @PrimaryGeneratedColumn()
   id: number;
@@ -30,6 +34,9 @@ export class WebPushSubscription {
 
   @Column({ name: 'is_active', default: true })
   isActive: boolean;
+
+  @Column({ name: 'notice_notifications_enabled', default: true })
+  noticeNotificationsEnabled: boolean;
 
   @Column({ name: 'user_agent', type: 'text', nullable: true })
   userAgent: string | null;

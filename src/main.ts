@@ -57,6 +57,7 @@ async function bootstrap() {
   // Set global prefix and disable some headers for security
   app.setGlobalPrefix('');
   app.disable('x-powered-by');
+  app.set('trust proxy', 1);
 
   const port = configService.get<number>('port');
   await app.listen(port);
