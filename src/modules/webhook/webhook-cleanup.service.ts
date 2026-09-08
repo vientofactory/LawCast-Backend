@@ -92,45 +92,6 @@ export class WebhookCleanupService {
     }
   }
 
-  /**
-   * Monitor system in real-time and take immediate actions if needed
-   * @returns void
-   */
-  async runSystemMonitoring(): Promise<void> {
-    if (this.isRunning) {
-      this.logger.warn(
-        'Webhook cleanup already in progress, skipping runSystemMonitoring',
-      );
-      return;
-    }
-    this.isRunning = true;
-    try {
-      const stats = await this.webhookService.getDetailedStats();
-      const efficiency =
-        stats.total > 0 ? (stats.active / stats.total) * 100 : 100;
-      if (efficiency < 30 && stats.total > 100) {
-        const emergencyCleaned =
-          await this.webhookService.cleanupInactiveWebhooks();
-        this.logger.warn(
-          `Emergency cleanup triggered! System efficiency was ${efficiency.toFixed(1)}%. Cleaned ${emergencyCleaned} inactive webhooks.`,
-        );
-      } else if (stats.oldInactive > 50) {
-        const preventiveCleaned =
-          await this.webhookService.cleanupOldInactiveWebhooks(3);
-        this.logger.log(
-          `Preventive maintenance: cleaned ${preventiveCleaned} old inactive webhooks to prevent efficiency degradation.`,
-        );
-      }
-    } catch (error) {
-      this.logger.error(
-        'Failed to perform real-time system monitoring:',
-        error,
-      );
-    } finally {
-      this.isRunning = false;
-    }
-  }
-
   async performSelfDiagnostics(): Promise<{
     systemHealth: 'excellent' | 'good' | 'fair' | 'poor' | 'critical';
     autoActionsPerformed: string[];

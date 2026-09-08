@@ -17,18 +17,14 @@ describe('CronJobsService', () => {
     jest.restoreAllMocks();
   });
 
-  it('should run web push inactive cleanup during system monitoring', async () => {
-    const webhookCleanupService = {
-      runSystemMonitoring: jest.fn().mockResolvedValue(undefined),
-    };
-
+  it('should run web push inactive cleanup without system monitoring', async () => {
     const webPushSubscriptionService = {
       cleanupInactiveSubscriptions: jest.fn().mockResolvedValue(2),
     };
 
     const service = new CronJobsService(
       {} as any,
-      webhookCleanupService as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -38,9 +34,8 @@ describe('CronJobsService', () => {
       undefined as any,
     );
 
-    await service.handleSystemMonitoring();
+    await service.handleWebPushCleanup();
 
-    expect(webhookCleanupService.runSystemMonitoring).toHaveBeenCalledTimes(1);
     expect(
       webPushSubscriptionService.cleanupInactiveSubscriptions,
     ).toHaveBeenCalledWith(14);

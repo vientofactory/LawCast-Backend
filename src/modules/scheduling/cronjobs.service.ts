@@ -37,7 +37,7 @@ const CRON_JOB_TASK_EXPRESSIONS: Record<string, string> = {
     APP_CONSTANTS.CRON.EXPRESSIONS.PROPOSAL_REASON_BACKFILL_DRAIN,
   'isDone sync': APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC,
   'webhook cleanup': APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP,
-  'system monitoring': APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING,
+  'web push cleanup': APP_CONSTANTS.CRON.EXPRESSIONS.WEB_PUSH_CLEANUP,
   'snapshot artifact backfill': APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN,
   'integrity re-scan': APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN,
   'change-tracking daily audit':
@@ -425,14 +425,12 @@ export class CronJobsService {
     );
   }
 
-  // Performs hourly system monitoring and stale web-push cleanup.
-  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.SYSTEM_MONITORING, {
+  // Removes stale web-push subscriptions.
+  @Cron(APP_CONSTANTS.CRON.EXPRESSIONS.WEB_PUSH_CLEANUP, {
     timeZone: CRON_TIMEZONE,
   })
-  async handleSystemMonitoring(): Promise<void> {
-    await this.execute('system monitoring', async () => {
-      await this.webhookCleanupService.runSystemMonitoring();
-
+  async handleWebPushCleanup(): Promise<void> {
+    await this.execute('web push cleanup', async () => {
       if (!this.webPushSubscriptionService) {
         return;
       }
