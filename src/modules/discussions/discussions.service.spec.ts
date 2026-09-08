@@ -132,6 +132,11 @@ describe('DiscussionsService', () => {
       const result = await service.getThreads(2200001, 1, 10);
       expect(result.total).toBe(1);
       expect(result.items[0].title).toBe('법안 토론 1');
+      expect(threadRepo.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({
+          order: { updatedAt: 'DESC', id: 'DESC' },
+        }),
+      );
       expect((result.items[0] as any).passwordHash).toBeUndefined();
       expect((result.items[0] as any).passwordSalt).toBeUndefined();
       expect((result.items[0] as any).authorIpHash).toBeUndefined();
@@ -190,6 +195,7 @@ describe('DiscussionsService', () => {
       expect(threadRepo.findAndCount).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { status: DiscussionThreadStatus.OPEN },
+          order: { updatedAt: 'DESC', id: 'DESC' },
         }),
       );
     });

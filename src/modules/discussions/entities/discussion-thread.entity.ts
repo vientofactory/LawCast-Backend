@@ -20,6 +20,12 @@ export enum DiscussionThreadStatus {
   'noticeNum',
   'updatedAt',
 ])
+@Index('idx_discussion_threads_updated_at_id', ['updatedAt', 'id'])
+@Index('idx_discussion_threads_status_updated_at_id', [
+  'status',
+  'updatedAt',
+  'id',
+])
 export class DiscussionThread {
   @PrimaryGeneratedColumn()
   id: number;

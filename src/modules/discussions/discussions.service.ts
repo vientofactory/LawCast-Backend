@@ -195,7 +195,7 @@ export class DiscussionsService {
 
     const [threads, total] = await this.threadRepository.findAndCount({
       where: { noticeNum },
-      order: { updatedAt: 'DESC' },
+      order: { updatedAt: 'DESC', id: 'DESC' },
       skip,
       take: safeLimit,
     });
@@ -228,7 +228,7 @@ export class DiscussionsService {
 
     const [threads, total] = await this.threadRepository.findAndCount({
       where: status ? { status } : {},
-      order: { updatedAt: 'DESC' },
+      order: { updatedAt: 'DESC', id: 'DESC' },
       skip,
       take: safeLimit,
     });
