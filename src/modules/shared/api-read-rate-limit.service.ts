@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, type LoggerService } from '@nestjs/common';
 import type { Request } from 'express';
 import { CacheService } from '../cache/cache.service';
 import { IpMaskingUtil } from '../discussions/utils/ip-masking.util';
@@ -15,7 +15,27 @@ export class ApiReadRateLimitService {
     expensive: { maxRequests: 30, windowSeconds: 60 },
   };
 
-  constructor(private readonly cacheService: CacheService) {}
+  constructor(
+    private readonly cacheService: CacheService,
+    private readonly logger?: LoggerService,
+  ) {}
+
+  /**
+   * True when the request carries no forwarded client identity at all, i.e.
+   * the rate-limit bucket would key on the immediate peer address. For SSR
+   * traffic that peer is the frontend worker/edge, so a persistent spike of
+   * these warnings means client-IP forwarding broke upstream.
+   */
+  static hasNoForwardedIdentity(request: Request): boolean {
+    const headers = request.headers ?? {};
+    return !(
+      headers['x-lawcast-client-ip'] ||
+      headers['cf-connecting-ip'] ||
+      headers['true-client-ip'] ||
+      headers['x-forwarded-for'] ||
+      headers['x-real-ip']
+    );
+  }
 
   async assertAllowed(
     request: Request,
@@ -29,6 +49,12 @@ export class ApiReadRateLimitService {
     // first) matches DiscussionsRateLimitService via IpMaskingUtil.
     const clientIp = IpMaskingUtil.extractClientIp(request);
     const clientKey = IpMaskingUtil.hashIp(clientIp);
+
+    if (ApiReadRateLimitService.hasNoForwardedIdentity(request)) {
+      this.logger?.warn?.(
+        `api-read-rate-limit keyed on peer address (no forwarded client IP header); peer=${request.ip ?? request.socket?.remoteAddress ?? 'unknown'}`,
+      );
+    }
     const cacheKey = `api_read_rate_limit:v1:${bucket}:${clientKey}`;
     const currentCount = (await this.cacheService.getNumber(cacheKey)) ?? 0;
 
