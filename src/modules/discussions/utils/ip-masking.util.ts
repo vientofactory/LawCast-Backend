@@ -6,35 +6,56 @@ const IP_SALT =
 
 export class IpMaskingUtil {
   /**
+   * Normalize a header value to its first entry. Express may return a string
+   * or a string[] depending on header repetition and version.
+   */
+  private static firstHeaderValue(value: unknown): string | null {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+    if (Array.isArray(value)) {
+      const first = value.find(
+        (entry): entry is string => typeof entry === 'string' && !!entry.trim(),
+      );
+      return first ? first.trim() : null;
+    }
+    return null;
+  }
+
+  /**
    * Extract raw client IP from request headers or connection.
    */
   static extractClientIp(req: Request): string {
-    const forwardedClientIp = req.headers['x-lawcast-client-ip'];
-    if (typeof forwardedClientIp === 'string' && forwardedClientIp.trim()) {
-      return this.cleanIp(forwardedClientIp.trim());
+    const forwardedClientIp = this.firstHeaderValue(
+      req.headers['x-lawcast-client-ip'],
+    );
+    if (forwardedClientIp) {
+      return this.cleanIp(forwardedClientIp);
     }
 
-    const cfIp = req.headers['cf-connecting-ip'];
-    if (typeof cfIp === 'string' && cfIp.trim()) {
-      return this.cleanIp(cfIp.trim());
+    const cfIp = this.firstHeaderValue(req.headers['cf-connecting-ip']);
+    if (cfIp) {
+      return this.cleanIp(cfIp);
     }
 
-    const xForwardedFor = req.headers['x-forwarded-for'];
-    if (typeof xForwardedFor === 'string' && xForwardedFor.trim()) {
+    const trueClientIp = this.firstHeaderValue(
+      req.headers['true-client-ip'],
+    );
+    if (trueClientIp) {
+      return this.cleanIp(trueClientIp);
+    }
+
+    const xForwardedFor = this.firstHeaderValue(req.headers['x-forwarded-for']);
+    if (xForwardedFor) {
       const firstIp = xForwardedFor.split(',')[0].trim();
       if (firstIp) {
         return this.cleanIp(firstIp);
       }
-    } else if (Array.isArray(xForwardedFor) && xForwardedFor.length > 0) {
-      const firstIp = xForwardedFor[0].split(',')[0].trim();
-      if (firstIp) {
-        return this.cleanIp(firstIp);
-      }
     }
 
-    const xRealIp = req.headers['x-real-ip'];
-    if (typeof xRealIp === 'string' && xRealIp.trim()) {
-      return this.cleanIp(xRealIp.trim());
+    const xRealIp = this.firstHeaderValue(req.headers['x-real-ip']);
+    if (xRealIp) {
+      return this.cleanIp(xRealIp);
     }
 
     if (req.ip) {

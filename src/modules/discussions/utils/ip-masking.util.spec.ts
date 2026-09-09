@@ -68,6 +68,47 @@ describe('IpMaskingUtil', () => {
 
       expect(IpMaskingUtil.extractClientIp(mockReq)).toBe('198.51.100.1');
     });
+
+    it('should fallback to true-client-ip before req.ip', () => {
+      const mockReq = {
+        headers: { 'true-client-ip': '198.51.100.77' },
+        ip: '10.0.0.9',
+      } as unknown as Request;
+
+      expect(IpMaskingUtil.extractClientIp(mockReq)).toBe('198.51.100.77');
+    });
+
+    it('should fallback to x-real-ip before req.ip', () => {
+      const mockReq = {
+        headers: { 'x-real-ip': '198.51.100.88' },
+        ip: '10.0.0.9',
+      } as unknown as Request;
+
+      expect(IpMaskingUtil.extractClientIp(mockReq)).toBe('198.51.100.88');
+    });
+
+    it('should ignore blank forwarded headers and fall through', () => {
+      const mockReq = {
+        headers: {
+          'x-lawcast-client-ip': '   ',
+          'cf-connecting-ip': '',
+          'x-forwarded-for': ', ,',
+        },
+        ip: '10.0.0.9',
+      } as unknown as Request;
+
+      expect(IpMaskingUtil.extractClientIp(mockReq)).toBe('10.0.0.9');
+    });
+
+    it('should handle array-valued x-forwarded-for headers', () => {
+      const mockReq = {
+        headers: {
+          'x-forwarded-for': ['203.0.113.5, 70.41.3.18'] as any,
+        },
+      } as unknown as Request;
+
+      expect(IpMaskingUtil.extractClientIp(mockReq)).toBe('203.0.113.5');
+    });
   });
 
   describe('hashIp', () => {

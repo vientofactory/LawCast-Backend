@@ -1,7 +1,7 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
-import { createHash } from 'node:crypto';
 import type { Request } from 'express';
 import { CacheService } from '../cache/cache.service';
+import { IpMaskingUtil } from '../discussions/utils/ip-masking.util';
 
 type ApiReadRateLimitBucket = 'standard' | 'expensive';
 
@@ -22,15 +22,13 @@ export class ApiReadRateLimitService {
     bucket: ApiReadRateLimitBucket = 'standard',
   ): Promise<void> {
     const policy = this.policies[bucket];
-    const rawIp = String(
-      request.headers['x-lawcast-client-ip'] ??
-        request.headers['cf-connecting-ip'] ??
-        request.ip ??
-        request.headers['x-forwarded-for'] ??
-        request.socket.remoteAddress ??
-        'unknown',
-    );
-    const clientKey = createHash('sha256').update(rawIp).digest('hex');
+
+    // Key on the original visitor IP, not the immediate peer. SSR traffic
+    // arrives from the frontend worker/proxy, so the peer address would put
+    // every user in one shared bucket. Header priority (x-lawcast-client-ip
+    // first) matches DiscussionsRateLimitService via IpMaskingUtil.
+    const clientIp = IpMaskingUtil.extractClientIp(request);
+    const clientKey = IpMaskingUtil.hashIp(clientIp);
     const cacheKey = `api_read_rate_limit:v1:${bucket}:${clientKey}`;
     const currentCount = (await this.cacheService.getNumber(cacheKey)) ?? 0;
 
