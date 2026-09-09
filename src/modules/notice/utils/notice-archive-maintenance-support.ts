@@ -18,7 +18,7 @@ import {
   type ArchiveNumCompareCountQuery,
   type ArchiveSummaryState,
 } from '../notice-archive.service';
-import { AI_SUMMARY_STATUS } from 'src/modules/crawling/utils/ai-summary-status.utils';
+import { AI_SUMMARY_STATUS } from '../../../modules/crawling/utils/ai-summary-status.utils';
 
 export interface NoticeArchiveMaintenanceDeps {
   archiveRepository: Repository<NoticeArchive>;
