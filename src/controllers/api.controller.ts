@@ -15,6 +15,7 @@ import {
   Res,
   NotFoundException,
   StreamableFile,
+  UseFilters,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Request, Response } from 'express';
@@ -51,12 +52,14 @@ import {
   assertValidPage,
 } from '../utils/request-limits.utils';
 import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
+import { ApiReadRateLimitFilter } from '../modules/shared/api-read-rate-limit.filter';
 import {
   parseIsoDate,
   parsePositiveInteger,
 } from '../utils/query-parsing.utils';
 
 @Controller('api')
+@UseFilters(ApiReadRateLimitFilter)
 export class ApiController {
   constructor(
     private readonly configService: ConfigService,

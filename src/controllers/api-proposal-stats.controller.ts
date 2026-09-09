@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Req } from '@nestjs/common';
+import { Controller, Get, Query, Req, UseFilters } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiResponseUtils } from '../utils/api-response.utils';
 import {
@@ -7,8 +7,10 @@ import {
 } from '../modules/notice/proposal-statistics.service';
 import { assertValidStatisticsDateRange } from '../utils/request-limits.utils';
 import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
+import { ApiReadRateLimitFilter } from '../modules/shared/api-read-rate-limit.filter';
 
 @Controller('api/stats')
+@UseFilters(ApiReadRateLimitFilter)
 export class ApiProposalStatsController {
   constructor(
     private readonly proposalStatisticsService: ProposalStatisticsService,

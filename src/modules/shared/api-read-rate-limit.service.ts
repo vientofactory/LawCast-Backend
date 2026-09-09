@@ -35,16 +35,30 @@ export class ApiReadRateLimitService {
     const currentCount = (await this.cacheService.getNumber(cacheKey)) ?? 0;
 
     if (currentCount >= policy.maxRequests) {
-      throw new HttpException(
-        'Too many requests. Please retry shortly.',
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+      throw new ApiReadRateLimitException(policy.windowSeconds);
     }
 
     await this.cacheService.setNumber(
       cacheKey,
       currentCount + 1,
       policy.windowSeconds * 1_000,
+    );
+  }
+}
+
+/**
+ * 429 with a structured body the frontend can act on:
+ * `{ statusCode, message, retryAfter }` plus a `Retry-After` header.
+ */
+export class ApiReadRateLimitException extends HttpException {
+  constructor(readonly retryAfterSeconds: number) {
+    super(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        message: 'Too many requests. Please retry shortly.',
+        retryAfter: retryAfterSeconds,
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
     );
   }
 }
