@@ -2,7 +2,7 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import { CacheService } from '../cache/cache.service';
 import { IpMaskingUtil } from '../discussions/utils/ip-masking.util';
-import { LoggerUtils } from 'src/utils/logger.utils';
+import { LoggerUtils } from '../../utils/logger.utils';
 
 type ApiReadRateLimitBucket = 'standard' | 'expensive';
 
