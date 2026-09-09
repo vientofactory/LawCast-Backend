@@ -1,12 +1,16 @@
-import { HttpException, HttpStatus, Injectable, type LoggerService } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import { CacheService } from '../cache/cache.service';
 import { IpMaskingUtil } from '../discussions/utils/ip-masking.util';
+import { LoggerUtils } from 'src/utils/logger.utils';
 
 type ApiReadRateLimitBucket = 'standard' | 'expensive';
 
 @Injectable()
 export class ApiReadRateLimitService {
+  private readonly logger = LoggerUtils.getContextLogger(
+    ApiReadRateLimitService.name,
+  );
   private readonly policies: Record<
     ApiReadRateLimitBucket,
     { maxRequests: number; windowSeconds: number }
@@ -15,10 +19,7 @@ export class ApiReadRateLimitService {
     expensive: { maxRequests: 30, windowSeconds: 60 },
   };
 
-  constructor(
-    private readonly cacheService: CacheService,
-    private readonly logger?: LoggerService,
-  ) {}
+  constructor(private readonly cacheService: CacheService) {}
 
   /**
    * True when the request carries no forwarded client identity at all, i.e.
@@ -50,11 +51,6 @@ export class ApiReadRateLimitService {
     const clientIp = IpMaskingUtil.extractClientIp(request);
     const clientKey = IpMaskingUtil.hashIp(clientIp);
 
-    if (ApiReadRateLimitService.hasNoForwardedIdentity(request)) {
-      this.logger?.warn?.(
-        `api-read-rate-limit keyed on peer address (no forwarded client IP header); peer=${request.ip ?? request.socket?.remoteAddress ?? 'unknown'}`,
-      );
-    }
     const cacheKey = `api_read_rate_limit:v1:${bucket}:${clientKey}`;
     const currentCount = (await this.cacheService.getNumber(cacheKey)) ?? 0;
 

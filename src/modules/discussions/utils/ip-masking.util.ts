@@ -38,9 +38,7 @@ export class IpMaskingUtil {
       return this.cleanIp(cfIp);
     }
 
-    const trueClientIp = this.firstHeaderValue(
-      req.headers['true-client-ip'],
-    );
+    const trueClientIp = this.firstHeaderValue(req.headers['true-client-ip']);
     if (trueClientIp) {
       return this.cleanIp(trueClientIp);
     }
