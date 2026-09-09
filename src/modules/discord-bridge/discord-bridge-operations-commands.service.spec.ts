@@ -2,21 +2,35 @@ import { MessageFlags } from 'discord.js';
 import { DiscordBridgeOperationsCommandsService } from './discord-bridge-operations-commands.service';
 import { BridgeLogLevel } from './discord-bridge.types';
 
-jest.mock('../health/health-check.service', () => ({ HealthCheckService: class {} }));
-jest.mock('../health/runtime-stats.service', () => ({ RuntimeStatsService: class {} }));
+jest.mock('../health/health-check.service', () => ({
+  HealthCheckService: class {},
+}));
+jest.mock('../health/runtime-stats.service', () => ({
+  RuntimeStatsService: class {},
+}));
 jest.mock('../webhook/webhook.service', () => ({ WebhookService: class {} }));
-jest.mock('../crawling/crawling.service', () => ({ CrawlingService: class {} }));
-jest.mock('../notice/notice-archive.service', () => ({ NoticeArchiveService: class {} }));
-jest.mock('../crawling/archive-sync.service', () => ({ ArchiveSyncService: class {} }));
+jest.mock('../crawling/crawling.service', () => ({
+  CrawlingService: class {},
+}));
+jest.mock('../notice/notice-archive.service', () => ({
+  NoticeArchiveService: class {},
+}));
+jest.mock('../crawling/archive-sync.service', () => ({
+  ArchiveSyncService: class {},
+}));
 jest.mock('../cache/cache.service', () => ({ CacheService: class {} }));
-jest.mock('../shared/batch-processing.service', () => ({ BatchProcessingService: class {} }));
+jest.mock('../shared/batch-processing.service', () => ({
+  BatchProcessingService: class {},
+}));
 jest.mock('../crawling/archive-orchestrator.service', () => ({
   ArchiveOrchestratorService: class {},
 }));
 jest.mock('../crawling/browser-lease-manager.service', () => ({
   BrowserLeaseManagerService: class {},
 }));
-jest.mock('../db-mirror/db-mirror.service', () => ({ DbMirrorService: class {} }));
+jest.mock('../db-mirror/db-mirror.service', () => ({
+  DbMirrorService: class {},
+}));
 
 describe('DiscordBridgeOperationsCommandsService', () => {
   function createService(get: jest.Mock) {
@@ -76,9 +90,10 @@ describe('DiscordBridgeOperationsCommandsService', () => {
           'Admins',
         ]),
       );
-      expect(embed.data.fields.find((f: { name: string }) => f.name === 'Admins').value).toBe(
-        '2',
-      );
+      expect(
+        embed.data.fields.find((f: { name: string }) => f.name === 'Admins')
+          .value,
+      ).toBe('2');
     });
   });
 
@@ -90,7 +105,9 @@ describe('DiscordBridgeOperationsCommandsService', () => {
           dependencies: { redis: 'ok', ollama: 'ok' },
         }),
       };
-      const service = createService(jest.fn().mockReturnValue(healthCheckService));
+      const service = createService(
+        jest.fn().mockReturnValue(healthCheckService),
+      );
       const interaction = createInteraction('health');
 
       await service.execute(interaction, ctx);
@@ -108,9 +125,13 @@ describe('DiscordBridgeOperationsCommandsService', () => {
 
     it('replies with a degraded embed when health status is not healthy', async () => {
       const healthCheckService = {
-        getApiHealthPayload: jest.fn().mockResolvedValue({ status: 'degraded' }),
+        getApiHealthPayload: jest
+          .fn()
+          .mockResolvedValue({ status: 'degraded' }),
       };
-      const service = createService(jest.fn().mockReturnValue(healthCheckService));
+      const service = createService(
+        jest.fn().mockReturnValue(healthCheckService),
+      );
       const interaction = createInteraction('health');
 
       await service.execute(interaction, ctx);
@@ -125,7 +146,11 @@ describe('DiscordBridgeOperationsCommandsService', () => {
       const runtimeStats = {
         getAggregatedStats: jest.fn().mockResolvedValue({
           nodeRuntime: {
-            memory: { rss: 104857600, heapUsed: 52428800, heapTotal: 209715200 },
+            memory: {
+              rss: 104857600,
+              heapUsed: 52428800,
+              heapTotal: 209715200,
+            },
             eventLoopDelay: {
               mean: 1.5,
               percentiles: { p50: 1, p90: 2, p99: 3 },
@@ -167,7 +192,8 @@ describe('DiscordBridgeOperationsCommandsService', () => {
         ]),
       );
       expect(
-        embed.data.fields.find((f: { name: string }) => f.name === 'Archives').value,
+        embed.data.fields.find((f: { name: string }) => f.name === 'Archives')
+          .value,
       ).toBe('42');
     });
   });
@@ -191,10 +217,16 @@ describe('DiscordBridgeOperationsCommandsService', () => {
       expect(embed.data.title).toBe('🗄️ Cache Status');
       const fieldNames = embed.data.fields.map((f: { name: string }) => f.name);
       expect(fieldNames).toEqual(
-        expect.arrayContaining(['Size', 'Max Size', 'Initialized', 'Last Updated']),
+        expect.arrayContaining([
+          'Size',
+          'Max Size',
+          'Initialized',
+          'Last Updated',
+        ]),
       );
       expect(
-        embed.data.fields.find((f: { name: string }) => f.name === 'Size').value,
+        embed.data.fields.find((f: { name: string }) => f.name === 'Size')
+          .value,
       ).toBe('7');
     });
 
@@ -214,14 +246,18 @@ describe('DiscordBridgeOperationsCommandsService', () => {
 
       const embed = interaction.reply.mock.calls[0][0].embeds[0];
       expect(
-        embed.data.fields.find((f: { name: string }) => f.name === 'Last Updated').value,
+        embed.data.fields.find(
+          (f: { name: string }) => f.name === 'Last Updated',
+        ).value,
       ).toBe('N/A');
     });
   });
 
   describe('crawl command', () => {
     it('defers, runs the crawl, and reports success', async () => {
-      const crawlingService = { handleCron: jest.fn().mockResolvedValue(undefined) };
+      const crawlingService = {
+        handleCron: jest.fn().mockResolvedValue(undefined),
+      };
       const service = createService(jest.fn().mockReturnValue(crawlingService));
       const interaction = createInteraction('crawl');
 
@@ -251,13 +287,17 @@ describe('DiscordBridgeOperationsCommandsService', () => {
 
   describe('batch-history command', () => {
     it('replies with an info message when there is no history', async () => {
-      const batchService = { getRecentJobHistory: jest.fn().mockReturnValue([]) };
+      const batchService = {
+        getRecentJobHistory: jest.fn().mockReturnValue([]),
+      };
       const service = createService(jest.fn().mockReturnValue(batchService));
       const interaction = createInteraction('batch-history');
 
       await service.execute(interaction, ctx);
 
-      expect(interaction.reply).toHaveBeenCalledWith('ℹ️ No recent batch jobs.');
+      expect(interaction.reply).toHaveBeenCalledWith(
+        'ℹ️ No recent batch jobs.',
+      );
     });
 
     it('replies with an embed when history exists', async () => {
@@ -275,7 +315,9 @@ describe('DiscordBridgeOperationsCommandsService', () => {
       const embed = interaction.reply.mock.calls[0][0].embeds[0];
       expect(embed.data.title).toBe('📋 Recent Batch History');
       expect(embed.data.description).toContain('crawl');
-      expect(embed.data.footer.text).toBe('2 job(s) shown | LawCast Debug Bridge');
+      expect(embed.data.footer.text).toBe(
+        '2 job(s) shown | LawCast Debug Bridge',
+      );
     });
   });
 
@@ -367,7 +409,8 @@ describe('DiscordBridgeOperationsCommandsService', () => {
               name: 'integrity check',
               status: 'idle',
               lastRunAt: null,
-              lastError: 'previous failure with a long message that gets truncated',
+              lastError:
+                'previous failure with a long message that gets truncated',
             },
             {
               name: 'chain integrity audit',
@@ -399,12 +442,18 @@ describe('DiscordBridgeOperationsCommandsService', () => {
       expect(embed.data.title).toBe('🔒 Lock / Phase Debug');
       const fieldNames = embed.data.fields.map((f: { name: string }) => f.name);
       expect(fieldNames).toEqual(
-        expect.arrayContaining(['Scheduler / Phases', 'Write-Heavy', 'Recent Activity']),
+        expect.arrayContaining([
+          'Scheduler / Phases',
+          'Write-Heavy',
+          'Recent Activity',
+        ]),
       );
       expect(embed.data.fields[0].value).toContain('scheduler.busy=true');
       expect(embed.data.fields[0].value).toContain('archive.anyRunning=true');
       expect(embed.data.fields[1].value).toContain('fullSyncApply.queue=3');
-      expect(embed.data.fields[2].value).toContain('pending sync: status=running');
+      expect(embed.data.fields[2].value).toContain(
+        'pending sync: status=running',
+      );
     });
 
     it('truncates long phase errors in the recent activity section', async () => {
@@ -525,7 +574,9 @@ describe('DiscordBridgeOperationsCommandsService', () => {
           forceKillWaitMs: 3000,
         }),
       };
-      const service = createService(jest.fn().mockReturnValue(browserLeaseService));
+      const service = createService(
+        jest.fn().mockReturnValue(browserLeaseService),
+      );
       const interaction = createInteraction('browser-lease');
 
       await service.execute(interaction, ctx);
@@ -559,7 +610,9 @@ describe('DiscordBridgeOperationsCommandsService', () => {
           forceKillWaitMs: 3000,
         }),
       };
-      const service = createService(jest.fn().mockReturnValue(browserLeaseService));
+      const service = createService(
+        jest.fn().mockReturnValue(browserLeaseService),
+      );
       const interaction = createInteraction('browser-lease');
 
       await service.execute(interaction, ctx);
@@ -581,7 +634,9 @@ describe('DiscordBridgeOperationsCommandsService', () => {
       expect(interaction.deferReply).toHaveBeenCalledWith({
         flags: MessageFlags.Ephemeral,
       });
-      expect(dbMirrorService.runMirrorJob).toHaveBeenCalledWith({ force: true });
+      expect(dbMirrorService.runMirrorJob).toHaveBeenCalledWith({
+        force: true,
+      });
       expect(interaction.editReply).toHaveBeenCalledWith(
         '✅ Database mirror upload triggered successfully.',
       );

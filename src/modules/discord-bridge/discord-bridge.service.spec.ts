@@ -1,4 +1,11 @@
-import { Collection, Client, REST, Routes, Events, MessageFlags } from 'discord.js';
+import {
+  Collection,
+  Client,
+  REST,
+  Routes,
+  Events,
+  MessageFlags,
+} from 'discord.js';
 import { DiscordBridgeService } from './discord-bridge.service';
 import { BridgeLogLevel } from './discord-bridge.types';
 
@@ -44,9 +51,7 @@ describe('DiscordBridgeService', () => {
     } as any;
   }
 
-  function createService(
-    configOverrides: Record<string, unknown> = {},
-  ): {
+  function createService(configOverrides: Record<string, unknown> = {}): {
     service: DiscordBridgeService;
     configService: any;
     commandsService: {
@@ -59,10 +64,14 @@ describe('DiscordBridgeService', () => {
       execute: jest.fn().mockResolvedValue(undefined),
       executeComponentInteraction: jest.fn().mockResolvedValue(true),
     };
-    const service = new DiscordBridgeService(configService, commandsService as any);
+    const service = new DiscordBridgeService(
+      configService,
+      commandsService as any,
+    );
     return { service, configService, commandsService };
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   function makeReady(service: DiscordBridgeService): void {
     const readyHandler = mockClient.once.mock.calls.find(
       ([event]) => event === Events.ClientReady,
@@ -115,10 +124,16 @@ describe('DiscordBridgeService', () => {
       const { configService } = createService();
       expect(configService.get).toHaveBeenCalledWith('discordBridge.enabled');
       expect(configService.get).toHaveBeenCalledWith('discordBridge.botToken');
-      expect(configService.get).toHaveBeenCalledWith('discordBridge.bridgeChannelId');
-      expect(configService.get).toHaveBeenCalledWith('discordBridge.logChannelId');
+      expect(configService.get).toHaveBeenCalledWith(
+        'discordBridge.bridgeChannelId',
+      );
+      expect(configService.get).toHaveBeenCalledWith(
+        'discordBridge.logChannelId',
+      );
       expect(configService.get).toHaveBeenCalledWith('discordBridge.logLevel');
-      expect(configService.get).toHaveBeenCalledWith('discordBridge.adminUserIds');
+      expect(configService.get).toHaveBeenCalledWith(
+        'discordBridge.adminUserIds',
+      );
       expect(configService.get).toHaveBeenCalledWith('discordBridge.guildId');
     });
 
@@ -159,7 +174,10 @@ describe('DiscordBridgeService', () => {
         Events.InteractionCreate,
         expect.any(Function),
       );
-      expect(mockClient.on).toHaveBeenCalledWith(Events.Error, expect.any(Function));
+      expect(mockClient.on).toHaveBeenCalledWith(
+        Events.Error,
+        expect.any(Function),
+      );
       expect(mockClient.login).toHaveBeenCalledWith('bot-token');
     });
 
@@ -241,9 +259,14 @@ describe('DiscordBridgeService', () => {
       const channel = createTextChannel();
       mockClient.channels.fetch.mockResolvedValue(channel);
 
-      await service.logEvent(BridgeLogLevel.WARN, 'crawling', 'something failed', {
-        attempts: 3,
-      });
+      await service.logEvent(
+        BridgeLogLevel.WARN,
+        'crawling',
+        'something failed',
+        {
+          attempts: 3,
+        },
+      );
 
       expect(mockClient.channels.fetch).toHaveBeenCalledWith('log-channel');
       expect(channel.send).toHaveBeenCalledTimes(1);
@@ -439,9 +462,13 @@ describe('DiscordBridgeService', () => {
       const { service } = createService();
       await service.onModuleInit();
       makeReady(service);
-      mockClient.channels.fetch.mockRejectedValueOnce(new Error('missing channel'));
+      mockClient.channels.fetch.mockRejectedValueOnce(
+        new Error('missing channel'),
+      );
 
-      await expect(service.upsertDbMirrorAnnouncement(params)).resolves.toBeUndefined();
+      await expect(
+        service.upsertDbMirrorAnnouncement(params),
+      ).resolves.toBeUndefined();
     });
   });
 
@@ -487,7 +514,13 @@ describe('DiscordBridgeService', () => {
         .mockResolvedValueOnce(
           new Collection([
             ['e1', existing],
-            ['e2', createMessage('e2', { embeds: [{ title: 'LawCast Database Mirror Error' }], createdTimestamp: 50 })],
+            [
+              'e2',
+              createMessage('e2', {
+                embeds: [{ title: 'LawCast Database Mirror Error' }],
+                createdTimestamp: 50,
+              }),
+            ],
           ]),
         )
         .mockResolvedValue(new Collection());
@@ -608,7 +641,9 @@ describe('DiscordBridgeService', () => {
 
       await handler(interaction);
 
-      expect(commandsService.executeComponentInteraction).toHaveBeenCalledWith(interaction);
+      expect(commandsService.executeComponentInteraction).toHaveBeenCalledWith(
+        interaction,
+      );
     });
 
     it('replies with an ephemeral error when a command throws', async () => {
@@ -657,7 +692,10 @@ describe('DiscordBridgeService', () => {
     it('lets commands change the log level through the context', async () => {
       const { service, commandsService } = createService();
       commandsService.execute.mockImplementationOnce(
-        async (_i: unknown, ctx: { setLogLevel: (l: BridgeLogLevel) => void }) => {
+        async (
+          _i: unknown,
+          ctx: { setLogLevel: (l: BridgeLogLevel) => void },
+        ) => {
           ctx.setLogLevel(BridgeLogLevel.DEBUG);
         },
       );

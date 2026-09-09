@@ -1,14 +1,18 @@
 import { MessageFlags } from 'discord.js';
 import { DiscordBridgeAdminAnnouncementCommandService } from './discord-bridge-admin-announcement-command.service';
 
-jest.mock('../notification/notification.service', () => ({ NotificationService: class {} }));
+jest.mock('../notification/notification.service', () => ({
+  NotificationService: class {},
+}));
 jest.mock('../webhook/webhook.service', () => ({ WebhookService: class {} }));
 
 const PREFIX = 'admin_announcement';
 
 describe('DiscordBridgeAdminAnnouncementCommandService', () => {
   function createService(get: jest.Mock) {
-    const service = new DiscordBridgeAdminAnnouncementCommandService({ get } as any);
+    const service = new DiscordBridgeAdminAnnouncementCommandService({
+      get,
+    } as any);
     return service;
   }
 
@@ -134,8 +138,12 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
       const customIds = replyArgs.components[0].components.map(
         (button: any) => button.data.custom_id,
       );
-      expect(customIds[0]).toMatch(new RegExp(`^${PREFIX}:open_modal:[a-f0-9]{8}$`));
-      expect(customIds[1]).toMatch(new RegExp(`^${PREFIX}:cancel:[a-f0-9]{8}$`));
+      expect(customIds[0]).toMatch(
+        new RegExp(`^${PREFIX}:open_modal:[a-f0-9]{8}$`),
+      );
+      expect(customIds[1]).toMatch(
+        new RegExp(`^${PREFIX}:cancel:[a-f0-9]{8}$`),
+      );
     });
 
     it('honors the dry_run flag in the summary embed', async () => {
@@ -148,7 +156,9 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
       await service.executeCommand(interaction);
 
       const replyArgs = interaction.reply.mock.calls[0][0];
-      expect(replyArgs.embeds[0].data.title).toBe('🧪 관리자 공지 Dry-Run 요약');
+      expect(replyArgs.embeds[0].data.title).toBe(
+        '🧪 관리자 공지 Dry-Run 요약',
+      );
       expect(replyArgs.embeds[0].data.fields[2].value).toBe('dry-run');
     });
   });
@@ -158,7 +168,9 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
       const service = createService(jest.fn());
       const interaction = createButtonInteraction('other:action');
 
-      await expect(service.executeComponentInteraction(interaction)).resolves.toBe(false);
+      await expect(
+        service.executeComponentInteraction(interaction),
+      ).resolves.toBe(false);
       expect(interaction.reply).not.toHaveBeenCalled();
     });
 
@@ -166,7 +178,9 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
       const service = createService(jest.fn());
       const interaction = createModalInteraction('other:submit_modal:abc', {});
 
-      await expect(service.executeComponentInteraction(interaction)).resolves.toBe(false);
+      await expect(
+        service.executeComponentInteraction(interaction),
+      ).resolves.toBe(false);
     });
 
     it('ignores unsupported interaction types', async () => {
@@ -177,7 +191,9 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
         customId: 'admin_announcement:open_modal:abc',
       } as any;
 
-      await expect(service.executeComponentInteraction(interaction)).resolves.toBe(false);
+      await expect(
+        service.executeComponentInteraction(interaction),
+      ).resolves.toBe(false);
     });
 
     it('replies when the pending announcement has expired or is missing', async () => {
@@ -283,21 +299,6 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
   });
 
   describe('announcement modal flow', () => {
-    async function createServiceWithPendingDraft(get: jest.Mock) {
-      const service = createService(get);
-      const chatInput = createChatInputInteraction();
-      await service.executeCommand(chatInput);
-      const token = extractTokenFromReply(chatInput.reply);
-
-      const modal = createModalInteraction(`${PREFIX}:submit_modal:${token}`, {
-        announcement_title: '시스템 점검 안내',
-        announcement_body: '금일 22시부터 23시까지 시스템 점검을 진행합니다.',
-        confirm_keyword: 'send',
-      });
-      await service.executeComponentInteraction(modal);
-      return { service, token, modal };
-    }
-
     it('rejects a mismatched confirm keyword and keeps the draft flow open', async () => {
       const webhookService = { findAll: jest.fn().mockResolvedValue(webhooks) };
       const service = createService(jest.fn().mockReturnValue(webhookService));
@@ -342,7 +343,9 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
 
       expect(modal.editReply).toHaveBeenCalledTimes(1);
       const replyArgs = modal.editReply.mock.calls[0][0];
-      expect(replyArgs.content).toContain('확인 키워드 SEND 입력 후 최종 전송 버튼을 눌러주세요.');
+      expect(replyArgs.content).toContain(
+        '확인 키워드 SEND 입력 후 최종 전송 버튼을 눌러주세요.',
+      );
       expect(replyArgs.embeds[0].data.title).toBe('⚠️ 관리자 공지 전송 요약');
       expect(replyArgs.embeds[0].data.fields[3].value).toBe('시스템 점검 안내');
       const customIds = replyArgs.components[0].components.map(
@@ -405,14 +408,18 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
       );
       await service.executeComponentInteraction(buttonInteraction);
 
-      expect(notificationService.sendDiscordAdminAnnouncementBatch).not.toHaveBeenCalled();
+      expect(
+        notificationService.sendDiscordAdminAnnouncementBatch,
+      ).not.toHaveBeenCalled();
       expect(buttonInteraction.editReply).toHaveBeenCalledWith(
         expect.objectContaining({
           content: expect.stringContaining('🧪 Dry-run completed'),
         }),
       );
       // The stale draft from the first run was not sent either
-      expect(notificationService.sendDiscordAdminAnnouncementBatch).not.toHaveBeenCalled();
+      expect(
+        notificationService.sendDiscordAdminAnnouncementBatch,
+      ).not.toHaveBeenCalled();
     });
 
     it('sends the announcement and reports per-webhook results', async () => {
@@ -421,12 +428,15 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
         remove: jest.fn().mockResolvedValue(undefined),
       };
       const notificationService = {
-        sendDiscordAdminAnnouncementBatch: jest
-          .fn()
-          .mockResolvedValue([
-            { webhookId: 1, success: true },
-            { webhookId: 2, success: false, shouldDelete: true, error: new Error('410 Gone') },
-          ]),
+        sendDiscordAdminAnnouncementBatch: jest.fn().mockResolvedValue([
+          { webhookId: 1, success: true },
+          {
+            webhookId: 2,
+            success: false,
+            shouldDelete: true,
+            error: new Error('410 Gone'),
+          },
+        ]),
         clearPermanentFailureFlag: jest.fn(),
       };
       const get = jest
@@ -441,7 +451,9 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
       );
       await service.executeComponentInteraction(buttonInteraction);
 
-      expect(notificationService.sendDiscordAdminAnnouncementBatch).toHaveBeenCalledWith(
+      expect(
+        notificationService.sendDiscordAdminAnnouncementBatch,
+      ).toHaveBeenCalledWith(
         expect.objectContaining({
           title: '시스템 점검 안내',
           body: '금일 22시부터 23시까지 시스템 점검을 진행합니다.',
@@ -451,7 +463,9 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
         webhooks,
       );
       expect(webhookService.remove).toHaveBeenCalledWith(2);
-      expect(notificationService.clearPermanentFailureFlag).toHaveBeenCalledWith(2);
+      expect(
+        notificationService.clearPermanentFailureFlag,
+      ).toHaveBeenCalledWith(2);
       expect(buttonInteraction.editReply).toHaveBeenCalledWith(
         expect.objectContaining({
           content: expect.stringContaining(
@@ -506,7 +520,9 @@ describe('DiscordBridgeAdminAnnouncementCommandService', () => {
       );
       await service.executeComponentInteraction(buttonInteraction);
 
-      expect(notificationService.sendDiscordAdminAnnouncementBatch).not.toHaveBeenCalled();
+      expect(
+        notificationService.sendDiscordAdminAnnouncementBatch,
+      ).not.toHaveBeenCalled();
       expect(buttonInteraction.editReply).toHaveBeenCalledWith(
         expect.objectContaining({
           content: 'ℹ️ 활성화된 웹훅이 없어 공지를 전송하지 않았습니다.',

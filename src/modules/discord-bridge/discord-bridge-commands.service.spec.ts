@@ -28,8 +28,12 @@ describe('DiscordBridgeCommandsService', () => {
 
   describe('execute', () => {
     it('short-circuits when operationsCommands handles the command', async () => {
-      const { service, operationsCommands, discussionsCommands, adminAnnouncementCommands } =
-        createService();
+      const {
+        service,
+        operationsCommands,
+        discussionsCommands,
+        adminAnnouncementCommands,
+      } = createService();
       operationsCommands.execute.mockResolvedValueOnce(true);
       const interaction = { commandName: 'status' } as any;
       const ctx = { currentLogLevel: 2 } as any;
@@ -42,8 +46,12 @@ describe('DiscordBridgeCommandsService', () => {
     });
 
     it('routes to discussionsCommands when operations does not handle it', async () => {
-      const { service, operationsCommands, discussionsCommands, adminAnnouncementCommands } =
-        createService();
+      const {
+        service,
+        operationsCommands,
+        discussionsCommands,
+        adminAnnouncementCommands,
+      } = createService();
       discussionsCommands.executeCommand.mockResolvedValueOnce(true);
       const interaction = { commandName: 'discussion-admin' } as any;
       const ctx = { currentLogLevel: 2 } as any;
@@ -51,54 +59,82 @@ describe('DiscordBridgeCommandsService', () => {
       await service.execute(interaction, ctx);
 
       expect(operationsCommands.execute).toHaveBeenCalledWith(interaction, ctx);
-      expect(discussionsCommands.executeCommand).toHaveBeenCalledWith(interaction);
+      expect(discussionsCommands.executeCommand).toHaveBeenCalledWith(
+        interaction,
+      );
       expect(adminAnnouncementCommands.executeCommand).not.toHaveBeenCalled();
     });
 
     it('falls back to adminAnnouncementCommands when nothing else handles it', async () => {
-      const { service, operationsCommands, discussionsCommands, adminAnnouncementCommands } =
-        createService();
+      const {
+        service,
+        operationsCommands,
+        discussionsCommands,
+        adminAnnouncementCommands,
+      } = createService();
       const interaction = { commandName: 'notice-batch' } as any;
       const ctx = { currentLogLevel: 2 } as any;
 
       await service.execute(interaction, ctx);
 
       expect(operationsCommands.execute).toHaveBeenCalledWith(interaction, ctx);
-      expect(discussionsCommands.executeCommand).toHaveBeenCalledWith(interaction);
-      expect(adminAnnouncementCommands.executeCommand).toHaveBeenCalledWith(interaction);
+      expect(discussionsCommands.executeCommand).toHaveBeenCalledWith(
+        interaction,
+      );
+      expect(adminAnnouncementCommands.executeCommand).toHaveBeenCalledWith(
+        interaction,
+      );
     });
   });
 
   describe('executeComponentInteraction', () => {
     it('returns true when discussionsCommands handles the component', async () => {
-      const { service, discussionsCommands, adminAnnouncementCommands } = createService();
-      discussionsCommands.executeComponentInteraction.mockResolvedValueOnce(true);
+      const { service, discussionsCommands, adminAnnouncementCommands } =
+        createService();
+      discussionsCommands.executeComponentInteraction.mockResolvedValueOnce(
+        true,
+      );
       const interaction = { customId: 'da:page:1:-' } as any;
 
-      await expect(service.executeComponentInteraction(interaction)).resolves.toBe(true);
+      await expect(
+        service.executeComponentInteraction(interaction),
+      ).resolves.toBe(true);
 
-      expect(discussionsCommands.executeComponentInteraction).toHaveBeenCalledWith(interaction);
-      expect(adminAnnouncementCommands.executeComponentInteraction).not.toHaveBeenCalled();
+      expect(
+        discussionsCommands.executeComponentInteraction,
+      ).toHaveBeenCalledWith(interaction);
+      expect(
+        adminAnnouncementCommands.executeComponentInteraction,
+      ).not.toHaveBeenCalled();
     });
 
     it('falls back to adminAnnouncementCommands and returns its result', async () => {
-      const { service, discussionsCommands, adminAnnouncementCommands } = createService();
-      adminAnnouncementCommands.executeComponentInteraction.mockResolvedValueOnce(true);
+      const { service, discussionsCommands, adminAnnouncementCommands } =
+        createService();
+      adminAnnouncementCommands.executeComponentInteraction.mockResolvedValueOnce(
+        true,
+      );
       const interaction = { customId: 'admin_announcement:cancel:abc' } as any;
 
-      await expect(service.executeComponentInteraction(interaction)).resolves.toBe(true);
+      await expect(
+        service.executeComponentInteraction(interaction),
+      ).resolves.toBe(true);
 
-      expect(discussionsCommands.executeComponentInteraction).toHaveBeenCalledWith(interaction);
-      expect(adminAnnouncementCommands.executeComponentInteraction).toHaveBeenCalledWith(
-        interaction,
-      );
+      expect(
+        discussionsCommands.executeComponentInteraction,
+      ).toHaveBeenCalledWith(interaction);
+      expect(
+        adminAnnouncementCommands.executeComponentInteraction,
+      ).toHaveBeenCalledWith(interaction);
     });
 
     it('returns false when no sub-service handles the component', async () => {
       const { service } = createService();
       const interaction = { customId: 'unrelated:action' } as any;
 
-      await expect(service.executeComponentInteraction(interaction)).resolves.toBe(false);
+      await expect(
+        service.executeComponentInteraction(interaction),
+      ).resolves.toBe(false);
     });
   });
 });
