@@ -94,7 +94,7 @@ export const APP_CONSTANTS = {
   },
   API: {
     PAGINATION: {
-      DEFAULT_LIMIT: 10,
+      DEFAULT_LIMIT: 20,
       MAX_LIMIT: 100,
       MIN_LIMIT: 1,
       MIN_PAGE: 1,

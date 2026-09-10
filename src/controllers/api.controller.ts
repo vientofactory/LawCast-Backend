@@ -338,8 +338,18 @@ export class ApiController {
   @Get('notices/changes')
   async getRecentNoticeChanges(
     @Req() req: Request,
-    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query(
+      'page',
+      new DefaultValuePipe(APP_CONSTANTS.API.PAGINATION.MIN_PAGE),
+      ParseIntPipe,
+    )
+    page: number,
+    @Query(
+      'limit',
+      new DefaultValuePipe(APP_CONSTANTS.API.PAGINATION.DEFAULT_LIMIT),
+      ParseIntPipe,
+    )
+    limit: number,
     @Query('search') search?: string,
     @Query('noticeNum') noticeNumRaw?: string,
     @Query('eventType') eventTypeRaw?: string,
