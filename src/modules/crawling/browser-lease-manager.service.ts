@@ -5,7 +5,6 @@ import { APP_CONSTANTS } from '../../config/app.config';
 import { delayMs } from '../../utils/async-delay.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 
-const execFileAsync = promisify(execFile);
 const BROWSER_PROCESS_NAME_REGEX = new RegExp(/chromium|chrome|crashpad/i);
 const ZOMBIE_LOG_THROTTLE_MS = 60_000;
 
@@ -18,6 +17,30 @@ interface ProcessSnapshotRow {
   ppid: number;
   stat: string;
   command: string;
+}
+
+type ExecFileAsync = (
+  file: string,
+  args?: readonly string[],
+  options?: {
+    encoding?: string | null;
+    timeout?: number;
+    maxBuffer?: number;
+    killSignal?: string | number;
+    uid?: number;
+    gid?: number;
+    windowsHide?: boolean;
+    shell?: boolean | string;
+  },
+) => Promise<{ stdout: string | Buffer; stderr: string | Buffer }>;
+
+let cachedExecFileAsync: ExecFileAsync | undefined;
+
+function getExecFileAsync(): ExecFileAsync {
+  if (!cachedExecFileAsync) {
+    cachedExecFileAsync = promisify(execFile);
+  }
+  return cachedExecFileAsync;
 }
 
 @Injectable()
@@ -169,7 +192,11 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
 
   private async collectProcessTree(rootPid: number): Promise<number[]> {
     try {
-      const { stdout } = await execFileAsync('ps', ['-A', '-o', 'pid=,ppid=']);
+      const { stdout } = (await getExecFileAsync()('ps', [
+        '-A',
+        '-o',
+        'pid=,ppid=',
+      ])) as { stdout: string };
       const childrenByParent = new Map<number, number[]>();
 
       for (const rawLine of stdout.split('\n')) {
@@ -213,11 +240,11 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
 
   private async readProcessSnapshot(): Promise<ProcessSnapshotRow[]> {
     try {
-      const { stdout } = await execFileAsync('ps', [
+      const { stdout } = (await getExecFileAsync()('ps', [
         '-A',
         '-o',
         'pid=,ppid=,stat=,comm=',
-      ]);
+      ])) as { stdout: string };
 
       const rows: ProcessSnapshotRow[] = [];
       for (const rawLine of stdout.split('\n')) {
