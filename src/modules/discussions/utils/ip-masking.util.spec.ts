@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { IpMaskingUtil } from './ip-masking.util';
 import type { Request } from 'express';
 
@@ -108,6 +109,38 @@ describe('IpMaskingUtil', () => {
       } as unknown as Request;
 
       expect(IpMaskingUtil.extractClientIp(mockReq)).toBe('203.0.113.5');
+    });
+
+    it('should return null when no IP source is available', () => {
+      const mockReq = {
+        headers: {},
+      } as unknown as Request;
+
+      expect(IpMaskingUtil.extractClientIp(mockReq)).toBeNull();
+    });
+  });
+
+  describe('requireClientIp', () => {
+    it('should return the extracted IP when one is available', () => {
+      const mockReq = {
+        headers: { 'cf-connecting-ip': '203.0.113.10' },
+      } as unknown as Request;
+
+      expect(IpMaskingUtil.requireClientIp(mockReq)).toBe('203.0.113.10');
+    });
+
+    it('should throw a 400 BadRequest when no IP source is available', () => {
+      const mockReq = {
+        headers: {},
+      } as unknown as Request;
+
+      try {
+        IpMaskingUtil.requireClientIp(mockReq);
+        throw new Error('expected requireClientIp to throw');
+      } catch (error) {
+        expect(error).toBeInstanceOf(BadRequestException);
+        expect((error as BadRequestException).getStatus()).toBe(400);
+      }
     });
   });
 

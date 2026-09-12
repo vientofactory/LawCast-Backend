@@ -114,7 +114,7 @@ export class ApiController {
     }
 
     const authorId = IpMaskingUtil.authorIdFromIp(
-      IpMaskingUtil.extractClientIp(req),
+      IpMaskingUtil.requireClientIp(req),
       `thread:${threadId}`,
     );
     const isBound =
@@ -156,7 +156,7 @@ export class ApiController {
     @Req() req: Request,
   ) {
     const authorId = IpMaskingUtil.authorIdFromIp(
-      IpMaskingUtil.extractClientIp(req),
+      IpMaskingUtil.requireClientIp(req),
       `thread:${threadId}`,
     );
     await this.webPushSubscriptionService.deactivateDiscussionBinding(

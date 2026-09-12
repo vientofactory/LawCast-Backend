@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { createHash, createHmac } from 'crypto';
 import type { Request } from 'express';
 
@@ -24,8 +25,10 @@ export class IpMaskingUtil {
 
   /**
    * Extract raw client IP from request headers or connection.
+   * Returns null when no IP source is available; callers must reject the
+   * request instead of attributing it to a placeholder address.
    */
-  static extractClientIp(req: Request): string {
+  static extractClientIp(req: Request): string | null {
     const forwardedClientIp = this.firstHeaderValue(
       req.headers['x-lawcast-client-ip'],
     );
@@ -64,7 +67,23 @@ export class IpMaskingUtil {
       return this.cleanIp(req.socket.remoteAddress);
     }
 
-    return '127.0.0.1';
+    return null;
+  }
+
+  /**
+   * extractClientIp + reject: throws a 400 when the client IP cannot be
+   * determined, so unattributable traffic never reaches business logic
+   * (rate-limit buckets, PoW proofs, author IDs, IP masking).
+   */
+  static requireClientIp(req: Request): string {
+    const clientIp = this.extractClientIp(req);
+    if (!clientIp) {
+      throw new BadRequestException({
+        success: false,
+        message: '클라이언트 IP를 확인할 수 없어 요청을 처리할 수 없습니다.',
+      });
+    }
+    return clientIp;
   }
 
   /**

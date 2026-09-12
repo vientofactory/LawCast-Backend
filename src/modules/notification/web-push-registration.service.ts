@@ -37,7 +37,7 @@ export class WebPushRegistrationService {
         });
       }
 
-      const clientIp = IpMaskingUtil.extractClientIp(req);
+      const clientIp = IpMaskingUtil.requireClientIp(req);
       const isProofValid = await this.hashguardService.verifyProof(
         createDto.proof,
         clientIp,

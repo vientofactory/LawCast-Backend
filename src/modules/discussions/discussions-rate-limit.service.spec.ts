@@ -51,6 +51,20 @@ describe('DiscussionsRateLimitService', () => {
     expect(cacheService.setNumber).not.toHaveBeenCalled();
   });
 
+  it('rejects a request with no extractable client IP with a 400', async () => {
+    const cacheService = {
+      getNumber: jest.fn().mockResolvedValue(0),
+      setNumber: jest.fn(),
+    };
+    const service = new DiscussionsRateLimitService(cacheService as never);
+
+    await expect(
+      service.assertAllowed({ headers: {} } as unknown as Request, 'write'),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(cacheService.getNumber).not.toHaveBeenCalled();
+    expect(cacheService.setNumber).not.toHaveBeenCalled();
+  });
+
   it('uses a separate read bucket policy', async () => {
     const cacheService = {
       getNumber: jest.fn().mockResolvedValue(299),

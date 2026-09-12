@@ -48,7 +48,9 @@ export class ApiReadRateLimitService {
     // arrives from the frontend worker/proxy, so the peer address would put
     // every user in one shared bucket. Header priority (x-lawcast-client-ip
     // first) matches DiscussionsRateLimitService via IpMaskingUtil.
-    const clientIp = IpMaskingUtil.extractClientIp(request);
+    // Unattributable requests are rejected rather than bucketed on a
+    // placeholder address.
+    const clientIp = IpMaskingUtil.requireClientIp(request);
     const clientKey = IpMaskingUtil.hashIp(clientIp);
 
     const cacheKey = `api_read_rate_limit:v1:${bucket}:${clientKey}`;

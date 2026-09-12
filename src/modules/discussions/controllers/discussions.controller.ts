@@ -91,7 +91,7 @@ export class DiscussionsController {
     @Req() req: Request,
   ) {
     await this.rateLimitService.assertAllowed(req, 'write');
-    const clientIp = IpMaskingUtil.extractClientIp(req);
+    const clientIp = IpMaskingUtil.requireClientIp(req);
     const data = await this.discussionsService.createThread(
       noticeNum,
       dto,
@@ -134,7 +134,7 @@ export class DiscussionsController {
     @Req() req: Request,
   ) {
     await this.rateLimitService.assertAllowed(req, 'write');
-    const clientIp = IpMaskingUtil.extractClientIp(req);
+    const clientIp = IpMaskingUtil.requireClientIp(req);
     const data = await this.discussionsService.addComment(
       threadId,
       dto,

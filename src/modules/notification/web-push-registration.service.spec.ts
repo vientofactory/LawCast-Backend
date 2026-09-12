@@ -1,4 +1,7 @@
-import { ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { DiscussionThread } from '../discussions/entities/discussion-thread.entity';
 import { IpMaskingUtil } from '../discussions/utils/ip-masking.util';
@@ -98,5 +101,27 @@ describe('WebPushRegistrationService', () => {
       42,
       expectedAuthorId,
     );
+  });
+
+  it('rejects registration with a 400 when the client IP cannot be extracted', async () => {
+    const { service, hashguardService, webPushSubscriptionService } =
+      createService({ webPushEnabled: true });
+
+    await expect(
+      service.registerSubscription(
+        {
+          endpoint: 'https://push.example/subscription/1',
+          p256dh: 'p256dh',
+          auth: 'auth',
+          proof: 'proof',
+        },
+        { headers: {} } as any,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(hashguardService.verifyProof).not.toHaveBeenCalled();
+    expect(
+      webPushSubscriptionService.createOrReactivate,
+    ).not.toHaveBeenCalled();
   });
 });

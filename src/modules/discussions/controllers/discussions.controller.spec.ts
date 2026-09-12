@@ -110,6 +110,21 @@ describe('DiscussionsController', () => {
         '211.234.1.2',
       );
     });
+
+    it('should reject the request when the client IP cannot be extracted', async () => {
+      const dto = {
+        title: '토론 주제',
+        password: 'password123',
+        content: '내용입니다.',
+      };
+
+      await expect(
+        controller.createNoticeThread(2200001, dto, {
+          headers: {},
+        } as unknown as Request),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(service.createThread).not.toHaveBeenCalled();
+    });
   });
 
   describe('addComment', () => {
@@ -125,6 +140,17 @@ describe('DiscussionsController', () => {
       expect(res.success).toBe(true);
       expect(res.data).toEqual(mockComment);
       expect(service.addComment).toHaveBeenCalledWith(1, dto, '123.45.67.89');
+    });
+
+    it('should reject the request when the client IP cannot be extracted', async () => {
+      const dto = { password: 'password123', content: '답글입니다.' };
+
+      await expect(
+        controller.addComment(1, dto, {
+          headers: {},
+        } as unknown as Request),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(service.addComment).not.toHaveBeenCalled();
     });
   });
 

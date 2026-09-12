@@ -47,6 +47,20 @@ describe('ApiReadRateLimitService', () => {
     });
   });
 
+  it('rejects a request with no extractable client IP with a 400', async () => {
+    const cacheService = {
+      getNumber: jest.fn().mockResolvedValue(0),
+      setNumber: jest.fn(),
+    };
+    const service = new ApiReadRateLimitService(cacheService as any);
+
+    await expect(
+      service.assertAllowed({ headers: {}, socket: {} } as any),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(cacheService.getNumber).not.toHaveBeenCalled();
+    expect(cacheService.setNumber).not.toHaveBeenCalled();
+  });
+
   it('keys the bucket on the SSR-forwarded x-lawcast-client-ip, not the peer IP', async () => {
     const cacheService = {
       getNumber: jest.fn().mockResolvedValue(0),

@@ -45,7 +45,9 @@ export class DiscussionsRateLimitService {
     scope?: DiscussionReadRateLimitScope,
   ): Promise<void> {
     const policy = this.policies[bucket];
-    const clientIp = IpMaskingUtil.extractClientIp(request);
+    // Reject unattributable requests instead of collapsing them into one
+    // placeholder-IP bucket shared by every such client.
+    const clientIp = IpMaskingUtil.requireClientIp(request);
     const ipHash = IpMaskingUtil.hashIp(clientIp);
     const scopeKey = bucket === 'read' ? (scope ?? 'default') : 'default';
     const key = `discussion_rate_limit:v2:${bucket}:${scopeKey}:${ipHash}`;
