@@ -45,6 +45,7 @@ describe('DiscussionsService', () => {
     };
     noticeArchiveRepo = {
       find: jest.fn(),
+      findOne: jest.fn(),
     };
     dataSource = {
       transaction: jest.fn(),
@@ -253,6 +254,28 @@ describe('DiscussionsService', () => {
   });
 
   describe('createThread', () => {
+    it('should reject threads for non-existent notice numbers', async () => {
+      (noticeArchiveRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.createThread(
+          999999,
+          {
+            title: '존재하지 않는 의안 토론',
+            content: '의견 내용',
+            password: 'password123',
+          },
+          '123.45.67.89',
+        ),
+      ).rejects.toThrow(BadRequestException);
+      expect(noticeArchiveRepo.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { noticeNum: 999999 },
+          select: ['id'],
+        }),
+      );
+    });
+
     it('should create thread and initial comment in a transaction', async () => {
       const mockSavedThread = {
         id: 1,
@@ -283,6 +306,10 @@ describe('DiscussionsService', () => {
       };
       const create = jest.fn().mockImplementation((_entity, dto) => dto);
 
+      (noticeArchiveRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 1,
+        noticeNum: 2200001,
+      });
       dataSource.transaction.mockImplementation(async (cb) => {
         const manager = {
           create,

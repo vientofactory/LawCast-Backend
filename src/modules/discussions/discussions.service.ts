@@ -319,6 +319,16 @@ export class DiscussionsService {
     dto: CreateThreadDto,
     rawIp: string,
   ): Promise<ThreadDetailResponse> {
+    const noticeExists = await this.noticeArchiveRepository.findOne({
+      where: { noticeNum },
+      select: ['id'],
+    });
+    if (!noticeExists) {
+      throw new BadRequestException(
+        '존재하지 않는 의안번호입니다. 해당 법률안이 등록되지 않았습니다.',
+      );
+    }
+
     const authorNickname = dto.authorNickname?.trim() || '익명';
     const authorIpMasked = IpMaskingUtil.maskIp(rawIp);
     const { hash: passwordHash, salt: passwordSalt } =
