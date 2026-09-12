@@ -292,6 +292,9 @@ describe('HTTP-Batch Processing Isolation', () => {
           provide: PackagesService,
           useValue: {
             getPackages: jest.fn().mockReturnValue([]),
+            getVersion: jest
+              .fn()
+              .mockReturnValue({ version: '0.0.1', buildEnv: 'test' }),
           },
         },
         {

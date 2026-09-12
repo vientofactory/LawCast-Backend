@@ -496,7 +496,10 @@ export class ApiController {
     const healthPayload = await this.crawlingService.getApiHealthPayload({
       nodeEnv: this.nodeEnv,
     });
-    return ApiResponseUtils.success(healthPayload, 'LawCast API is healthy');
+    return ApiResponseUtils.success(
+      { ...healthPayload, version: this.packagesService.getVersion().version },
+      'LawCast API is healthy',
+    );
   }
 
   @Get('webhooks/stats/detailed')
@@ -543,6 +546,11 @@ export class ApiController {
       },
       isConnected ? 'Redis is connected' : 'Redis connection failed',
     );
+  }
+
+  @Get('version')
+  getVersion() {
+    return ApiResponseUtils.success(this.packagesService.getVersion());
   }
 
   @Get('packages')

@@ -146,6 +146,9 @@ describe('ApiController archive export', () => {
           provide: PackagesService,
           useValue: {
             getPackages: jest.fn().mockReturnValue([]),
+            getVersion: jest
+              .fn()
+              .mockReturnValue({ version: '0.0.1', buildEnv: 'test' }),
           },
         },
         {
