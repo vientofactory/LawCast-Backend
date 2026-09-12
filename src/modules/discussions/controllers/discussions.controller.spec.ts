@@ -1,7 +1,9 @@
+import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DiscussionsController } from './discussions.controller';
 import { DiscussionsService } from '../discussions.service';
 import { DiscussionsRateLimitService } from '../discussions-rate-limit.service';
+import { DiscussionThreadStatus } from '../entities/discussion-thread.entity';
 import type { Request } from 'express';
 
 describe('DiscussionsController', () => {
@@ -180,6 +182,144 @@ describe('DiscussionsController', () => {
       expect(res.success).toBe(true);
       expect(res.data).toEqual(mockDeleted);
       expect(res.message).toBe('의견이 성공적으로 삭제되었습니다.');
+    });
+  });
+
+  describe('rate limiting enforcement', () => {
+    it('should check read rate limit before listing threads', async () => {
+      (service.getThreads as jest.Mock).mockResolvedValue({
+        items: [],
+        total: 0,
+        page: 1,
+        limit: 20,
+      });
+
+      await controller.getNoticeThreads(2200001, {} as Request, '1', '20');
+      expect(rateLimitService.assertAllowed).toHaveBeenCalledWith(
+        expect.anything(),
+        'read',
+        'notice-threads',
+      );
+    });
+
+    it('should check write rate limit before creating a thread', async () => {
+      const mockResult = { thread: { id: 1 }, comments: [] };
+      (service.createThread as jest.Mock).mockResolvedValue(mockResult);
+      const mockReq = {
+        headers: { 'cf-connecting-ip': '1.2.3.4' },
+      } as unknown as Request;
+
+      await controller.createNoticeThread(
+        2200001,
+        { title: 't', password: 'p', content: 'c' },
+        mockReq,
+      );
+      expect(rateLimitService.assertAllowed).toHaveBeenCalledWith(
+        expect.anything(),
+        'write',
+      );
+    });
+
+    it('should check write rate limit before adding a comment', async () => {
+      (service.addComment as jest.Mock).mockResolvedValue({ id: 1 });
+      const mockReq = {
+        headers: { 'cf-connecting-ip': '1.2.3.4' },
+      } as unknown as Request;
+
+      await controller.addComment(1, { password: 'p', content: 'c' }, mockReq);
+      expect(rateLimitService.assertAllowed).toHaveBeenCalledWith(
+        expect.anything(),
+        'write',
+      );
+    });
+
+    it('should check write rate limit before updating a comment', async () => {
+      (service.updateComment as jest.Mock).mockResolvedValue({ id: 1 });
+
+      await controller.updateComment(
+        1,
+        { password: 'p', content: 'c' },
+        {} as Request,
+      );
+      expect(rateLimitService.assertAllowed).toHaveBeenCalledWith(
+        expect.anything(),
+        'write',
+      );
+    });
+
+    it('should check write rate limit before deleting a comment', async () => {
+      (service.deleteComment as jest.Mock).mockResolvedValue({
+        id: 1,
+        isDeleted: true,
+      });
+
+      await controller.deleteComment(1, { password: 'p' }, {} as Request);
+      expect(rateLimitService.assertAllowed).toHaveBeenCalledWith(
+        expect.anything(),
+        'write',
+      );
+    });
+
+    it('should check write rate limit before updating thread status', async () => {
+      (service.updateThreadStatus as jest.Mock).mockResolvedValue({
+        id: 1,
+        status: 'closed',
+      });
+
+      await controller.updateThreadStatus(
+        1,
+        { status: DiscussionThreadStatus.CLOSED, password: 'p' },
+        {} as Request,
+      );
+      expect(rateLimitService.assertAllowed).toHaveBeenCalledWith(
+        expect.anything(),
+        'write',
+      );
+    });
+
+    it('should check read rate limit for thread detail', async () => {
+      (service.getThreadDetail as jest.Mock).mockResolvedValue({
+        thread: {},
+        comments: [],
+        hasMore: false,
+        nextCursor: null,
+      });
+
+      await controller.getThreadDetail(1, undefined, undefined, {} as Request);
+      expect(rateLimitService.assertAllowed).toHaveBeenCalledWith(
+        expect.anything(),
+        'read',
+        'thread-detail',
+      );
+    });
+  });
+
+  describe('error propagation', () => {
+    it('should propagate service errors without swallowing them', async () => {
+      (service.getThreads as jest.Mock).mockRejectedValue(
+        new Error('database connection lost'),
+      );
+
+      await expect(
+        controller.getNoticeThreads(2200001, {} as Request, '1', '20'),
+      ).rejects.toThrow('database connection lost');
+    });
+
+    it('should propagate rate limit errors from the service', async () => {
+      (service.createThread as jest.Mock).mockRejectedValue(
+        new BadRequestException('존재하지 않는 의안번호입니다.'),
+      );
+      const mockReq = {
+        headers: { 'cf-connecting-ip': '1.2.3.4' },
+      } as unknown as Request;
+
+      await expect(
+        controller.createNoticeThread(
+          999999,
+          { title: 't', password: 'p', content: 'c' },
+          mockReq,
+        ),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });

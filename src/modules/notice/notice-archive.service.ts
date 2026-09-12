@@ -3332,29 +3332,44 @@ export class NoticeArchiveService {
       return;
     }
 
-    const existing = await this.summaryStateRepository.findOne({
-      where: { noticeNum },
-      select: { id: true },
-    });
+    // Use update-first-then-insert to avoid a TOCTOU race where two
+    // concurrent calls both find no existing row and both try to insert,
+    // violating the unique index on noticeNum.
+    const updateResult = await this.summaryStateRepository.update(
+      { noticeNum },
+      {
+        ...(payload.isDone === undefined ? {} : { isDone: payload.isDone }),
+        aiSummary: payload.aiSummary,
+        aiSummaryStatus: payload.aiSummaryStatus,
+      },
+    );
 
-    if (existing?.id) {
-      await this.summaryStateRepository.update(
-        { id: existing.id },
-        {
-          ...(payload.isDone === undefined ? {} : { isDone: payload.isDone }),
+    if ((updateResult.affected ?? 0) === 0) {
+      try {
+        await this.summaryStateRepository.insert({
+          noticeNum,
+          isDone: payload.isDone ?? false,
           aiSummary: payload.aiSummary,
           aiSummaryStatus: payload.aiSummaryStatus,
-        },
-      );
-      return;
+        });
+      } catch (error) {
+        if (this.isSummaryStateUniqueConflict(error)) {
+          // Another concurrent insert won the race — retry the update.
+          await this.summaryStateRepository.update(
+            { noticeNum },
+            {
+              ...(payload.isDone === undefined
+                ? {}
+                : { isDone: payload.isDone }),
+              aiSummary: payload.aiSummary,
+              aiSummaryStatus: payload.aiSummaryStatus,
+            },
+          );
+          return;
+        }
+        throw error;
+      }
     }
-
-    await this.summaryStateRepository.insert({
-      noticeNum,
-      isDone: payload.isDone ?? false,
-      aiSummary: payload.aiSummary,
-      aiSummaryStatus: payload.aiSummaryStatus,
-    });
   }
 
   private async ensureDefaultSummaryStateExists(

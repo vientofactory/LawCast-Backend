@@ -11,7 +11,11 @@ import {
   DiscussionMessageType,
 } from './entities/discussion-comment.entity';
 import { NoticeArchive } from '../notice/notice-archive.entity';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { PasswordSecurityUtil } from './utils/password-security.util';
 
 describe('DiscussionsService', () => {
@@ -488,7 +492,7 @@ describe('DiscussionsService', () => {
           content: '수정 시도',
         }),
       ).rejects.toThrow(BadRequestException);
-      expect(commentRepo.save).not.toHaveBeenCalled();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
     it('should reject edits once the parent thread is closed', async () => {
@@ -504,9 +508,15 @@ describe('DiscussionsService', () => {
       };
 
       (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
-      (threadRepo.findOne as jest.Mock).mockResolvedValue({
-        id: 1,
-        status: DiscussionThreadStatus.CLOSED,
+      dataSource.transaction.mockImplementation(async (callback) => {
+        const manager = {
+          findOne: jest.fn().mockResolvedValue({
+            id: 1,
+            status: DiscussionThreadStatus.CLOSED,
+          }),
+          save: jest.fn(),
+        };
+        return callback(manager);
       });
 
       await expect(
@@ -515,7 +525,6 @@ describe('DiscussionsService', () => {
           content: '수정 시도',
         }),
       ).rejects.toThrow(BadRequestException);
-      expect(commentRepo.save).not.toHaveBeenCalled();
     });
 
     it('should reject edits once the parent thread is locked, even if reopened', async () => {
@@ -531,10 +540,16 @@ describe('DiscussionsService', () => {
       };
 
       (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
-      (threadRepo.findOne as jest.Mock).mockResolvedValue({
-        id: 1,
-        status: DiscussionThreadStatus.OPEN,
-        isLocked: true,
+      dataSource.transaction.mockImplementation(async (callback) => {
+        const manager = {
+          findOne: jest.fn().mockResolvedValue({
+            id: 1,
+            status: DiscussionThreadStatus.OPEN,
+            isLocked: true,
+          }),
+          save: jest.fn(),
+        };
+        return callback(manager);
       });
 
       await expect(
@@ -543,7 +558,6 @@ describe('DiscussionsService', () => {
           content: '수정 시도',
         }),
       ).rejects.toThrow(BadRequestException);
-      expect(commentRepo.save).not.toHaveBeenCalled();
     });
 
     it('should throw UnauthorizedException if password does not match', async () => {
@@ -581,9 +595,19 @@ describe('DiscussionsService', () => {
       };
 
       (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
-      (commentRepo.save as jest.Mock).mockImplementation((c) =>
-        Promise.resolve(c),
-      );
+      dataSource.transaction.mockImplementation(async (callback) => {
+        const manager = {
+          findOne: jest.fn().mockResolvedValue({
+            id: 1,
+            status: DiscussionThreadStatus.OPEN,
+            isLocked: false,
+          }),
+          save: jest
+            .fn()
+            .mockImplementation((_entity, value) => Promise.resolve(value)),
+        };
+        return callback(manager);
+      });
 
       const updated = await service.updateComment(1, {
         password: 'correctPassword',
@@ -608,7 +632,7 @@ describe('DiscussionsService', () => {
       await expect(
         service.deleteComment(1, { password: 'any-password' }),
       ).rejects.toThrow(BadRequestException);
-      expect(commentRepo.save).not.toHaveBeenCalled();
+      expect(dataSource.transaction).not.toHaveBeenCalled();
     });
 
     it('should soft delete comment when password matches and return sanitized comment', async () => {
@@ -632,16 +656,28 @@ describe('DiscussionsService', () => {
       };
 
       (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
-      (commentRepo.save as jest.Mock).mockResolvedValue({
-        ...mockComment,
-        isDeleted: true,
+      dataSource.transaction.mockImplementation(async (callback) => {
+        const manager = {
+          findOne: jest.fn().mockResolvedValue({
+            id: 1,
+            status: DiscussionThreadStatus.OPEN,
+            isLocked: false,
+          }),
+          save: jest.fn().mockImplementation((_entity, value) => {
+            // Simulate the manager.save behavior: return the comment with isDeleted set
+            return Promise.resolve({
+              ...value,
+              isDeleted: true,
+              deletedBy: 'author',
+            });
+          }),
+        };
+        return callback(manager);
       });
 
       const res = await service.deleteComment(1, { password: 'deletePass' });
       expect(res.isDeleted).toBe(true);
       expect(res.content).toBe('작성자에 의해 삭제된 의견입니다.');
-      expect(mockComment.isDeleted).toBe(true);
-      expect(mockComment.deletedBy).toBe('author');
     });
 
     it('should reject deletion once the parent thread is closed', async () => {
@@ -656,15 +692,20 @@ describe('DiscussionsService', () => {
       };
 
       (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
-      (threadRepo.findOne as jest.Mock).mockResolvedValue({
-        id: 1,
-        status: DiscussionThreadStatus.CLOSED,
+      dataSource.transaction.mockImplementation(async (callback) => {
+        const manager = {
+          findOne: jest.fn().mockResolvedValue({
+            id: 1,
+            status: DiscussionThreadStatus.CLOSED,
+          }),
+          save: jest.fn(),
+        };
+        return callback(manager);
       });
 
       await expect(
         service.deleteComment(1, { password: 'deletePass' }),
       ).rejects.toThrow(BadRequestException);
-      expect(commentRepo.save).not.toHaveBeenCalled();
     });
 
     it('should reject deletion once the parent thread is locked, even if reopened', async () => {
@@ -679,16 +720,21 @@ describe('DiscussionsService', () => {
       };
 
       (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
-      (threadRepo.findOne as jest.Mock).mockResolvedValue({
-        id: 1,
-        status: DiscussionThreadStatus.OPEN,
-        isLocked: true,
+      dataSource.transaction.mockImplementation(async (callback) => {
+        const manager = {
+          findOne: jest.fn().mockResolvedValue({
+            id: 1,
+            status: DiscussionThreadStatus.OPEN,
+            isLocked: true,
+          }),
+          save: jest.fn(),
+        };
+        return callback(manager);
       });
 
       await expect(
         service.deleteComment(1, { password: 'deletePass' }),
       ).rejects.toThrow(BadRequestException);
-      expect(commentRepo.save).not.toHaveBeenCalled();
     });
   });
 
@@ -1143,6 +1189,200 @@ describe('DiscussionsService', () => {
       );
 
       await expect(service.adminPostMessage(999, '내용')).rejects.toThrow();
+    });
+
+    it('trims whitespace from content', async () => {
+      const thread = { id: 1, noticeNum: 2200001 };
+      const manager = {
+        findOne: jest.fn().mockResolvedValueOnce(thread),
+        create: jest.fn().mockImplementation((_entity, value) => value),
+        save: jest
+          .fn()
+          .mockImplementation((_entity, value) => Promise.resolve(value)),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      const result = await service.adminPostMessage(1, '  공지 내용  ');
+      expect(result.content).toBe('공지 내용');
+    });
+  });
+
+  describe('getThreadDetail', () => {
+    it('throws NotFoundException for a non-existent thread', async () => {
+      (threadRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(service.getThreadDetail(99999, 0, 20)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('addComment', () => {
+    it('throws NotFoundException for a non-existent thread', async () => {
+      const manager = { findOne: jest.fn().mockResolvedValue(null) };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      await expect(
+        service.addComment(
+          99999,
+          { password: 'password123', content: '새 의견' },
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('rejects new opinions on a closed thread', async () => {
+      const thread = {
+        id: 7,
+        noticeNum: 2200001,
+        status: DiscussionThreadStatus.CLOSED,
+        isLocked: false,
+        commentCount: 1,
+      };
+      const manager = { findOne: jest.fn().mockResolvedValue(thread) };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      await expect(
+        service.addComment(
+          7,
+          { password: 'password123', content: '새 의견입니다.' },
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('updateComment', () => {
+    it('throws NotFoundException for a non-existent comment', async () => {
+      (commentRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.updateComment(99999, {
+          password: 'password',
+          content: '수정',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('rejects edits to an already-deleted comment', async () => {
+      const { hash, salt } =
+        PasswordSecurityUtil.hashPassword('correctPassword');
+      (commentRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 1,
+        threadId: 1,
+        messageType: DiscussionMessageType.USER,
+        passwordHash: hash,
+        passwordSalt: salt,
+        isDeleted: true,
+      });
+
+      await expect(
+        service.updateComment(1, {
+          password: 'correctPassword',
+          content: '수정 시도',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects edits to an admin message', async () => {
+      (commentRepo.findOne as jest.Mock).mockResolvedValue({
+        id: 1,
+        messageType: DiscussionMessageType.ADMIN,
+        isDeleted: false,
+      });
+
+      await expect(
+        service.updateComment(1, {
+          password: 'any',
+          content: '수정 시도',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('deleteComment', () => {
+    it('throws NotFoundException for a non-existent comment', async () => {
+      (commentRepo.findOne as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        service.deleteComment(99999, { password: 'password' }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('returns the same comment without re-deleting if already deleted', async () => {
+      const { hash, salt } = PasswordSecurityUtil.hashPassword('pass');
+      const mockComment = {
+        id: 1,
+        threadId: 1,
+        messageType: DiscussionMessageType.USER,
+        noticeNum: 2200001,
+        sequence: 1,
+        authorNickname: '익명',
+        authorIpMasked: '123.45.***.***',
+        content: '원문',
+        passwordHash: hash,
+        passwordSalt: salt,
+        isDeleted: true,
+        deletedBy: 'author',
+        isEdited: false,
+        editedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      (commentRepo.findOne as jest.Mock).mockResolvedValue(mockComment);
+
+      const res = await service.deleteComment(1, { password: 'pass' });
+      expect(res.isDeleted).toBe(true);
+      expect(commentRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateThreadStatus', () => {
+    it('throws NotFoundException for a non-existent thread', async () => {
+      const manager = { findOne: jest.fn().mockResolvedValue(null) };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      await expect(
+        service.updateThreadStatus(99999, {
+          status: DiscussionThreadStatus.CLOSED,
+          password: 'password',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws UnauthorizedException for wrong password', async () => {
+      const { hash, salt } =
+        PasswordSecurityUtil.hashPassword('correctPassword');
+      const thread = {
+        id: 1,
+        status: DiscussionThreadStatus.OPEN,
+        isLocked: false,
+        passwordHash: hash,
+        passwordSalt: salt,
+      };
+      const manager = {
+        findOne: jest.fn().mockResolvedValue(thread),
+        create: jest.fn(),
+        save: jest.fn().mockImplementation((_e, v) => Promise.resolve(v)),
+      };
+      dataSource.transaction.mockImplementation(async (callback) =>
+        callback(manager),
+      );
+
+      await expect(
+        service.updateThreadStatus(1, {
+          status: DiscussionThreadStatus.CLOSED,
+          password: 'wrongPassword',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 });

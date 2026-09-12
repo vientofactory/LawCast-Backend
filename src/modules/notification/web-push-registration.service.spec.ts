@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Repository } from 'typeorm';
@@ -123,5 +124,76 @@ describe('WebPushRegistrationService', () => {
     expect(
       webPushSubscriptionService.createOrReactivate,
     ).not.toHaveBeenCalled();
+  });
+
+  it('rejects registration when proof-of-work verification fails', async () => {
+    const { service, hashguardService, webPushSubscriptionService } =
+      createService({ webPushEnabled: true });
+    hashguardService.verifyProof.mockResolvedValue(false);
+
+    await expect(
+      service.registerSubscription(
+        {
+          endpoint: 'https://push.example/subscription/1',
+          p256dh: 'p256dh',
+          auth: 'auth',
+          proof: 'invalid-proof',
+        },
+        { headers: {}, ip: '127.0.0.1' } as any,
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+
+    expect(
+      webPushSubscriptionService.createOrReactivate,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('rejects registration with a non-existent threadId', async () => {
+    const { service, discussionThreadRepository, webPushSubscriptionService } =
+      createService({ webPushEnabled: true });
+    (discussionThreadRepository.findOne as jest.Mock).mockResolvedValue(null);
+
+    await expect(
+      service.registerSubscription(
+        {
+          endpoint: 'https://push.example/subscription/1',
+          p256dh: 'p256dh',
+          auth: 'auth',
+          proof: 'proof',
+          threadId: 99999,
+        },
+        { headers: {}, ip: '127.0.0.1' } as any,
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(
+      webPushSubscriptionService.createOrReactivate,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('skips discussion binding when threadId is omitted', async () => {
+    const { service, webPushSubscriptionService } = createService({
+      webPushEnabled: true,
+    });
+    (
+      webPushSubscriptionService.createOrReactivate as jest.Mock
+    ).mockResolvedValue({ id: 7 });
+
+    await service.registerSubscription(
+      {
+        endpoint: 'https://push.example/subscription/1',
+        p256dh: 'p256dh',
+        auth: 'auth',
+        proof: 'proof',
+      },
+      { headers: {}, ip: '127.0.0.1' } as any,
+    );
+
+    expect(webPushSubscriptionService.createOrReactivate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        noticeNotificationsEnabled: true,
+      }),
+    );
+    expect(webPushSubscriptionService.bindToDiscussion).not.toHaveBeenCalled();
   });
 });

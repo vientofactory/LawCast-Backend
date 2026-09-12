@@ -463,6 +463,9 @@ export class DiscussionsService {
 
   /**
    * Update a comment's content after verifying password.
+   * Thread status is checked inside a transaction together with the
+   * save to prevent a TOCTOU race where the thread is locked/closed
+   * between the check and the update.
    */
   async updateComment(
     commentId: number,
@@ -489,18 +492,6 @@ export class DiscussionsService {
       throw new BadRequestException('이미 삭제된 의견은 수정할 수 없습니다.');
     }
 
-    const thread = await this.threadRepository.findOne({
-      where: { id: comment.threadId },
-    });
-    if (thread?.isLocked) {
-      throw new BadRequestException(
-        '관리자에 의해 잠긴 토론의 의견은 수정할 수 없습니다.',
-      );
-    }
-    if (thread?.status === DiscussionThreadStatus.CLOSED) {
-      throw new BadRequestException('닫힌 토론의 의견은 수정할 수 없습니다.');
-    }
-
     const isPasswordValid = PasswordSecurityUtil.verifyPassword(
       dto.password,
       comment.passwordSalt,
@@ -511,16 +502,34 @@ export class DiscussionsService {
       throw new UnauthorizedException('비밀번호가 일치하지 않습니다.');
     }
 
-    comment.content = dto.content.trim();
-    comment.isEdited = true;
-    comment.editedAt = new Date();
+    const savedComment = await this.dataSource.transaction(async (manager) => {
+      const thread = await manager.findOne(DiscussionThread, {
+        where: { id: comment.threadId },
+      });
+      if (thread?.isLocked) {
+        throw new BadRequestException(
+          '관리자에 의해 잠긴 토론의 의견은 수정할 수 없습니다.',
+        );
+      }
+      if (thread?.status === DiscussionThreadStatus.CLOSED) {
+        throw new BadRequestException('닫힌 토론의 의견은 수정할 수 없습니다.');
+      }
 
-    const saved = await this.commentRepository.save(comment);
-    return this.sanitizeComment(saved);
+      comment.content = dto.content.trim();
+      comment.isEdited = true;
+      comment.editedAt = new Date();
+
+      return await manager.save(DiscussionComment, comment);
+    });
+
+    return this.sanitizeComment(savedComment);
   }
 
   /**
    * Soft delete a comment after verifying password.
+   * Thread status is checked inside a transaction together with the
+   * save to prevent a TOCTOU race where the thread is locked/closed
+   * between the check and the delete.
    */
   async deleteComment(
     commentId: number,
@@ -547,18 +556,6 @@ export class DiscussionsService {
       return this.sanitizeComment(comment);
     }
 
-    const thread = await this.threadRepository.findOne({
-      where: { id: comment.threadId },
-    });
-    if (thread?.isLocked) {
-      throw new BadRequestException(
-        '관리자에 의해 잠긴 토론의 의견은 삭제할 수 없습니다.',
-      );
-    }
-    if (thread?.status === DiscussionThreadStatus.CLOSED) {
-      throw new BadRequestException('닫힌 토론의 의견은 삭제할 수 없습니다.');
-    }
-
     const isPasswordValid = PasswordSecurityUtil.verifyPassword(
       dto.password,
       comment.passwordSalt,
@@ -569,11 +566,25 @@ export class DiscussionsService {
       throw new UnauthorizedException('비밀번호가 일치하지 않습니다.');
     }
 
-    comment.isDeleted = true;
-    comment.deletedBy = DiscussionCommentDeletedBy.AUTHOR;
-    const saved = await this.commentRepository.save(comment);
+    const savedComment = await this.dataSource.transaction(async (manager) => {
+      const thread = await manager.findOne(DiscussionThread, {
+        where: { id: comment.threadId },
+      });
+      if (thread?.isLocked) {
+        throw new BadRequestException(
+          '관리자에 의해 잠긴 토론의 의견은 삭제할 수 없습니다.',
+        );
+      }
+      if (thread?.status === DiscussionThreadStatus.CLOSED) {
+        throw new BadRequestException('닫힌 토론의 의견은 삭제할 수 없습니다.');
+      }
 
-    return this.sanitizeComment(saved);
+      comment.isDeleted = true;
+      comment.deletedBy = DiscussionCommentDeletedBy.AUTHOR;
+      return await manager.save(DiscussionComment, comment);
+    });
+
+    return this.sanitizeComment(savedComment);
   }
 
   /**

@@ -135,6 +135,15 @@ export class WebPushSubscriptionService {
   ): Promise<void> {
     if (!this.discussionBindingRepository) return;
 
+    // Validate that the subscription still exists to prevent
+    // orphaned bindings if the subscription was deleted concurrently.
+    const subscription = await this.subscriptionRepository.findOne({
+      where: { id: subscriptionId },
+    });
+    if (!subscription) {
+      return;
+    }
+
     const existing = await this.discussionBindingRepository.findOne({
       where: { subscriptionId, threadId, authorId },
     });

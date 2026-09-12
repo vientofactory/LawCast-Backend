@@ -112,7 +112,7 @@ describe('NoticeArchiveService', () => {
     count: jest.fn<(...args: any[]) => Promise<number>>().mockResolvedValue(0),
     update: jest
       .fn<(...args: any[]) => Promise<any>>()
-      .mockResolvedValue(undefined),
+      .mockResolvedValue({ affected: 0 }),
     insert: jest
       .fn<(...args: any[]) => Promise<any>>()
       .mockResolvedValue(undefined),
@@ -969,7 +969,8 @@ describe('NoticeArchiveService', () => {
         ...createRepositoryMock(),
       };
       const summaryStateRepository = createSummaryStateRepositoryMock();
-      summaryStateRepository.findOne.mockResolvedValue({ id: 7 });
+      // persistSummaryState now uses update-first: mock it to succeed (affected=1)
+      summaryStateRepository.update.mockResolvedValue({ affected: 1 });
       const changeTrackingService = createChangeTrackingServiceMock();
 
       repositoryMock.findOne.mockResolvedValue(
@@ -996,7 +997,7 @@ describe('NoticeArchiveService', () => {
       });
 
       expect(summaryStateRepository.update).toHaveBeenCalledWith(
-        { id: 7 },
+        { noticeNum: 2219776 },
         expect.objectContaining({
           aiSummary: null,
           aiSummaryStatus: 'not_requested',
@@ -2219,13 +2220,15 @@ describe('NoticeArchiveService', () => {
       summaryStateRepositoryMock.find.mockResolvedValue([
         { noticeNum: 2219901, isDone: false },
       ]);
-      summaryStateRepositoryMock.findOne
-        .mockResolvedValueOnce({
-          isDone: false,
-          aiSummary: '기존 요약',
-          aiSummaryStatus: 'ready',
-        })
-        .mockResolvedValueOnce({ id: 7 });
+      // persistSummaryState now uses update-first-then-insert, so we mock
+      // update to return affected=1 (row exists) and provide the existing
+      // summary state via findOne for the caller's own read.
+      summaryStateRepositoryMock.update.mockResolvedValueOnce({ affected: 1 });
+      summaryStateRepositoryMock.findOne.mockResolvedValueOnce({
+        isDone: false,
+        aiSummary: '기존 요약',
+        aiSummaryStatus: 'ready',
+      });
 
       await service.appendSourceDeletedEventByNoticeNum(2219901);
 
@@ -2238,7 +2241,7 @@ describe('NoticeArchiveService', () => {
         }),
       );
       expect(summaryStateRepositoryMock.update).toHaveBeenCalledWith(
-        { id: 7 },
+        { noticeNum: 2219901 },
         expect.objectContaining({
           isDone: true,
           aiSummary: '기존 요약',
@@ -2268,9 +2271,9 @@ describe('NoticeArchiveService', () => {
       summaryStateRepositoryMock.find.mockResolvedValue([
         { noticeNum: 2219902, isDone: false },
       ]);
-      summaryStateRepositoryMock.findOne
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null);
+      // persistSummaryState uses update-first-then-insert: update returns
+      // affected=0 so it falls through to insert.
+      summaryStateRepositoryMock.update.mockResolvedValueOnce({ affected: 0 });
 
       await service.appendSourceDeletedEventByNoticeNum(2219902);
 
