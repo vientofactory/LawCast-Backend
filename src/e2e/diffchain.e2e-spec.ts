@@ -328,6 +328,8 @@ describe('Diffchain API (e2e)', () => {
       {} as any,
       {} as any,
       undefined as any,
+      undefined as any,
+      undefined as any,
     );
     const detectedAt = new Date('2026-07-05T00:00:00.000Z');
     const snapshot = {
@@ -393,6 +395,7 @@ describe('Diffchain API (e2e)', () => {
     const service = new ChangeTrackingService(
       changeEventRepository,
       changeDetailRepository,
+      undefined as any,
       undefined as any,
       undefined as any,
     );

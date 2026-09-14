@@ -121,6 +121,32 @@ describe('NoticeArchiveService', () => {
       .mockResolvedValue(undefined),
   });
 
+  const createIntegrityCheckRepositoryMock = () => ({
+    find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([]),
+    findOne: jest.fn<(...args: any[]) => Promise<any>>(),
+    count: jest.fn<(...args: any[]) => Promise<number>>().mockResolvedValue(0),
+    save: jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue(undefined),
+    delete: jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue(undefined),
+  });
+
+  const createIntegrityStateRepositoryMock = () => ({
+    find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([]),
+    findOne: jest.fn<(...args: any[]) => Promise<any>>(),
+    count: jest.fn<(...args: any[]) => Promise<number>>().mockResolvedValue(0),
+    save: jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue(undefined),
+    delete: jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue(undefined),
+  });
+
+  const createDiscordBridgeMock = () => ({}) as any;
+
   const buildRow = (overrides: Partial<NoticeArchive> = {}): NoticeArchive => {
     const sourceHtml = '<html><body>LawCast Integrity Test</body></html>';
     const sourceHtmlSha256 = computeSha256(sourceHtml);
@@ -195,6 +221,9 @@ describe('NoticeArchiveService', () => {
       repositoryMock as any,
       summaryStateRepository as any,
       changeTrackingService as any,
+      createDiscordBridgeMock() as any,
+      createIntegrityCheckRepositoryMock() as any,
+      createIntegrityStateRepositoryMock() as any,
     );
 
     const result = await service.seedLegacyGenesisEvents(
@@ -230,8 +259,11 @@ describe('NoticeArchiveService', () => {
     const changeTrackingService = createChangeTrackingServiceMock();
     const service = new NoticeArchiveService(
       repositoryMock as any,
-      undefined as any,
+      createSummaryStateRepositoryMock() as any,
       changeTrackingService as any,
+      createDiscordBridgeMock() as any,
+      createIntegrityCheckRepositoryMock() as any,
+      createIntegrityStateRepositoryMock() as any,
     );
     const row = buildRow();
 
@@ -280,8 +312,11 @@ describe('NoticeArchiveService', () => {
     const changeTrackingService = createChangeTrackingServiceMock();
     const service = new NoticeArchiveService(
       repositoryMock as any,
-      undefined as any,
+      createSummaryStateRepositoryMock() as any,
       changeTrackingService as any,
+      createDiscordBridgeMock() as any,
+      createIntegrityCheckRepositoryMock() as any,
+      createIntegrityStateRepositoryMock() as any,
     );
     const row = buildRow({ noticeNum: 2218363 });
 
@@ -418,6 +453,9 @@ describe('NoticeArchiveService', () => {
         archiveRepository,
         summaryRepository,
         createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
       const candidates = await (service as any).getGenesisCandidateRows(
         2200001,
@@ -466,8 +504,11 @@ describe('NoticeArchiveService', () => {
     const changeTrackingService = createChangeTrackingServiceMock();
     const service = new NoticeArchiveService(
       repositoryMock as any,
-      undefined as any,
+      createSummaryStateRepositoryMock() as any,
       changeTrackingService as any,
+      createDiscordBridgeMock() as any,
+      createIntegrityCheckRepositoryMock() as any,
+      createIntegrityStateRepositoryMock() as any,
     );
 
     repositoryMock.findOne.mockResolvedValue(null);
@@ -499,20 +540,31 @@ describe('NoticeArchiveService', () => {
         .mockResolvedValue(pendingRows);
       const repoMock = { ...createRepositoryMock(), find: findMock };
       const changeTrackingService = createChangeTrackingServiceMock();
+      const summaryStateRepository = createSummaryStateRepositoryMock();
+      summaryStateRepository.find.mockResolvedValue(
+        pendingRows.map((row) => ({
+          noticeNum: row.noticeNum,
+          aiSummary: row.aiSummary,
+          aiSummaryStatus: row.aiSummaryStatus,
+        })),
+      );
       const service = new NoticeArchiveService(
         repoMock as any,
-        undefined as any,
+        summaryStateRepository as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getPendingSummaryPage(50);
 
-      expect(findMock).toHaveBeenCalledTimes(1);
-      const callArg = findMock.mock.calls[0][0] as Record<string, unknown>;
+      const summaryCallArg = summaryStateRepository.find.mock
+        .calls[0][0] as Record<string, unknown>;
       expect(
-        (callArg['where'] as Record<string, unknown>)['aiSummaryStatus'],
+        (summaryCallArg['where'] as Record<string, unknown>)['aiSummaryStatus'],
       ).toBe('not_requested');
-      expect(callArg['take']).toBe(50);
+      expect(summaryCallArg['take']).toBe(50);
 
       expect(result).toHaveLength(1);
       expect(result[0]).toMatchObject({
@@ -536,8 +588,11 @@ describe('NoticeArchiveService', () => {
       const changeTrackingService = createChangeTrackingServiceMock();
       const service = new NoticeArchiveService(
         repoMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getPendingSummaryPage(50);
@@ -564,10 +619,21 @@ describe('NoticeArchiveService', () => {
       changeTrackingService.getLatestFieldValues.mockResolvedValue(
         new Map([[1002, '변경 체인 최신 제안이유']]),
       );
+      const summaryStateRepository = createSummaryStateRepositoryMock();
+      summaryStateRepository.find.mockResolvedValue(
+        pendingRows.map((row) => ({
+          noticeNum: row.noticeNum,
+          aiSummary: row.aiSummary,
+          aiSummaryStatus: row.aiSummaryStatus,
+        })),
+      );
       const service = new NoticeArchiveService(
         repoMock as any,
-        undefined as any,
+        summaryStateRepository as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getPendingSummaryPage(50);
@@ -613,11 +679,22 @@ describe('NoticeArchiveService', () => {
           [1402, '체인 제안이유 B'],
         ]),
       );
+      const summaryStateRepository = createSummaryStateRepositoryMock();
+      summaryStateRepository.find.mockResolvedValue(
+        pendingRows.map((row) => ({
+          noticeNum: row.noticeNum,
+          aiSummary: row.aiSummary,
+          aiSummaryStatus: row.aiSummaryStatus,
+        })),
+      );
 
       const service = new NoticeArchiveService(
         repoMock as any,
-        undefined as any,
+        summaryStateRepository as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getPendingSummaryPage(50);
@@ -662,11 +739,22 @@ describe('NoticeArchiveService', () => {
           [1412, '   '],
         ]),
       );
+      const summaryStateRepository = createSummaryStateRepositoryMock();
+      summaryStateRepository.find.mockResolvedValue(
+        pendingRows.map((row) => ({
+          noticeNum: row.noticeNum,
+          aiSummary: row.aiSummary,
+          aiSummaryStatus: row.aiSummaryStatus,
+        })),
+      );
 
       const service = new NoticeArchiveService(
         repoMock as any,
-        undefined as any,
+        summaryStateRepository as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getPendingSummaryPageByOffset(0, 20);
@@ -689,29 +777,40 @@ describe('NoticeArchiveService', () => {
     });
 
     it('falls back to recoverable NSM not_supported rows when not_requested is empty', async () => {
+      const notSupportedRow = buildRow({
+        noticeNum: 1301,
+        subject: '레거시 상태 복구 대상',
+        contentId: null,
+        proposalReason: '',
+        aiSummaryStatus: 'not_supported',
+        aiSummary: null,
+      });
       const findMock = jest
         .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([
-          buildRow({
-            noticeNum: 1301,
-            subject: '레거시 상태 복구 대상',
-            contentId: null,
-            proposalReason: '',
-            aiSummaryStatus: 'not_supported',
-            aiSummary: null,
-          }),
-        ]);
+        .mockResolvedValueOnce([notSupportedRow]);
       const repoMock = { ...createRepositoryMock(), find: findMock };
       const changeTrackingService = createChangeTrackingServiceMock();
       changeTrackingService.getLatestFieldValues.mockResolvedValue(
         new Map([[1301, '체인 보정 사유']]),
       );
+      const summaryStateRepository = createSummaryStateRepositoryMock();
+      summaryStateRepository.find
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            noticeNum: 1301,
+            aiSummary: null,
+            aiSummaryStatus: 'not_supported',
+          },
+        ]);
 
       const service = new NoticeArchiveService(
         repoMock as any,
-        undefined as any,
+        summaryStateRepository as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getPendingSummaryPage(20);
@@ -723,19 +822,16 @@ describe('NoticeArchiveService', () => {
         proposalReason: '체인 보정 사유',
         aiSummaryStatus: 'not_supported',
       });
-      expect(findMock).toHaveBeenCalledTimes(2);
+      expect(findMock).toHaveBeenCalledTimes(1);
       expect(
         (findMock.mock.calls[0][0] as Record<string, unknown>).where as Record<
           string,
           unknown
         >,
-      ).toMatchObject({ aiSummaryStatus: 'not_requested' });
-      expect(
-        (findMock.mock.calls[1][0] as Record<string, unknown>).where as Record<
-          string,
-          unknown
-        >,
-      ).toMatchObject({ aiSummaryStatus: 'not_supported' });
+      ).toMatchObject({
+        noticeNum: expect.anything(),
+        lifecycleStatus: expect.anything(),
+      });
       expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledWith(
         [1301],
         'proposalReason',
@@ -765,21 +861,32 @@ describe('NoticeArchiveService', () => {
         .mockResolvedValue(unavailableRows);
       const repoMock = { ...createRepositoryMock(), find: findMock };
       const changeTrackingService = createChangeTrackingServiceMock();
+      const summaryStateRepository = createSummaryStateRepositoryMock();
+      summaryStateRepository.find.mockResolvedValue(
+        unavailableRows.map((row) => ({
+          noticeNum: row.noticeNum,
+          aiSummary: row.aiSummary,
+          aiSummaryStatus: row.aiSummaryStatus,
+        })),
+      );
       const service = new NoticeArchiveService(
         repoMock as any,
-        undefined as any,
+        summaryStateRepository as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getUnavailableSummaryPage(50, 25);
 
-      expect(findMock).toHaveBeenCalledTimes(1);
-      const callArg = findMock.mock.calls[0][0] as Record<string, unknown>;
+      const summaryCallArg = summaryStateRepository.find.mock
+        .calls[0][0] as Record<string, unknown>;
       expect(
-        (callArg['where'] as Record<string, unknown>)['aiSummaryStatus'],
+        (summaryCallArg['where'] as Record<string, unknown>)['aiSummaryStatus'],
       ).toBe('unavailable');
-      expect(callArg['skip']).toBe(50);
-      expect(callArg['take']).toBe(25);
+      expect(summaryCallArg['skip']).toBe(50);
+      expect(summaryCallArg['take']).toBe(25);
 
       expect(result).toHaveLength(1);
       expect(result[0]).toMatchObject({
@@ -803,8 +910,11 @@ describe('NoticeArchiveService', () => {
       const changeTrackingService = createChangeTrackingServiceMock();
       const service = new NoticeArchiveService(
         repoMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getUnavailableSummaryPage(0, 50);
@@ -829,10 +939,21 @@ describe('NoticeArchiveService', () => {
         .mockResolvedValue(unavailableRows);
       const repoMock = { ...createRepositoryMock(), find: findMock };
       const changeTrackingService = createChangeTrackingServiceMock();
+      const summaryStateRepository = createSummaryStateRepositoryMock();
+      summaryStateRepository.find.mockResolvedValue(
+        unavailableRows.map((row) => ({
+          noticeNum: row.noticeNum,
+          aiSummary: row.aiSummary,
+          aiSummaryStatus: row.aiSummaryStatus,
+        })),
+      );
       const service = new NoticeArchiveService(
         repoMock as any,
-        undefined as any,
+        summaryStateRepository as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getUnavailableSummaryPage(0, 50);
@@ -858,8 +979,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       service.beginChangeNotificationCollection();
@@ -876,13 +1000,6 @@ describe('NoticeArchiveService', () => {
         changeTrackingService.flushQueuedChangeNotificationsNow,
       ).toHaveBeenCalledTimes(1);
     });
-
-    it('throws when ChangeTrackingService is missing in immutable diffchain mode', async () => {
-      const repositoryMock = createRepositoryMock();
-      expect(() => new NoticeArchiveService(repositoryMock as any)).toThrow(
-        'ChangeTrackingService is required for immutable diffchain mode.',
-      );
-    });
   });
 
   describe('proposalReason no-op protections', () => {
@@ -895,8 +1012,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -945,8 +1065,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.updateNsmHtmlAndDetail(2219775, {
@@ -987,6 +1110,9 @@ describe('NoticeArchiveService', () => {
         repositoryMock as any,
         summaryStateRepository as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.updateNsmHtmlAndDetail(2219776, {
@@ -1037,8 +1163,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.updateNsmHtmlAndDetail(2220590, {
@@ -1088,8 +1217,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -1151,8 +1283,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -1203,8 +1338,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -1308,8 +1446,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -1380,8 +1521,11 @@ describe('NoticeArchiveService', () => {
       const changeTrackingService = createChangeTrackingServiceMock();
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getNsmProposalReasonRetryCandidates(10);
@@ -1447,8 +1591,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -1552,8 +1699,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -1629,8 +1779,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -1686,8 +1839,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -1743,8 +1899,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -1808,8 +1967,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -1879,8 +2041,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       await service.upsertNoticeArchive(
@@ -1933,8 +2098,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getArchivedNullContentIdNums([
@@ -1962,8 +2130,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getArchivedNullContentIdNums([3201]);
@@ -1986,8 +2157,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.reconcileStaleLifecycleStatuses();
@@ -2016,8 +2190,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.reconcileStaleLifecycleStatuses();
@@ -2044,8 +2221,11 @@ describe('NoticeArchiveService', () => {
 
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.reconcileStaleLifecycleStatuses();
@@ -2083,8 +2263,11 @@ describe('NoticeArchiveService', () => {
       );
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getArchiveNoticesByNoticeNums([2220590]);
@@ -2099,8 +2282,11 @@ describe('NoticeArchiveService', () => {
     it('uses FTS candidates for full-text archive search', () => {
       const service = new NoticeArchiveService(
         createRepositoryMock() as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
       const qb = { andWhere: jest.fn() };
 
@@ -2184,6 +2370,9 @@ describe('NoticeArchiveService', () => {
         repositoryMock as any,
         summaryStateRepository as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getRecentNoticesForCache(100);
@@ -2206,6 +2395,9 @@ describe('NoticeArchiveService', () => {
         repositoryMock as any,
         summaryStateRepositoryMock as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       repositoryMock.findOne.mockResolvedValue(
@@ -2258,6 +2450,9 @@ describe('NoticeArchiveService', () => {
         repositoryMock as any,
         summaryStateRepositoryMock as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       repositoryMock.findOne.mockResolvedValue(
@@ -2330,6 +2525,9 @@ describe('NoticeArchiveService', () => {
         repositoryMock as any,
         summaryStateRepositoryMock as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const affected = await service.markNoticesDoneByNums([2219951]);
@@ -2398,6 +2596,9 @@ describe('NoticeArchiveService', () => {
         repositoryMock as any,
         summaryStateRepositoryMock as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const affected = await service.revertNoticesDoneByNums([2219952]);
@@ -2445,10 +2646,10 @@ describe('NoticeArchiveService', () => {
     ) =>
       new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         createChangeTrackingServiceMock() as any,
-        undefined as any,
-        undefined as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
         integrityStateRepositoryMock as any,
       );
 
@@ -2802,8 +3003,11 @@ describe('NoticeArchiveService', () => {
     const buildService = (repositoryMock: any) =>
       new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
     it('selects only active rows with NULL source html, newest first', async () => {
@@ -2882,8 +3086,11 @@ describe('NoticeArchiveService', () => {
       );
       const service = new NoticeArchiveService(
         repositoryMock as any,
-        undefined as any,
+        createSummaryStateRepositoryMock() as any,
         changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
       );
 
       const result = await service.getNoticesWithMissingSnapshotArtifacts(10);

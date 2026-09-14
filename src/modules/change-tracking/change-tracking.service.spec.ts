@@ -35,6 +35,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeDetailRepository,
       undefined as any,
       notificationBatchService as any,
+      undefined as any,
     );
 
     return { service, notificationBatchService };
@@ -376,6 +377,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeEventRepository,
       {} as any,
       undefined as any,
+      undefined as any,
+      undefined as any,
     );
 
     const saved = await service.appendChangeEventWithDetails({
@@ -447,6 +450,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeEventRepository,
       changeDetailRepository,
       undefined as any,
+      undefined as any,
+      undefined as any,
     );
 
     const saved = await service.appendChangeEventWithDetails({
@@ -499,6 +504,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         createQueryBuilder: jest.fn().mockReturnValue(qb),
       } as any,
       undefined as any,
+      undefined as any,
+      undefined as any,
     );
 
     const latestNonEmpty = await service.getLatestFieldAfterValue(
@@ -521,6 +528,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const service = new ChangeTrackingService(
       { find: eventFind } as any,
       {} as any,
+      undefined as any,
+      undefined as any,
       undefined as any,
     );
 
@@ -556,6 +565,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       {} as any,
       { manager: { query } } as any,
       undefined as any,
+      undefined as any,
+      undefined as any,
     );
 
     const result = await service.getLatestFieldValuesForFields(
@@ -585,6 +596,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const service = new ChangeTrackingService(
       {} as any,
       { manager: { query } } as any,
+      undefined as any,
+      undefined as any,
       undefined as any,
     );
     const noticeNums = Array.from({ length: 401 }, (_, index) => index + 1);
@@ -660,6 +673,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
             },
           },
         } as any,
+        undefined as any,
+        undefined as any,
         undefined as any,
       );
       const result = await service.getLatestFieldValuesForFields(
@@ -759,6 +774,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeEventRepository,
       {} as any,
       undefined as any,
+      undefined as any,
+      undefined as any,
     );
 
     const appendInput = (hashSuffix: string) =>
@@ -851,6 +868,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeEventRepository,
       {} as any,
       undefined as any,
+      undefined as any,
+      undefined as any,
     );
 
     const savedPromise = service.appendChangeEventWithDetails({
@@ -882,6 +901,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const bootstrapService = new ChangeTrackingService(
       {} as any,
       {} as any,
+      undefined as any,
+      undefined as any,
       undefined as any,
     );
     const createdDetectedAt = new Date('2026-07-03T00:00:00.000Z');
@@ -984,6 +1005,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeDetailRepository,
       undefined as any,
       undefined as any,
+      undefined as any,
     );
 
     const report = await service.runScheduledChainAudit('daily');
@@ -999,6 +1021,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const bootstrapService = new ChangeTrackingService(
       {} as any,
       {} as any,
+      undefined as any,
+      undefined as any,
       undefined as any,
     );
     const detectedAt = new Date('2026-07-03T00:00:00.000Z');
@@ -1068,6 +1092,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeDetailRepository,
       undefined as any,
       undefined as any,
+      undefined as any,
     );
 
     const report = await service.runScheduledChainAudit('daily');
@@ -1081,6 +1106,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const bootstrapService = new ChangeTrackingService(
       {} as any,
       {} as any,
+      undefined as any,
+      undefined as any,
       undefined as any,
     );
     const firstDetectedAt = new Date('2026-07-01T00:00:00.000Z');
@@ -1186,6 +1213,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeDetailRepository,
       undefined as any,
       undefined as any,
+      undefined as any,
     );
 
     const report = await service.runScheduledChainAudit('daily');
@@ -1199,6 +1227,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const bootstrapService = new ChangeTrackingService(
       {} as any,
       {} as any,
+      undefined as any,
+      undefined as any,
       undefined as any,
     );
     const firstDetectedAt = new Date('2026-07-05T00:00:00.000Z');
@@ -1304,6 +1334,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeDetailRepository,
       undefined as any,
       undefined as any,
+      undefined as any,
     );
 
     const report = await service.runScheduledChainAudit('daily');
@@ -1315,6 +1346,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const service = new ChangeTrackingService(
       {} as any,
       {} as any,
+      undefined as any,
+      undefined as any,
       undefined as any,
     );
     const beforeSnapshot = {
@@ -1352,6 +1385,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       {} as any,
       {} as any,
       undefined as any,
+      undefined as any,
+      undefined as any,
     );
     const beforeSnapshot = {
       num: 7004,
@@ -1387,6 +1422,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const bootstrapService = new ChangeTrackingService(
       {} as any,
       {} as any,
+      undefined as any,
+      undefined as any,
       undefined as any,
     );
     const detectedAt = new Date('2026-07-03T00:00:00.000Z');
@@ -1456,6 +1493,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeDetailRepository,
       undefined as any,
       undefined as any,
+      undefined as any,
     );
 
     const report = await service.runScheduledChainAudit('daily');
@@ -1468,6 +1506,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const bootstrapService = new ChangeTrackingService(
       {} as any,
       {} as any,
+      undefined as any,
+      undefined as any,
       undefined as any,
     );
     const firstDetectedAt = new Date('2026-07-07T00:00:00.000Z');
@@ -1577,6 +1617,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeDetailRepository,
       undefined as any,
       undefined as any,
+      undefined as any,
     );
 
     const report = await service.runScheduledChainAudit('daily');
@@ -1588,6 +1629,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const bootstrapService = new ChangeTrackingService(
       {} as any,
       {} as any,
+      undefined as any,
+      undefined as any,
       undefined as any,
     );
     const detectedAt = new Date('2026-07-09T00:00:00.000Z');
@@ -1658,6 +1701,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeDetailRepository,
       undefined as any,
       undefined as any,
+      undefined as any,
     );
 
     const report = await service.runScheduledChainAudit('daily');
@@ -1674,6 +1718,8 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     const bootstrapService = new ChangeTrackingService(
       {} as any,
       {} as any,
+      undefined as any,
+      undefined as any,
       undefined as any,
     );
     const createdDetectedAt = new Date('2026-08-18T02:49:38.181Z');
@@ -1789,6 +1835,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeDetailRepository,
       undefined as any,
       undefined as any,
+      undefined as any,
     );
 
     const report = await service.runScheduledChainAudit('daily');
@@ -1842,6 +1889,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       changeEventRepository,
       changeDetailRepository,
       archiveRepository,
+      undefined as any,
       undefined as any,
     );
 

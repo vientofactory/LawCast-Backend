@@ -155,6 +155,11 @@ export class DiscordBridgeOperationsCommandsService {
       await import('../notice/notice-archive.service');
     const { ArchiveSyncService } =
       await import('../crawling/archive-sync.service');
+    const { ChangeTrackingService } =
+      await import('../change-tracking/change-tracking.service');
+    const { WebPushSubscriptionService } =
+      await import('../notification/web-push-subscription.service');
+    const { CronJobsService } = await import('../scheduling/cronjobs.service');
 
     const runtimeStats = this.moduleRef.get(RuntimeStatsService, {
       strict: false,
@@ -167,6 +172,16 @@ export class DiscordBridgeOperationsCommandsService {
     const archiveSyncSvc = this.moduleRef.get(ArchiveSyncService, {
       strict: false,
     });
+    const changeTrackingSvc = this.moduleRef.get(ChangeTrackingService, {
+      strict: false,
+    });
+    const webPushSubscriptionSvc = this.moduleRef.get(
+      WebPushSubscriptionService,
+      { strict: false },
+    );
+    const cronJobsSvc = this.moduleRef.get(CronJobsService, {
+      strict: false,
+    });
 
     const stats = await runtimeStats.getAggregatedStats(
       { nodeEnv: process.env.NODE_ENV },
@@ -174,6 +189,9 @@ export class DiscordBridgeOperationsCommandsService {
       crawlingSvc,
       archiveSvc,
       archiveSyncSvc,
+      changeTrackingSvc,
+      webPushSubscriptionSvc,
+      cronJobsSvc,
     );
 
     const fmtMB = (b: number) => `${(b / 1024 / 1024).toFixed(1)} MB`;

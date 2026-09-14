@@ -112,10 +112,10 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     webhookService: WebhookService,
     crawlingService: CrawlingService,
     noticeArchiveService: NoticeArchiveService,
-    archiveSyncService?: ArchiveSyncService,
-    changeTrackingService?: ChangeTrackingService,
-    webPushSubscriptionService?: WebPushSubscriptionService,
-    cronJobsService?: CronJobsService,
+    archiveSyncService: ArchiveSyncService,
+    changeTrackingService: ChangeTrackingService,
+    webPushSubscriptionService: WebPushSubscriptionService,
+    cronJobsService: CronJobsService,
   ) {
     const nodeEnv = params.nodeEnv;
     if (!webhookService || !crawlingService || !noticeArchiveService) {
@@ -133,15 +133,8 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
       crawlingService.getCacheInfo(),
       noticeArchiveService.getArchiveCount(),
       crawlingService.getOllamaMetrics(),
-      changeTrackingService?.getComparableChangeSummary() ??
-        Promise.resolve({ comparableEventTotal: 0, comparableNoticeCount: 0 }),
-      webPushSubscriptionService?.getStatsForApi() ??
-        Promise.resolve({
-          total: 0,
-          active: 0,
-          inactive: 0,
-          withFailures: 0,
-        }),
+      changeTrackingService.getComparableChangeSummary(),
+      webPushSubscriptionService.getStatsForApi(),
     ]);
     const nodeRuntime = this.getNodeRuntimeStats();
     const isProduction = nodeEnv === 'production';
@@ -157,9 +150,8 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         : cacheInfo,
       archive: {
         count: archiveCount,
-        isDoneSync: archiveSyncService?.getIsDoneSyncStatus() ?? null,
-        legacyGenesisSeed:
-          archiveSyncService?.getLegacyGenesisSeedStatus() ?? null,
+        isDoneSync: archiveSyncService.getIsDoneSyncStatus(),
+        legacyGenesisSeed: archiveSyncService.getLegacyGenesisSeedStatus(),
       },
       webPush: webPushStats,
       changeTracking: comparableChangeSummary,
@@ -351,10 +343,10 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     cronJobsService?: CronJobsService,
   ) {
     const schedulerState = crawlingService.getSchedulerExecutionState();
-    const archiveState = archiveSyncService?.getExecutionState() ?? null;
+    const archiveState = archiveSyncService.getExecutionState();
 
-    const palPhase = archiveState?.phases.find((p) => p.name === 'full sync');
-    const pendingSyncPhase = archiveState?.phases.find(
+    const palPhase = archiveState.phases.find((p) => p.name === 'full sync');
+    const pendingSyncPhase = archiveState.phases.find(
       (p) => p.name === 'pending sync',
     );
 
@@ -397,18 +389,18 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         },
       },
       archiveSync: {
-        isRunning: archiveState?.isAnyPhaseRunning ?? false,
-        runningPhases: archiveState?.runningPhases ?? [],
-        phases: (archiveState?.phases ?? []).map((p) => ({
+        isRunning: archiveState.isAnyPhaseRunning,
+        runningPhases: archiveState.runningPhases,
+        phases: archiveState.phases.map((p) => ({
           name: p.name,
           status: p.status,
           lastRunAt: p.lastRunAt,
           lastError: p.lastError,
         })),
-        asyncApply: archiveState?.asyncApply ?? null,
+        asyncApply: archiveState.asyncApply,
       },
-      cronJobs: (cronJobsService?.getCronJobsStatus() ?? []).map((job) => {
-        const expression = cronJobsService?.getCronJobExpression(job.taskName);
+      cronJobs: cronJobsService.getCronJobsStatus().map((job) => {
+        const expression = cronJobsService.getCronJobExpression(job.taskName);
         return {
           name: job.taskName,
           status: job.status,

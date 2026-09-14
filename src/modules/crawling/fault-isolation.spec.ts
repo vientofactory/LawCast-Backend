@@ -29,6 +29,8 @@ import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { WebhookService } from '../webhook/webhook.service';
 import { NotificationService } from '../notification/notification.service';
 import { BatchProcessingService } from '../shared/batch-processing.service';
+import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
+import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { WebPushSubscriptionService } from '../notification/web-push-subscription.service';
 import { WebPushNotificationService } from '../notification/web-push-notification.service';
 import { type CachedNotice } from '../../types/cache.types';
@@ -584,6 +586,12 @@ describe('[Fault Isolation] NotificationBatchService', () => {
             }),
           },
         },
+        {
+          provide: DiscordBridgeService,
+          useValue: {
+            logEvent: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
@@ -724,6 +732,16 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
                 return true;
               }),
             deleteKey: jest.fn().mockResolvedValue(true),
+          },
+        },
+        {
+          provide: ChangeTrackingService,
+          useValue: {},
+        },
+        {
+          provide: DiscordBridgeService,
+          useValue: {
+            logEvent: jest.fn(),
           },
         },
       ],

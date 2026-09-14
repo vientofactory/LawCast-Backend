@@ -83,8 +83,8 @@ export interface ArchiveSyncExecutorDeps {
   archiveOrchestratorService: ArchiveOrchestratorService;
   summaryGenerationService: SummaryGenerationService;
   cacheService: CacheService;
-  changeTrackingService?: ChangeTrackingService;
-  discordBridge?: DiscordBridgeService;
+  changeTrackingService: ChangeTrackingService;
+  discordBridge: DiscordBridgeService;
 }
 
 export interface ArchiveSyncExecutorOptions {

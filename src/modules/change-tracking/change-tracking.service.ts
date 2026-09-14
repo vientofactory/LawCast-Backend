@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { type EntityManager, In, Repository } from 'typeorm';
 import {
@@ -252,12 +252,10 @@ export class ChangeTrackingService {
     private readonly changeEventRepository: Repository<NoticeChangeEvent>,
     @InjectRepository(NoticeChangeDetail)
     private readonly changeDetailRepository: Repository<NoticeChangeDetail>,
-    @Optional()
     @InjectRepository(NoticeArchive)
-    private readonly noticeArchiveRepository?: Repository<NoticeArchive>,
-    @Optional()
-    private readonly notificationBatchService?: NotificationBatchService,
-    @Optional() private readonly discordBridge?: DiscordBridgeService,
+    private readonly noticeArchiveRepository: Repository<NoticeArchive>,
+    private readonly notificationBatchService: NotificationBatchService,
+    private readonly discordBridge: DiscordBridgeService,
   ) {}
 
   async getLastEventForNotice(

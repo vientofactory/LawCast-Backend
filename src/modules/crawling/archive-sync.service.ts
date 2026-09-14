@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, Optional } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { CrawlingCoreService } from './crawling-core.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
@@ -243,8 +243,8 @@ export class ArchiveSyncService implements OnModuleInit {
     private readonly archiveOrchestratorService: ArchiveOrchestratorService,
     private readonly summaryGenerationService: SummaryGenerationService,
     private readonly cacheService: CacheService,
-    @Optional() private readonly changeTrackingService?: ChangeTrackingService,
-    @Optional() private readonly discordBridge?: DiscordBridgeService,
+    private readonly changeTrackingService: ChangeTrackingService,
+    private readonly discordBridge: DiscordBridgeService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────

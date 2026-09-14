@@ -6,7 +6,9 @@ jest.mock('../health/health-check.service', () => ({
   HealthCheckService: class {},
 }));
 jest.mock('../health/runtime-stats.service', () => ({
-  RuntimeStatsService: class {},
+  RuntimeStatsService: class {
+    static getAggregatedStats = jest.fn();
+  },
 }));
 jest.mock('../webhook/webhook.service', () => ({ WebhookService: class {} }));
 jest.mock('../crawling/crawling.service', () => ({
@@ -17,6 +19,15 @@ jest.mock('../notice/notice-archive.service', () => ({
 }));
 jest.mock('../crawling/archive-sync.service', () => ({
   ArchiveSyncService: class {},
+}));
+jest.mock('../change-tracking/change-tracking.service', () => ({
+  ChangeTrackingService: class {},
+}));
+jest.mock('../notification/web-push-subscription.service', () => ({
+  WebPushSubscriptionService: class {},
+}));
+jest.mock('../scheduling/cronjobs.service', () => ({
+  CronJobsService: class {},
 }));
 jest.mock('../cache/cache.service', () => ({ CacheService: class {} }));
 jest.mock('../shared/batch-processing.service', () => ({

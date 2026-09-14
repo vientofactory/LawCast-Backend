@@ -2,7 +2,6 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
-  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -256,18 +255,14 @@ export class NoticeArchiveService {
   constructor(
     @InjectRepository(NoticeArchive)
     private readonly archiveRepository: Repository<NoticeArchive>,
-    @Optional()
     @InjectRepository(NoticeArchiveSnapshotState)
-    private readonly summaryStateRepository?: Repository<NoticeArchiveSnapshotState>,
-    @Optional()
-    private readonly changeTrackingService?: ChangeTrackingService,
-    @Optional() private readonly discordBridge?: DiscordBridgeService,
-    @Optional()
+    private readonly summaryStateRepository: Repository<NoticeArchiveSnapshotState>,
+    private readonly changeTrackingService: ChangeTrackingService,
+    private readonly discordBridge: DiscordBridgeService,
     @InjectRepository(NoticeArchiveIntegrityCheck)
-    private readonly integrityCheckRepository?: Repository<NoticeArchiveIntegrityCheck>,
-    @Optional()
+    private readonly integrityCheckRepository: Repository<NoticeArchiveIntegrityCheck>,
     @InjectRepository(NoticeArchiveIntegrityState)
-    private readonly integrityStateRepository?: Repository<NoticeArchiveIntegrityState>,
+    private readonly integrityStateRepository: Repository<NoticeArchiveIntegrityState>,
   ) {
     this.artifactSupport = new NoticeArchiveArtifactSupport(
       this.archiveRepository,
@@ -275,13 +270,6 @@ export class NoticeArchiveService {
       this.integrityStateRepository,
       this.summaryStateRepository,
     );
-
-    if (!this.changeTrackingService) {
-      const message =
-        'ChangeTrackingService is required for immutable diffchain mode.';
-      this.logger.error(message);
-      throw new Error(message);
-    }
   }
 
   getRecommendedWriteConcurrency(defaultConcurrency: number): number {
@@ -368,15 +356,6 @@ export class NoticeArchiveService {
     boundaryAt: Date,
     batchSize = 300,
   ): Promise<LegacyGenesisSeedResult> {
-    if (!this.changeTrackingService) {
-      return {
-        boundaryAt: boundaryAt.toISOString(),
-        scanned: 0,
-        seeded: 0,
-        skipped: 0,
-      };
-    }
-
     const take = Math.max(1, Math.min(batchSize, 2000));
     const startedAt = Date.now();
     const scanned = await this.archiveRepository.count();

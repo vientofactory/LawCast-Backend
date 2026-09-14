@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { WebhookService } from '../webhook/webhook.service';
 import {
   NotificationService,
@@ -63,7 +63,7 @@ export class NotificationBatchService {
     private webPushSubscriptionService: WebPushSubscriptionService,
     private webPushNotificationService: WebPushNotificationService,
     private batchProcessingService: BatchProcessingService,
-    @Optional() private discordBridge: DiscordBridgeService,
+    private discordBridge: DiscordBridgeService,
   ) {}
 
   /**

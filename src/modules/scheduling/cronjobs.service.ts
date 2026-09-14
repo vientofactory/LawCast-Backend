@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { DataSource } from 'typeorm';
 import { WebhookCleanupService } from '../webhook/webhook-cleanup.service';
@@ -82,9 +82,8 @@ export class CronJobsService {
     private readonly changeTrackingService: ChangeTrackingService,
     private readonly dbMirrorService: DbMirrorService,
     private readonly discussionsService: DiscussionsService,
-    @Optional()
     private readonly webPushSubscriptionService: WebPushSubscriptionService,
-    @Optional() private readonly discordBridge: DiscordBridgeService,
+    private readonly discordBridge: DiscordBridgeService,
   ) {}
 
   // Helper method to wrap cron job execution with logging and error handling
@@ -440,10 +439,6 @@ export class CronJobsService {
   })
   async handleWebPushCleanup(): Promise<void> {
     await this.execute('web push cleanup', async () => {
-      if (!this.webPushSubscriptionService) {
-        return;
-      }
-
       const cleanedCount =
         await this.webPushSubscriptionService.cleanupInactiveSubscriptions(
           this.webPushCutoffDays,
@@ -524,10 +519,6 @@ export class CronJobsService {
   })
   async handleDiscussionWebPushCleanup(): Promise<void> {
     await this.execute('discussion web push cleanup', async () => {
-      if (!this.webPushSubscriptionService) {
-        return;
-      }
-
       const closedThreadIds =
         await this.discussionsService.findClosedThreadIdsOlderThan(
           this.discussionWebPushBindingCutoffDays,

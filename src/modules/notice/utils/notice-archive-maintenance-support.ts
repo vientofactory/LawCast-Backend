@@ -23,7 +23,7 @@ import { AI_SUMMARY_STATUS } from '../../../modules/crawling/utils/ai-summary-st
 export interface NoticeArchiveMaintenanceDeps {
   archiveRepository: Repository<NoticeArchive>;
   summaryStateRepository?: Repository<NoticeArchiveSnapshotState>;
-  changeTrackingService?: ChangeTrackingService;
+  changeTrackingService: ChangeTrackingService;
   artifactSupport: NoticeArchiveArtifactSupport;
   logger: { warn(message: string): void };
 }
@@ -204,10 +204,6 @@ export async function getLatestProposalReason(
   deps: NoticeArchiveMaintenanceDeps,
   noticeNum: number,
 ): Promise<string | null> {
-  if (!deps.changeTrackingService) {
-    return null;
-  }
-
   try {
     return deps.changeTrackingService.getLatestFieldValue(
       noticeNum,

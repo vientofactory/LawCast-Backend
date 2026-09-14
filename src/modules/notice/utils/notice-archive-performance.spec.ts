@@ -34,6 +34,7 @@ describe('notice archive performance paths', () => {
       const result = await getArchiveStartedAtByNoticeNums(
         {
           archiveRepository,
+          changeTrackingService: {} as any,
           artifactSupport: {} as any,
           logger: { warn: jest.fn() },
         },
