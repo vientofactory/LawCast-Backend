@@ -135,6 +135,7 @@ export function normalizeSortOrder(sortOrder?: 'asc' | 'desc'): 'asc' | 'desc' {
 
 export function buildArchiveWhereConditions(params: {
   search?: string;
+  proposer?: string;
   startDate?: Date;
   endDate?: Date;
   noticeNumCondition?: FindOperator<number>;
@@ -145,6 +146,7 @@ export function buildArchiveWhereConditions(params: {
   | FindOptionsWhere<NoticeArchive>[]
   | undefined {
   const normalizedSearch = (params.search || '').trim();
+  const normalizedProposer = (params.proposer || '').trim();
   const baseWhere: FindOptionsWhere<NoticeArchive> = {};
 
   if (params.noticeNumCondition) {
@@ -162,6 +164,10 @@ export function buildArchiveWhereConditions(params: {
     baseWhere.archiveStartedAt = LessThanOrEqual(params.endDate);
   }
 
+  if (normalizedProposer) {
+    baseWhere.contentProposer = ILike(`%${normalizedProposer}%`);
+  }
+
   if (!normalizedSearch) {
     return Object.keys(baseWhere).length > 0 ? baseWhere : undefined;
   }
@@ -169,6 +175,7 @@ export function buildArchiveWhereConditions(params: {
   const conditions: FindOptionsWhere<NoticeArchive>[] = [
     { ...baseWhere, subject: ILike(`%${normalizedSearch}%`) },
     { ...baseWhere, committee: ILike(`%${normalizedSearch}%`) },
+    { ...baseWhere, contentProposer: ILike(`%${normalizedSearch}%`) },
   ];
 
   if (params.fullText) {

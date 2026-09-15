@@ -2308,11 +2308,12 @@ describe('NoticeArchiveService', () => {
         ...nested.where.mock.calls,
         ...nested.orWhere.mock.calls,
       ].map((call) => String(call[0]));
-      expect(predicates).toHaveLength(3);
+      expect(predicates).toHaveLength(4);
       expect(predicates[0]).toBe('archive.subject LIKE :search');
       expect(predicates[1]).toBe('archive.committee LIKE :search');
-      expect(predicates[2]).toContain('notice_archives_fts MATCH :ftsQuery');
-      expect(nested.orWhere.mock.calls[1][1]).toEqual({
+      expect(predicates[2]).toBe('archive.contentProposer LIKE :search');
+      expect(predicates[3]).toContain('notice_archives_fts MATCH :ftsQuery');
+      expect(nested.orWhere.mock.calls[2][1]).toEqual({
         ftsQuery: '"PAL"* AND "제안이유"*',
       });
     });
