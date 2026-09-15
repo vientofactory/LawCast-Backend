@@ -6,9 +6,11 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { CrawlingCoreService } from './crawling-core.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { AI_SUMMARY_STATUS } from './utils/ai-summary-status.utils';
+import { extractProposerName } from '../../utils/proposer.utils';
 
 export interface SearchNoticesQuery {
   keyword: string;
+  proposer?: string;
   page: number;
   limit: number;
   includeDone?: boolean;
@@ -37,6 +39,7 @@ export interface SearchNoticesResult {
   limit: number;
   totalPages: number;
   keyword: string;
+  proposer?: string;
   source: 'archive' | 'crawler' | 'mixed';
 }
 
@@ -54,7 +57,7 @@ export class NoticeSearchService {
   ) {}
 
   async searchNotices(query: SearchNoticesQuery): Promise<SearchNoticesResult> {
-    const key = `${query.keyword.trim()}|${query.page}|${query.limit}|${query.includeDone ?? true}|${query.fullText ?? false}`;
+    const key = `${query.keyword.trim()}|${(query.proposer || '').trim()}|${query.page}|${query.limit}|${query.includeDone ?? true}|${query.fullText ?? false}`;
 
     const existing = this.inFlight.get(key);
     if (existing) {
@@ -74,6 +77,10 @@ export class NoticeSearchService {
   ): Promise<SearchNoticesResult> {
     const { page, limit, includeDone = true, fullText = false } = query;
     const keyword = query.keyword.trim();
+    const proposer = (query.proposer || '').trim();
+    const extractedNames = proposer ? extractProposerName(proposer) : [];
+    const extractedProposer =
+      extractedNames.length > 0 ? extractedNames[0] : proposer || undefined;
     const safeLimit = Math.min(
       APP_CONSTANTS.API.PAGINATION.MAX_LIMIT,
       Math.max(APP_CONSTANTS.API.PAGINATION.MIN_LIMIT, limit),
@@ -82,7 +89,11 @@ export class NoticeSearchService {
     const dbFetchLimit = shouldQueryCrawler
       ? Math.min(150, Math.max(safeLimit, 30))
       : safeLimit;
-    const crawlerQuery: ISearchQuery = { billName: keyword, pageUnit: 100 };
+    const crawlerQuery: ISearchQuery = {
+      billName: keyword || undefined,
+      represent: extractedProposer,
+      pageUnit: 100,
+    };
 
     const [dbResult, crawlerActiveResult, crawlerDoneResult] =
       await Promise.allSettled([
@@ -90,6 +101,7 @@ export class NoticeSearchService {
           page: shouldQueryCrawler ? 1 : page,
           limit: dbFetchLimit,
           search: keyword,
+          proposer: extractedProposer,
           sortOrder: 'desc',
           fullText,
         }),
@@ -212,6 +224,7 @@ export class NoticeSearchService {
       limit: safeLimit,
       totalPages: Math.max(1, Math.ceil(total / safeLimit)),
       keyword,
+      proposer: proposer || undefined,
       source,
     };
   }
