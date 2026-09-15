@@ -70,11 +70,13 @@ import {
   recoverCompetentAuthorityName,
   recoverOptionalCompetentAuthorityName,
 } from '../crawling/utils/competent-authority-autocomplete.utils';
+import { extractProposerName } from '../../utils/proposer.utils';
 
 export interface ArchiveListQuery {
   page: number;
   limit: number;
   search?: string;
+  proposer?: string;
   startDate?: Date;
   endDate?: Date;
   sortOrder?: 'asc' | 'desc';
@@ -87,6 +89,7 @@ export interface ArchiveOffsetQuery {
   skip: number;
   take: number;
   search?: string;
+  proposer?: string;
   startDate?: Date;
   endDate?: Date;
   sortOrder?: 'asc' | 'desc';
@@ -101,6 +104,7 @@ export interface ArchiveNumCompareCountQuery {
   num: number;
   operator: 'gt' | 'lt';
   search?: string;
+  proposer?: string;
   startDate?: Date;
   endDate?: Date;
 }
@@ -1648,12 +1652,14 @@ export class NoticeArchiveService {
     qb: SelectQueryBuilder<NoticeArchive>,
     params: {
       search?: string;
+      proposer?: string;
       startDate?: Date;
       endDate?: Date;
       fullText?: boolean;
     },
   ): void {
     const search = (params.search || '').trim();
+    const proposer = (params.proposer || '').trim();
 
     if (params.startDate && params.endDate) {
       const rangeStart =
@@ -1677,6 +1683,39 @@ export class NoticeArchiveService {
       });
     }
 
+    if (proposer) {
+      const extractedNames = extractProposerName(proposer);
+      const namesToSearch =
+        extractedNames.length > 0 ? extractedNames : [proposer];
+      qb.andWhere(
+        new Brackets((query) => {
+          for (let i = 0; i < namesToSearch.length; i++) {
+            const paramName = `proposerSearch_${i}`;
+            const pattern = `%${namesToSearch[i]}%`;
+            if (i === 0) {
+              query.where(
+                '(archive.contentProposer LIKE :' +
+                  paramName +
+                  ' OR archive.subject LIKE :' +
+                  paramName +
+                  ')',
+                { [paramName]: pattern },
+              );
+            } else {
+              query.orWhere(
+                '(archive.contentProposer LIKE :' +
+                  paramName +
+                  ' OR archive.subject LIKE :' +
+                  paramName +
+                  ')',
+                { [paramName]: pattern },
+              );
+            }
+          }
+        }),
+      );
+    }
+
     if (!search) {
       return;
     }
@@ -1690,6 +1729,9 @@ export class NoticeArchiveService {
             search: `%${search}%`,
           })
           .orWhere('archive.committee LIKE :search', {
+            search: `%${search}%`,
+          })
+          .orWhere('archive.contentProposer LIKE :search', {
             search: `%${search}%`,
           });
 
@@ -1728,6 +1770,7 @@ export class NoticeArchiveService {
   private async queryArchiveNoticeNumsByIsDoneFilter(params: {
     isDone: boolean;
     search?: string;
+    proposer?: string;
     startDate?: Date;
     endDate?: Date;
     fullText?: boolean;
@@ -1755,7 +1798,10 @@ export class NoticeArchiveService {
     this.applyArchiveSearchFilters(baseQb, params);
 
     const hasArchiveFilters = Boolean(
-      params.search?.trim() || params.startDate || params.endDate,
+      params.search?.trim() ||
+      params.proposer?.trim() ||
+      params.startDate ||
+      params.endDate,
     );
     const total =
       params.knownTotal !== undefined
@@ -1939,6 +1985,7 @@ export class NoticeArchiveService {
       const paged = await this.queryArchiveNoticeNumsByIsDoneFilter({
         isDone: query.isDone,
         search,
+        proposer: query.proposer,
         startDate: query.startDate,
         endDate: query.endDate,
         fullText: query.fullText,
@@ -1964,6 +2011,7 @@ export class NoticeArchiveService {
       const baseQb = this.createArchiveNoticeItemQueryBuilder('archive');
       this.applyArchiveSearchFilters(baseQb, {
         search,
+        proposer: query.proposer,
         startDate: query.startDate,
         endDate: query.endDate,
         fullText: query.fullText,
@@ -2092,6 +2140,7 @@ export class NoticeArchiveService {
     const nonDoneBaseQb = this.createArchiveNoticeItemQueryBuilder('archive');
     this.applyArchiveSearchFilters(nonDoneBaseQb, {
       search,
+      proposer: query.proposer,
       startDate: query.startDate,
       endDate: query.endDate,
       fullText: query.fullText,
@@ -2107,6 +2156,7 @@ export class NoticeArchiveService {
       const paged = await this.queryArchiveNoticeNumsByIsDoneFilter({
         isDone: query.isDone,
         search,
+        proposer: query.proposer,
         startDate: query.startDate,
         endDate: query.endDate,
         fullText: query.fullText,
@@ -2148,6 +2198,7 @@ export class NoticeArchiveService {
       const paged = await this.queryArchiveNoticeNumsByIsDoneFilter({
         isDone: query.isDone,
         search,
+        proposer: query.proposer,
         startDate: query.startDate,
         endDate: query.endDate,
         fullText: query.fullText,

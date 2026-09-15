@@ -275,6 +275,7 @@ export async function countByNoticeNumComparison(
 ): Promise<number> {
   const where = buildArchiveWhereConditions({
     search: query.search,
+    proposer: query.proposer,
     startDate: query.startDate,
     endDate: query.endDate,
     noticeNumCondition:

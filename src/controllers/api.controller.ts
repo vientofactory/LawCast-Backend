@@ -220,6 +220,7 @@ export class ApiController {
     )
     limit: number,
     @Query('search') search?: string,
+    @Query('proposer') proposer?: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('sortOrder') sortOrder?: string,
@@ -229,6 +230,7 @@ export class ApiController {
   ) {
     assertValidPage(page);
     assertSearchLength(search);
+    assertSearchLength(proposer);
     assertNoticeNumsInput(noticeNums);
     await this.apiReadRateLimitService.assertAllowed(req, 'expensive');
     const isDone =
@@ -238,6 +240,7 @@ export class ApiController {
       page,
       limit,
       search,
+      proposer,
       startDate,
       endDate,
       sortOrder: sortOrder === 'asc' ? 'asc' : 'desc',
@@ -252,6 +255,7 @@ export class ApiController {
   async searchNotices(
     @Req() req: Request,
     @Query('q') q: string,
+    @Query('proposer') proposerQuery: string,
     @Query(
       'page',
       new DefaultValuePipe(APP_CONSTANTS.API.PAGINATION.MIN_PAGE),
@@ -269,9 +273,11 @@ export class ApiController {
   ) {
     assertValidPage(page);
     assertSearchLength(q);
+    assertSearchLength(proposerQuery);
     await this.apiReadRateLimitService.assertAllowed(req, 'expensive');
     const keyword = (q || '').trim();
-    if (!keyword) {
+    const proposer = (proposerQuery || '').trim();
+    if (!keyword && !proposer) {
       return ApiResponseUtils.success({
         items: [],
         total: 0,
@@ -279,6 +285,7 @@ export class ApiController {
         limit,
         totalPages: 1,
         keyword: '',
+        proposer: '',
         source: 'archive',
       });
     }
@@ -286,6 +293,7 @@ export class ApiController {
     const fullText = fullTextRaw === 'true';
     const result = await this.noticeSearchService.searchNotices({
       keyword,
+      proposer: proposer || undefined,
       page,
       limit,
       includeDone,

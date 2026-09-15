@@ -9,11 +9,16 @@ import {
   API_REQUEST_LIMITS,
   assertNoticeNumsInput,
 } from '../../utils/request-limits.utils';
+import {
+  extractProposerName,
+  extractProposerFromSubject,
+} from '../../utils/proposer.utils';
 
 interface ArchivedNoticesQuery {
   page: number;
   limit: number;
   search?: string;
+  proposer?: string;
   startDate?: string;
   endDate?: string;
   sortOrder?: 'asc' | 'desc';
@@ -34,6 +39,7 @@ export class NoticesQueryService {
     page,
     limit,
     search,
+    proposer,
     startDate,
     endDate,
     sortOrder,
@@ -47,6 +53,7 @@ export class NoticesQueryService {
       Math.max(APP_CONSTANTS.API.PAGINATION.MIN_LIMIT, limit),
     );
     const normalizedSearch = (search || '').trim();
+    const normalizedProposer = (proposer || '').trim();
     const normalizedSortOrder = this.normalizeSortOrder(sortOrder);
     const parsedNoticeNums = this.parseNoticeNums(noticeNums);
     const parsedDateRange = this.parseDateRange(startDate, endDate);
@@ -69,17 +76,23 @@ export class NoticesQueryService {
       return {
         ...scopedItems,
         search: normalizedSearch,
+        proposer: normalizedProposer,
         startDate: parsedDateRange.startDateRaw,
         endDate: parsedDateRange.endDateRaw,
         sortOrder: normalizedSortOrder,
       };
     }
 
-    const searchedCached = normalizedSearch
-      ? cachedNotices.filter((notice) =>
-          this.matchesSearchKeyword(notice, normalizedSearch),
-        )
-      : cachedNotices;
+    const searchedCached =
+      normalizedSearch || normalizedProposer
+        ? cachedNotices.filter((notice) =>
+            this.matchesSearchKeyword(
+              notice,
+              normalizedSearch,
+              normalizedProposer,
+            ),
+          )
+        : cachedNotices;
 
     // When filtering by isDone=true, cache items (active notices) never qualify
     const cacheCandidates: CachedNotice[] =
@@ -112,6 +125,7 @@ export class NoticesQueryService {
         skip: 0,
         take: 0,
         search: normalizedSearch,
+        proposer: normalizedProposer,
         startDate: parsedDateRange.startDate,
         endDate: parsedDateRange.endDate,
         sortOrder: normalizedSortOrder,
@@ -155,6 +169,7 @@ export class NoticesQueryService {
         skip: archiveSkip,
         take: archiveTake,
         search: normalizedSearch,
+        proposer: normalizedProposer,
         startDate: parsedDateRange.startDate,
         endDate: parsedDateRange.endDate,
         sortOrder: normalizedSortOrder,
@@ -193,6 +208,7 @@ export class NoticesQueryService {
       total,
       totalPages: Math.max(1, Math.ceil(total / safeLimit)),
       search: normalizedSearch,
+      proposer: normalizedProposer,
       startDate: parsedDateRange.startDateRaw,
       endDate: parsedDateRange.endDateRaw,
       sortOrder: normalizedSortOrder,
@@ -224,8 +240,38 @@ export class NoticesQueryService {
     };
   }
 
-  private matchesSearchKeyword(notice: CachedNotice, search: string): boolean {
+  private matchesSearchKeyword(
+    notice: CachedNotice,
+    search?: string,
+    proposer?: string,
+  ): boolean {
+    if (proposer) {
+      const extractedNames = [
+        ...extractProposerFromSubject(notice.subject),
+        ...extractProposerName(notice.proposerCategory),
+      ];
+      const proposerLower = proposer.toLowerCase();
+      const proposerMatch =
+        extractedNames.some(
+          (name) => name && name.toLowerCase().includes(proposerLower),
+        ) ||
+        notice.subject.toLowerCase().includes(proposerLower) ||
+        (notice.proposerCategory &&
+          notice.proposerCategory.toLowerCase().includes(proposerLower));
+
+      if (!proposerMatch) {
+        return false;
+      }
+    }
+
+    if (!search) {
+      return true;
+    }
+
     const keyword = search.toLowerCase();
+    const extractedProposer = extractProposerFromSubject(notice.subject).join(
+      ' ',
+    );
     // NOTE: proposalReason (원문 텍스트) is intentionally excluded because
     // CachedNotice does not carry that field. A cache-only item whose keyword
     // appears only in the original text will therefore not match here, which
@@ -233,6 +279,7 @@ export class NoticesQueryService {
     const target = [
       notice.subject,
       notice.proposerCategory,
+      extractedProposer,
       notice.committee,
       notice.aiSummary || '',
     ]
