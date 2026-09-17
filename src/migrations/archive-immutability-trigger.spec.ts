@@ -228,4 +228,28 @@ describe('notice_archives immutability trigger', () => {
       ),
     ).resolves.not.toThrow();
   });
+
+  it('has screenshot_capture_status and screenshot_capture_error columns', async () => {
+    const columns = await dataSource.query(
+      `PRAGMA table_info("notice_archives")`,
+    );
+    const names = columns.map((c: any) => c.name);
+    expect(names).toContain('screenshot_capture_status');
+    expect(names).toContain('screenshot_capture_error');
+  });
+
+  it('allows inserting rows with screenshot capture status columns', async () => {
+    await insertRow({
+      screenshot_capture_status: 'failed',
+      screenshot_capture_error: 'viewport exceeded limit',
+    });
+
+    const [row] = await dataSource.query(
+      `SELECT "screenshot_capture_status", "screenshot_capture_error"
+       FROM "notice_archives" WHERE "noticeNum" = ?`,
+      [2203643],
+    );
+    expect(row.screenshot_capture_status).toBe('failed');
+    expect(row.screenshot_capture_error).toBe('viewport exceeded limit');
+  });
 });

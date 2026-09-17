@@ -3,6 +3,10 @@ import {
   type ScreenshotQueueItem,
 } from './archive-orchestrator-screenshot-coordinator';
 
+jest.mock('../../../utils/async-delay.utils', () => ({
+  delayMs: jest.fn().mockResolvedValue(undefined),
+}));
+
 describe('ArchiveOrchestratorScreenshotCoordinator', () => {
   it('drains screenshot queue in bounded parallel batches', async () => {
     const queueState: ScreenshotQueueItem[] = [
@@ -95,5 +99,151 @@ describe('ArchiveOrchestratorScreenshotCoordinator', () => {
 
     expect(updateScreenshot).toHaveBeenCalledTimes(3);
     expect(queueState).toHaveLength(0);
+  });
+
+  it('records screenshot capture failure when capture returns null (size limit)', async () => {
+    const queueState: ScreenshotQueueItem[] = [
+      { num: 10, contentId: 'content-10', isDone: false, retryCount: 0 },
+    ];
+    const updateScreenshot = jest.fn().mockResolvedValue(undefined);
+    const recordScreenshotCaptureFailure = jest
+      .fn()
+      .mockResolvedValue(undefined);
+
+    const cacheService = {
+      getObject: jest.fn(async () => queueState),
+      setObject: jest.fn(async (_key: string, value: ScreenshotQueueItem[]) => {
+        queueState.splice(0, queueState.length, ...value);
+        return true;
+      }),
+      deleteKey: jest.fn(async () => {
+        queueState.splice(0, queueState.length);
+        return true;
+      }),
+    };
+
+    const captureContentScreenshot = jest.fn().mockResolvedValue(null);
+
+    const coordinator = new ArchiveOrchestratorScreenshotCoordinator({
+      cacheService: cacheService as any,
+      noticeArchiveService: {
+        updateScreenshot,
+        recordScreenshotCaptureFailure,
+      } as any,
+      crawlingCoreService: {
+        captureContentScreenshot,
+        captureNsmDetailScreenshot: jest.fn(),
+      } as any,
+      logger: { log: jest.fn(), warn: jest.fn() },
+    });
+
+    await (coordinator as any).drainScreenshotQueue();
+
+    expect(captureContentScreenshot).toHaveBeenCalledWith('content-10', false);
+    expect(updateScreenshot).not.toHaveBeenCalled();
+    expect(recordScreenshotCaptureFailure).toHaveBeenCalledWith(
+      10,
+      'content exceeds size limit after all compression strategies',
+    );
+  });
+
+  it('records screenshot capture failure after max retries exceeded', async () => {
+    const queueState: ScreenshotQueueItem[] = [
+      { num: 20, contentId: 'content-20', isDone: false, retryCount: 3 },
+    ];
+    const updateScreenshot = jest.fn().mockResolvedValue(undefined);
+    const recordScreenshotCaptureFailure = jest
+      .fn()
+      .mockResolvedValue(undefined);
+
+    const cacheService = {
+      getObject: jest.fn(async () => queueState),
+      setObject: jest.fn(async (_key: string, value: ScreenshotQueueItem[]) => {
+        queueState.splice(0, queueState.length, ...value);
+        return true;
+      }),
+      deleteKey: jest.fn(async () => {
+        queueState.splice(0, queueState.length);
+        return true;
+      }),
+    };
+
+    const captureContentScreenshot = jest
+      .fn()
+      .mockRejectedValue(new Error('net::ERR_TIMED_OUT'));
+
+    const coordinator = new ArchiveOrchestratorScreenshotCoordinator({
+      cacheService: cacheService as any,
+      noticeArchiveService: {
+        updateScreenshot,
+        recordScreenshotCaptureFailure,
+      } as any,
+      crawlingCoreService: {
+        captureContentScreenshot,
+        captureNsmDetailScreenshot: jest.fn(),
+      } as any,
+      logger: { log: jest.fn(), warn: jest.fn() },
+    });
+
+    await (coordinator as any).drainScreenshotQueue();
+
+    expect(updateScreenshot).not.toHaveBeenCalled();
+    expect(recordScreenshotCaptureFailure).toHaveBeenCalledWith(
+      20,
+      'net::ERR_TIMED_OUT',
+    );
+  });
+
+  it('re-queues item when retry count is below max', async () => {
+    const queueState: ScreenshotQueueItem[] = [
+      { num: 30, contentId: 'content-30', isDone: false, retryCount: 0 },
+    ];
+    const updateScreenshot = jest.fn().mockResolvedValue(undefined);
+    const recordScreenshotCaptureFailure = jest
+      .fn()
+      .mockResolvedValue(undefined);
+    const allSetStates: ScreenshotQueueItem[][] = [];
+
+    const cacheService = {
+      getObject: jest.fn(async () => queueState),
+      setObject: jest.fn(async (_key: string, value: ScreenshotQueueItem[]) => {
+        allSetStates.push([...value]);
+        queueState.splice(0, queueState.length, ...value);
+        return true;
+      }),
+      deleteKey: jest.fn(async () => {
+        queueState.splice(0, queueState.length);
+        return true;
+      }),
+    };
+
+    const captureContentScreenshot = jest
+      .fn()
+      .mockRejectedValue(new Error('temporary failure'));
+
+    const coordinator = new ArchiveOrchestratorScreenshotCoordinator({
+      cacheService: cacheService as any,
+      noticeArchiveService: {
+        updateScreenshot,
+        recordScreenshotCaptureFailure,
+      } as any,
+      crawlingCoreService: {
+        captureContentScreenshot,
+        captureNsmDetailScreenshot: jest.fn(),
+      } as any,
+      logger: { log: jest.fn(), warn: jest.fn() },
+    });
+
+    await (coordinator as any).drainScreenshotQueue();
+
+    expect(updateScreenshot).not.toHaveBeenCalled();
+    const requeueWrites = allSetStates.filter(
+      (s) => s.length > 0 && s[0].num === 30 && s[0].retryCount > 0,
+    );
+    expect(requeueWrites.length).toBeGreaterThanOrEqual(1);
+    expect(requeueWrites[0][0]).toMatchObject({
+      num: 30,
+      retryCount: 1,
+    });
   });
 });

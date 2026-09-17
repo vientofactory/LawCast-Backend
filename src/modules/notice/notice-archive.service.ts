@@ -167,6 +167,8 @@ export interface ArchiveDetailResult {
   screenshotMeta: {
     hasScreenshot: boolean;
     format: string | null;
+    captureStatus: string | null;
+    captureError: string | null;
   };
 }
 
@@ -2737,7 +2739,28 @@ export class NoticeArchiveService {
     await this.fillMissingSnapshotArtifacts(noticeNum, {
       screenshotBlob: blob,
       screenshotFormat: format,
+      screenshotCaptureStatus: 'captured',
     });
+  }
+
+  /**
+   * Records a permanent screenshot capture failure so the UI can display
+   * the reason instead of silently hiding the screenshot button.
+   * Only writes when the status column is still NULL (first-fill guard).
+   */
+  async recordScreenshotCaptureFailure(
+    noticeNum: number,
+    error: string,
+  ): Promise<void> {
+    await this.applyGuardedArtifactFill(
+      { noticeNum, screenshotCaptureStatus: IsNull() },
+      {
+        screenshotCaptureStatus: 'failed',
+        screenshotCaptureError: error,
+      },
+      noticeNum,
+      'screenshotCaptureFailure',
+    );
   }
 
   /**
@@ -2791,6 +2814,7 @@ export class NoticeArchiveService {
       httpMetadata?: ArchiveHttpMetadata | null;
       screenshotBlob?: Buffer | null;
       screenshotFormat?: string | null;
+      screenshotCaptureStatus?: string | null;
     },
   ): Promise<SnapshotArtifactFillResult> {
     const result: SnapshotArtifactFillResult = {
@@ -2840,6 +2864,8 @@ export class NoticeArchiveService {
         {
           screenshotBlob,
           screenshotFormat: artifacts.screenshotFormat?.trim() || 'jpeg',
+          screenshotCaptureStatus:
+            artifacts.screenshotCaptureStatus?.trim() || 'captured',
         },
         noticeNum,
         'screenshot',

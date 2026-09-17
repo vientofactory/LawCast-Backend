@@ -130,4 +130,138 @@ describe('notice archive performance paths', () => {
     expect(projection).not.toHaveProperty('sourceHtml');
     expect(projection).not.toHaveProperty('screenshotBlob');
   });
+
+  it('returns screenshotCaptureStatus and screenshotCaptureError in screenshotMeta', async () => {
+    const row = {
+      noticeNum: 2200002,
+      subject: 'subject',
+      proposerCategory: 'member',
+      committee: 'committee',
+      assemblyLink: 'link',
+      contentId: null,
+      proposalReason: 'reason',
+      sourceTitle: null,
+      contentBillNumber: null,
+      contentProposer: null,
+      contentProposalDate: null,
+      contentCommittee: null,
+      contentReferralDate: null,
+      contentNoticePeriod: null,
+      contentProposalSession: null,
+      attachmentPdfFile: '',
+      attachmentHwpFile: '',
+      archivedAt: new Date('2026-08-19T00:00:00.000Z'),
+      sourceHtmlSha256: null,
+      integrityVerifiedAt: null,
+      integrityCheckPassed: null,
+      httpMetadataJson: '{}',
+      httpFetchedAt: null,
+      httpStatusCode: 200,
+      httpContentType: 'text/html',
+      httpEtag: null,
+      httpLastModified: null,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
+      screenshotFormat: null,
+      screenshotCaptureStatus: 'failed',
+      screenshotCaptureError: 'viewport exceeded 16384px limit',
+      archiveStartedAt: new Date('2026-08-19T00:00:00.000Z'),
+      aiSummary: null,
+      aiSummaryStatus: 'not_requested',
+      isDone: false,
+    } as NoticeArchive;
+    const findOne = jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue(row);
+    const repository = {
+      findOne,
+      query: jest
+        .fn<(...args: any[]) => Promise<any[]>>()
+        .mockResolvedValue([{ sourceHtmlSize: 0, hasScreenshot: 0 }]),
+    };
+    const integrityStateRepository = {
+      findOne: jest
+        .fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValue(null),
+    };
+    const support = new NoticeArchiveArtifactSupport(
+      repository as any,
+      undefined,
+      integrityStateRepository as any,
+    );
+
+    const result = await support.getArchivedNoticeDetail(2200002);
+
+    expect(result?.screenshotMeta.hasScreenshot).toBe(false);
+    expect(result?.screenshotMeta.captureStatus).toBe('failed');
+    expect(result?.screenshotMeta.captureError).toBe(
+      'viewport exceeded 16384px limit',
+    );
+  });
+
+  it('returns null captureStatus and captureError when columns are not set', async () => {
+    const row = {
+      noticeNum: 2200003,
+      subject: 'subject',
+      proposerCategory: 'member',
+      committee: 'committee',
+      assemblyLink: 'link',
+      contentId: null,
+      proposalReason: 'reason',
+      sourceTitle: null,
+      contentBillNumber: null,
+      contentProposer: null,
+      contentProposalDate: null,
+      contentCommittee: null,
+      contentReferralDate: null,
+      contentNoticePeriod: null,
+      contentProposalSession: null,
+      attachmentPdfFile: '',
+      attachmentHwpFile: '',
+      archivedAt: new Date('2026-08-19T00:00:00.000Z'),
+      sourceHtmlSha256: null,
+      integrityVerifiedAt: null,
+      integrityCheckPassed: null,
+      httpMetadataJson: '{}',
+      httpFetchedAt: null,
+      httpStatusCode: 200,
+      httpContentType: 'text/html',
+      httpEtag: null,
+      httpLastModified: null,
+      lifecycleStatus: 'active',
+      sourceDeletedAt: null,
+      screenshotFormat: null,
+      screenshotCaptureStatus: null,
+      screenshotCaptureError: null,
+      archiveStartedAt: new Date('2026-08-19T00:00:00.000Z'),
+      aiSummary: null,
+      aiSummaryStatus: 'not_requested',
+      isDone: false,
+    } as NoticeArchive;
+    const findOne = jest
+      .fn<(...args: any[]) => Promise<any>>()
+      .mockResolvedValue(row);
+    const repository = {
+      findOne,
+      query: jest
+        .fn<(...args: any[]) => Promise<any[]>>()
+        .mockResolvedValue([{ sourceHtmlSize: 0, hasScreenshot: 0 }]),
+    };
+    const integrityStateRepository = {
+      findOne: jest
+        .fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValue(null),
+    };
+    const support = new NoticeArchiveArtifactSupport(
+      repository as any,
+      undefined,
+      integrityStateRepository as any,
+    );
+
+    const result = await support.getArchivedNoticeDetail(2200003);
+
+    expect(result?.screenshotMeta.hasScreenshot).toBe(false);
+    expect(result?.screenshotMeta.captureStatus).toBeNull();
+    expect(result?.screenshotMeta.captureError).toBeNull();
+  });
 });

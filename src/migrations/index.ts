@@ -28,6 +28,7 @@ import { AddWebPushNotificationPreference1757203201000 } from './202609070002-ad
 import { OptimizeDiscussionThreadListing1757289601000 } from './202609080001-optimize-discussion-thread-listing.migration';
 import { AddDiscussionCommentDeletedBy1757289602000 } from './202609080002-add-discussion-comment-deleted-by.migration';
 import { AddDiscussionThreadLock1757289603000 } from './202609080003-add-discussion-thread-lock.migration';
+import { AddScreenshotCaptureStatus1758096001000 } from './202609170001-add-screenshot-capture-status.migration';
 
 export const migrations: (new () => MigrationInterface)[] = [
   InitialSchemaMigration1744953900000,
@@ -59,4 +60,5 @@ export const migrations: (new () => MigrationInterface)[] = [
   OptimizeDiscussionThreadListing1757289601000,
   AddDiscussionCommentDeletedBy1757289602000,
   AddDiscussionThreadLock1757289603000,
+  AddScreenshotCaptureStatus1758096001000,
 ];

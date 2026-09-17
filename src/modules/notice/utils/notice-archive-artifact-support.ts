@@ -175,6 +175,8 @@ export class NoticeArchiveArtifactSupport {
         lifecycleStatus: true,
         sourceDeletedAt: true,
         screenshotFormat: true,
+        screenshotCaptureStatus: true,
+        screenshotCaptureError: true,
         archiveStartedAt: true,
       },
     });
@@ -267,6 +269,8 @@ export class NoticeArchiveArtifactSupport {
       screenshotMeta: {
         hasScreenshot: artifactFlags[0]?.hasScreenshot === 1,
         format: row.screenshotFormat ?? null,
+        captureStatus: row.screenshotCaptureStatus ?? null,
+        captureError: row.screenshotCaptureError ?? null,
       },
     };
   }

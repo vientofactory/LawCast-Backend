@@ -117,6 +117,9 @@ describe('ArchiveOrchestratorService', () => {
               .fn()
               .mockResolvedValue(undefined),
             updateScreenshot: jest.fn().mockResolvedValue(undefined),
+            recordScreenshotCaptureFailure: jest
+              .fn()
+              .mockResolvedValue(undefined),
             updateSourceHtml: jest.fn().mockResolvedValue(undefined),
             getNoticesWithMissingSnapshotArtifacts: jest
               .fn()
@@ -654,6 +657,30 @@ describe('ArchiveOrchestratorService', () => {
       expect(
         noticeArchiveService.updateNsmHtmlAndDetail,
       ).not.toHaveBeenCalled();
+    });
+
+    it('records screenshot capture failure when NSM capture returns null screenshot', async () => {
+      setTargets({ nsm: [{ num: 2220570 }] });
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '<html>nsm detail</html>',
+          screenshot: null,
+          detail: { proposalReason: '제안이유' },
+          responseUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2220570/detailRP',
+          statusCode: 200,
+        },
+      );
+
+      const result = await service.backfillMissingSnapshotArtifacts();
+
+      expect(result.nsmFilled).toBe(1);
+      expect(
+        noticeArchiveService.recordScreenshotCaptureFailure,
+      ).toHaveBeenCalledWith(
+        2220570,
+        'screenshot returned null from captureNsmDetailFull during snapshot artifact backfill',
+      );
     });
 
     it('does not count a deleted NSM source page as a backfill failure', async () => {
