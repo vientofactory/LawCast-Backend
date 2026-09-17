@@ -192,6 +192,21 @@ export class NoticeArchive {
   })
   screenshotFormat: string | null;
 
+  @Column({
+    type: 'varchar',
+    length: 20,
+    name: 'screenshot_capture_status',
+    nullable: true,
+  })
+  screenshotCaptureStatus: string | null;
+
+  @Column({
+    type: 'text',
+    name: 'screenshot_capture_error',
+    nullable: true,
+  })
+  screenshotCaptureError: string | null;
+
   @CreateDateColumn({ name: 'archive_started_at' })
   archiveStartedAt: Date;
 }

@@ -271,9 +271,14 @@ export class ArchiveOrchestratorScreenshotCoordinator {
           `Screenshot stored for notice ${notice.num} (${screenshot.length.toLocaleString()} Bytes)`,
         );
       } else {
+        const skipReason =
+          'content exceeds size limit after all compression strategies';
         this.options.logger.warn(
-          `Screenshot permanently skipped for notice ${notice.num}: ` +
-            `content exceeds size limit after all compression strategies`,
+          `Screenshot permanently skipped for notice ${notice.num}: ${skipReason}`,
+        );
+        await this.options.noticeArchiveService.recordScreenshotCaptureFailure(
+          notice.num,
+          skipReason,
         );
       }
     } catch (error) {
@@ -288,6 +293,10 @@ export class ArchiveOrchestratorScreenshotCoordinator {
 
       this.options.logger.warn(
         `Screenshot permanently skipped for notice ${notice.num} after ${max + 1} attempt(s): ${message} - will retry on next backfill`,
+      );
+      await this.options.noticeArchiveService.recordScreenshotCaptureFailure(
+        notice.num,
+        message,
       );
     } finally {
       if (forceNsmSpacing && notice.nsmBillNo) {

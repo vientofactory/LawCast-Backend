@@ -348,6 +348,13 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
             },
           );
 
+          if (!screenshot) {
+            await this.noticeArchiveService.recordScreenshotCaptureFailure(
+              nsmTargets[idx].num,
+              'screenshot returned null from captureNsmDetailFull during snapshot artifact backfill',
+            );
+          }
+
           result.nsmFilled += 1;
         } catch (error) {
           // A deleted source page can never be re-captured; the lifecycle
@@ -906,6 +913,13 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         screenshotBlob: capturedScreenshot,
         screenshotFormat: capturedScreenshot ? 'jpeg' : undefined,
       });
+
+      if (!capturedScreenshot) {
+        await this.noticeArchiveService.recordScreenshotCaptureFailure(
+          num,
+          'screenshot returned null from captureNsmDetailFull during proposalReason backfill',
+        );
+      }
 
       if (!proposalReason) {
         LoggerUtils.debugDev(

@@ -191,6 +191,8 @@ describe('NoticeArchiveService', () => {
       archiveStartedAt: new Date('2026-04-17T00:00:02.000Z'),
       screenshotBlob: null,
       screenshotFormat: null,
+      screenshotCaptureStatus: null,
+      screenshotCaptureError: null,
       ...overrides,
     };
   };
@@ -2997,6 +2999,95 @@ describe('NoticeArchiveService', () => {
       });
 
       expect(repositoryMock.update).not.toHaveBeenCalled();
+    });
+
+    it('updateScreenshot includes screenshotCaptureStatus captured in the patch', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 1 }),
+      };
+
+      const service = buildService(repositoryMock);
+
+      await service.updateScreenshot(2220565, Buffer.from([1, 2, 3]), 'jpeg');
+
+      expect(repositoryMock.update).toHaveBeenCalledTimes(1);
+      expect(repositoryMock.update.mock.calls[0][1]).toMatchObject({
+        screenshotBlob: Buffer.from([1, 2, 3]),
+        screenshotFormat: 'jpeg',
+        screenshotCaptureStatus: 'captured',
+      });
+    });
+
+    it('recordScreenshotCaptureFailure sets status failed and error message', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 1 }),
+      };
+
+      const service = buildService(repositoryMock);
+
+      await service.recordScreenshotCaptureFailure(
+        2220565,
+        'capture timed out after 30s',
+      );
+
+      expect(repositoryMock.update).toHaveBeenCalledTimes(1);
+      expect(repositoryMock.update.mock.calls[0][1]).toEqual({
+        screenshotCaptureStatus: 'failed',
+        screenshotCaptureError: 'capture timed out after 30s',
+      });
+    });
+
+    it('recordScreenshotCaptureFailure is idempotent when status is already set', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 0 }),
+      };
+
+      const service = buildService(repositoryMock);
+
+      await service.recordScreenshotCaptureFailure(2220565, 'already failed');
+
+      expect(repositoryMock.update).toHaveBeenCalledTimes(1);
+      const criteria = repositoryMock.update.mock.calls[0][0];
+      expect(criteria).toMatchObject({
+        noticeNum: 2220565,
+      });
+    });
+
+    it('fillMissingSnapshotArtifacts passes screenshotCaptureStatus through to the patch', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 1 }),
+      };
+
+      const service = buildService(repositoryMock);
+
+      const result = await service.fillMissingSnapshotArtifacts(2220565, {
+        screenshotBlob: Buffer.from([4, 5, 6]),
+        screenshotFormat: 'png',
+        screenshotCaptureStatus: 'captured',
+      });
+
+      expect(result).toEqual({
+        html: false,
+        httpMetadata: false,
+        screenshot: true,
+      });
+      expect(repositoryMock.update).toHaveBeenCalledTimes(1);
+      expect(repositoryMock.update.mock.calls[0][1]).toMatchObject({
+        screenshotCaptureStatus: 'captured',
+        screenshotFormat: 'png',
+      });
     });
   });
 
