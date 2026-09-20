@@ -267,6 +267,29 @@ export class ChangeTrackingService {
     });
   }
 
+  async getNoticeRevisionMetadata(noticeNum: number): Promise<{
+    headRev: number | null;
+    hasLegacyGenesisBoundary: boolean;
+    legacyGenesisBoundaryAt: Date | null;
+  }> {
+    const lastEvent = await this.getLastEventForNotice(noticeNum);
+    const headRev = lastEvent?.eventHeight ?? null;
+
+    const legacyGenesisEvent = await this.changeEventRepository.findOne({
+      where: {
+        noticeNum,
+        source: NoticeChangeSource.BOOTSTRAP_LEGACY_SEED,
+      },
+      order: { eventHeight: 'ASC' },
+    });
+
+    return {
+      headRev,
+      hasLegacyGenesisBoundary: Boolean(legacyGenesisEvent),
+      legacyGenesisBoundaryAt: legacyGenesisEvent?.detectedAt ?? null,
+    };
+  }
+
   async getNoticeNumsWithAnyEvent(noticeNums: number[]): Promise<Set<number>> {
     const uniqueNums = Array.from(new Set(noticeNums));
     if (uniqueNums.length === 0) {
