@@ -8,6 +8,11 @@ import { LoggerUtils } from '../../../utils/logger.utils';
 import { delayMs } from '../../../utils/async-delay.utils';
 import { logAndBridge } from '../../../utils/bridge-log.utils';
 import { mapConcurrently } from '../../../utils/concurrency.utils';
+import {
+  ScreenshotFailureReason,
+  classifyScreenshotError,
+  formatScreenshotCaptureError,
+} from './screenshot-failure-classifier.util';
 
 export interface ScreenshotQueueItem {
   num: number;
@@ -271,14 +276,15 @@ export class ArchiveOrchestratorScreenshotCoordinator {
           `Screenshot stored for notice ${notice.num} (${screenshot.length.toLocaleString()} Bytes)`,
         );
       } else {
-        const skipReason =
-          'content exceeds size limit after all compression strategies';
+        const errorMsg = formatScreenshotCaptureError(
+          ScreenshotFailureReason.SIZE_LIMIT,
+        );
         this.options.logger.warn(
-          `Screenshot permanently skipped for notice ${notice.num}: ${skipReason}`,
+          `Screenshot permanently skipped for notice ${notice.num}: ${errorMsg}`,
         );
         await this.options.noticeArchiveService.recordScreenshotCaptureFailure(
           notice.num,
-          skipReason,
+          errorMsg,
         );
       }
     } catch (error) {
@@ -291,12 +297,14 @@ export class ArchiveOrchestratorScreenshotCoordinator {
         return { ...notice, retryCount: notice.retryCount + 1 };
       }
 
+      const reason = classifyScreenshotError(error);
+      const errorMsg = formatScreenshotCaptureError(reason, message);
       this.options.logger.warn(
-        `Screenshot permanently skipped for notice ${notice.num} after ${max + 1} attempt(s): ${message} - will retry on next backfill`,
+        `Screenshot permanently skipped for notice ${notice.num} after ${max + 1} attempt(s): ${errorMsg}`,
       );
       await this.options.noticeArchiveService.recordScreenshotCaptureFailure(
         notice.num,
-        message,
+        errorMsg,
       );
     } finally {
       if (forceNsmSpacing && notice.nsmBillNo) {

@@ -29,6 +29,11 @@ import {
   canonicalizeProposalReasonForComparison,
 } from '../../utils/proposal-reason.utils';
 import { ArchiveOrchestratorScreenshotCoordinator } from './utils/archive-orchestrator-screenshot-coordinator';
+import {
+  ScreenshotFailureReason,
+  classifyScreenshotError,
+  formatScreenshotCaptureError,
+} from './utils/screenshot-failure-classifier.util';
 
 const SNAPSHOT_ARTIFACT_BACKFILL_LIMIT = 200;
 /** Browser-driven, so far smaller than the PAL cap to bound Chromium pressure. */
@@ -351,7 +356,9 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
           if (!screenshot) {
             await this.noticeArchiveService.recordScreenshotCaptureFailure(
               nsmTargets[idx].num,
-              'screenshot returned null from captureNsmDetailFull during snapshot artifact backfill',
+              formatScreenshotCaptureError(
+                ScreenshotFailureReason.SCREENSHOT_FAILED,
+              ),
             );
           }
 
@@ -645,6 +652,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
             let sourceHtmlSha256: string | null = null;
             let httpMetadata: ArchiveHttpMetadata | null = null;
             let capturedScreenshot: Buffer | null = null;
+            let captureError: unknown = null;
 
             try {
               const full = await this.crawlingCoreService.captureNsmDetailFull(
@@ -685,6 +693,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
               // Screenshot captured in the same session
               capturedScreenshot = full.screenshot;
             } catch (error) {
+              captureError = error;
               const message =
                 error instanceof Error ? error.message : String(error);
 
@@ -770,6 +779,20 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
                 screenshotBlob: capturedScreenshot,
                 screenshotFormat: capturedScreenshot ? 'jpeg' : null,
               });
+
+              if (!capturedScreenshot) {
+                const reason = captureError
+                  ? classifyScreenshotError(captureError)
+                  : ScreenshotFailureReason.SCREENSHOT_FAILED;
+                const rawMsg =
+                  captureError instanceof Error
+                    ? captureError.message
+                    : undefined;
+                await this.noticeArchiveService.recordScreenshotCaptureFailure(
+                  notice.num,
+                  formatScreenshotCaptureError(reason, rawMsg),
+                );
+              }
 
               const enriched: CachedNotice = {
                 ...notice,
@@ -917,7 +940,9 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       if (!capturedScreenshot) {
         await this.noticeArchiveService.recordScreenshotCaptureFailure(
           num,
-          'screenshot returned null from captureNsmDetailFull during proposalReason backfill',
+          formatScreenshotCaptureError(
+            ScreenshotFailureReason.SCREENSHOT_FAILED,
+          ),
         );
       }
 

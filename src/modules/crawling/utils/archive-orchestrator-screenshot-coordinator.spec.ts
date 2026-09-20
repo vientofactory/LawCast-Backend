@@ -143,7 +143,7 @@ describe('ArchiveOrchestratorScreenshotCoordinator', () => {
     expect(updateScreenshot).not.toHaveBeenCalled();
     expect(recordScreenshotCaptureFailure).toHaveBeenCalledWith(
       10,
-      'content exceeds size limit after all compression strategies',
+      expect.stringContaining('size_limit'),
     );
   });
 
@@ -190,7 +190,7 @@ describe('ArchiveOrchestratorScreenshotCoordinator', () => {
     expect(updateScreenshot).not.toHaveBeenCalled();
     expect(recordScreenshotCaptureFailure).toHaveBeenCalledWith(
       20,
-      'net::ERR_TIMED_OUT',
+      expect.stringContaining('net::ERR_TIMED_OUT'),
     );
   });
 
