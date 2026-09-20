@@ -306,11 +306,13 @@ export class ApiController {
   async getNoticeDetail(
     @Param('num', ParseIntPipe) num: number,
     @Query('rev') revRaw?: string,
+    @Query('includeTimeline') includeTimeline?: string,
   ) {
     const { detail, timeline, revision } =
       await this.noticeArchiveService.getArchivedNoticeDetailWithRevision(
         num,
         revRaw,
+        { includeTimeline: includeTimeline === 'true' },
       );
 
     return ApiResponseUtils.success({
@@ -318,11 +320,17 @@ export class ApiController {
       aiSummaryEnabled: (await this.healthCheckService.getOllamaMetrics())
         .enabled,
       revision,
-      changes: {
-        noticeNum: num,
-        items: timeline,
-        count: timeline.length,
-      },
+      ...(includeTimeline === 'true'
+        ? {
+            changes: {
+              noticeNum: num,
+              items: timeline,
+              count: timeline.length,
+            },
+          }
+        : {
+            changesCount: timeline.length,
+          }),
     });
   }
 
