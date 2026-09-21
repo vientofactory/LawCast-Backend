@@ -143,7 +143,7 @@ describe('ArchiveOrchestratorScreenshotCoordinator', () => {
     expect(updateScreenshot).not.toHaveBeenCalled();
     expect(recordScreenshotCaptureFailure).toHaveBeenCalledWith(
       10,
-      'content exceeds size limit after all compression strategies',
+      expect.stringContaining('size_limit'),
     );
   });
 
@@ -190,7 +190,7 @@ describe('ArchiveOrchestratorScreenshotCoordinator', () => {
     expect(updateScreenshot).not.toHaveBeenCalled();
     expect(recordScreenshotCaptureFailure).toHaveBeenCalledWith(
       20,
-      'net::ERR_TIMED_OUT',
+      expect.stringContaining('net::ERR_TIMED_OUT'),
     );
   });
 
@@ -297,7 +297,7 @@ describe('ArchiveOrchestratorScreenshotCoordinator', () => {
     expect(updateScreenshot).not.toHaveBeenCalled();
     expect(recordScreenshotCaptureFailure).toHaveBeenCalledWith(
       40,
-      'NSM Waitingroom timeout',
+      '국회 웹사이트 접근 제한으로 스크린샷을 캡처하지 못했습니다 (rate_limited: NSM Waitingroom timeout)',
     );
   });
 
@@ -410,7 +410,7 @@ describe('ArchiveOrchestratorScreenshotCoordinator', () => {
     expect(updateScreenshot).not.toHaveBeenCalled();
     expect(recordScreenshotCaptureFailure).toHaveBeenCalledWith(
       60,
-      'content exceeds size limit after all compression strategies',
+      '페이지 내용이 너무 커서 스크린샷을 저장할 수 없습니다 (size_limit)',
     );
   });
 });

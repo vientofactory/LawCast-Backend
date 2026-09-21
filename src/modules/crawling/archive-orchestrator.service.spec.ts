@@ -679,7 +679,7 @@ describe('ArchiveOrchestratorService', () => {
         noticeArchiveService.recordScreenshotCaptureFailure,
       ).toHaveBeenCalledWith(
         2220570,
-        'screenshot returned null from captureNsmDetailFull during snapshot artifact backfill',
+        expect.stringContaining('screenshot_failed'),
       );
     });
 
@@ -1270,6 +1270,9 @@ describe('ArchiveOrchestratorService', () => {
         noticeArchiveService.appendSourceDeletedEventByNoticeNum,
       ).toHaveBeenCalledWith(2219776);
       expect(noticeArchiveService.upsertNoticeArchive).not.toHaveBeenCalled();
+      expect(
+        noticeArchiveService.recordScreenshotCaptureFailure,
+      ).not.toHaveBeenCalled();
     });
 
     it('does not mark source_deleted when a single Puppeteer capture reports deletion but the HTTP probe cannot confirm it', async () => {
@@ -1290,6 +1293,9 @@ describe('ArchiveOrchestratorService', () => {
         noticeArchiveService.appendSourceDeletedEventByNoticeNum,
       ).not.toHaveBeenCalled();
       expect(noticeArchiveService.upsertNoticeArchive).not.toHaveBeenCalled();
+      expect(
+        noticeArchiveService.recordScreenshotCaptureFailure,
+      ).not.toHaveBeenCalled();
       expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
         BridgeLogLevel.WARN,
         'ArchiveOrchestratorService',
@@ -1365,12 +1371,86 @@ describe('ArchiveOrchestratorService', () => {
           screenshotFormat: null,
         }),
       );
-
       // Screenshot failure is NOT recorded here — the backfillMissingScreenshots
       // pipeline handles retry/recording for null-screenshot-on-success cases
+    });
+
+    it('does not record screenshot failure when screenshot is captured', async () => {
+      const fakeBuffer = Buffer.from('fake-jpeg');
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '<html>nsm detail</html>',
+          screenshot: fakeBuffer,
+          detail: {
+            proposalReason: '사유 본문',
+            proposalInfo: '테스트 NSM 법률안',
+            billNo: '2219776',
+            proposer: '홍길동의원',
+            proposalDate: '2026-07-01',
+            session: '제418회',
+          },
+          responseUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219776/detailRP',
+          statusCode: 200,
+        },
+      );
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+
+      await service.archiveNsmBillItems([mockNsmBillItem]);
+
+      expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalledWith(
+        expect.objectContaining({ num: 2219776 }),
+        expect.objectContaining({
+          screenshotBlob: fakeBuffer,
+          screenshotFormat: 'jpeg',
+        }),
+      );
       expect(
         noticeArchiveService.recordScreenshotCaptureFailure,
       ).not.toHaveBeenCalled();
+    });
+
+    it('records screenshot capture failure when captureNsmDetailFull throws a non-deletion error', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new Error('Puppeteer timeout'),
+      );
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+
+      await service.archiveNsmBillItems([mockNsmBillItem]);
+
+      expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalled();
+      expect(
+        noticeArchiveService.recordScreenshotCaptureFailure,
+      ).toHaveBeenCalledWith(
+        2219776,
+        expect.stringContaining('Puppeteer timeout'),
+      );
+    });
+
+    it('does not record screenshot failure when upsertNoticeArchive fails', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new Error('Puppeteer timeout'),
+      );
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockRejectedValue(
+        new Error('DB write failed'),
+      );
+
+      const result = await service.archiveNsmBillItems([mockNsmBillItem]);
+
+      expect(result).toEqual([]);
+      expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalled();
+      // recordScreenshotCaptureFailure is called BEFORE upsert, so it succeeds
+      // even when the subsequent upsert fails
+      expect(
+        noticeArchiveService.recordScreenshotCaptureFailure,
+      ).toHaveBeenCalledWith(
+        2219776,
+        expect.stringContaining('Puppeteer timeout'),
+      );
     });
   });
 

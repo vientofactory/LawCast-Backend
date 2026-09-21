@@ -2263,6 +2263,7 @@ export class NoticeArchiveService {
   async getArchivedNoticeDetailWithRevision(
     noticeNum: number,
     revRaw?: string,
+    options?: { includeTimeline?: boolean },
   ): Promise<{
     detail: ArchiveDetailResult;
     timeline: Awaited<
@@ -2285,6 +2286,35 @@ export class NoticeArchiveService {
       );
     }
 
+    const requestedRev = this.parseRevisionQuery(revRaw);
+    const includeTimeline = options?.includeTimeline === true;
+
+    if (!includeTimeline && requestedRev === null) {
+      const metadata = this.changeTrackingService
+        ? await this.changeTrackingService.getNoticeRevisionMetadata(noticeNum)
+        : {
+            headRev: null,
+            hasLegacyGenesisBoundary: false,
+            legacyGenesisBoundaryAt: null,
+          };
+
+      const resolvedRev = metadata.headRev;
+
+      return {
+        detail,
+        timeline: [],
+        revision: {
+          requestedRev: null,
+          resolvedRev,
+          headRev: metadata.headRev,
+          hasDiffchain: metadata.headRev !== null,
+          isHistorical: false,
+          hasLegacyGenesisBoundary: metadata.hasLegacyGenesisBoundary,
+          legacyGenesisBoundaryAt: metadata.legacyGenesisBoundaryAt,
+        },
+      };
+    }
+
     const timeline = this.changeTrackingService
       ? await this.changeTrackingService.getCompleteNoticeChangeTimeline(
           noticeNum,
@@ -2296,7 +2326,6 @@ export class NoticeArchiveService {
     );
     const headRev =
       eventsAsc.length > 0 ? eventsAsc[eventsAsc.length - 1].eventHeight : null;
-    const requestedRev = this.parseRevisionQuery(revRaw);
 
     if (requestedRev !== null && (headRev === null || requestedRev > headRev)) {
       throw new BadRequestException(
