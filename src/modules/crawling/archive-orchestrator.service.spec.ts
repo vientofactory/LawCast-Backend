@@ -699,6 +699,25 @@ describe('ArchiveOrchestratorService', () => {
       ).not.toHaveBeenCalled();
     });
 
+    it('counts a non-deletion NSM capture error as a failure', async () => {
+      setTargets({ nsm: [{ num: 2220571 }] });
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new Error('net::ERR_TIMED_OUT'),
+      );
+
+      const result = await service.backfillMissingSnapshotArtifacts();
+
+      expect(result.nsmScanned).toBe(1);
+      expect(result.nsmFilled).toBe(0);
+      expect(result.failed).toBe(1);
+      expect(
+        noticeArchiveService.updateNsmHtmlAndDetail,
+      ).not.toHaveBeenCalled();
+      expect(
+        noticeArchiveService.recordScreenshotCaptureFailure,
+      ).not.toHaveBeenCalled();
+    });
+
     it('caps browser-driven NSM captures per run', async () => {
       setTargets({
         nsm: Array.from({ length: 50 }, (_, idx) => ({ num: 2220000 + idx })),
@@ -1282,6 +1301,76 @@ describe('ArchiveOrchestratorService', () => {
             SourceDeletionDetectionMethod.NSM_ERROR_WITHOUT_HTTP_PROBE_CONFIRMATION,
         }),
       );
+    });
+
+    it('records screenshot capture failure when captureNsmDetailFull throws a non-deletion error', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
+        new Error('net::ERR_TIMED_OUT'),
+      );
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+
+      const result = await service.archiveNsmBillItems([mockNsmBillItem]);
+
+      // Notice is still archived (without screenshot)
+      expect(result).toHaveLength(1);
+      expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalledWith(
+        expect.objectContaining({ num: 2219776 }),
+        expect.objectContaining({
+          screenshotBlob: null,
+          screenshotFormat: null,
+        }),
+      );
+
+      // Screenshot capture failure is recorded so the UI can show the reason
+      expect(
+        noticeArchiveService.recordScreenshotCaptureFailure,
+      ).toHaveBeenCalledWith(
+        2219776,
+        'captureNsmDetailFull failed: net::ERR_TIMED_OUT',
+      );
+    });
+
+    it('does not record screenshot failure when captureNsmDetailFull succeeds but returns null screenshot', async () => {
+      (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
+        {
+          html: '<html>nsm</html>',
+          screenshot: null,
+          detail: {
+            proposalReason: '제안이유',
+            proposalInfo: '테스트',
+            billNo: '2219776',
+            proposer: '홍길동',
+            proposalDate: '2026-07-01',
+            session: '제418회',
+          },
+          responseUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219776/detailRP',
+          statusCode: 200,
+        },
+      );
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+
+      const result = await service.archiveNsmBillItems([mockNsmBillItem]);
+
+      // Notice is archived without screenshot
+      expect(result).toHaveLength(1);
+      expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalledWith(
+        expect.objectContaining({ num: 2219776 }),
+        expect.objectContaining({
+          screenshotBlob: null,
+          screenshotFormat: null,
+        }),
+      );
+
+      // Screenshot failure is NOT recorded here — the backfillMissingScreenshots
+      // pipeline handles retry/recording for null-screenshot-on-success cases
+      expect(
+        noticeArchiveService.recordScreenshotCaptureFailure,
+      ).not.toHaveBeenCalled();
     });
   });
 
