@@ -759,6 +759,16 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
                 bridgeMessage: `NsmLmSts full capture failed for bill **${item.billNo}**: ${message}`,
                 metadata: { billNo: item.billNo },
               });
+
+              // Record the screenshot capture failure so the UI can display
+              // the reason instead of silently showing "not yet captured".
+              // Without this, the notice is archived with NULL screenshot and
+              // NULL capture status, leaving the system unable to distinguish
+              // between "not yet attempted" and "permanently failed".
+              await this.noticeArchiveService.recordScreenshotCaptureFailure(
+                notice.num,
+                `captureNsmDetailFull failed: ${message}`,
+              );
             }
 
             try {
