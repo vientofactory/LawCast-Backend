@@ -246,4 +246,171 @@ describe('ArchiveOrchestratorScreenshotCoordinator', () => {
       retryCount: 1,
     });
   });
+
+  it('records screenshot capture failure when NSM capture throws (not null return)', async () => {
+    const queueState: ScreenshotQueueItem[] = [
+      {
+        num: 40,
+        contentId: '',
+        isDone: false,
+        retryCount: 3,
+        nsmBillNo: '2200040',
+      },
+    ];
+    const updateScreenshot = jest.fn().mockResolvedValue(undefined);
+    const recordScreenshotCaptureFailure = jest
+      .fn()
+      .mockResolvedValue(undefined);
+
+    const cacheService = {
+      getObject: jest.fn(async () => queueState),
+      setObject: jest.fn(async (_key: string, value: ScreenshotQueueItem[]) => {
+        queueState.splice(0, queueState.length, ...value);
+        return true;
+      }),
+      deleteKey: jest.fn(async () => {
+        queueState.splice(0, queueState.length);
+        return true;
+      }),
+    };
+
+    const captureNsmDetailScreenshot = jest
+      .fn()
+      .mockRejectedValue(new Error('NSM Waitingroom timeout'));
+
+    const coordinator = new ArchiveOrchestratorScreenshotCoordinator({
+      cacheService: cacheService as any,
+      noticeArchiveService: {
+        updateScreenshot,
+        recordScreenshotCaptureFailure,
+      } as any,
+      crawlingCoreService: {
+        captureContentScreenshot: jest.fn(),
+        captureNsmDetailScreenshot,
+      } as any,
+      logger: { log: jest.fn(), warn: jest.fn() },
+    });
+
+    await (coordinator as any).drainScreenshotQueue();
+
+    expect(captureNsmDetailScreenshot).toHaveBeenCalledWith('2200040');
+    expect(updateScreenshot).not.toHaveBeenCalled();
+    expect(recordScreenshotCaptureFailure).toHaveBeenCalledWith(
+      40,
+      'NSM Waitingroom timeout',
+    );
+  });
+
+  it('re-queues NSM item on first failure then succeeds on retry', async () => {
+    const queueState: ScreenshotQueueItem[] = [
+      {
+        num: 50,
+        contentId: '',
+        isDone: false,
+        retryCount: 0,
+        nsmBillNo: '2200050',
+      },
+    ];
+    const updateScreenshot = jest.fn().mockResolvedValue(undefined);
+    const recordScreenshotCaptureFailure = jest
+      .fn()
+      .mockResolvedValue(undefined);
+
+    const cacheService = {
+      getObject: jest.fn(async () => queueState),
+      setObject: jest.fn(async (_key: string, value: ScreenshotQueueItem[]) => {
+        queueState.splice(0, queueState.length, ...value);
+        return true;
+      }),
+      deleteKey: jest.fn(async () => {
+        queueState.splice(0, queueState.length);
+        return true;
+      }),
+    };
+
+    // First attempt throws (re-queued), second attempt succeeds
+    const captureNsmDetailScreenshot = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary NSM error'))
+      .mockResolvedValueOnce(Buffer.from('nsm-retry'));
+
+    const coordinator = new ArchiveOrchestratorScreenshotCoordinator({
+      cacheService: cacheService as any,
+      noticeArchiveService: {
+        updateScreenshot,
+        recordScreenshotCaptureFailure,
+      } as any,
+      crawlingCoreService: {
+        captureContentScreenshot: jest.fn(),
+        captureNsmDetailScreenshot,
+      } as any,
+      logger: { log: jest.fn(), warn: jest.fn() },
+    });
+
+    await (coordinator as any).drainScreenshotQueue();
+
+    // Capture was attempted twice: first failed, second succeeded
+    expect(captureNsmDetailScreenshot).toHaveBeenCalledTimes(2);
+    expect(captureNsmDetailScreenshot).toHaveBeenCalledWith('2200050');
+    // Screenshot saved on second (successful) attempt
+    expect(updateScreenshot).toHaveBeenCalledWith(
+      50,
+      Buffer.from('nsm-retry'),
+      'jpeg',
+    );
+    // Failure NOT permanently recorded — retry succeeded
+    expect(recordScreenshotCaptureFailure).not.toHaveBeenCalled();
+  });
+
+  it('records failure for NSM item when null screenshot returned (size limit)', async () => {
+    const queueState: ScreenshotQueueItem[] = [
+      {
+        num: 60,
+        contentId: '',
+        isDone: false,
+        retryCount: 0,
+        nsmBillNo: '2200060',
+      },
+    ];
+    const updateScreenshot = jest.fn().mockResolvedValue(undefined);
+    const recordScreenshotCaptureFailure = jest
+      .fn()
+      .mockResolvedValue(undefined);
+
+    const cacheService = {
+      getObject: jest.fn(async () => queueState),
+      setObject: jest.fn(async (_key: string, value: ScreenshotQueueItem[]) => {
+        queueState.splice(0, queueState.length, ...value);
+        return true;
+      }),
+      deleteKey: jest.fn(async () => {
+        queueState.splice(0, queueState.length);
+        return true;
+      }),
+    };
+
+    const captureNsmDetailScreenshot = jest.fn().mockResolvedValue(null);
+
+    const coordinator = new ArchiveOrchestratorScreenshotCoordinator({
+      cacheService: cacheService as any,
+      noticeArchiveService: {
+        updateScreenshot,
+        recordScreenshotCaptureFailure,
+      } as any,
+      crawlingCoreService: {
+        captureContentScreenshot: jest.fn(),
+        captureNsmDetailScreenshot,
+      } as any,
+      logger: { log: jest.fn(), warn: jest.fn() },
+    });
+
+    await (coordinator as any).drainScreenshotQueue();
+
+    expect(captureNsmDetailScreenshot).toHaveBeenCalledWith('2200060');
+    expect(updateScreenshot).not.toHaveBeenCalled();
+    expect(recordScreenshotCaptureFailure).toHaveBeenCalledWith(
+      60,
+      'content exceeds size limit after all compression strategies',
+    );
+  });
 });

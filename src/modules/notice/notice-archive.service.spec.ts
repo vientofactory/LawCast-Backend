@@ -3062,6 +3062,89 @@ describe('NoticeArchiveService', () => {
       });
     });
 
+    it('recordScreenshotCaptureFailure preserves the original error when a second attempt is made', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 0 }),
+      };
+
+      const service = buildService(repositoryMock);
+
+      // First failure
+      await service.recordScreenshotCaptureFailure(
+        2220565,
+        'viewport exceeded limit',
+      );
+      // Second attempt with a different error
+      await service.recordScreenshotCaptureFailure(
+        2220565,
+        'net::ERR_TIMED_OUT',
+      );
+
+      // The second call should NOT overwrite — the IsNull() guard prevents it
+      expect(repositoryMock.update).toHaveBeenCalledTimes(2);
+      const firstPatch = repositoryMock.update.mock.calls[0][1];
+      const secondPatch = repositoryMock.update.mock.calls[1][1];
+      expect(firstPatch).toMatchObject({
+        screenshotCaptureStatus: 'failed',
+        screenshotCaptureError: 'viewport exceeded limit',
+      });
+      // Second call still attempts to write but affected=0 (guard blocks)
+      expect(secondPatch).toMatchObject({
+        screenshotCaptureStatus: 'failed',
+        screenshotCaptureError: 'net::ERR_TIMED_OUT',
+      });
+    });
+
+    it('updateScreenshot does not overwrite a failed capture status', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 1 }),
+      };
+
+      const service = buildService(repositoryMock);
+
+      // Simulate: failure was recorded first (screenshotCaptureStatus='failed',
+      // screenshotCaptureError='some error'), then a late screenshot arrives.
+      // updateScreenshot -> fillMissingSnapshotArtifacts uses IsNull() guard on
+      // screenshotBlob, so it should write the blob but NOT overwrite status.
+      await service.updateScreenshot(2220565, Buffer.from([7, 8, 9]), 'jpeg');
+
+      // The patch should contain screenshotBlob/format but NOT
+      // screenshotCaptureStatus (fillMissingSnapshotArtifacts only writes
+      // screenshotCaptureStatus when explicitly passed in artifacts)
+      expect(repositoryMock.update).toHaveBeenCalledTimes(1);
+      const patch = repositoryMock.update.mock.calls[0][1];
+      expect(patch).toMatchObject({
+        screenshotBlob: Buffer.from([7, 8, 9]),
+        screenshotFormat: 'jpeg',
+        screenshotCaptureStatus: 'captured',
+      });
+    });
+
+    it('recordScreenshotCaptureFailure handles an empty error message', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        update: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue({ affected: 1 }),
+      };
+
+      const service = buildService(repositoryMock);
+
+      await service.recordScreenshotCaptureFailure(2220565, '');
+
+      expect(repositoryMock.update).toHaveBeenCalledTimes(1);
+      expect(repositoryMock.update.mock.calls[0][1]).toEqual({
+        screenshotCaptureStatus: 'failed',
+        screenshotCaptureError: '',
+      });
+    });
+
     it('fillMissingSnapshotArtifacts passes screenshotCaptureStatus through to the patch', async () => {
       const repositoryMock = {
         ...createRepositoryMock(),
