@@ -1104,7 +1104,7 @@ export class NoticeArchiveService {
 
     // Priority 1: probe bills whose detail page was never successfully
     // captured (content_bill_number IS NULL) - the strongest candidates for
-    // having been deleted on国民참여입법센터. Random order (rather than a
+    // having been deleted on NSM (국민참여입법센터). Random order (rather than a
     // fixed noticeNum DESC slice) so that when this pool is >= limit, the
     // same top-N rows aren't probed forever while the rest of the pool never
     // gets checked.

@@ -1168,8 +1168,8 @@ export async function executePendingSyncPhase(
 
     // ── NSM detail-page probe ─────────────────────────────────────────
     // Bills that are still in the NSM list but deleted on the detail page
-    // (e.g.国民참여입법센터 list API returns them but detail shows
-    // "안건정보가 없습니다") are not caught by list-based detection.
+    // (e.g. NSM list API returns them but detail shows
+    // 'Bill information not found') are not caught by list-based detection.
     // Probe ALL content_bill_number IS NULL bills (typically <50) since
     // these are the strongest deletion candidates (detail page never captured).
     const NSM_DETAIL_PROBE_BATCH_SIZE = 50;

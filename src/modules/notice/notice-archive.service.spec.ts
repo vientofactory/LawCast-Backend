@@ -1611,7 +1611,7 @@ describe('NoticeArchiveService', () => {
           attachments: { pdfFile: '', hwpFile: '' },
         },
         {
-          // fetch 실패 상황과 동일하게 빈값/누락 전달
+          // Simulate empty/missing values as in fetch failure
           proposalReason: '',
           billNumber: undefined,
           proposer: undefined,
@@ -1886,7 +1886,7 @@ describe('NoticeArchiveService', () => {
         }),
       );
 
-      // 체인 헤드가 이미 removed 상태(null)로 오염된 상황을 가정
+      // Assume the chain head is already contaminated with removed state (null)
       changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
         {
           eventHeight: 1,

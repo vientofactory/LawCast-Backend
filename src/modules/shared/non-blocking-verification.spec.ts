@@ -124,7 +124,7 @@ describe('Non-blocking Architecture Verification', () => {
       const jobs2 = [() => Promise.resolve('job2')];
       const jobs3 = [() => Promise.resolve('job3')];
 
-      // 여러 배치 작업을 동시에 시작
+      // Start multiple batch jobs concurrently
       const startTime = Date.now();
       const promises = [
         batchService.executeBatch(jobs1),
@@ -132,12 +132,12 @@ describe('Non-blocking Architecture Verification', () => {
         batchService.executeBatch(jobs3),
       ];
 
-      // 각 배치 작업이 서로를 차단하지 않아야 함
+      // Each batch job should not block the others
       const results = await Promise.all(promises);
       const totalTime = Date.now() - startTime;
 
       expect(results).toHaveLength(3);
-      expect(totalTime).toBeLessThan(1000); // 1초 이내에 완료
+      expect(totalTime).toBeLessThan(1000); // Should complete within 1 second
 
       console.log(`3 concurrent batch jobs completed in ${totalTime}ms`);
     });
@@ -198,7 +198,7 @@ describe('Non-blocking Architecture Verification', () => {
 
       const startTime = Date.now();
       const results = await batchService.executeBatch(jobs, {
-        concurrency: 5, // 동시에 5개만 실행
+        concurrency: 5, // Only 5 concurrent
         timeout: 5000,
       });
       const totalTime = Date.now() - startTime;
@@ -206,9 +206,9 @@ describe('Non-blocking Architecture Verification', () => {
       expect(results).toHaveLength(20);
       expect(results.every((r) => r.success)).toBe(true);
 
-      // 동시성 제어로 인해 순차 실행(200ms)보다 빨라야 함
-      // 이론적 최소 시간(40ms)에 대한 하한선은 CI 환경에서 불안정하므로 제거
-      expect(totalTime).toBeLessThan(500); // 충분히 빨라야 함
+      // Should be faster than sequential execution (200ms) due to concurrency control
+      // Lower bound for theoretical minimum (40ms) removed as it's unstable in CI
+      expect(totalTime).toBeLessThan(500); // Should be fast enough
 
       console.log(`20 jobs with concurrency=5 completed in ${totalTime}ms`);
     });
@@ -233,7 +233,7 @@ describe('Non-blocking Architecture Verification', () => {
 
       expect(results).toHaveLength(1);
       expect(results[0].success).toBe(true);
-      expect(attemptCount).toBe(3); // 첫 시도 + 2번 재시도
+      expect(attemptCount).toBe(3); // First attempt + 2 retries
 
       console.log(`Retry mechanism worked: ${attemptCount} attempts`);
     });
@@ -241,21 +241,21 @@ describe('Non-blocking Architecture Verification', () => {
 
   describe('Resource Management', () => {
     it('should properly clean up resources', async () => {
-      // 여러 배치 작업 시작
+      // Start batch jobs
       const jobs = [
         () => new Promise((resolve) => setTimeout(() => resolve('test'), 100)),
       ];
 
       await batchService.executeBatch(jobs);
 
-      // 작업 완료 후 대기
+      // Wait for jobs to complete
       await batchService.waitForAllBatchJobs();
 
-      // 작업 큐가 비어있어야 함
+      // Job queue should be empty
       const status = batchService.getBatchJobStatus();
       expect(status.jobCount).toBe(0);
 
-      // 타이머 정리
+      // Clean up timers
       batchService.clearAllTimeouts();
 
       console.log('Resources properly cleaned up');
@@ -275,9 +275,9 @@ describe('Non-blocking Architecture Verification', () => {
       expect(results[0].success).toBe(false);
       expect(results[1].success).toBe(true);
 
-      // 일부 작업 실패가 전체 서비스에 영향을 주지 않음
+      // Individual job failures should not affect the overall service
       const status = batchService.getBatchJobStatus();
-      expect(status).toBeDefined(); // 서비스는 여전히 정상 작동
+      expect(status).toBeDefined(); // Service still operates normally
 
       console.log('Error isolation works correctly');
     });

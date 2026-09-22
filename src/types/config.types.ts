@@ -30,7 +30,7 @@ declare global {
   }
 }
 
-// ConfigService용 타입 확장
+// Type extension for ConfigService
 declare module '@nestjs/config' {
   interface ConfigService {
     get<T = any>(propertyPath: keyof AppConfig | string): T | undefined;

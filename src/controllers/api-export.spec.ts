@@ -20,7 +20,7 @@ import { WebPushRegistrationService } from '../modules/notification/web-push-reg
 import { CronJobsService } from '../modules/scheduling/cronjobs.service';
 import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
 
-// NoticeArchiveService 모킹
+// Mock NoticeArchiveService
 const mockBuildArchiveExportZip = jest.fn();
 
 const mockNoticeArchiveService = {
