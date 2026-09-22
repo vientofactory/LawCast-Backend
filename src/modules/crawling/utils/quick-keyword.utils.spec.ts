@@ -81,7 +81,7 @@ describe('buildQuickKeywordSuggestionsCache', () => {
 
     const result = buildQuickKeywordSuggestionsCache(notices, 100);
 
-    // '인공지능' (4 chars) and '교육' (2 chars, but let's use longer ones)
+    // '인공지능' (4 chars) and '교육' (2 chars) - verify long keyword is included
     const keywords = result.items.map((i) => i.keyword);
     expect(keywords).toContain('인공지능');
   });
@@ -158,7 +158,7 @@ describe('buildQuickKeywordSuggestionsCache', () => {
 
     const result = buildQuickKeywordSuggestionsCache(notices, 100);
 
-    // '개인정보보호에서' should be normalized to '개인정보보호' by removing particle '에서'
+    // Particle suffix '에서' should be stripped: '개인정보보호에서' → '개인정보보호'
     const keywords = result.items.map((i) => i.keyword);
     expect(keywords).toContain('개인정보보호');
   });

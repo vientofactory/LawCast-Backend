@@ -32,13 +32,13 @@ describe('BatchProcessingService', () => {
   });
 
   afterEach(async () => {
-    // 모든 배치 작업이 완료될 때까지 대기
+    // Wait for all batch jobs to complete
     await service.waitForAllBatchJobs();
 
-    // 모든 활성 타이머 정리
+    // Clear all active timers
     service.clearAllTimeouts();
 
-    // 테스트 모듈 정리
+    // Tear down test module
     if (module) {
       await module.close();
     }

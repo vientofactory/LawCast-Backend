@@ -26,7 +26,7 @@ describe('NotificationService', () => {
   let mockMessageBuilder: jest.Mocked<MessageBuilder>;
 
   beforeEach(async () => {
-    // MessageBuilder 모킹
+    // Mock MessageBuilder
     mockMessageBuilder = {
       setTitle: jest.fn().mockReturnThis(),
       setDescription: jest.fn().mockReturnThis(),
@@ -37,7 +37,7 @@ describe('NotificationService', () => {
       setFooter: jest.fn().mockReturnThis(),
     } as any;
 
-    // DiscordWebhook 모킹
+    // Mock DiscordWebhook
     mockDiscordWebhook = {
       setUsername: jest.fn(),
       send: jest.fn(),
@@ -85,7 +85,7 @@ describe('NotificationService', () => {
   });
 
   afterEach(() => {
-    // 모든 모킹 정리
+    // Clear all mocks
     jest.clearAllMocks();
   });
 
@@ -127,8 +127,8 @@ describe('NotificationService', () => {
 
     it('should handle webhook sending failures', async () => {
       mockDiscordWebhook.send
-        .mockResolvedValueOnce(undefined) // 첫 번째 성공
-        .mockRejectedValueOnce(new Error('Network error')); // 두 번째 실패
+        .mockResolvedValueOnce(undefined) // First succeeds
+        .mockRejectedValueOnce(new Error('Network error')); // Second fails
 
       await service.sendDiscordNotificationBatch(mockNotice, mockWebhooks);
 
@@ -294,8 +294,8 @@ describe('NotificationService', () => {
     it('should return appropriate results for failed webhooks', async () => {
       const error = { response: { status: 404 } };
       mockDiscordWebhook.send
-        .mockResolvedValueOnce(undefined) // 첫 번째 성공
-        .mockRejectedValueOnce(error); // 두 번째 실패 (404 - 삭제 대상)
+        .mockResolvedValueOnce(undefined) // First succeeds
+        .mockRejectedValueOnce(error); // Second fails (404 - deletion target)
 
       const results = await service.sendDiscordNotificationBatch(
         mockNotice,

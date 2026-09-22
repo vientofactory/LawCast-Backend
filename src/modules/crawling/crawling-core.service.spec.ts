@@ -8,7 +8,7 @@ import {
 import { NsmLmSts, NsmLmStsParser, PalCrawl, type ITableData } from 'pal-crawl';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 
-// pal-crawl 모듈을 모킹
+// Mock pal-crawl module
 jest.mock('pal-crawl');
 jest.mock('../../utils/http-fetch.utils', () => ({
   fetchHtmlPage: jest.fn(),
@@ -69,7 +69,7 @@ describe('CrawlingCoreService', () => {
   ];
 
   beforeEach(async () => {
-    // PalCrawl 모킹
+    // Mock PalCrawl
     mockPalCrawl = {
       get: jest.fn(),
       getContent: jest.fn(),

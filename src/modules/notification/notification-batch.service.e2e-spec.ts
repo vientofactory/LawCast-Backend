@@ -95,7 +95,7 @@ describe('NotificationBatchService E2E', () => {
   });
 
   it('should detect new notice and send notification via webhook', async () => {
-    // 1. 새로운 법률안 추가
+    // 1. Add a new notice
     const newNotice = {
       num: 1,
       subject: '신규 법률안',
@@ -107,14 +107,14 @@ describe('NotificationBatchService E2E', () => {
     };
     await mockNoticeArchiveRepo.save(newNotice);
 
-    // 2. 배치 실행 (fire-and-forget이므로 내부 Promise가 완료될 때까지 대기)
+    // 2. Run batch (fire-and-forget; wait for internal Promise to settle)
     await batchService.processNotificationBatch([newNotice]);
-    // processNotificationBatch는 batchRunId를 즉시 반환하고 실제 dispatch는
-    // .then() 체인에서 비동기로 실행되므로 microtask flush 필요
+    // processNotificationBatch returns batchRunId immediately; actual dispatch
+    // runs asynchronously in a .then() chain, so microtask flush is needed
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
 
-    // 3. 알림 전송 검증
+    // 3. Verify notification was sent
     expect(
       mockNotificationService.sendDiscordNotificationBatch,
     ).toHaveBeenCalledWith(newNotice, [{ id: 1 }], expect.anything());

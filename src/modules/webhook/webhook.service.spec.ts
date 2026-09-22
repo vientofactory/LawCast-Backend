@@ -113,7 +113,7 @@ describe('WebhookService', () => {
 
       await service.create(invalidUrl);
 
-      // 파싱 실패 시 원본 URL이 사용되어야 함
+      // Original URL should be used when parsing fails
       expect(mockRepository.create).toHaveBeenCalledWith({
         url: 'invalid-url',
       });
@@ -299,5 +299,5 @@ describe('WebhookService', () => {
     });
   });
 
-  // getDetailedStats는 복잡한 SQL 쿼리를 사용하므로 통합 테스트에서 검증
+  // getDetailedStats uses complex SQL queries — verified in integration tests
 });

@@ -393,19 +393,19 @@ describe('HTTP-Batch Processing Isolation', () => {
 
   describe('API Responsiveness During Batch Processing', () => {
     it('should handle health checks instantly even during batch processing', async () => {
-      // 1. 장시간 실행되는 배치 작업 시작
+      // 1. Start long-running batch jobs
       const longRunningJobs = Array.from(
         { length: 10 },
         (_, i) => () =>
           new Promise((resolve) => setTimeout(() => resolve(`job-${i}`), 100)),
       );
 
-      // 배치 처리 시작 (백그라운드에서 실행)
+      // Start batch processing (runs in background)
       const batchPromise = batchService.executeBatch(longRunningJobs, {
         concurrency: 3,
       });
 
-      // 2. 배치 처리 중에 HTTP 요청 처리
+      // 2. Handle HTTP requests during batch processing
       const healthRequests = Array.from({ length: 20 }, async () => {
         const startTime = Date.now();
         const response = await controller.getHealth();
@@ -423,7 +423,7 @@ describe('HTTP-Batch Processing Isolation', () => {
         responseTimes.reduce((sum, time) => sum + time, 0) /
         responseTimes.length;
 
-      // 3. 배치 작업 완료 대기
+      // 3. Wait for batch jobs to complete
       const batchResults = await batchPromise;
 
       expect(batchResults.every((r) => r.success)).toBe(true);
@@ -438,7 +438,7 @@ describe('HTTP-Batch Processing Isolation', () => {
     });
 
     it('should serve recent notices quickly regardless of batch operations', async () => {
-      // 1. 알림 배치 처리 시작 (논블로킹)
+      // 1. Start notification batch processing (non-blocking)
       const mockNotices = Array.from({ length: 5 }, (_, i) => ({
         subject: `Notice ${i}`,
         proposerCategory: 'Test',
@@ -451,7 +451,7 @@ describe('HTTP-Batch Processing Isolation', () => {
         mockNotices as any,
       );
 
-      // 2. 동시에 여러 클라이언트에서 최근 알림 조회
+      // 2. Query recent notices from multiple clients concurrently
       const noticeRequests = Array.from({ length: 50 }, async () => {
         const startTime = Date.now();
         const response = await controller.getRecentNotices();
@@ -460,7 +460,7 @@ describe('HTTP-Batch Processing Isolation', () => {
         expect(response).toBeDefined();
         expect(response.success).toBe(true);
         expect(Array.isArray(response.data)).toBe(true);
-        expect(responseTime).toBeLessThanOrEqual(15); // 15ms 이내 응답 (여유 허용)
+        expect(responseTime).toBeLessThanOrEqual(15); // Respond within 15ms (with margin)
 
         return responseTime;
       });
@@ -468,7 +468,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       const responseTimes = await Promise.all(noticeRequests);
       const maxResponseTime = Math.max(...responseTimes);
 
-      expect(maxResponseTime).toBeLessThanOrEqual(15); // 최대 15ms 이내 (여유 허용)
+      expect(maxResponseTime).toBeLessThanOrEqual(15); // Max within 15ms (with margin)
 
       console.log(
         `Recent notices API: max response time ${maxResponseTime}ms (50 concurrent requests)`,
@@ -476,7 +476,7 @@ describe('HTTP-Batch Processing Isolation', () => {
     });
 
     it('should provide batch status without performance degradation', async () => {
-      // 1. 다양한 크기의 배치 작업들 시작
+      // 1. Start batch jobs of various sizes
       const smallBatch = batchService.executeBatch([
         () => new Promise((resolve) => setTimeout(() => resolve('small'), 50)),
       ]);
@@ -499,7 +499,7 @@ describe('HTTP-Batch Processing Isolation', () => {
         { concurrency: 5 },
       );
 
-      // 2. 배치 작업들이 실행되는 동안 상태 조회
+      // 2. Query status while batch jobs are running
       const statusRequests = Array.from({ length: 100 }, async () => {
         const startTime = Date.now();
         const response = await controller.getBatchStatus();
@@ -515,13 +515,13 @@ describe('HTTP-Batch Processing Isolation', () => {
 
       const results = await Promise.all(statusRequests);
 
-      // 3. 모든 배치 작업 완료 대기
+      // 3. Wait for all batch jobs to complete
       await Promise.all([smallBatch, mediumBatch, largeBatch]);
 
       const avgResponseTime =
         results.reduce((sum, r) => sum + r.responseTime, 0) / results.length;
 
-      expect(avgResponseTime).toBeLessThan(20); // 평균 20ms 이내 (환경 편차 허용)
+      expect(avgResponseTime).toBeLessThan(20); // Average within 20ms (environment variance allowed)
 
       console.log(
         `Batch status API: avg response time ${avgResponseTime.toFixed(2)}ms`,
@@ -529,7 +529,7 @@ describe('HTTP-Batch Processing Isolation', () => {
     });
 
     it('should handle stats API efficiently during heavy batch load', async () => {
-      // 1. 많은 수의 배치 작업 시작
+      // 1. Start a large number of batch jobs
       const heavyBatchPromises = Array.from({ length: 5 }, () =>
         batchService.executeBatch(
           Array.from(
@@ -541,7 +541,7 @@ describe('HTTP-Batch Processing Isolation', () => {
         ),
       );
 
-      // 2. 무거운 배치 작업 중에 stats API 호출
+      // 2. Call stats API during heavy batch processing
       const statsRequests = Array.from({ length: 30 }, async () => {
         const startTime = Date.now();
         const response = await controller.getStats();
@@ -558,7 +558,7 @@ describe('HTTP-Batch Processing Isolation', () => {
 
       const responseTimes = await Promise.all(statsRequests);
 
-      // 3. 모든 배치 작업 완료 대기
+      // 3. Wait for all batch jobs to complete
       await Promise.all(heavyBatchPromises);
 
       const maxResponseTime = Math.max(...responseTimes);
@@ -566,8 +566,8 @@ describe('HTTP-Batch Processing Isolation', () => {
         responseTimes.reduce((sum, time) => sum + time, 0) /
         responseTimes.length;
 
-      expect(maxResponseTime).toBeLessThan(20); // 최대 20ms 이내
-      expect(avgResponseTime).toBeLessThan(15); // 평균 15ms 이내
+      expect(maxResponseTime).toBeLessThan(20); // Max within 20ms
+      expect(avgResponseTime).toBeLessThan(15); // Average within 15ms
 
       console.log(
         `Stats API during heavy load: avg ${avgResponseTime.toFixed(2)}ms, max ${maxResponseTime}ms`,
@@ -577,7 +577,7 @@ describe('HTTP-Batch Processing Isolation', () => {
 
   describe('Concurrent Load Testing', () => {
     it('should handle mixed API requests during batch processing without blocking', async () => {
-      // 1. 지속적인 배치 작업 시작
+      // 1. Start continuous batch jobs
       const continuousBatch = Array.from(
         { length: 50 },
         (_, i) => () =>
@@ -593,25 +593,25 @@ describe('HTTP-Batch Processing Isolation', () => {
         concurrency: 10,
       });
 
-      // 2. 다양한 API 엔드포인트를 동시에 호출
+      // 2. Call various API endpoints concurrently
       const mixedRequests = [
-        // Health checks (가장 빨라야 함)
+        // Health checks (fastest)
         ...Array.from({ length: 20 }, () => () => controller.getHealth()),
 
-        // Recent notices (캐시에서 조회)
+        // Recent notices (cached)
         ...Array.from(
           { length: 15 },
           () => () => controller.getRecentNotices(),
         ),
 
-        // Batch status (상태 조회)
+        // Batch status (status query)
         ...Array.from({ length: 10 }, () => () => controller.getBatchStatus()),
 
-        // Stats (복합 데이터)
+        // Stats (composite data)
         ...Array.from({ length: 5 }, () => () => controller.getStats()),
       ];
 
-      // 모든 요청을 무작위 순서로 실행
+      // Execute all requests in random order
       const shuffled = mixedRequests.sort(() => Math.random() - 0.5);
 
       const startTime = Date.now();
@@ -627,10 +627,10 @@ describe('HTTP-Batch Processing Isolation', () => {
       );
       const totalTime = Date.now() - startTime;
 
-      // 3. 배치 작업도 완료 대기
+      // 3. Wait for batch jobs to complete
       await batchPromise;
 
-      // 4. 결과 검증
+      // 4. Verify results
       expect(responses).toHaveLength(50);
       expect(responses.every((r) => r.success)).toBe(true);
 
@@ -638,8 +638,8 @@ describe('HTTP-Batch Processing Isolation', () => {
         responses.reduce((sum, r) => sum + r.responseTime, 0) /
         responses.length;
 
-      expect(totalTime).toBeLessThan(1000); // 전체 1초 이내
-      expect(avgResponseTime).toBeLessThan(15); // 평균 15ms 이내
+      expect(totalTime).toBeLessThan(1000); // Complete within 1 second total
+      expect(avgResponseTime).toBeLessThan(15); // Average within 15ms
 
       console.log(
         `Mixed load test: 50 requests in ${totalTime}ms (avg ${avgResponseTime.toFixed(2)}ms per request)`,
@@ -651,7 +651,7 @@ describe('HTTP-Batch Processing Isolation', () => {
     it('should maintain stable memory usage during concurrent operations', async () => {
       const initialMemory = process.memoryUsage();
 
-      // 1. 대량의 배치 작업과 API 호출을 동시에 실행
+      // 1. Execute heavy batch jobs and API calls concurrently
       const batchPromises = Array.from({ length: 3 }, () =>
         batchService.executeBatch(
           Array.from(
@@ -672,7 +672,7 @@ describe('HTTP-Batch Processing Isolation', () => {
       const finalMemory = process.memoryUsage();
       const memoryIncrease = finalMemory.heapUsed - initialMemory.heapUsed;
 
-      // 메모리 증가가 합리적인 범위 내인지 확인 (10MB 이하)
+      // Verify memory increase stays within reasonable bounds (under 10MB)
       expect(memoryIncrease).toBeLessThan(10 * 1024 * 1024);
 
       console.log(

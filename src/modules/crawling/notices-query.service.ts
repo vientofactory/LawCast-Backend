@@ -272,7 +272,7 @@ export class NoticesQueryService {
     const extractedProposer = extractProposerFromSubject(notice.subject).join(
       ' ',
     );
-    // NOTE: proposalReason (원문 텍스트) is intentionally excluded because
+    // NOTE: proposalReason (original text) is intentionally excluded because
     // CachedNotice does not carry that field. A cache-only item whose keyword
     // appears only in the original text will therefore not match here, which
     // is an acceptable trade-off to keep the cache lightweight.

@@ -1161,7 +1161,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         // Regardless of whether Puppeteer threw NsmBillDeletedError or some
         // other error (timeout, Waitingroom), a single capture is not enough
         // evidence of deletion — session/anti-bot error pages can reuse the
-        // same "안건정보가 없습니다" template. Always require an independent
+        // same 'Bill information not found' template. Always require an independent
         // HTTP probe confirmation before marking source_deleted.
         const detectionMethod =
           error instanceof NsmBillDeletedError

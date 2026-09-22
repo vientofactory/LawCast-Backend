@@ -34,12 +34,12 @@ export function extractProposerName(raw: string | null | undefined): string[] {
     return [];
   }
 
-  // Strip prefixes like "제안자목록", "제안자:", "발의자:"
+  // Strip prefixes like '제안자목록' (proposer list), '제안자:' (proposer:), '발의자:' (sponsor:)
   cleaned = cleaned
     .replace(/^(?:제안자목록|제안자\s*[:：]|발의자\s*[:：])\s*/u, '')
     .trim();
 
-  // Pattern 1: "OOO의원 등 O인", "OOO의원ㆍOOO의원 외 O명", etc.
+  // Pattern 1: 'OOO의원 등 O인' (Lawmaker OOO et al. N), 'OOO의원ㆍOOO의원 외 O명' etc.
   const sponsorListMatch = cleaned.match(
     /^(.+?)\s*(?:등|외)\s*\d+\s*(?:인|명)\s*$/u,
   );
@@ -47,13 +47,13 @@ export function extractProposerName(raw: string | null | undefined): string[] {
     return parseMultipleProposers(sponsorListMatch[1]);
   }
 
-  // Pattern 2: "OOO의원", "OOO 의원"
+  // Pattern 2: 'OOO의원' or 'OOO 의원' (single lawmaker)
   const singleLawmakerMatch = cleaned.match(/^([^\s()]+?)\s*의원\s*$/u);
   if (singleLawmakerMatch && singleLawmakerMatch[1]) {
     return [singleLawmakerMatch[1].trim()];
   }
 
-  // Pattern 3: Fallback - return cleaned string (e.g. "정부", "법무부장관", "대통령", "위원장")
+  // Pattern 3: Fallback - return cleaned string (e.g. '정부' (government), '법무부장관' (minister), '대통령' (president), '위원장' (committee chair))
   return [cleaned];
 }
 
@@ -104,7 +104,7 @@ export function extractProposerFromSubject(
     return [];
   }
 
-  // Look for trailing parenthesis e.g. (윤한홍의원 등 10인) or (정부)
+  // Look for trailing parenthesis, e.g. (윤한홍의원 등 10인) or (정부)
   const parenMatch = trimmed.match(/\(([^()]+)\)\s*(?:\(수정\))?\s*$/u);
   if (parenMatch && parenMatch[1]) {
     const inside = parenMatch[1].trim();

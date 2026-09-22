@@ -186,7 +186,7 @@ export class SummaryGenerationService {
     }
 
     if (!notice.contentId) {
-      // NsmLmSts bills (발의 상태) have no contentId but may have proposalReason
+      // NsmLmSts bills (proposing status) have no contentId but may have proposalReason
       // stored in the archive snapshot or, after bootstrap repair, in the change chain.
       const storedReason = (notice as CachedNotice).proposalReason?.trim();
       const latestReason = storedReason
