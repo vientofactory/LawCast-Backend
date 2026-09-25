@@ -36,7 +36,7 @@
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
     "@nestjs/schedule": "^6.0.1",
-    "@nestjs/typeorm": "^11.0.3",
+    "@nestjs/typeorm": "^12.0.0",
     "axios": "^1.13.2",
     "cache-manager": "^7.2.5",
     "class-transformer": "^0.5.1",
