@@ -1,5 +1,22 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
-  "baseBranchPatterns": ["dev"]
+  "baseBranchPatterns": ["dev"],
+  "packageRules": [
+    {
+      "description": "NestJS 12 and @nestjs/typeorm 12 ship ESM only (type: module, no require export condition). This backend and its jest runtime are CommonJS, so loading them fails at import time. Hold these majors until the runtime and test setup support ESM.",
+      "matchPackageNames": ["@nestjs/*"],
+      "allowedVersions": "<12"
+    },
+    {
+      "description": "TypeORM 1.x dropped the sqlite (node-sqlite3) driver in favour of better-sqlite3, so the upgrade needs a driver swap plus code changes against the production database. Hold it until that migration is planned.",
+      "matchPackageNames": ["typeorm"],
+      "allowedVersions": "<1"
+    },
+    {
+      "description": "TypeScript majors need a coordinated toolchain upgrade: @typescript-eslint supports <6.1 and ts-jest supports <7, so v7 cannot even be installed. Hold majors until the toolchain catches up.",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<6"
+    }
+  ]
 }
