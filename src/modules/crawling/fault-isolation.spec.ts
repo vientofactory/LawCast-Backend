@@ -384,6 +384,9 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
             getAllPalNoticesForScreenshotRequeue: jest
               .fn()
               .mockResolvedValue([]),
+            recordScreenshotCaptureFailure: jest
+              .fn()
+              .mockResolvedValue(undefined),
           },
         },
         {
@@ -400,6 +403,7 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
               noticePeriod: '20일',
               proposalSession: '22대',
             }),
+            captureContentScreenshot: jest.fn().mockResolvedValue(null),
           },
         },
       ],

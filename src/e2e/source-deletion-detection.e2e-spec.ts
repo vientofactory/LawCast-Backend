@@ -99,6 +99,9 @@ describe('Source deletion detection (bill 2214911 scenario)', () => {
               .fn()
               .mockResolvedValue([]),
             markSourceDeletedByMissingNsmNums: jest.fn().mockResolvedValue(0),
+            recordScreenshotCaptureFailure: jest
+              .fn()
+              .mockResolvedValue(undefined),
           },
         },
         {
