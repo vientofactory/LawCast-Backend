@@ -8,6 +8,7 @@ import { NoticeArchive } from '../notice/notice-archive.entity';
 import { BatchProcessingService } from '../shared/batch-processing.service';
 import { WebPushSubscriptionService } from './web-push-subscription.service';
 import { WebPushNotificationService } from './web-push-notification.service';
+import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 
 const notices: any[] = [];
 const notifications: any[] = [];
@@ -63,6 +64,10 @@ describe('NotificationBatchService E2E', () => {
         {
           provide: WebPushNotificationService,
           useValue: { sendNotification: jest.fn().mockResolvedValue({}) },
+        },
+        {
+          provide: DiscordBridgeService,
+          useValue: { logEvent: jest.fn() },
         },
         {
           provide: BatchProcessingService,

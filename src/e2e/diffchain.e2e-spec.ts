@@ -6,6 +6,10 @@ import request from 'supertest';
 import { ConfigService } from '@nestjs/config';
 import { ApiController } from '../controllers/api.controller';
 import { WebhookService } from '../modules/webhook/webhook.service';
+import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.service';
+import { NotificationBatchService } from '../modules/notification/notification-batch.service';
+import { CronJobsService } from '../modules/scheduling/cronjobs.service';
+import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
 import { CrawlingService } from '../modules/crawling/crawling.service';
 import { HealthCheckService } from '../modules/health/health-check.service';
 import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
@@ -28,6 +32,7 @@ import { NoticeChangeSource } from '../modules/change-tracking/notice-change-sou
 import { NoticeArchive } from '../modules/notice/notice-archive.entity';
 import { NoticeArchiveIntegrityCheck } from '../modules/notice/notice-archive-integrity-check.entity';
 import { NoticeArchiveIntegrityState } from '../modules/notice/notice-archive-integrity-state.entity';
+import { NoticeArchiveSnapshotState } from '../modules/notice/notice-archive-summary-state.entity';
 import { NoticeArchiveArtifactSupport } from '../modules/notice/utils/notice-archive-artifact-support';
 import {
   CHANGE_EVENT_TYPE,
@@ -116,6 +121,7 @@ describe('Diffchain API (e2e)', () => {
         }),
         TypeOrmModule.forFeature([
           NoticeArchive,
+          NoticeArchiveSnapshotState,
           NoticeChangeEvent,
           NoticeChangeDetail,
           NoticeArchiveIntegrityCheck,
@@ -147,6 +153,30 @@ describe('Diffchain API (e2e)', () => {
         },
         { provide: CrawlingService, useValue: mockCrawlingService },
         { provide: HealthCheckService, useValue: mockHealthCheckService },
+        {
+          provide: DiscordBridgeService,
+          useValue: {
+            logEvent: jest.fn(),
+          },
+        },
+        {
+          provide: NotificationBatchService,
+          useValue: {
+            processNotificationBatch: jest.fn(),
+            processChangeNotificationBatch: jest.fn(),
+          },
+        },
+        {
+          provide: CronJobsService,
+          useValue: {
+            getCronJobsStatus: jest.fn().mockReturnValue([]),
+            getCronJobExpression: jest.fn().mockReturnValue(undefined),
+          },
+        },
+        {
+          provide: ApiReadRateLimitService,
+          useValue: { assertAllowed: jest.fn() },
+        },
         {
           provide: WebhookRegistrationService,
           useValue: {
