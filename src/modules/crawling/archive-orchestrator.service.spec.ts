@@ -467,6 +467,115 @@ describe('ArchiveOrchestratorService', () => {
         }),
       );
     });
+
+    it('captures and persists the screenshot for newly detected notices', async () => {
+      const screenshot = Buffer.from('jpeg-bytes');
+      const mockResponse = {
+        data: '<html>Test HTML</html>',
+        status: 200,
+        statusText: 'OK',
+        config: { url: 'https://example.com/notice/1' },
+        request: { res: { responseUrl: 'https://example.com/notice/1' } },
+        headers: {},
+      };
+
+      (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
+        title: 'Test Title',
+        proposalReason: 'Test Proposal Reason',
+      });
+      mockFetchHtmlPage.mockResolvedValue(mockResponse as any);
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+      (
+        crawlingCoreService.captureContentScreenshot as jest.Mock
+      ).mockResolvedValue(screenshot);
+
+      await service.archiveNotices([mockNotice]);
+
+      expect(crawlingCoreService.captureContentScreenshot).toHaveBeenCalledWith(
+        'content-1',
+        false,
+      );
+      expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalledWith(
+        mockNotice,
+        expect.objectContaining({
+          screenshotBlob: screenshot,
+          screenshotFormat: 'jpeg',
+        }),
+      );
+      expect(
+        noticeArchiveService.recordScreenshotCaptureFailure,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('does not capture a screenshot for recompare archive runs', async () => {
+      const mockResponse = {
+        data: '<html>Test HTML</html>',
+        status: 200,
+        statusText: 'OK',
+        config: { url: 'https://example.com/notice/1' },
+        request: { res: { responseUrl: 'https://example.com/notice/1' } },
+        headers: {},
+      };
+
+      (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
+        title: 'Test Title',
+        proposalReason: 'Test Proposal Reason',
+      });
+      mockFetchHtmlPage.mockResolvedValue(mockResponse as any);
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+
+      await service.archiveNotices([mockNotice], {
+        reason: ArchiveReason.PAL_RECOMPARE,
+      });
+
+      expect(
+        crawlingCoreService.captureContentScreenshot,
+      ).not.toHaveBeenCalled();
+      expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalledWith(
+        mockNotice,
+        expect.objectContaining({
+          screenshotBlob: null,
+          screenshotFormat: null,
+        }),
+      );
+    });
+
+    it('records a screenshot capture failure when inline capture returns null', async () => {
+      const mockResponse = {
+        data: '<html>Test HTML</html>',
+        status: 200,
+        statusText: 'OK',
+        config: { url: 'https://example.com/notice/1' },
+        request: { res: { responseUrl: 'https://example.com/notice/1' } },
+        headers: {},
+      };
+
+      (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
+        title: 'Test Title',
+        proposalReason: 'Test Proposal Reason',
+      });
+      mockFetchHtmlPage.mockResolvedValue(mockResponse as any);
+      (noticeArchiveService.upsertNoticeArchive as jest.Mock).mockResolvedValue(
+        undefined,
+      );
+      (
+        crawlingCoreService.captureContentScreenshot as jest.Mock
+      ).mockResolvedValue(null);
+
+      await service.archiveNotices([mockNotice]);
+
+      expect(noticeArchiveService.upsertNoticeArchive).toHaveBeenCalledWith(
+        mockNotice,
+        expect.objectContaining({ screenshotBlob: null }),
+      );
+      expect(
+        noticeArchiveService.recordScreenshotCaptureFailure,
+      ).toHaveBeenCalledWith(mockNotice.num, expect.any(String));
+    });
   });
 
   describe('filterAlreadyArchivedNotices', () => {

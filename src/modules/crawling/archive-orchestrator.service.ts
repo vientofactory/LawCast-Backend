@@ -426,6 +426,11 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
 
     try {
       const reason = options?.reason ?? ArchiveReason.NEW_NOTICES;
+      // Only new detections capture inline; recompare/upgrade runs revisit rows
+      // that already have an image, so a browser session would be wasted.
+      const shouldCaptureScreenshotInline =
+        reason === ArchiveReason.NEW_NOTICES ||
+        reason === ArchiveReason.FULL_SYNC_NEW_NOTICES;
       const startLog = this.getArchiveStartLog(notices.length, reason);
       logAndBridge({
         method: 'log',
@@ -461,6 +466,8 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
               let sourceHtml: string | null = null;
               let sourceHtmlSha256: string | null = null;
               let httpMetadata: ArchiveHttpMetadata | null = null;
+              let capturedScreenshot: Buffer | null = null;
+              let screenshotCaptureError: unknown = null;
               const archivedAt = new Date();
 
               if (notice.contentId) {
@@ -520,6 +527,20 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
                 });
               }
 
+              // PAL HTML is plain HTTP, so capture the image in the same pass
+              // rather than deferring it to the screenshot backfill.
+              if (shouldCaptureScreenshotInline && notice.contentId) {
+                try {
+                  capturedScreenshot =
+                    await this.crawlingCoreService.captureContentScreenshot(
+                      notice.contentId,
+                      false,
+                    );
+                } catch (error) {
+                  screenshotCaptureError = error;
+                }
+              }
+
               try {
                 await this.noticeArchiveService.upsertNoticeArchive(notice, {
                   proposalReason,
@@ -535,7 +556,22 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
                   htmlSha256: sourceHtmlSha256,
                   archivedAt,
                   httpMetadata,
+                  screenshotBlob: capturedScreenshot,
+                  screenshotFormat: capturedScreenshot ? 'jpeg' : null,
                 });
+
+                if (
+                  shouldCaptureScreenshotInline &&
+                  notice.contentId &&
+                  !capturedScreenshot
+                ) {
+                  await this.recordInlineScreenshotFailure(
+                    notice.num,
+                    screenshotCaptureError,
+                    ScreenshotFailureReason.SIZE_LIMIT,
+                  );
+                }
+
                 return notice;
               } catch (error) {
                 const message =
@@ -572,6 +608,32 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
   }
 
   /**
+   * Logs and records an inline screenshot capture failure with its classified
+   * reason (which embeds the raw error text for operators). `nullReason`
+   * distinguishes PAL size-limit from NSM generic failures.
+   */
+  private async recordInlineScreenshotFailure(
+    noticeNum: number,
+    captureError: unknown,
+    nullReason: ScreenshotFailureReason,
+  ): Promise<void> {
+    const reason = captureError
+      ? classifyScreenshotError(captureError)
+      : nullReason;
+    const rawMessage =
+      captureError instanceof Error ? captureError.message : undefined;
+    const formattedError = formatScreenshotCaptureError(reason, rawMessage);
+
+    this.logger.warn(
+      `Inline screenshot capture failed for notice ${noticeNum}: ${formattedError}`,
+    );
+    await this.noticeArchiveService.recordScreenshotCaptureFailure(
+      noticeNum,
+      formattedError,
+    );
+  }
+
+  /**
    * Archives NsmLmSts pending bills (발의 상태) by fetching their full detail page
    * (proposalReason, proposalInfo, session, etc.) and persisting everything to
    * the archive database.
@@ -580,8 +642,8 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
    * rather than relying on a pal.assembly.go.kr contentId (which does not
    * exist yet for bills that have not entered the formal 입법예고 process).
    *
-   * Screenshots are scheduled as a fire-and-forget background task, matching
-   * the behaviour of `archiveNotices` for pal.assembly.go.kr bills.
+   * The screenshot is captured in the same Puppeteer session, mirroring the
+   * inline capture `archiveNotices` performs for newly detected notices.
    *
    * @param items Raw INsmBillItem entries returned by NsmLmSts list pages.
    * @returns Successfully archived CachedNotice objects with `proposalReason`
@@ -791,16 +853,10 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
               });
 
               if (!capturedScreenshot) {
-                const reason = captureError
-                  ? classifyScreenshotError(captureError)
-                  : ScreenshotFailureReason.SCREENSHOT_FAILED;
-                const rawMsg =
-                  captureError instanceof Error
-                    ? captureError.message
-                    : undefined;
-                await this.noticeArchiveService.recordScreenshotCaptureFailure(
+                await this.recordInlineScreenshotFailure(
                   notice.num,
-                  formatScreenshotCaptureError(reason, rawMsg),
+                  captureError,
+                  ScreenshotFailureReason.SCREENSHOT_FAILED,
                 );
               }
 
