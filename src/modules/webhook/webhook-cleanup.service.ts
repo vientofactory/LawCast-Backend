@@ -43,8 +43,12 @@ export class WebhookCleanupService {
 
       let totalCleaned = 0;
 
-      // 1. Clean up old inactive webhooks if they exist (14+ days inactive)
-      if (stats.oldInactive > 0) {
+      // 1. Clean up old inactive webhooks if any deletion-marked webhook
+      // exists. The cleanup query itself applies the precise 14+ day
+      // condition; gating on stats.oldInactive would miss rows because that
+      // counter only measures webhooks inactive for 30+ days, which delayed
+      // collection of marked webhooks well past the 14-day retention window.
+      if (stats.inactive > 0) {
         const oldCleaned =
           await this.webhookService.cleanupOldInactiveWebhooks(14);
         totalCleaned += oldCleaned;

@@ -1,6 +1,6 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, LessThan, MoreThanOrEqual, Repository } from 'typeorm';
+import { In, LessThan, Repository } from 'typeorm';
 import { DiscussionWebPushBinding } from './discussion-web-push-binding.entity';
 import { WebPushSubscription } from './web-push-subscription.entity';
 
@@ -21,7 +21,6 @@ export interface WebPushSubscriptionStats {
 
 @Injectable()
 export class WebPushSubscriptionService {
-  public readonly webPushFailureDeactivationThreshold = 5;
   constructor(
     @InjectRepository(WebPushSubscription)
     private readonly subscriptionRepository: Repository<WebPushSubscription>,
@@ -274,6 +273,16 @@ export class WebPushSubscriptionService {
     });
   }
 
+  /**
+   * Records a delivery failure for a subscription.
+   *
+   * Only an explicit deactivate flag (404/410 responses, which every push
+   * provider uses to signal that the subscription itself is invalid or gone:
+   * FCM UNREGISTERED/404, Mozilla autopush 404/410, Apple 410) marks the
+   * subscription inactive. Transient failures (429/5xx/network) must keep the
+   * subscription active and retryable per the web push specs; they are only
+   * counted for observability.
+   */
   async markFailure(
     subscriptionId: number,
     reason: string,
@@ -286,9 +295,7 @@ export class WebPushSubscriptionService {
 
     existing.failureCount = (existing.failureCount || 0) + 1;
     existing.lastFailureReason = reason.slice(0, 1000);
-    const shouldDeactivate =
-      options.deactivate === true ||
-      existing.failureCount >= this.webPushFailureDeactivationThreshold;
+    const shouldDeactivate = options.deactivate === true;
     if (shouldDeactivate) {
       existing.isActive = false;
     }
@@ -298,9 +305,11 @@ export class WebPushSubscriptionService {
   }
 
   /**
-   * Deletes inactive or repeatedly failing subscriptions. Inactive endpoints
-   * are retained for the given day threshold; exhausted endpoints are removed
-   * immediately so they cannot remain active after repeated delivery failures.
+   * Deletes inactive subscriptions that have been retained past the given day
+   * threshold. A subscription is only marked inactive when a push service
+   * reported it invalid (404/410), so this is the hard-delete side of that
+   * deletion marking. Subscriptions that merely failed transiently are still
+   * active and are never collected here.
    */
   async cleanupInactiveSubscriptions(daysBefore: number = 14): Promise<number> {
     const safeDays = Math.max(1, Math.trunc(daysBefore) || 14);
@@ -309,14 +318,7 @@ export class WebPushSubscriptionService {
 
     if (this.discussionBindingRepository) {
       const staleSubscriptions = await this.subscriptionRepository.find({
-        where: [
-          { isActive: false, updatedAt: LessThan(cutoffDate) },
-          {
-            failureCount: MoreThanOrEqual(
-              this.webPushFailureDeactivationThreshold,
-            ),
-          },
-        ],
+        where: { isActive: false, updatedAt: LessThan(cutoffDate) },
       });
       const staleSubscriptionIds = staleSubscriptions.map(
         (subscription) => subscription.id,
@@ -333,14 +335,10 @@ export class WebPushSubscriptionService {
       .createQueryBuilder()
       .delete()
       .from(WebPushSubscription)
-      .where(
-        '(is_active = :isActive AND updated_at < :cutoffDate) OR failure_count >= :failureThreshold',
-        {
-          isActive: false,
-          cutoffDate,
-          failureThreshold: this.webPushFailureDeactivationThreshold,
-        },
-      )
+      .where('is_active = :isActive AND updated_at < :cutoffDate', {
+        isActive: false,
+        cutoffDate,
+      })
       .execute();
 
     return result.affected || 0;
