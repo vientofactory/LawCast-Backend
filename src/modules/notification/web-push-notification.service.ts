@@ -450,10 +450,28 @@ export class WebPushNotificationService {
       return true;
     }
 
+    // Transport-layer errors (web-push rejects raw Node syscall errors for
+    // these) are transient per RFC 8030 and provider practice: DNS, connect,
+    // and socket failures never mean the subscription is invalid, so they
+    // belong to the same retry class as 5xx and must not deactivate it.
     const candidate = error as { code?: string };
-    return ['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN'].includes(
-      String(candidate?.code ?? ''),
-    );
+    return [
+      // DNS resolution
+      'ENOTFOUND',
+      'EAI_AGAIN',
+      'EAI_FAIL',
+      // connection establishment
+      'ECONNREFUSED',
+      'ECONNABORTED',
+      'ETIMEDOUT',
+      'ENETUNREACH',
+      'ENETDOWN',
+      'ENETRESET',
+      'EHOSTUNREACH',
+      // established socket
+      'ECONNRESET',
+      'EPIPE',
+    ].includes(String(candidate?.code ?? ''));
   }
 
   private resolveRetryDelayMs(error: unknown, attempt: number): number {

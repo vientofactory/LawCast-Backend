@@ -4,6 +4,7 @@ function createService(
   stats: {
     total?: number;
     active?: number;
+    inactive?: number;
     oldInactive?: number;
     recentInactive?: number;
   } = {},
@@ -12,6 +13,7 @@ function createService(
     getDetailedStats: jest.fn().mockResolvedValue({
       total: stats.total ?? 100,
       active: stats.active ?? 80,
+      inactive: stats.inactive ?? (stats.total ?? 100) - (stats.active ?? 80),
       oldInactive: stats.oldInactive ?? 5,
       recentInactive: stats.recentInactive ?? 15,
     }),
@@ -52,10 +54,11 @@ describe('WebhookCleanupService', () => {
       );
     });
 
-    it('skips old cleanup when no old inactive webhooks exist', async () => {
+    it('skips old cleanup when no inactive webhooks exist', async () => {
       const { service, webhookService } = createService({
         total: 100,
-        active: 80,
+        active: 100,
+        inactive: 0,
         oldInactive: 0,
       });
 
@@ -64,6 +67,24 @@ describe('WebhookCleanupService', () => {
       expect(
         webhookService.cleanupOldInactiveWebhooks,
       ).not.toHaveBeenCalledWith(14);
+    });
+
+    it('collects deletion-marked webhooks even when none pass the 30-day old-inactive counter', async () => {
+      // Regression: a webhook inactive for 15-29 days is not counted in
+      // stats.oldInactive (30-day window), but cleanupOldInactiveWebhooks(14)
+      // already matches it. The gate must not skip the 14-day cleanup for it.
+      const { service, webhookService } = createService({
+        total: 100,
+        active: 99,
+        inactive: 1,
+        oldInactive: 0,
+      });
+
+      await service.intelligentWebhookCleanup();
+
+      expect(webhookService.cleanupOldInactiveWebhooks).toHaveBeenCalledWith(
+        14,
+      );
     });
 
     it('cleans recent inactive webhooks when efficiency is below 70%', async () => {

@@ -186,6 +186,176 @@ describe('WebPushNotificationService', () => {
     });
   });
 
+  it('does not retry permanent failure (404) and marks subscription as deactivated', async () => {
+    const { service, webPushSubscriptionService } = createService();
+    webPushSubscriptionService.markFailure.mockResolvedValue(true);
+
+    const notFoundError = Object.assign(new Error('Not Found'), {
+      statusCode: 404,
+    });
+    const sendNotification = jest.fn().mockRejectedValue(notFoundError);
+
+    (service as any).webPushClient = {
+      setVapidDetails: jest.fn(),
+      sendNotification,
+    };
+
+    const summary = await service.sendNewNoticeBatch(
+      {
+        num: 404,
+        subject: '존재하지 않는 구독 테스트',
+        proposerCategory: '정부',
+        committee: '법제사법위원회',
+        link: 'https://example.com/notice/404',
+        contentId: null,
+        attachments: { pdfFile: '', hwpFile: '' },
+      } as any,
+      [mockSubscription(4)],
+    );
+
+    expect(sendNotification).toHaveBeenCalledTimes(1);
+    expect(webPushSubscriptionService.markFailure).toHaveBeenCalledWith(
+      4,
+      'Not Found',
+      { deactivate: true },
+    );
+    expect(summary).toMatchObject({
+      targetCount: 1,
+      successCount: 0,
+      failedCount: 1,
+      deactivatedCount: 1,
+    });
+  });
+
+  it('keeps the subscription retryable after exhausted transient failures (5xx)', async () => {
+    const { service, webPushSubscriptionService } = createService();
+
+    const transientError = Object.assign(new Error('Service Unavailable'), {
+      statusCode: 503,
+      headers: { 'retry-after': '0' },
+    });
+    const sendNotification = jest.fn().mockRejectedValue(transientError);
+
+    (service as any).webPushClient = {
+      setVapidDetails: jest.fn(),
+      sendNotification,
+    };
+
+    const summary = await service.sendNewNoticeBatch(
+      {
+        num: 503,
+        subject: '일시 장애 테스트 법률안',
+        proposerCategory: '정부',
+        committee: '법제사법위원회',
+        link: 'https://example.com/notice/503',
+        contentId: null,
+        attachments: { pdfFile: '', hwpFile: '' },
+      } as any,
+      [mockSubscription(5)],
+    );
+
+    // All in-flight attempts are retried, but a transient error must never
+    // deactivate the subscription (RFC 8030 / provider specs).
+    expect(sendNotification).toHaveBeenCalledTimes(3);
+    expect(webPushSubscriptionService.markFailure).toHaveBeenCalledWith(
+      5,
+      'Service Unavailable',
+      { deactivate: false },
+    );
+    expect(summary).toMatchObject({
+      targetCount: 1,
+      successCount: 0,
+      failedCount: 1,
+      deactivatedCount: 0,
+    });
+  });
+
+  it('retries transport errors (ENOTFOUND) and recovers without marking failure', async () => {
+    const { service, webPushSubscriptionService } = createService();
+
+    // web-push rejects raw Node syscall errors (no statusCode) for transport
+    // failures; they are transient and must be retried.
+    const networkError = Object.assign(
+      new Error('getaddrinfo ENOTFOUND push.example'),
+      { code: 'ENOTFOUND' },
+    );
+    const sendNotification = jest
+      .fn()
+      .mockRejectedValueOnce(networkError)
+      .mockResolvedValueOnce(undefined);
+
+    (service as any).webPushClient = {
+      setVapidDetails: jest.fn(),
+      sendNotification,
+    };
+
+    const summary = await service.sendNewNoticeBatch(
+      {
+        num: 601,
+        subject: 'DNS 일시 오류 테스트 법률안',
+        proposerCategory: '정부',
+        committee: '법제사법위원회',
+        link: 'https://example.com/notice/601',
+        contentId: null,
+        attachments: { pdfFile: '', hwpFile: '' },
+      } as any,
+      [mockSubscription(6)],
+    );
+
+    expect(sendNotification).toHaveBeenCalledTimes(2);
+    expect(webPushSubscriptionService.markSuccess).toHaveBeenCalledTimes(1);
+    expect(webPushSubscriptionService.markFailure).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({
+      targetCount: 1,
+      successCount: 1,
+      failedCount: 0,
+      deactivatedCount: 0,
+    });
+  }, 10_000);
+
+  it('keeps the subscription retryable when transport errors exhaust retries (EPIPE)', async () => {
+    const { service, webPushSubscriptionService } = createService();
+
+    const networkError = Object.assign(new Error('write EPIPE'), {
+      code: 'EPIPE',
+    });
+    const sendNotification = jest.fn().mockRejectedValue(networkError);
+
+    (service as any).webPushClient = {
+      setVapidDetails: jest.fn(),
+      sendNotification,
+    };
+
+    const summary = await service.sendNewNoticeBatch(
+      {
+        num: 602,
+        subject: '소켓 단절 테스트 법률안',
+        proposerCategory: '정부',
+        committee: '법제사법위원회',
+        link: 'https://example.com/notice/602',
+        contentId: null,
+        attachments: { pdfFile: '', hwpFile: '' },
+      } as any,
+      [mockSubscription(7)],
+    );
+
+    // All in-flight attempts are retried with backoff, and a transport error
+    // must never invalidate the subscription (RFC 8030 / provider specs).
+    expect(sendNotification).toHaveBeenCalledTimes(3);
+    expect(webPushSubscriptionService.markFailure).toHaveBeenCalledWith(
+      7,
+      'write EPIPE',
+      { deactivate: false },
+    );
+    expect(webPushSubscriptionService.markSuccess).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({
+      targetCount: 1,
+      successCount: 0,
+      failedCount: 1,
+      deactivatedCount: 0,
+    });
+  }, 10_000);
+
   it('removes a leading quote marker and truncates quoted opinion content', async () => {
     const { service } = createService();
     const sendNotification = jest.fn().mockResolvedValue(undefined);

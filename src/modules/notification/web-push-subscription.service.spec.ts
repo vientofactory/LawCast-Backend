@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { LessThan, Repository } from 'typeorm';
 import { WebPushSubscriptionService } from './web-push-subscription.service';
 import { WebPushSubscription } from './web-push-subscription.entity';
 import { DiscussionWebPushBinding } from './discussion-web-push-binding.entity';
@@ -80,6 +80,11 @@ describe('WebPushSubscriptionService', () => {
       );
       await service.cleanupInactiveSubscriptions(14);
 
+      // Bindings are collected with the exact same condition as the
+      // subscription delete (inactive + past retention).
+      expect(subscriptionRepository.find).toHaveBeenCalledWith({
+        where: { isActive: false, updatedAt: LessThan(expect.any(Date)) },
+      });
       expect(bindingRepository.delete).toHaveBeenCalledWith({
         subscriptionId: expect.objectContaining({
           _type: 'in',
@@ -109,11 +114,10 @@ describe('WebPushSubscriptionService', () => {
       expect(deleteFn).toHaveBeenCalledTimes(1);
       expect(from).toHaveBeenCalledWith(WebPushSubscription);
       expect(where).toHaveBeenCalledWith(
-        '(is_active = :isActive AND updated_at < :cutoffDate) OR failure_count >= :failureThreshold',
+        'is_active = :isActive AND updated_at < :cutoffDate',
         {
           isActive: false,
           cutoffDate: expect.any(Date),
-          failureThreshold: service.webPushFailureDeactivationThreshold,
         },
       );
       expect(execute).toHaveBeenCalledTimes(1);
@@ -136,40 +140,68 @@ describe('WebPushSubscriptionService', () => {
       await service.cleanupInactiveSubscriptions(0);
 
       expect(where).toHaveBeenCalledWith(
-        '(is_active = :isActive AND updated_at < :cutoffDate) OR failure_count >= :failureThreshold',
+        'is_active = :isActive AND updated_at < :cutoffDate',
         {
           isActive: false,
           cutoffDate: expect.any(Date),
-          failureThreshold: service.webPushFailureDeactivationThreshold,
         },
       );
     });
   });
 
   describe('markFailure', () => {
-    it('deactivates a subscription after repeated delivery failures', async () => {
-      const save = jest.fn();
-      const findOne = jest.fn();
+    function createServiceWithSubscription(subscription: {
+      id: number;
+      failureCount: number;
+      isActive: boolean;
+    }) {
+      const save = jest.fn().mockImplementation(async (entity) => entity);
+      const findOne = jest.fn().mockResolvedValue(subscription);
       const repository = {
         findOne,
         save,
       } as unknown as Repository<WebPushSubscription>;
-      const service = new WebPushSubscriptionService(repository);
-      const subscription = {
+      return {
+        service: new WebPushSubscriptionService(repository),
+        subscription: subscription as WebPushSubscription,
+        save,
+      };
+    }
+
+    it('deactivates immediately when a push service reports 404/410', async () => {
+      const { service, subscription, save } = createServiceWithSubscription({
         id: 12,
-        failureCount: service.webPushFailureDeactivationThreshold - 1,
+        failureCount: 0,
         isActive: true,
-      } as WebPushSubscription;
-      findOne.mockResolvedValue(subscription);
-      save.mockResolvedValue(subscription);
-      const deactivated = await service.markFailure(12, 'Push service failed');
+      });
+
+      const deactivated = await service.markFailure(12, 'Gone', {
+        deactivate: true,
+      });
 
       expect(deactivated).toBe(true);
-      expect(subscription.failureCount).toBe(
-        service.webPushFailureDeactivationThreshold,
-      );
       expect(subscription.isActive).toBe(false);
+      expect(subscription.failureCount).toBe(1);
       expect(save).toHaveBeenCalledWith(subscription);
+    });
+
+    it('keeps the subscription retryable after repeated transient failures', async () => {
+      const { service, subscription } = createServiceWithSubscription({
+        id: 12,
+        failureCount: 20,
+        isActive: true,
+      });
+
+      const deactivated = await service.markFailure(
+        12,
+        'Push service temporarily failed',
+      );
+
+      // Transient failures (429/5xx/network) must never invalidate the
+      // subscription; they are only counted for observability.
+      expect(deactivated).toBe(false);
+      expect(subscription.isActive).toBe(true);
+      expect(subscription.failureCount).toBe(21);
     });
   });
 
