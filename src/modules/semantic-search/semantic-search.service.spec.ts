@@ -1,0 +1,202 @@
+import {
+  BadRequestException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import axios, { AxiosError } from 'axios';
+import { NoticeSearchService } from '../crawling/notice-search.service';
+import { SemanticSearchService } from './semantic-search.service';
+
+jest.mock('axios');
+
+describe('SemanticSearchService', () => {
+  const mockGet =
+    jest.fn<(url: string, config: unknown) => Promise<{ data: unknown }>>();
+  const mockSearchNotices =
+    jest.fn<(query: unknown) => Promise<Record<string, unknown>>>();
+  const mockedAxios = axios as jest.Mocked<typeof axios>;
+
+  const createService = (enabled = true): SemanticSearchService => {
+    mockedAxios.create.mockReturnValue({ get: mockGet } as any);
+
+    const configService = {
+      get: jest.fn((key: string) => {
+        if (key === 'semanticSearch.enabled') return enabled;
+        if (key === 'semanticSearch.apiUrl') return 'http://127.0.0.1:8300';
+        if (key === 'semanticSearch.timeout') return 10000;
+        return undefined;
+      }),
+    } as unknown as ConfigService;
+
+    const noticeSearchService = {
+      searchNotices: mockSearchNotices,
+    } as unknown as NoticeSearchService;
+
+    return new SemanticSearchService(configService, noticeSearchService);
+  };
+
+  const sidecarChunk = (noticeNum: number, text: string) => ({
+    chunkId: `${noticeNum}-0000`,
+    noticeNum,
+    subject: `법률안 ${noticeNum}`,
+    committee: '법제사법위원회',
+    section: '제안이유',
+    score: 0.5,
+    text,
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedAxios.isAxiosError.mockImplementation(
+      (payload: any): payload is AxiosError<any, any, any> =>
+        Boolean(payload?.isAxiosError),
+    );
+  });
+
+  it('returns notice-deduplicated semantic hits', async () => {
+    const service = createService();
+    mockGet.mockResolvedValue({
+      data: {
+        query: '세입자 보호',
+        k: 5,
+        model: 'nlpai-lab/KURE-v1',
+        results: [
+          sidecarChunk(101, '첫 번째 청크'),
+          sidecarChunk(101, '중복 청크'),
+          sidecarChunk(102, '다른 공고'),
+        ],
+      },
+    });
+
+    const result = await service.searchSemantic('세입자 보호', 5);
+
+    expect(result.mode).toBe('semantic');
+    expect(result.fallbackReason).toBeNull();
+    expect(result.results).toHaveLength(2);
+    expect(result.results[0]).toEqual({
+      noticeNum: 101,
+      subject: '법률안 101',
+      committee: '법제사법위원회',
+      section: '제안이유',
+      score: 0.5,
+      excerpt: '첫 번째 청크',
+    });
+    expect(mockGet).toHaveBeenCalledWith('/search', {
+      params: { query: '세입자 보호', k: 5 },
+    });
+  });
+
+  it('falls back to keyword search when the sidecar reports 503 (model load failure)', async () => {
+    const service = createService();
+    mockGet.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 503 },
+      message: 'Request failed with status code 503',
+    });
+    mockSearchNotices.mockResolvedValue({
+      items: [
+        {
+          num: 7,
+          subject: '키워드 결과',
+          committee: '교육위원회',
+        },
+      ],
+      total: 1,
+      page: 1,
+      limit: 5,
+      totalPages: 1,
+      keyword: '세입자 보호',
+      source: 'archive',
+    });
+
+    const result = await service.searchSemantic('세입자 보호', 5);
+
+    expect(result.mode).toBe('keyword_fallback');
+    expect(result.fallbackReason).toContain('키워드 검색');
+    expect(result.results).toEqual([
+      {
+        noticeNum: 7,
+        subject: '키워드 결과',
+        committee: '교육위원회',
+        section: null,
+        score: null,
+        excerpt: null,
+      },
+    ]);
+    expect(mockSearchNotices).toHaveBeenCalledWith(
+      expect.objectContaining({ keyword: '세입자 보호', page: 1, limit: 5 }),
+    );
+  });
+
+  it('falls back to keyword search when the sidecar is unreachable', async () => {
+    const service = createService();
+    mockGet.mockRejectedValue({
+      isAxiosError: true,
+      code: 'ECONNREFUSED',
+      message: 'connect ECONNREFUSED 127.0.0.1:8300',
+    });
+    mockSearchNotices.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      limit: 5,
+      totalPages: 1,
+      keyword: '세입자 보호',
+      source: 'archive',
+    });
+
+    const result = await service.searchSemantic('세입자 보호', 5);
+
+    expect(result.mode).toBe('keyword_fallback');
+    expect(result.results).toEqual([]);
+    expect(mockSearchNotices).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces sidecar 4xx rejections as request errors without falling back', async () => {
+    const service = createService();
+    mockGet.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 422 },
+      message: 'Request failed with status code 422',
+    });
+
+    await expect(service.searchSemantic('질의', 5)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(mockSearchNotices).not.toHaveBeenCalled();
+  });
+
+  it('returns ServiceUnavailableException when the keyword fallback also fails', async () => {
+    const service = createService();
+    mockGet.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 503 },
+      message: 'Request failed with status code 503',
+    });
+    mockSearchNotices.mockRejectedValue(new Error('crawler down'));
+
+    await expect(
+      service.searchSemantic('세입자 보호', 5),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it('skips the sidecar entirely when semantic search is disabled', async () => {
+    const service = createService(false);
+    mockSearchNotices.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      limit: 5,
+      totalPages: 1,
+      keyword: '세입자 보호',
+      source: 'archive',
+    });
+
+    const result = await service.searchSemantic('세입자 보호', 5);
+
+    expect(mockGet).not.toHaveBeenCalled();
+    expect(result.mode).toBe('keyword_fallback');
+    expect(result.fallbackReason).toContain('비활성화');
+  });
+});
