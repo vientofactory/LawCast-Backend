@@ -29,6 +29,11 @@ export interface AppConfig {
     model: string;
     timeout: number;
   };
+  semanticSearch: {
+    enabled: boolean;
+    apiUrl: string;
+    timeout: number;
+  };
   frontend: {
     urls: string[];
   };
@@ -435,6 +440,12 @@ export default (): AppConfig => ({
     apiUrl: process.env.OLLAMA_API_URL?.trim() || '',
     model: process.env.OLLAMA_MODEL?.trim() || '',
     timeout: parseInt(process.env.OLLAMA_TIMEOUT, 10) || 10000,
+  },
+  semanticSearch: {
+    enabled: parseBooleanWithDefault(process.env.SEMANTIC_SEARCH_ENABLED, true),
+    apiUrl:
+      process.env.SEMANTIC_SEARCH_API_URL?.trim() || 'http://127.0.0.1:8300',
+    timeout: parseInt(process.env.SEMANTIC_SEARCH_TIMEOUT, 10) || 10000,
   },
   frontend: {
     urls: process.env.FRONTEND_URL

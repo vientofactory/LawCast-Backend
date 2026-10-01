@@ -29,6 +29,7 @@ import { CrawlingModule } from './modules/crawling/crawling.module';
 import { HealthModule } from './modules/health/health.module';
 import { SchedulingModule } from './modules/scheduling/scheduling.module';
 import { OllamaModule } from './modules/ollama/ollama.module';
+import { SemanticSearchModule } from './modules/semantic-search/semantic-search.module';
 import { DiscordBridgeModule } from './modules/discord-bridge/discord-bridge.module';
 import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.module';
 import { DiscussionsModule } from './modules/discussions/discussions.module';
@@ -99,6 +100,7 @@ import { DiscussionsModule } from './modules/discussions/discussions.module';
     DiscussionsModule,
     // Third-party integration modules
     OllamaModule,
+    SemanticSearchModule,
     DiscordBridgeModule,
   ],
   controllers: [ApiController, ApiProposalStatsController],
