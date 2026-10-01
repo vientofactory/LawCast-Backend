@@ -39,7 +39,7 @@ describe('SemanticSearchController', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it.each(['0', '51', 'abc', '-3'])(
+  it.each(['0', '51', 'abc', '-3', '3.9', '5.0', '1e2', '+5'])(
     'rejects invalid k value %s',
     async (kRaw) => {
       const { controller } = createController();

@@ -11,11 +11,8 @@ import { ApiReadRateLimitFilter } from '../shared/api-read-rate-limit.filter';
 import { ApiReadRateLimitService } from '../shared/api-read-rate-limit.service';
 import { ApiResponseUtils } from '../../utils/api-response.utils';
 import { assertSearchLength } from '../../utils/request-limits.utils';
-import { parsePositiveInteger } from '../../utils/query-parsing.utils';
+import { DEFAULT_K, MAX_K } from './semantic-search.constants';
 import { SemanticSearchService } from './semantic-search.service';
-
-const DEFAULT_K = 5;
-const MAX_K = 50;
 
 /**
  * Semantic search endpoint. Separate from the keyword search route on
@@ -49,15 +46,26 @@ export class SemanticSearchController {
     return ApiResponseUtils.success(result);
   }
 
+  /**
+   * Strict k parsing, scoped to this endpoint on purpose. The shared
+   * `parsePositiveInteger` uses parseInt and would silently accept `3.9` as
+   * 3 or `1e2` as 1, hiding client bugs; here only plain positive integers
+   * within range pass. Other endpoints keep the lenient shared util
+   * unchanged.
+   */
   private parseK(raw?: string): number {
-    if (raw === undefined || raw.trim() === '') {
+    const trimmed = (raw ?? '').trim();
+    if (trimmed === '') {
       return DEFAULT_K;
     }
-    const parsed = parsePositiveInteger(raw);
-    if (parsed === undefined || parsed > MAX_K) {
-      throw new BadRequestException(
-        `k는 1에서 ${MAX_K} 사이의 정수여야 합니다.`,
-      );
+    const invalid = () =>
+      new BadRequestException(`k는 1에서 ${MAX_K} 사이의 정수여야 합니다.`);
+    if (!/^[0-9]+$/.test(trimmed)) {
+      throw invalid();
+    }
+    const parsed = Number(trimmed);
+    if (parsed < 1 || parsed > MAX_K) {
+      throw invalid();
     }
     return parsed;
   }
