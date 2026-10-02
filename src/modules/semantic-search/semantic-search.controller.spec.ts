@@ -56,6 +56,7 @@ describe('SemanticSearchController', () => {
       query: '질의',
       mode: 'semantic',
       fallbackReason: null,
+      lastUpdateAt: '2026-10-02T12:00:00+00:00',
       results: [],
     });
 
@@ -67,12 +68,14 @@ describe('SemanticSearchController', () => {
 
     expect(assertAllowed).toHaveBeenCalledWith(req, 'expensive');
     expect(searchSemantic).toHaveBeenCalledWith('질의', 5);
+    // The wrapper must not strip fields: lastUpdateAt reaches the client.
     expect(response).toEqual({
       success: true,
       data: {
         query: '질의',
         mode: 'semantic',
         fallbackReason: null,
+        lastUpdateAt: '2026-10-02T12:00:00+00:00',
         results: [],
       },
     });

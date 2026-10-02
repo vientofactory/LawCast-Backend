@@ -20,6 +20,7 @@ export interface SemanticSearchResponse {
   query: string;
   mode: SemanticSearchMode;
   fallbackReason: string | null;
+  lastUpdateAt: string | null;
   results: SemanticSearchResultItem[];
 }
 
@@ -38,5 +39,6 @@ export interface SemanticSidecarSearchResponse {
   query: string;
   k: number;
   model: string | null;
+  lastUpdateAt: string | null;
   results: SemanticSidecarChunk[];
 }

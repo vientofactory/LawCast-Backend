@@ -62,19 +62,29 @@ export class SemanticSearchService {
       return this.keywordFallback(query, k, FALLBACK_REASON_DISABLED);
     }
     let collected: SemanticSidecarChunk[];
+    let lastUpdateAt: string | null;
     try {
-      collected = await this.collectChunks(query, k);
+      ({ chunks: collected, lastUpdateAt } = await this.collectChunks(
+        query,
+        k,
+      ));
     } catch (error) {
       return this.handleFirstWindowFailure(error, query, k);
     }
     const hits = this.toNoticeHits(collected);
     if (hits.length === 0) {
-      return this.keywordFallback(query, k, FALLBACK_REASON_NO_HITS);
+      return this.keywordFallback(
+        query,
+        k,
+        FALLBACK_REASON_NO_HITS,
+        lastUpdateAt,
+      );
     }
     return {
       query,
       mode: 'semantic',
       fallbackReason: null,
+      lastUpdateAt,
       results: hits.slice(0, k),
     } satisfies SemanticSearchResponse;
   }
@@ -113,12 +123,14 @@ export class SemanticSearchService {
 
   /**
    * Degraded path served by the existing keyword search (read-only reuse of
-   * NoticeSearchService; its own behavior is unchanged).
+   * NoticeSearchService; its own behavior is unchanged). `lastUpdateAt`
+   * defaults to null: only a sidecar response can carry the index time.
    */
   private async keywordFallback(
     query: string,
     k: number,
     fallbackReason: string,
+    lastUpdateAt: string | null = null,
   ): Promise<SemanticSearchResponse> {
     try {
       const result = await this.noticeSearchService.searchNotices({
@@ -132,6 +144,7 @@ export class SemanticSearchService {
         query,
         mode: 'keyword_fallback',
         fallbackReason,
+        lastUpdateAt,
         results: result.items.map((item) => ({
           noticeNum: item.num,
           subject: item.subject,
@@ -164,15 +177,18 @@ export class SemanticSearchService {
    * Failure policy: only a failed FIRST window propagates (the caller turns
    * it into a fallback or a request error). A failed widening request keeps
    * the chunks collected so far — partial results beat discarding them.
+   * The sidecar's `lastUpdateAt` rides along: the last successful window
+   * carries the serving generation's index time.
    */
   private async collectChunks(
     query: string,
     k: number,
-  ): Promise<SemanticSidecarChunk[]> {
+  ): Promise<{ chunks: SemanticSidecarChunk[]; lastUpdateAt: string | null }> {
     const collected: SemanticSidecarChunk[] = [];
+    let lastUpdateAt: string | null = null;
     let chunkK = Math.min(k * CHUNK_FETCH_INITIAL_FACTOR, SIDE_CAR_MAX_CHUNK_K);
     for (;;) {
-      let window: SemanticSidecarChunk[];
+      let window: SemanticSidecarSearchResponse;
       try {
         window = await this.fetchChunks(query, chunkK);
       } catch (error) {
@@ -183,17 +199,18 @@ export class SemanticSearchService {
           `semantic sidecar chunk widening failed (${this.describeError(error)}); ` +
             `returning partial results from ${collected.length} collected chunks`,
         );
-        return collected;
+        return { chunks: collected, lastUpdateAt };
       }
-      collected.push(...window);
+      collected.push(...window.results);
+      lastUpdateAt = window.lastUpdateAt;
       const hits = this.toNoticeHits(collected);
-      const corpusExhausted = window.length < chunkK;
+      const corpusExhausted = window.results.length < chunkK;
       if (
         hits.length >= k ||
         corpusExhausted ||
         chunkK >= SIDE_CAR_MAX_CHUNK_K
       ) {
-        return collected;
+        return { chunks: collected, lastUpdateAt };
       }
       chunkK = Math.min(chunkK * CHUNK_FETCH_GROWTH, SIDE_CAR_MAX_CHUNK_K);
     }
@@ -202,12 +219,12 @@ export class SemanticSearchService {
   private async fetchChunks(
     query: string,
     chunkK: number,
-  ): Promise<SemanticSidecarChunk[]> {
+  ): Promise<SemanticSidecarSearchResponse> {
     const response = await this.http.get<SemanticSidecarSearchResponse>(
       '/search',
       { params: { query, k: chunkK } },
     );
-    return response.data.results;
+    return response.data;
   }
 
   /**
