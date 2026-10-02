@@ -11,6 +11,7 @@ import { SemanticSearchService } from './semantic-search.service';
 jest.mock('axios');
 
 describe('SemanticSearchService', () => {
+  const STAMP = '2026-10-02T12:00:00+00:00';
   const mockGet =
     jest.fn<(url: string, config: unknown) => Promise<{ data: unknown }>>();
   const mockSearchNotices =
@@ -73,6 +74,7 @@ describe('SemanticSearchService', () => {
         query: '세입자 보호',
         k: 5,
         model: 'nlpai-lab/KURE-v1',
+        lastUpdateAt: STAMP,
         results: [
           sidecarChunk(101, '첫 번째 청크'),
           sidecarChunk(101, '중복 청크'),
@@ -85,6 +87,7 @@ describe('SemanticSearchService', () => {
 
     expect(result.mode).toBe('semantic');
     expect(result.fallbackReason).toBeNull();
+    expect(result.lastUpdateAt).toBe(STAMP);
     expect(result.results).toHaveLength(2);
     expect(result.results[0]).toEqual({
       noticeNum: 101,
@@ -265,6 +268,8 @@ describe('SemanticSearchService', () => {
 
     expect(result.mode).toBe('keyword_fallback');
     expect(result.fallbackReason).toContain('키워드 검색');
+    // No sidecar response ever arrived -> no index time to report.
+    expect(result.lastUpdateAt).toBeNull();
     expect(mockGet).toHaveBeenCalledTimes(1);
     expect(mockSearchNotices).toHaveBeenCalledTimes(1);
   });
@@ -272,7 +277,13 @@ describe('SemanticSearchService', () => {
   it('falls back to keyword search when no semantic hit is collected', async () => {
     const service = createService();
     mockGet.mockResolvedValue({
-      data: { query: '질의', k: 15, model: 'nlpai-lab/KURE-v1', results: [] },
+      data: {
+        query: '질의',
+        k: 15,
+        model: 'nlpai-lab/KURE-v1',
+        lastUpdateAt: STAMP,
+        results: [],
+      },
     });
     mockSearchNotices.mockResolvedValue({
       items: [],
@@ -290,6 +301,8 @@ describe('SemanticSearchService', () => {
     // window means the corpus is exhausted (no widening is attempted).
     expect(result.mode).toBe('keyword_fallback');
     expect(result.fallbackReason).toContain('의미 검색 결과가 없어');
+    // The sidecar DID answer, so its index time still rides the response.
+    expect(result.lastUpdateAt).toBe(STAMP);
     expect(mockGet).toHaveBeenCalledTimes(1);
     expect(mockSearchNotices).toHaveBeenCalledTimes(1);
   });
