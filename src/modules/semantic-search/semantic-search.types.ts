@@ -42,3 +42,17 @@ export interface SemanticSidecarSearchResponse {
   lastUpdateAt: string | null;
   results: SemanticSidecarChunk[];
 }
+
+/**
+ * Engine status fields shown in the frontend 의미 검색 status block.
+ *
+ * Field names are passed through verbatim from the sidecar's `GET /health`
+ * payload (`health()` in semantic-search/service/app.py), which carries more
+ * observation fields than these three — only what the UI displays crosses
+ * the API boundary here.
+ */
+export interface SemanticEngineHealthResponse {
+  indexedChunks: number;
+  lastUpdateAt: string | null;
+  lastUpdateTriggeredAt: string | null;
+}
