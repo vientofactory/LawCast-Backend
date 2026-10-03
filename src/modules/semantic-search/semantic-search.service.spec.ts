@@ -12,8 +12,9 @@ jest.mock('axios');
 
 describe('SemanticSearchService', () => {
   const STAMP = '2026-10-02T12:00:00+00:00';
+  const TRIGGERED_AT = '2026-10-02T13:00:00+00:00';
   const mockGet =
-    jest.fn<(url: string, config: unknown) => Promise<{ data: unknown }>>();
+    jest.fn<(url: string, config?: unknown) => Promise<{ data: unknown }>>();
   const mockSearchNotices =
     jest.fn<(query: unknown) => Promise<Record<string, unknown>>>();
   const mockedAxios = axios as jest.Mocked<typeof axios>;
@@ -418,5 +419,54 @@ describe('SemanticSearchService', () => {
     expect(mockGet).not.toHaveBeenCalled();
     expect(result.mode).toBe('keyword_fallback');
     expect(result.fallbackReason).toContain('비활성화');
+  });
+
+  it('returns the engine health fields the sidecar /health reports', async () => {
+    const service = createService();
+    mockGet.mockResolvedValue({
+      data: {
+        status: 'ready',
+        model: 'nlpai-lab/KURE-v1',
+        indexedChunks: 93031,
+        lastUpdateAt: STAMP,
+        lastUpdateResult: 'unchanged',
+        lastUpdateTriggeredAt: TRIGGERED_AT,
+        updating: false,
+        generation: 2,
+      },
+    });
+
+    const health = await service.getEngineHealth();
+
+    expect(mockGet).toHaveBeenCalledWith('/health');
+    // Only the three status-block fields cross the API boundary.
+    expect(health).toEqual({
+      indexedChunks: 93031,
+      lastUpdateAt: STAMP,
+      lastUpdateTriggeredAt: TRIGGERED_AT,
+    });
+  });
+
+  it('surfaces an unreachable sidecar as ServiceUnavailableException', async () => {
+    const service = createService();
+    mockGet.mockRejectedValue({
+      isAxiosError: true,
+      code: 'ECONNREFUSED',
+      message: 'connect ECONNREFUSED 127.0.0.1:8300',
+    });
+
+    await expect(service.getEngineHealth()).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(mockSearchNotices).not.toHaveBeenCalled();
+  });
+
+  it('reports engine status as unavailable when semantic search is disabled', async () => {
+    const service = createService(false);
+
+    await expect(service.getEngineHealth()).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(mockGet).not.toHaveBeenCalled();
   });
 });

@@ -47,6 +47,20 @@ export class SemanticSearchController {
   }
 
   /**
+   * Engine status proxy for the frontend semantic search status block: the sidecar
+   * is reachable only from the backend, so its `/health` fields
+   * (indexedChunks, lastUpdateAt, lastUpdateTriggeredAt) pass through here.
+   * Failures surface as 503 (no keyword-style fallback applies to status).
+   */
+  @Get('notices/semantic-search/health')
+  async engineHealth(@Req() req: Request) {
+    await this.apiReadRateLimitService.assertAllowed(req);
+
+    const health = await this.semanticSearchService.getEngineHealth();
+    return ApiResponseUtils.success(health);
+  }
+
+  /**
    * Strict k parsing, scoped to this endpoint on purpose. The shared
    * `parsePositiveInteger` uses parseInt and would silently accept `3.9` as
    * 3 or `1e2` as 1, hiding client bugs; here only plain positive integers

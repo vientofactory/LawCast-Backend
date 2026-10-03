@@ -9,13 +9,14 @@ describe('SemanticSearchController', () => {
   const createController = () => {
     const searchSemantic =
       jest.fn<(query: string, k: number) => Promise<Record<string, unknown>>>();
+    const getEngineHealth = jest.fn<() => Promise<Record<string, unknown>>>();
     const assertAllowed =
-      jest.fn<(req: Request, bucket: string) => Promise<void>>();
+      jest.fn<(req: Request, bucket?: string) => Promise<void>>();
     const controller = new SemanticSearchController(
-      { searchSemantic } as unknown as SemanticSearchService,
+      { searchSemantic, getEngineHealth } as unknown as SemanticSearchService,
       { assertAllowed } as unknown as ApiReadRateLimitService,
     );
-    return { controller, searchSemantic, assertAllowed };
+    return { controller, searchSemantic, getEngineHealth, assertAllowed };
   };
 
   const req = {} as Request;
@@ -93,5 +94,21 @@ describe('SemanticSearchController', () => {
     await controller.semanticSearch(req, '질의', '12');
 
     expect(searchSemantic).toHaveBeenCalledWith('질의', 12);
+  });
+
+  it('wraps the engine health payload without stripping fields', async () => {
+    const { controller, getEngineHealth, assertAllowed } = createController();
+    const health = {
+      indexedChunks: 93031,
+      lastUpdateAt: '2026-10-02T12:00:00+00:00',
+      lastUpdateTriggeredAt: '2026-10-02T13:00:00+00:00',
+    };
+    getEngineHealth.mockResolvedValue(health);
+
+    const response = await controller.engineHealth(req);
+
+    // Status is a cheap read: standard bucket, not the search's expensive one.
+    expect(assertAllowed).toHaveBeenCalledWith(req);
+    expect(response).toEqual({ success: true, data: health });
   });
 });

@@ -13,6 +13,7 @@ import {
   SIDE_CAR_MAX_CHUNK_K,
 } from './semantic-search.constants';
 import {
+  SemanticEngineHealthResponse,
   SemanticSearchResponse,
   SemanticSidecarChunk,
   SemanticSidecarSearchResponse,
@@ -213,6 +214,34 @@ export class SemanticSearchService {
         return { chunks: collected, lastUpdateAt };
       }
       chunkK = Math.min(chunkK * CHUNK_FETCH_GROWTH, SIDE_CAR_MAX_CHUNK_K);
+    }
+  }
+
+  /**
+   * Engine status for the frontend's status block, read from the sidecar's
+   * `/health` (chunk index count, index-update time, last update tick time).
+   * There is no fallback payload: a disabled feature or an unreachable
+   * sidecar surfaces as 503 so the UI can show its error state.
+   */
+  async getEngineHealth(): Promise<SemanticEngineHealthResponse> {
+    if (!this.enabled) {
+      throw new ServiceUnavailableException(
+        '의미 검색 엔진이 비활성화되어 있습니다.',
+      );
+    }
+    try {
+      const response =
+        await this.http.get<SemanticEngineHealthResponse>('/health');
+      const { indexedChunks, lastUpdateAt, lastUpdateTriggeredAt } =
+        response.data;
+      return { indexedChunks, lastUpdateAt, lastUpdateTriggeredAt };
+    } catch (error) {
+      this.logger.warn(
+        `semantic sidecar health unavailable (${this.describeError(error)})`,
+      );
+      throw new ServiceUnavailableException(
+        '의미 검색 엔진 상태를 확인할 수 없습니다.',
+      );
     }
   }
 
