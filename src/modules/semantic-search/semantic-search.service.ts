@@ -23,8 +23,6 @@ const FALLBACK_REASON_UNAVAILABLE =
   '의미 검색 엔진을 사용할 수 없어 키워드 검색 결과를 반환합니다.';
 const FALLBACK_REASON_DISABLED =
   '의미 검색 기능이 비활성화되어 있어 키워드 검색 결과를 반환합니다.';
-const FALLBACK_REASON_NO_HITS =
-  '의미 검색 결과가 없어 키워드 검색 결과를 반환합니다.';
 
 @Injectable()
 export class SemanticSearchService {
@@ -55,38 +53,35 @@ export class SemanticSearchService {
    *   returns partial semantic results (count < k is allowed) — the keyword
    *   fallback returns nothing for paraphrase queries, so partial semantic
    *   hits are strictly better;
-   * - keyword fallback is used only when the first window failed or no
-   *   semantic hit was collected at all.
+   * - keyword fallback is used only when the first window failed (feature
+   *   disabled or engine unreachable) — never on an empty clear tier: the
+   *   sidecar already dropped unrelated hits, so an empty `results` is the
+   *   engine's real answer and `weakResults` still rides along for the UI's
+   *   explicit reveal.
    */
   async searchSemantic(query: string, k: number) {
     if (!this.enabled) {
       return this.keywordFallback(query, k, FALLBACK_REASON_DISABLED);
     }
     let collected: SemanticSidecarChunk[];
+    let weakCollected: SemanticSidecarChunk[];
     let lastUpdateAt: string | null;
     try {
-      ({ chunks: collected, lastUpdateAt } = await this.collectChunks(
-        query,
-        k,
-      ));
+      ({
+        chunks: collected,
+        weakChunks: weakCollected,
+        lastUpdateAt,
+      } = await this.collectChunks(query, k));
     } catch (error) {
       return this.handleFirstWindowFailure(error, query, k);
-    }
-    const hits = this.toNoticeHits(collected);
-    if (hits.length === 0) {
-      return this.keywordFallback(
-        query,
-        k,
-        FALLBACK_REASON_NO_HITS,
-        lastUpdateAt,
-      );
     }
     return {
       query,
       mode: 'semantic',
       fallbackReason: null,
       lastUpdateAt,
-      results: hits.slice(0, k),
+      results: this.toNoticeHits(collected).slice(0, k),
+      weakResults: this.toNoticeHits(weakCollected).slice(0, k),
     } satisfies SemanticSearchResponse;
   }
 
@@ -154,6 +149,7 @@ export class SemanticSearchService {
           score: null,
           excerpt: null,
         })),
+        weakResults: [],
       };
     } catch (error) {
       this.logger.error(
@@ -173,7 +169,10 @@ export class SemanticSearchService {
    * oversized chunk window first and widen it (growth up to the sidecar cap)
    * while dedup leaves the result short. Widening stops as soon as the
    * sidecar runs out of chunks (it returned fewer than requested), so a
-   * small corpus costs exactly one request.
+   * small corpus costs exactly one request. The sidecar splits each window
+   * into a clear tier (`results`) and a weak band (`weakResults`); both ride
+   * along, and exhaustion counts the two tiers together (the tiers cut the
+   * same top-k window).
    *
    * Failure policy: only a failed FIRST window propagates (the caller turns
    * it into a fallback or a request error). A failed widening request keeps
@@ -184,8 +183,13 @@ export class SemanticSearchService {
   private async collectChunks(
     query: string,
     k: number,
-  ): Promise<{ chunks: SemanticSidecarChunk[]; lastUpdateAt: string | null }> {
+  ): Promise<{
+    chunks: SemanticSidecarChunk[];
+    weakChunks: SemanticSidecarChunk[];
+    lastUpdateAt: string | null;
+  }> {
     const collected: SemanticSidecarChunk[] = [];
+    const weakCollected: SemanticSidecarChunk[] = [];
     let lastUpdateAt: string | null = null;
     let chunkK = Math.min(k * CHUNK_FETCH_INITIAL_FACTOR, SIDE_CAR_MAX_CHUNK_K);
     for (;;) {
@@ -193,25 +197,41 @@ export class SemanticSearchService {
       try {
         window = await this.fetchChunks(query, chunkK);
       } catch (error) {
-        if (collected.length === 0) {
+        // Both tiers empty = the first window itself failed, so nothing
+        // was ever collected and the failure must propagate.
+        if (collected.length === 0 && weakCollected.length === 0) {
           throw error;
         }
         this.logger.warn(
           `semantic sidecar chunk widening failed (${this.describeError(error)}); ` +
             `returning partial results from ${collected.length} collected chunks`,
         );
-        return { chunks: collected, lastUpdateAt };
+        return {
+          chunks: collected,
+          weakChunks: weakCollected,
+          lastUpdateAt,
+        };
       }
       collected.push(...window.results);
+      // `weakResults` is contract-required, but the sidecar and this backend
+      // deploy as separate containers: tolerate an older sidecar that
+      // predates the tiered response rather than failing the whole search.
+      const windowWeak = window.weakResults ?? [];
+      weakCollected.push(...windowWeak);
       lastUpdateAt = window.lastUpdateAt;
       const hits = this.toNoticeHits(collected);
-      const corpusExhausted = window.results.length < chunkK;
+      const corpusExhausted =
+        window.results.length + windowWeak.length < chunkK;
       if (
         hits.length >= k ||
         corpusExhausted ||
         chunkK >= SIDE_CAR_MAX_CHUNK_K
       ) {
-        return { chunks: collected, lastUpdateAt };
+        return {
+          chunks: collected,
+          weakChunks: weakCollected,
+          lastUpdateAt,
+        };
       }
       chunkK = Math.min(chunkK * CHUNK_FETCH_GROWTH, SIDE_CAR_MAX_CHUNK_K);
     }
