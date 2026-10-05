@@ -4,6 +4,11 @@
  * `results` is uniformly notice-deduplicated: semantic hits carry the best
  * chunk per notice (section/score/excerpt populated), keyword fallback hits
  * carry only notice metadata (section/score/excerpt null).
+ *
+ * `weakResults` carries the engine's weak-relevance tier (cosine score
+ * between the sidecar's floor and clear thresholds) — never mixed into
+ * `results`, so the frontend can hide them behind an explicit reveal when
+ * the clear tier is empty. Keyword fallback responses always carry [].
  */
 export type SemanticSearchMode = 'semantic' | 'keyword_fallback';
 
@@ -22,6 +27,7 @@ export interface SemanticSearchResponse {
   fallbackReason: string | null;
   lastUpdateAt: string | null;
   results: SemanticSearchResultItem[];
+  weakResults: SemanticSearchResultItem[];
 }
 
 /** One ranked chunk returned by the semantic search sidecar. */
@@ -41,6 +47,8 @@ export interface SemanticSidecarSearchResponse {
   model: string | null;
   lastUpdateAt: string | null;
   results: SemanticSidecarChunk[];
+  /** Weak-band hits (MIN_SIMILARITY <= score < CLEAR_SIMILARITY). */
+  weakResults: SemanticSidecarChunk[];
 }
 
 /**

@@ -106,6 +106,57 @@ describe('SemanticSearchService', () => {
     expect(mockGet).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps weak hits out of results and passes them alongside', async () => {
+    const service = createService();
+    mockGet.mockResolvedValue({
+      data: {
+        query: '세입자 보호',
+        k: 15,
+        model: 'nlpai-lab/KURE-v1',
+        lastUpdateAt: STAMP,
+        results: [sidecarChunk(101, '명확한 청크')],
+        weakResults: [sidecarChunk(102, '관련도가 낮은 청크')],
+      },
+    });
+
+    const result = await service.searchSemantic('세입자 보호', 5);
+
+    // The tiers stay disjoint: weak hits never leak into `results`.
+    expect(result.results.map((hit) => hit.noticeNum)).toEqual([101]);
+    expect(result.weakResults.map((hit) => hit.noticeNum)).toEqual([102]);
+    expect(mockSearchNotices).not.toHaveBeenCalled();
+  });
+
+  it('keeps weak hits when the clear tier is empty (no keyword fallback)', async () => {
+    const service = createService();
+    mockGet.mockResolvedValue({
+      data: {
+        query: '질의',
+        k: 15,
+        model: 'nlpai-lab/KURE-v1',
+        lastUpdateAt: STAMP,
+        results: [],
+        weakResults: [
+          sidecarChunk(102, '약한 청크 1'),
+          sidecarChunk(102, '약한 청크 2'),
+          sidecarChunk(103, '약한 청크 3'),
+        ],
+      },
+    });
+
+    const result = await service.searchSemantic('질의', 5);
+
+    // An empty clear tier is the engine's real answer (unrelated hits were
+    // already dropped by the sidecar); the weak band still rides along for
+    // the UI's explicit reveal, and keyword search never substitutes in.
+    expect(result.mode).toBe('semantic');
+    expect(result.fallbackReason).toBeNull();
+    expect(result.results).toEqual([]);
+    expect(result.weakResults.map((hit) => hit.noticeNum)).toEqual([102, 103]);
+    expect(result.lastUpdateAt).toBe(STAMP);
+    expect(mockSearchNotices).not.toHaveBeenCalled();
+  });
+
   it('widens the chunk window until k notice hits are filled', async () => {
     const service = createService();
     mockGet
@@ -275,7 +326,7 @@ describe('SemanticSearchService', () => {
     expect(mockSearchNotices).toHaveBeenCalledTimes(1);
   });
 
-  it('falls back to keyword search when no semantic hit is collected', async () => {
+  it('returns an empty semantic answer when nothing qualifies', async () => {
     const service = createService();
     mockGet.mockResolvedValue({
       data: {
@@ -284,28 +335,23 @@ describe('SemanticSearchService', () => {
         model: 'nlpai-lab/KURE-v1',
         lastUpdateAt: STAMP,
         results: [],
+        weakResults: [],
       },
-    });
-    mockSearchNotices.mockResolvedValue({
-      items: [],
-      total: 0,
-      page: 1,
-      limit: 5,
-      totalPages: 1,
-      keyword: '질의',
-      source: 'archive',
     });
 
     const result = await service.searchSemantic('질의', 5);
 
-    // The keyword fallback is reserved for zero semantic evidence; an empty
-    // window means the corpus is exhausted (no widening is attempted).
-    expect(result.mode).toBe('keyword_fallback');
-    expect(result.fallbackReason).toContain('의미 검색 결과가 없어');
+    // The sidecar already dropped unrelated hits, so an empty response is
+    // the engine's verdict — the API reports "none" instead of quietly
+    // substituting keyword hits for a query with no relevant match.
+    expect(result.mode).toBe('semantic');
+    expect(result.fallbackReason).toBeNull();
+    expect(result.results).toEqual([]);
+    expect(result.weakResults).toEqual([]);
     // The sidecar DID answer, so its index time still rides the response.
     expect(result.lastUpdateAt).toBe(STAMP);
     expect(mockGet).toHaveBeenCalledTimes(1);
-    expect(mockSearchNotices).toHaveBeenCalledTimes(1);
+    expect(mockSearchNotices).not.toHaveBeenCalled();
   });
 
   it('falls back to keyword search when the sidecar reports 503 (model load failure)', async () => {
