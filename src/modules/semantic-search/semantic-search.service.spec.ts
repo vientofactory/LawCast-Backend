@@ -485,8 +485,10 @@ describe('SemanticSearchService', () => {
     const health = await service.getEngineHealth();
 
     expect(mockGet).toHaveBeenCalledWith('/health');
-    // Only the three status-block fields cross the API boundary.
+    // The readiness status and the three status-block fields cross the API
+    // boundary; everything else the sidecar reports stays internal.
     expect(health).toEqual({
+      status: 'ready',
       indexedChunks: 93031,
       lastUpdateAt: STAMP,
       lastUpdateTriggeredAt: TRIGGERED_AT,

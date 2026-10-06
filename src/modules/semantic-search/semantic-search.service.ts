@@ -239,9 +239,11 @@ export class SemanticSearchService {
 
   /**
    * Engine status for the frontend's status block, read from the sidecar's
-   * `/health` (chunk index count, index-update time, last update tick time).
-   * There is no fallback payload: a disabled feature or an unreachable
-   * sidecar surfaces as 503 so the UI can show its error state.
+   * `/health` (readiness status, chunk index count, index-update time, last
+   * update tick time). `status` is what lets the UI tell "not ready yet" from
+   * "ready" — the search-unavailable overlay keys on it. There is no fallback
+   * payload: a disabled feature or an unreachable sidecar surfaces as 503 so
+   * the UI can show its error state.
    */
   async getEngineHealth(): Promise<SemanticEngineHealthResponse> {
     if (!this.enabled) {
@@ -252,9 +254,9 @@ export class SemanticSearchService {
     try {
       const response =
         await this.http.get<SemanticEngineHealthResponse>('/health');
-      const { indexedChunks, lastUpdateAt, lastUpdateTriggeredAt } =
+      const { status, indexedChunks, lastUpdateAt, lastUpdateTriggeredAt } =
         response.data;
-      return { indexedChunks, lastUpdateAt, lastUpdateTriggeredAt };
+      return { status, indexedChunks, lastUpdateAt, lastUpdateTriggeredAt };
     } catch (error) {
       this.logger.warn(
         `semantic sidecar health unavailable (${this.describeError(error)})`,
