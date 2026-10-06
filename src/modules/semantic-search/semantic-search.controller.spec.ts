@@ -99,6 +99,7 @@ describe('SemanticSearchController', () => {
   it('wraps the engine health payload without stripping fields', async () => {
     const { controller, getEngineHealth, assertAllowed } = createController();
     const health = {
+      status: 'ready',
       indexedChunks: 93031,
       lastUpdateAt: '2026-10-02T12:00:00+00:00',
       lastUpdateTriggeredAt: '2026-10-02T13:00:00+00:00',
