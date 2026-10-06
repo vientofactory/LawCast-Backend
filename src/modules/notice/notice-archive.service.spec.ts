@@ -501,6 +501,107 @@ describe('NoticeArchiveService', () => {
     }
   });
 
+  it('selects ended NSM notices for proposalReason backfill in SQLite while preserving eligibility guards', async () => {
+    const dataSource = new DataSource({
+      type: 'sqlite',
+      database: ':memory:',
+      entities: [NoticeArchive, NoticeArchiveSnapshotState],
+      synchronize: true,
+    });
+    await dataSource.initialize();
+
+    try {
+      const archiveRepository = dataSource.getRepository(NoticeArchive);
+      const summaryRepository = dataSource.getRepository(
+        NoticeArchiveSnapshotState,
+      );
+      const overrides: Partial<NoticeArchive>[] = [
+        {},
+        { proposalReason: '   ' },
+        {},
+        { lifecycleStatus: 'source_deleted' },
+        { lifecycleStatus: 'renumbered' },
+        { contentId: 'PRC_PAL' },
+        { proposalReason: 'Already filled' },
+        {},
+        {},
+      ];
+      await archiveRepository.save(
+        overrides.map((override, index) =>
+          buildRow({
+            id: index + 1,
+            noticeNum: 2200001 + index,
+            contentId: null,
+            contentBillNumber: ` ${2200001 + index} `,
+            proposalReason: '',
+            ...override,
+          }),
+        ),
+      );
+      await summaryRepository.save(
+        overrides.slice(0, 8).map((_, index) => ({
+          noticeNum: 2200001 + index,
+          isDone: index !== 1,
+          aiSummary: null,
+          aiSummaryStatus: 'not_supported',
+        })),
+      );
+      await dataSource.query(`
+        CREATE TABLE notice_change_events (
+          id INTEGER PRIMARY KEY,
+          notice_num INTEGER NOT NULL
+        )
+      `);
+      await dataSource.query(`
+        CREATE TABLE notice_change_details (
+          id INTEGER PRIMARY KEY,
+          event_id INTEGER NOT NULL,
+          field_path TEXT NOT NULL,
+          after_value TEXT
+        )
+      `);
+      await dataSource.query(
+        'INSERT INTO notice_change_events (id, notice_num) VALUES (1, 2200003), (2, 2200008)',
+      );
+      await dataSource.query(
+        `INSERT INTO notice_change_details (id, event_id, field_path, after_value)
+         VALUES (1, 1, 'proposalReason', 'Recovered in chain'),
+                (2, 2, 'lifecycleStatus', 'source_deleted')`,
+      );
+      const service = new NoticeArchiveService(
+        archiveRepository,
+        summaryRepository,
+        createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+      const candidates = await service.getNsmProposalReasonRetryCandidates(10);
+      expect(
+        candidates.map(({ notice, billNo }) => ({
+          num: notice.num,
+          isDone: notice.isDone,
+          billNo,
+        })),
+      ).toEqual([
+        { num: 2200001, isDone: true, billNo: '2200001' },
+        { num: 2200002, isDone: false, billNo: '2200002' },
+        { num: 2200009, isDone: false, billNo: '2200009' },
+      ]);
+      expect(await service.getNsmProposalReasonRetryCandidates(1)).toEqual([
+        candidates[0],
+      ]);
+      expect(
+        await summaryRepository.findOneBy({ noticeNum: 2200001 }),
+      ).toMatchObject({
+        isDone: true,
+      });
+    } finally {
+      await dataSource.destroy();
+    }
+  });
+
   it('returns null when archive row is missing', async () => {
     const repositoryMock = createRepositoryMock();
     const changeTrackingService = createChangeTrackingServiceMock();

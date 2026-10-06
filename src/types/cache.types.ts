@@ -13,6 +13,8 @@ export type AISummaryStatus =
 type CachedBaseNotice = Omit<ITableData, 'numComments'>;
 
 export interface CachedNotice extends CachedBaseNotice {
+  /** Persisted notice-period completion state, independent of source lifecycle. */
+  isDone?: boolean;
   aiSummary?: string | null;
   aiSummaryStatus?: AISummaryStatus;
   /**
