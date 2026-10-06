@@ -3830,6 +3830,7 @@ export class NoticeArchiveService {
 
   /**
    * Returns NSM-origin archived notices that still have empty proposalReason.
+   * Includes ended notice periods and preserves their persisted isDone state.
    * Used by proposalReason backfill cron to periodically re-seed retry queue
    * even when no newly discovered pending bills arrive.
    */

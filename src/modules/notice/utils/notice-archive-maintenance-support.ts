@@ -43,6 +43,8 @@ export async function getNsmProposalReasonRetryCandidates(
     billNo: string | null;
   }>
 > {
+  // Notice-period completion does not prevent NSM detail recovery.
+  // Keep lifecycle eligibility separate from the persisted isDone state.
   const rows = await deps.archiveRepository
     .createQueryBuilder('na')
     .select([
@@ -99,6 +101,11 @@ export async function getNsmProposalReasonRetryCandidates(
       attachmentHwpFile: string | null;
     }>();
 
+  const summaryStates = await getSummaryStateByNoticeNums(
+    deps,
+    rows.map((row) => row.noticeNum),
+  );
+
   return rows.map((row) => ({
     notice: {
       num: row.noticeNum,
@@ -107,6 +114,7 @@ export async function getNsmProposalReasonRetryCandidates(
       committee: row.committee,
       link: row.assemblyLink,
       contentId: null,
+      isDone: summaryStates.get(row.noticeNum)?.isDone ?? false,
       proposalReason: null,
       attachments: {
         pdfFile: row.attachmentPdfFile ?? '',
