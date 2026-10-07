@@ -353,6 +353,13 @@ export class AdminNoticesService {
 
     const urgent = properties[NOTION_PROPERTY.URGENT]?.checkbox === true;
 
+    // created_time is a top-level page field, so no extra Notion call is
+    // needed; it stays stable across edits (row creation, not publication).
+    const createdAt =
+      typeof page.created_time === 'string' && page.created_time
+        ? page.created_time
+        : null;
+
     return {
       id: page.id,
       title,
@@ -363,6 +370,7 @@ export class AdminNoticesService {
       content,
       // Filled by attachNoticeBodies from the page block tree.
       body: '',
+      createdAt,
     };
   }
 
