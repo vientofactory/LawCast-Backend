@@ -29,7 +29,7 @@ export class ApiResponseUtils {
   }
 
   /**
-   * 성공 응답을 생성합니다.
+   * Creates a success response.
    */
   static success<T>(data?: T, message?: string): ApiResponse<T> {
     return {
@@ -40,7 +40,7 @@ export class ApiResponseUtils {
   }
 
   /**
-   * 웹훅 등록 성공 응답을 생성합니다.
+   * Creates a webhook registration success response (with test outcome).
    */
   static webhookSuccess(testResult: {
     success: boolean;
@@ -69,7 +69,7 @@ export class ApiResponseUtils {
   }
 
   /**
-   * 에러 응답을 생성합니다.
+   * Creates an error response.
    */
   static error(message: string, details?: string): ApiResponse {
     return {
@@ -80,7 +80,8 @@ export class ApiResponseUtils {
   }
 
   /**
-   * 알려진 예외를 다시 던집니다. 알려지지 않은 예외는 내부 서버 오류로 처리합니다.
+   * Rethrows known HTTP exceptions; any other error becomes an internal
+   * server error response.
    */
   static handleError(
     error: unknown,
@@ -110,7 +111,7 @@ export class ApiResponseUtils {
   }
 
   /**
-   * PoW 검증 실패 예외를 생성합니다.
+   * Creates the proof-of-work verification failure exception.
    */
   static createPoWFailedException(): BadRequestException {
     return new BadRequestException({
@@ -120,7 +121,7 @@ export class ApiResponseUtils {
   }
 
   /**
-   * 중복 웹훅 예외를 생성합니다.
+   * Creates the duplicate webhook registration exception.
    */
   static createDuplicateWebhookException(): BadRequestException {
     return new BadRequestException({
@@ -130,7 +131,7 @@ export class ApiResponseUtils {
   }
 
   /**
-   * 웹훅 제한 초과 예외를 생성합니다.
+   * Creates the webhook limit exceeded exception.
    */
   static createWebhookLimitExceededException(): BadRequestException {
     return new BadRequestException({
@@ -140,7 +141,7 @@ export class ApiResponseUtils {
   }
 
   /**
-   * 웹훅 테스트 실패 예외를 생성합니다.
+   * Creates the webhook test failure exception.
    */
   static createWebhookTestFailedException(
     errorMessage?: string,

@@ -13,8 +13,8 @@ import { ArchiveOrchestratorService } from '../crawling/archive-orchestrator.ser
 import { CrawlingCoreService } from '../crawling/crawling-core.service';
 
 /**
- * 논블로킹 배치 처리 구조 검증 테스트
- * 이 테스트는 배치 처리가 실제로 HTTP 요청 처리를 방해하지 않는지 검증합니다.
+ * Verifies the non-blocking batch processing structure.
+ * Proves batch processing does not actually block HTTP request handling.
  */
 describe('Non-blocking Architecture Verification', () => {
   let batchService: BatchProcessingService;

@@ -1,7 +1,8 @@
 /**
- * HTTP 처리와 배치 처리 간 격리 검증 테스트
+ * Verifies isolation between HTTP handling and batch processing.
  *
- * 이 테스트는 실제 API 컨트롤러가 배치 처리 중에도 정상적으로 HTTP 요청을 처리하는지 검증합니다.
+ * This test proves the API controllers keep serving HTTP requests while
+ * batch processing is running.
  */
 
 import { Test, TestingModule } from '@nestjs/testing';

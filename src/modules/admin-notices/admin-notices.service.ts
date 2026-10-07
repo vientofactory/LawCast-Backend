@@ -1,0 +1,315 @@
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import axios, { AxiosInstance } from 'axios';
+import { LoggerUtils } from '../../utils/logger.utils';
+import {
+  ADMIN_NOTICES_CACHE_TTL_MS,
+  NOTION_API_VERSION,
+  NOTION_MIN_REQUEST_INTERVAL_MS,
+  NOTION_PROPERTY,
+  NOTION_QUERY_MAX_PAGES,
+  NOTION_QUERY_PAGE_SIZE,
+  NOTION_RATE_LIMIT_DEFAULT_COOLDOWN_MS,
+  NOTION_RATE_LIMIT_MAX_COOLDOWN_MS,
+} from './admin-notices.constants';
+import {
+  AdminNotice,
+  NotionDatabaseQueryResponse,
+  NotionPageObject,
+  NotionRichTextItem,
+} from './admin-notices.types';
+
+const UNAVAILABLE_MESSAGE =
+  '공지사항을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.';
+
+/**
+ * Read-only Notion client for the admin notice board. The Notion database is
+ * the single source of truth (CRUD happens only in Notion); this service
+ * queries published rows sorted by 노출 순서 and serves them from a
+ * short-lived in-memory cache with stale-while-revalidate refresh, so page
+ * views neither hit the Notion API on every request nor wait for it.
+ */
+@Injectable()
+export class AdminNoticesService {
+  private readonly logger = LoggerUtils.getContextLogger(
+    AdminNoticesService.name,
+  );
+  private readonly http: AxiosInstance;
+  private readonly databaseId: string;
+  /** Enabled only when both NOTION_API_KEY and NOTION_DATABASE_ID are set. */
+  private readonly enabled: boolean;
+  /** In-memory cache TTL, overridable via NOTION_CACHE_TTL_MS (notion.cacheTtlMs). */
+  private readonly cacheTtlMs: number;
+  /**
+   * Minimum gap between outgoing Notion requests (~3 req/s budget),
+   * overridable via NOTION_MIN_REQUEST_INTERVAL_MS (notion.minRequestIntervalMs).
+   */
+  private readonly minRequestIntervalMs: number;
+  /** Earliest timestamp for the next outgoing Notion request (pacing). */
+  private nextRequestAt = 0;
+  /** While the clock is before this, a 429 pause is honored without re-querying. */
+  private rateLimitedUntil = 0;
+  /** Single-flight handle: concurrent cache misses share one Notion fetch. */
+  private inFlight: Promise<AdminNotice[]> | null = null;
+  private disabledLogged = false;
+  private cache: { items: AdminNotice[]; fetchedAt: number } | null = null;
+
+  constructor(configService: ConfigService) {
+    const apiKey = configService.get<string>('notion.apiKey') ?? '';
+    this.databaseId = configService.get<string>('notion.databaseId') ?? '';
+    this.enabled = Boolean(apiKey && this.databaseId);
+    this.cacheTtlMs =
+      configService.get<number>('notion.cacheTtlMs') ??
+      ADMIN_NOTICES_CACHE_TTL_MS;
+    this.minRequestIntervalMs =
+      configService.get<number>('notion.minRequestIntervalMs') ??
+      NOTION_MIN_REQUEST_INTERVAL_MS;
+    const baseUrl = (
+      configService.get<string>('notion.apiUrl') ?? 'https://api.notion.com'
+    ).replace(/\/+$/, '');
+    this.http = axios.create({
+      baseURL: baseUrl,
+      timeout: configService.get<number>('notion.timeout') ?? 5000,
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Notion-Version': NOTION_API_VERSION,
+        'Content-Type': 'application/json',
+      },
+    });
+  }
+
+  /**
+   * Returns published rows sorted by display order (ascending), with the
+   * unconfigured and transient-failure fallbacks:
+   * - unconfigured: empty list (feature-off is a normal state)
+   * - expired TTL: the stale snapshot is served immediately and the refresh
+   *   runs in the background (stale-while-revalidate), so a slow Notion call
+   *   never blocks a page view — the new data appears from the next request
+   *   on. A cold cache (no snapshot yet) still has to wait for the first fetch.
+   * - Notion error: the snapshot keeps being served, 503 only when none exists
+   * Rate-limit defenses: single-flight (concurrent misses and background
+   * refreshes share one fetch), request pacing (~3 req/s budget) and a 429
+   * Retry-After pause.
+   */
+  async getPublishedNotices(): Promise<AdminNotice[]> {
+    if (!this.enabled) {
+      if (!this.disabledLogged) {
+        this.disabledLogged = true;
+        this.logger.log(
+          'admin notices disabled: NOTION_API_KEY / NOTION_DATABASE_ID is not set',
+        );
+      }
+      return [];
+    }
+
+    const cached = this.cache;
+    if (cached && Date.now() - cached.fetchedAt < this.cacheTtlMs) {
+      return cached.items;
+    }
+
+    // Inside a 429 pause: do not touch Notion again — serve the snapshot
+    // (stale is fine) or fail fast; hammering would extend the pause.
+    if (Date.now() < this.rateLimitedUntil) {
+      if (cached) {
+        return cached.items;
+      }
+      throw new ServiceUnavailableException(UNAVAILABLE_MESSAGE);
+    }
+
+    if (cached) {
+      // Stale-while-revalidate: answer from the snapshot now and refresh in
+      // the background; failures are logged inside the flight and the stale
+      // data keeps being served.
+      this.refresh().catch(() => undefined);
+      return cached.items;
+    }
+
+    // Cold start: there is no snapshot to serve, so this request must wait.
+    try {
+      return await this.refresh();
+    } catch {
+      if (this.cache) {
+        // A pinned board must not blink out on a transient Notion failure;
+        // the stale snapshot is refreshed on the next successful fetch.
+        return this.cache.items;
+      }
+      throw new ServiceUnavailableException(UNAVAILABLE_MESSAGE);
+    }
+  }
+
+  /**
+   * Single-flight Notion refresh shared by cold-start waiters and background
+   * revalidations: a burst of concurrent triggers causes exactly one query
+   * sequence, not one per visitor. The cache is updated on success; failures
+   * apply the 429 backoff and are logged once per flight, then rethrown for
+   * the caller (background callers swallow it).
+   */
+  private refresh(): Promise<AdminNotice[]> {
+    if (!this.inFlight) {
+      this.inFlight = this.fetchPublishedNotices()
+        .then((items) => {
+          this.cache = { items, fetchedAt: Date.now() };
+          return items;
+        })
+        .catch((error) => {
+          this.applyRateLimitBackoff(error);
+          // Logged once per flight so a herd of waiters does not spam logs.
+          this.logger.warn(
+            this.cache
+              ? `notion notice fetch failed; serving last good snapshot: ${this.describeError(error)}`
+              : `notion notice fetch failed: ${this.describeError(error)}`,
+          );
+          throw error;
+        })
+        .finally(() => {
+          this.inFlight = null;
+        });
+    }
+    return this.inFlight;
+  }
+
+  /** Paginates the Notion database query (bounded by NOTION_QUERY_MAX_PAGES). */
+  private async fetchPublishedNotices(): Promise<AdminNotice[]> {
+    const notices: AdminNotice[] = [];
+    let startCursor: string | undefined = undefined;
+
+    for (let page = 0; page < NOTION_QUERY_MAX_PAGES; page++) {
+      await this.waitForRequestSlot();
+      const response = await this.http.post<NotionDatabaseQueryResponse>(
+        `/v1/databases/${this.databaseId}/query`,
+        {
+          filter: {
+            property: NOTION_PROPERTY.PUBLISHED,
+            checkbox: { equals: true },
+          },
+          sorts: [{ property: NOTION_PROPERTY.ORDER, direction: 'ascending' }],
+          page_size: NOTION_QUERY_PAGE_SIZE,
+          ...(startCursor ? { start_cursor: startCursor } : {}),
+        },
+      );
+
+      for (const row of response.data.results ?? []) {
+        const notice = this.mapPage(row);
+        if (notice) {
+          notices.push(notice);
+        }
+      }
+
+      if (!response.data.has_more || !response.data.next_cursor) {
+        break;
+      }
+      startCursor = response.data.next_cursor;
+      if (page === NOTION_QUERY_MAX_PAGES - 1) {
+        this.logger.warn(
+          `notion notice query reached the ${NOTION_QUERY_MAX_PAGES}-page cap; remaining rows were skipped`,
+        );
+      }
+    }
+
+    return this.sortByOrder(notices);
+  }
+
+  /**
+   * Enforces Notion's ~3 req/s budget: sleeps until the minimum gap since the
+   * previous outgoing request has passed. Slots are reserved in arrival order
+   * so pagination bursts and refetches share one pacing timeline.
+   */
+  private async waitForRequestSlot(): Promise<void> {
+    if (this.minRequestIntervalMs <= 0) {
+      return;
+    }
+    const now = Date.now();
+    const scheduledAt = Math.max(now, this.nextRequestAt);
+    this.nextRequestAt = scheduledAt + this.minRequestIntervalMs;
+    if (scheduledAt > now) {
+      await new Promise((resolve) => setTimeout(resolve, scheduledAt - now));
+    }
+  }
+
+  /**
+   * Records a 429 pause (honoring Retry-After, capped) so later calls stop
+   * querying Notion until the rate-limit window passes.
+   */
+  private applyRateLimitBackoff(error: unknown): void {
+    if (!axios.isAxiosError(error) || error.response?.status !== 429) {
+      return;
+    }
+    const parsedSeconds = Number.parseInt(
+      String(error.response.headers?.['retry-after'] ?? ''),
+      10,
+    );
+    const cooldownMs = Number.isFinite(parsedSeconds)
+      ? Math.min(
+          Math.max(parsedSeconds, 0) * 1000,
+          NOTION_RATE_LIMIT_MAX_COOLDOWN_MS,
+        )
+      : NOTION_RATE_LIMIT_DEFAULT_COOLDOWN_MS;
+    this.rateLimitedUntil = Date.now() + cooldownMs;
+    this.logger.warn(
+      `notion rate limited (429); pausing Notion requests for ${cooldownMs}ms`,
+    );
+  }
+
+  /** Maps one Notion page to the API shape; drops unpublished/empty-title rows. */
+  private mapPage(page: NotionPageObject): AdminNotice | null {
+    const properties = page.properties ?? {};
+    const title = this.readPlainText(properties[NOTION_PROPERTY.TITLE]?.title);
+
+    // Defense in depth: the query already filters on 공개 여부.
+    const published = properties[NOTION_PROPERTY.PUBLISHED]?.checkbox === true;
+    if (!published || !title) {
+      return null;
+    }
+
+    const statusProperty = properties[NOTION_PROPERTY.STATUS];
+    const status =
+      statusProperty?.status?.name ?? statusProperty?.select?.name ?? null;
+
+    const rawOrder = properties[NOTION_PROPERTY.ORDER]?.number;
+    const order =
+      typeof rawOrder === 'number' && Number.isFinite(rawOrder)
+        ? rawOrder
+        : null;
+
+    const content = this.readPlainText(
+      properties[NOTION_PROPERTY.CONTENT]?.rich_text,
+    );
+
+    const urgent = properties[NOTION_PROPERTY.URGENT]?.checkbox === true;
+
+    return { id: page.id, title, published, status, order, urgent, content };
+  }
+
+  /** Concatenates Notion rich text runs; preserves newlines in the body. */
+  private readPlainText(items: NotionRichTextItem[] | undefined): string {
+    return (items ?? []).map((item) => item.plain_text ?? '').join('');
+  }
+
+  /**
+   * Re-applies 노출 순서 ascending in memory (nulls last). Array.sort is
+   * stable, so equal/missing orders keep the order Notion returned.
+   */
+  private sortByOrder(notices: AdminNotice[]): AdminNotice[] {
+    return [...notices].sort((a, b) => {
+      const aOrder = a.order ?? Number.POSITIVE_INFINITY;
+      const bOrder = b.order ?? Number.POSITIVE_INFINITY;
+      if (aOrder === bOrder) {
+        return 0;
+      }
+      return aOrder < bOrder ? -1 : 1;
+    });
+  }
+
+  /** Error description for logs only — never includes the API key. */
+  private describeError(error: unknown): string {
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      const detail = (error.response?.data as { message?: string } | undefined)
+        ?.message;
+      return `${error.message}${status ? ` (status ${status})` : ''}${
+        detail ? `: ${detail}` : ''
+      }`;
+    }
+    return error instanceof Error ? error.message : String(error);
+  }
+}

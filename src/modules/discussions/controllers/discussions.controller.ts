@@ -33,7 +33,7 @@ export class DiscussionsController {
   ) {}
 
   /**
-   * 법률안별 토론 스레드 목록 조회
+   * Lists discussion threads for one legislative notice.
    */
   @Get('notices/:num/discussions')
   async getNoticeThreads(
@@ -55,7 +55,7 @@ export class DiscussionsController {
   }
 
   /**
-   * 전체 법률안에 걸친 토론 스레드 통합 목록 조회
+   * Lists discussion threads across all legislative notices.
    */
   @Get('discussions/threads')
   async getAllThreads(
@@ -82,7 +82,7 @@ export class DiscussionsController {
   }
 
   /**
-   * 법률안 새 토론 스레드 개설 및 #1 의견 등록
+   * Opens a new discussion thread and registers its first comment (#1).
    */
   @Post('notices/:num/discussions')
   async createNoticeThread(
@@ -104,7 +104,7 @@ export class DiscussionsController {
   }
 
   /**
-   * 특정 토론 스레드 상세 및 전체 레스 목록 조회
+   * Returns one thread's detail with its full comment list.
    */
   @Get('discussions/threads/:threadId')
   async getThreadDetail(
@@ -125,7 +125,7 @@ export class DiscussionsController {
   }
 
   /**
-   * 토론 스레드에 새 의견(#N) 등록
+   * Registers a new comment (#N) on a thread.
    */
   @Post('discussions/threads/:threadId/comments')
   async addComment(
@@ -144,7 +144,7 @@ export class DiscussionsController {
   }
 
   /**
-   * 의견 수정 (비밀번호 일치 확인)
+   * Updates a comment (password match required).
    */
   @Patch('discussions/comments/:commentId')
   async updateComment(
@@ -158,7 +158,7 @@ export class DiscussionsController {
   }
 
   /**
-   * 의견 소프트 삭제 (비밀번호 일치 확인)
+   * Soft-deletes a comment (password match required).
    */
   @Delete('discussions/comments/:commentId')
   async deleteComment(
@@ -172,7 +172,7 @@ export class DiscussionsController {
   }
 
   /**
-   * 토론 스레드 열림/닫힘 상태 변경 (개설 비밀번호 확인)
+   * Toggles a thread between open/closed (creation password required).
    */
   @Patch('discussions/threads/:threadId/status')
   async updateThreadStatus(
