@@ -1,10 +1,13 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
+import { NotionToMarkdown } from 'notion-to-md';
 import { LoggerUtils } from '../../utils/logger.utils';
 import {
   ADMIN_NOTICES_CACHE_TTL_MS,
   NOTION_API_VERSION,
+  NOTION_BODY_FETCH_MAX_NOTICES,
+  NOTION_BODY_MAX_BLOCK_PAGES,
   NOTION_MIN_REQUEST_INTERVAL_MS,
   NOTION_PROPERTY,
   NOTION_QUERY_MAX_PAGES,
@@ -35,6 +38,12 @@ export class AdminNoticesService {
     AdminNoticesService.name,
   );
   private readonly http: AxiosInstance;
+  /**
+   * notion-to-md converter wired to a minimal adapter over the shared axios
+   * instance, so block-children requests reuse auth, timeout, pacing and the
+   * 429 handling of the database query instead of bypassing them.
+   */
+  private readonly markdownConverter: NotionToMarkdown;
   private readonly databaseId: string;
   /** Enabled only when both NOTION_API_KEY and NOTION_DATABASE_ID are set. */
   private readonly enabled: boolean;
@@ -75,6 +84,34 @@ export class AdminNoticesService {
         'Notion-Version': NOTION_API_VERSION,
         'Content-Type': 'application/json',
       },
+    });
+    this.markdownConverter = new NotionToMarkdown({
+      notionClient: {
+        blocks: {
+          children: {
+            list: async (params: {
+              block_id: string;
+              start_cursor?: string;
+            }) => {
+              // Same pacing budget as the query: block fetches are Notion
+              // requests too and must stay inside the ~3 req/s allowance.
+              await this.waitForRequestSlot();
+              const response = await this.http.get(
+                `/v1/blocks/${params.block_id}/children`,
+                {
+                  params: params.start_cursor
+                    ? { start_cursor: params.start_cursor }
+                    : {},
+                },
+              );
+              return response.data;
+            },
+          },
+        },
+      },
+      // Child pages would trigger extra fetches for content the board never
+      // renders; base64 images would pull images through node-fetch.
+      config: { parseChildPages: false, convertImagesToBase64: false },
     });
   }
 
@@ -206,7 +243,53 @@ export class AdminNoticesService {
       }
     }
 
+    await this.attachNoticeBodies(notices);
+
     return this.sortByOrder(notices);
+  }
+
+  /**
+   * Fills each notice with the Markdown conversion of its page block tree.
+   * The property-based `content` keeps serving as the list preview and as
+   * the body fallback when a page has no blocks or one conversion fails.
+   * Sequential on purpose: the pacing timeline is global and serial anyway.
+   */
+  private async attachNoticeBodies(notices: AdminNotice[]): Promise<void> {
+    for (let index = 0; index < notices.length; index++) {
+      if (index >= NOTION_BODY_FETCH_MAX_NOTICES) {
+        this.logger.warn(
+          `notion notice body conversion capped at ${NOTION_BODY_FETCH_MAX_NOTICES} notices; remaining bodies were skipped`,
+        );
+        break;
+      }
+      notices[index].body = await this.fetchBodyMarkdown(notices[index].id);
+    }
+  }
+
+  /**
+   * Converts one page's block tree (the JSON block objects Notion stores as
+   * the page body) to Markdown via notion-to-md. Failure degrades per notice:
+   * a 429 is rethrown so the shared backoff pauses all Notion traffic, any
+   * other error leaves `body` empty and the property content still renders.
+   */
+  private async fetchBodyMarkdown(pageId: string): Promise<string> {
+    try {
+      const mdBlocks = await this.markdownConverter.pageToMarkdown(
+        pageId,
+        NOTION_BODY_MAX_BLOCK_PAGES,
+      );
+      const markdown =
+        this.markdownConverter.toMarkdownString(mdBlocks).parent ?? '';
+      return markdown.trim();
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 429) {
+        throw error;
+      }
+      this.logger.warn(
+        `notion body conversion failed for page ${pageId}: ${this.describeError(error)}`,
+      );
+      return '';
+    }
   }
 
   /**
@@ -277,7 +360,17 @@ export class AdminNoticesService {
 
     const urgent = properties[NOTION_PROPERTY.URGENT]?.checkbox === true;
 
-    return { id: page.id, title, published, status, order, urgent, content };
+    return {
+      id: page.id,
+      title,
+      published,
+      status,
+      order,
+      urgent,
+      content,
+      // Filled by attachNoticeBodies from the page block tree.
+      body: '',
+    };
   }
 
   /** Concatenates Notion rich text runs; preserves newlines in the body. */

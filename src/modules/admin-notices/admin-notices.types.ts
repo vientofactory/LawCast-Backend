@@ -16,8 +16,18 @@ export interface AdminNotice {
   order: number | null;
   /** 긴급 checkbox — true when the operator marked the row urgent */
   urgent: boolean;
-  /** 내용 — plain text, newlines preserved */
+  /**
+   * 내용 — plain text preview from the Notion rich text property,
+   * newlines preserved. Serves as the list preview and as the body
+   * fallback when the page has no block children.
+   */
   content: string;
+  /**
+   * Markdown body converted from the page's Notion block tree
+   * (notion-to-md). Empty when the page has no blocks or the
+   * conversion failed — clients then fall back to `content`.
+   */
+  body: string;
 }
 
 export interface AdminNoticeListResponse {
