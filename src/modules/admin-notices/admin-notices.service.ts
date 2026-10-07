@@ -1,6 +1,12 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import axios, { AxiosInstance } from 'axios';
+import {
+  APIResponseError,
+  Client,
+  isHTTPResponseError,
+  LogLevel,
+} from '@notionhq/client';
+import { getResponseHeader } from '@notionhq/client/build/src/errors';
 import { NotionToMarkdown } from 'notion-to-md';
 import { LoggerUtils } from '../../utils/logger.utils';
 import {
@@ -37,11 +43,12 @@ export class AdminNoticesService {
   private readonly logger = LoggerUtils.getContextLogger(
     AdminNoticesService.name,
   );
-  private readonly http: AxiosInstance;
+  /** Official Notion SDK client shared by the query and the markdown reader. */
+  private readonly notion: Client;
   /**
-   * notion-to-md converter wired to a minimal adapter over the shared axios
-   * instance, so block-children requests reuse auth, timeout, pacing and the
-   * 429 handling of the database query instead of bypassing them.
+   * notion-to-md converter wired to the same official client instance, so
+   * block-children requests reuse auth, timeout, pacing and the 429 handling
+   * of the database query instead of bypassing them.
    */
   private readonly markdownConverter: NotionToMarkdown;
   private readonly databaseId: string;
@@ -76,41 +83,21 @@ export class AdminNoticesService {
     const baseUrl = (
       configService.get<string>('notion.apiUrl') ?? 'https://api.notion.com'
     ).replace(/\/+$/, '');
-    this.http = axios.create({
-      baseURL: baseUrl,
-      timeout: configService.get<number>('notion.timeout') ?? 5000,
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Notion-Version': NOTION_API_VERSION,
-        'Content-Type': 'application/json',
+    // Create the Notion client instance.
+    this.notion = new Client({
+      auth: apiKey,
+      baseUrl,
+      notionVersion: NOTION_API_VERSION,
+      timeoutMs: configService.get<number>('notion.timeout') ?? 5000,
+      retry: false,
+      logLevel: LogLevel.ERROR,
+      fetch: async (url, init) => {
+        await this.waitForRequestSlot();
+        return globalThis.fetch(url, init);
       },
     });
     this.markdownConverter = new NotionToMarkdown({
-      notionClient: {
-        blocks: {
-          children: {
-            list: async (params: {
-              block_id: string;
-              start_cursor?: string;
-            }) => {
-              // Same pacing budget as the query: block fetches are Notion
-              // requests too and must stay inside the ~3 req/s allowance.
-              await this.waitForRequestSlot();
-              const response = await this.http.get(
-                `/v1/blocks/${params.block_id}/children`,
-                {
-                  params: params.start_cursor
-                    ? { start_cursor: params.start_cursor }
-                    : {},
-                },
-              );
-              return response.data;
-            },
-          },
-        },
-      },
-      // Child pages would trigger extra fetches for content the board never
-      // renders; base64 images would pull images through node-fetch.
+      notionClient: this.notion,
       config: { parseChildPages: false, convertImagesToBase64: false },
     });
   }
@@ -211,10 +198,14 @@ export class AdminNoticesService {
     let startCursor: string | undefined = undefined;
 
     for (let page = 0; page < NOTION_QUERY_MAX_PAGES; page++) {
-      await this.waitForRequestSlot();
-      const response = await this.http.post<NotionDatabaseQueryResponse>(
-        `/v1/databases/${this.databaseId}/query`,
-        {
+      // Request pacing happens inside the SDK's fetch hook (one shared
+      // timeline for every Notion request), so no explicit wait is needed
+      // here anymore.
+      const response = await this.notion.request<NotionDatabaseQueryResponse>({
+        // The SDK prefixes `${baseUrl}/v1/`, so the path carries no /v1.
+        path: `databases/${this.databaseId}/query`,
+        method: 'post',
+        body: {
           filter: {
             property: NOTION_PROPERTY.PUBLISHED,
             checkbox: { equals: true },
@@ -223,19 +214,19 @@ export class AdminNoticesService {
           page_size: NOTION_QUERY_PAGE_SIZE,
           ...(startCursor ? { start_cursor: startCursor } : {}),
         },
-      );
+      });
 
-      for (const row of response.data.results ?? []) {
+      for (const row of response.results ?? []) {
         const notice = this.mapPage(row);
         if (notice) {
           notices.push(notice);
         }
       }
 
-      if (!response.data.has_more || !response.data.next_cursor) {
+      if (!response.has_more || !response.next_cursor) {
         break;
       }
-      startCursor = response.data.next_cursor;
+      startCursor = response.next_cursor;
       if (page === NOTION_QUERY_MAX_PAGES - 1) {
         this.logger.warn(
           `notion notice query reached the ${NOTION_QUERY_MAX_PAGES}-page cap; remaining rows were skipped`,
@@ -282,7 +273,7 @@ export class AdminNoticesService {
         this.markdownConverter.toMarkdownString(mdBlocks).parent ?? '';
       return markdown.trim();
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 429) {
+      if (isHTTPResponseError(error) && error.status === 429) {
         throw error;
       }
       this.logger.warn(
@@ -295,7 +286,9 @@ export class AdminNoticesService {
   /**
    * Enforces Notion's ~3 req/s budget: sleeps until the minimum gap since the
    * previous outgoing request has passed. Slots are reserved in arrival order
-   * so pagination bursts and refetches share one pacing timeline.
+   * so pagination bursts and refetches share one pacing timeline. Called from
+   * the SDK fetch hook, so every Notion request — query or block children —
+   * passes through here exactly once.
    */
   private async waitForRequestSlot(): Promise<void> {
     if (this.minRequestIntervalMs <= 0) {
@@ -314,11 +307,11 @@ export class AdminNoticesService {
    * querying Notion until the rate-limit window passes.
    */
   private applyRateLimitBackoff(error: unknown): void {
-    if (!axios.isAxiosError(error) || error.response?.status !== 429) {
+    if (!isHTTPResponseError(error) || error.status !== 429) {
       return;
     }
     const parsedSeconds = Number.parseInt(
-      String(error.response.headers?.['retry-after'] ?? ''),
+      getResponseHeader(error.headers, 'retry-after') ?? '',
       10,
     );
     const cooldownMs = Number.isFinite(parsedSeconds)
@@ -395,14 +388,12 @@ export class AdminNoticesService {
 
   /** Error description for logs only — never includes the API key. */
   private describeError(error: unknown): string {
-    if (axios.isAxiosError(error)) {
-      const status = error.response?.status;
-      const detail = (error.response?.data as { message?: string } | undefined)
-        ?.message;
-      return `${error.message}${status ? ` (status ${status})` : ''}${
-        detail ? `: ${detail}` : ''
-      }`;
+    if (error instanceof APIResponseError) {
+      return `${error.message} (status ${error.status})`;
     }
-    return error instanceof Error ? error.message : String(error);
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return String(error);
   }
 }
