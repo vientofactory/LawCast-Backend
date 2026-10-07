@@ -8,23 +8,40 @@ import {
   it,
   jest,
 } from '@jest/globals';
-import axios, { AxiosError } from 'axios';
 import { AdminNoticesService } from './admin-notices.service';
 import { NOTION_PROPERTY } from './admin-notices.constants';
 
-jest.mock('axios');
+// The service runs the real official Notion SDK; only the transport (fetch)
+// is faked, so URL/header assembly, 429 conversion and Retry-After parsing
+// are exercised against real SDK code paths. The Client constructor wrapper
+// exposes the options the service passed so the pinned wire contract
+// (auth, API version, timeout, disabled retries) stays asserted directly.
+jest.mock('@notionhq/client', () => {
+  const actual = jest.requireActual('@notionhq/client') as {
+    Client: new (options?: any) => any;
+  };
+  class ClientSpy extends actual.Client {
+    static lastOptions: unknown;
+    constructor(options?: unknown) {
+      super(options);
+      ClientSpy.lastOptions = options;
+    }
+  }
+  return { ...actual, Client: ClientSpy, __clientState: ClientSpy };
+});
 
 describe('AdminNoticesService', () => {
-  const mockPost =
-    jest.fn<(url: string, body?: unknown) => Promise<{ data: unknown }>>();
-  const mockGet =
-    jest.fn<(url: string, config?: unknown) => Promise<{ data: unknown }>>();
-  const mockedAxios = axios as jest.Mocked<typeof axios>;
+  type FetchHandler = (url: string, init?: RequestInit) => Promise<Response>;
+  /** Database-query transport seam (was mockPost over axios). */
+  const mockQuery = jest.fn<FetchHandler>();
+  /** Block-children transport seam (was mockGet over axios). */
+  const mockBlocks = jest.fn<FetchHandler>();
+  let fetchMock: jest.MockedFunction<typeof globalThis.fetch>;
+  let fetchDescriptor: PropertyDescriptor | undefined;
 
   const createService = (
     overrides: Record<string, unknown> = {},
   ): AdminNoticesService => {
-    mockedAxios.create.mockReturnValue({ post: mockPost, get: mockGet } as any);
     const values: Record<string, unknown> = {
       'notion.apiKey': 'secret-token',
       'notion.databaseId': 'db-123',
@@ -42,15 +59,62 @@ describe('AdminNoticesService', () => {
     return new AdminNoticesService(configService);
   };
 
-  const notionPage = (
-    id: string,
-    properties: Record<string, unknown>,
-  ): Record<string, unknown> => ({ id, properties });
+  const jsonResponse = (payload: unknown, init: ResponseInit = {}): Response =>
+    new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      ...init,
+    });
 
   const queryResponse = (
     results: Record<string, unknown>[],
     extra: Record<string, unknown> = {},
-  ) => ({ data: { results, has_more: false, next_cursor: null, ...extra } });
+  ): Response =>
+    jsonResponse({
+      results,
+      has_more: false,
+      next_cursor: null,
+      ...extra,
+    });
+
+  const blockChildrenResponse = (
+    results: Record<string, unknown>[],
+    extra: Record<string, unknown> = {},
+  ): Response =>
+    jsonResponse({
+      results,
+      has_more: false,
+      next_cursor: null,
+      ...extra,
+    });
+
+  /** Notion's real 429 wire shape; the SDK converts it to APIResponseError. */
+  const rateLimitResponse = (retryAfter?: string): Response =>
+    jsonResponse(
+      {
+        object: 'error',
+        status: 429,
+        code: 'rate_limited',
+        message: 'rate limited',
+      },
+      {
+        status: 429,
+        headers: {
+          'content-type': 'application/json',
+          ...(retryAfter ? { 'retry-after': retryAfter } : {}),
+        },
+      },
+    );
+
+  const errorResponse = (
+    status: number,
+    payload: Record<string, unknown>,
+  ): Response => jsonResponse(payload, { status });
+
+  const notionPage = (
+    id: string,
+    properties: Record<string, unknown>,
+  ): Record<string, unknown> => ({ id, properties });
 
   const publishedProps = (
     overrides: Record<string, unknown> = {},
@@ -71,38 +135,72 @@ describe('AdminNoticesService', () => {
     },
     ...overrides,
   });
+
+  /** First request's URL/init from the fetch seam (the actual wire call). */
+  const firstFetchCall = (): [input: RequestInfo | URL, init?: RequestInit] => {
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
+    return fetchMock.mock.calls[0];
+  };
+
+  const fetchCallsTo = (urlFragment: string): string[] =>
+    fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.includes(urlFragment));
+
   beforeEach(() => {
     jest.clearAllMocks();
     // Drop any queued one-time implementations from a previous test so an
     // unconsumed Once value can never leak into (and corrupt) the next test.
-    mockPost.mockReset();
-    mockGet.mockReset();
-    // Block-children listings default to a page without a block body; tests
-    // that exercise the Markdown body override it with realistic payloads.
-    mockGet.mockResolvedValue({
-      data: { results: [], has_more: false, next_cursor: null },
-    });
-    mockedAxios.isAxiosError.mockImplementation(
-      (payload: any): payload is AxiosError<any, any, any> =>
-        Boolean(payload?.isAxiosError),
+    mockQuery.mockReset();
+    mockBlocks.mockReset();
+    // Database queries and block-children listings default to empty results;
+    // tests that exercise payloads override them with realistic responses.
+    // Handlers build a fresh Response per call: a Response body can only be
+    // read once, and the SDK reads it on every request.
+    mockQuery.mockImplementation(async () => queryResponse([]));
+    mockBlocks.mockImplementation(async () => blockChildrenResponse([]));
+    fetchMock = jest.fn(
+      async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const url = String(input);
+        return url.includes('/databases/')
+          ? mockQuery(url, init)
+          : mockBlocks(url, init);
+      },
     );
+    fetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
+    Object.defineProperty(globalThis, 'fetch', {
+      value: fetchMock,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
   });
 
   afterEach(() => {
+    if (fetchDescriptor) {
+      Object.defineProperty(globalThis, 'fetch', fetchDescriptor);
+    }
     jest.restoreAllMocks();
   });
 
-  it('configures the Notion client with bearer auth and version header', () => {
+  it('configures the official Notion client with auth, pinned version, timeout and no hidden retries', () => {
     createService();
 
-    expect(mockedAxios.create).toHaveBeenCalledWith(
+    const state = jest.requireMock('@notionhq/client') as {
+      __clientState: { lastOptions?: Record<string, unknown> };
+    };
+    expect(state.__clientState.lastOptions).toEqual(
       expect.objectContaining({
-        baseURL: 'https://api.notion.com',
-        timeout: 5000,
-        headers: expect.objectContaining({
-          Authorization: 'Bearer secret-token',
-          'Notion-Version': '2022-06-28',
-        }),
+        auth: 'secret-token',
+        baseUrl: 'https://api.notion.com',
+        notionVersion: '2022-06-28',
+        timeoutMs: 5000,
+        // SDK-side retries must stay off: the first 429 has to surface here
+        // so applyRateLimitBackoff owns the shared pause.
+        retry: false,
       }),
     );
   });
@@ -111,16 +209,16 @@ describe('AdminNoticesService', () => {
     const service = createService({ 'notion.apiKey': '' });
 
     await expect(service.getPublishedNotices()).resolves.toEqual([]);
-    expect(mockPost).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
 
     const noDatabase = createService({ 'notion.databaseId': '' });
     await expect(noDatabase.getPublishedNotices()).resolves.toEqual([]);
-    expect(mockPost).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('queries only published rows and maps title/status/order/urgent/content', async () => {
     const service = createService();
-    mockPost.mockResolvedValue(
+    mockQuery.mockImplementation(async () =>
       queryResponse([
         notionPage('page-1', publishedProps()),
         notionPage('page-2', {
@@ -158,7 +256,21 @@ describe('AdminNoticesService', () => {
 
     const items = await service.getPublishedNotices();
 
-    expect(mockPost).toHaveBeenCalledWith('/v1/databases/db-123/query', {
+    // The actual wire call: pinned base URL, classic query path, auth and
+    // version headers, and the exact filter/sort/page-size body.
+    const [input, init] = firstFetchCall();
+    expect(String(input)).toBe(
+      'https://api.notion.com/v1/databases/db-123/query',
+    );
+    expect(init?.method).toBe('POST');
+    expect(init?.headers).toEqual(
+      expect.objectContaining({
+        authorization: 'Bearer secret-token',
+        'Notion-Version': '2022-06-28',
+        'content-type': 'application/json',
+      }),
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({
       filter: {
         property: NOTION_PROPERTY.PUBLISHED,
         checkbox: { equals: true },
@@ -191,16 +303,16 @@ describe('AdminNoticesService', () => {
       },
     ]);
     // Only displayable (published + titled) rows get their block tree read.
-    expect(mockGet).toHaveBeenCalledTimes(2);
-    expect(mockGet.mock.calls.map((call) => call[0])).toEqual([
-      '/v1/blocks/page-1/children',
-      '/v1/blocks/page-2/children',
+    expect(mockBlocks).toHaveBeenCalledTimes(2);
+    expect(fetchCallsTo('/v1/blocks/')).toEqual([
+      'https://api.notion.com/v1/blocks/page-1/children',
+      'https://api.notion.com/v1/blocks/page-2/children',
     ]);
   });
 
   it('converts a page block body into markdown via notion-to-md', async () => {
     const service = createService();
-    mockPost.mockResolvedValue(
+    mockQuery.mockImplementation(async () =>
       queryResponse([
         notionPage(
           'page-1',
@@ -227,48 +339,44 @@ describe('AdminNoticesService', () => {
       plain_text: plain,
       href: null,
     });
-    mockGet.mockResolvedValue({
-      data: {
-        results: [
-          {
-            object: 'block',
-            id: 'block-1',
-            type: 'heading_1',
-            has_children: false,
-            heading_1: { rich_text: [text('마크다운 테스트')] },
-          },
-          {
-            object: 'block',
-            id: 'block-2',
-            type: 'bulleted_list_item',
-            has_children: false,
-            bulleted_list_item: { rich_text: [text('asdf')] },
-          },
-          {
-            object: 'block',
-            id: 'block-3',
-            type: 'bulleted_list_item',
-            has_children: false,
-            bulleted_list_item: { rich_text: [text('qwer')] },
-          },
-          {
-            object: 'block',
-            id: 'block-4',
-            type: 'paragraph',
-            has_children: false,
-            paragraph: { rich_text: [text('볼드체', { bold: true })] },
-          },
-        ],
-        has_more: false,
-        next_cursor: null,
-      },
-    });
+    mockBlocks.mockImplementation(async () =>
+      blockChildrenResponse([
+        {
+          object: 'block',
+          id: 'block-1',
+          type: 'heading_1',
+          has_children: false,
+          heading_1: { rich_text: [text('마크다운 테스트')] },
+        },
+        {
+          object: 'block',
+          id: 'block-2',
+          type: 'bulleted_list_item',
+          has_children: false,
+          bulleted_list_item: { rich_text: [text('asdf')] },
+        },
+        {
+          object: 'block',
+          id: 'block-3',
+          type: 'bulleted_list_item',
+          has_children: false,
+          bulleted_list_item: { rich_text: [text('qwer')] },
+        },
+        {
+          object: 'block',
+          id: 'block-4',
+          type: 'paragraph',
+          has_children: false,
+          paragraph: { rich_text: [text('볼드체', { bold: true })] },
+        },
+      ]),
+    );
 
     const items = await service.getPublishedNotices();
 
-    expect(mockGet).toHaveBeenCalledWith('/v1/blocks/page-1/children', {
-      params: {},
-    });
+    expect(fetchCallsTo('/v1/blocks/')).toEqual([
+      'https://api.notion.com/v1/blocks/page-1/children',
+    ]);
     expect(items).toHaveLength(1);
     expect(items[0].content).toBe('');
     expect(items[0].body).toContain('# 마크다운 테스트');
@@ -278,10 +386,10 @@ describe('AdminNoticesService', () => {
 
   it('keeps serving notices when one block body conversion fails', async () => {
     const service = createService();
-    mockPost.mockResolvedValue(
+    mockQuery.mockResolvedValue(
       queryResponse([notionPage('page-1', publishedProps())]),
     );
-    mockGet.mockRejectedValue(new Error('network down'));
+    mockBlocks.mockRejectedValue(new Error('network down'));
 
     const items = await service.getPublishedNotices();
 
@@ -295,20 +403,16 @@ describe('AdminNoticesService', () => {
     const nowSpy = jest.spyOn(Date, 'now');
     nowSpy.mockReturnValue(1_000_000);
     const service = createService();
-    mockPost.mockResolvedValue(
+    mockQuery.mockImplementation(async () =>
       queryResponse([notionPage('page-1', publishedProps())]),
     );
-    mockGet.mockRejectedValue({
-      isAxiosError: true,
-      message: 'rate limited',
-      response: { status: 429 },
-    });
+    mockBlocks.mockResolvedValue(rateLimitResponse());
 
     await expect(service.getPublishedNotices()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
-    expect(mockPost).toHaveBeenCalledTimes(1);
-    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(mockBlocks).toHaveBeenCalledTimes(1);
 
     // Inside the default 1s cooldown: block fetches are Notion requests too,
     // so the whole board stops querying instead of hammering through 429s.
@@ -316,13 +420,13 @@ describe('AdminNoticesService', () => {
     await expect(service.getPublishedNotices()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
-    expect(mockPost).toHaveBeenCalledTimes(1);
-    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(mockBlocks).toHaveBeenCalledTimes(1);
   });
 
   it('orders by 노출 순서 ascending with missing order last', async () => {
     const service = createService();
-    mockPost.mockResolvedValue(
+    mockQuery.mockImplementation(async () =>
       queryResponse([
         notionPage(
           'page-no-order',
@@ -356,7 +460,7 @@ describe('AdminNoticesService', () => {
 
   it('follows pagination cursors and combines the pages', async () => {
     const service = createService();
-    mockPost
+    mockQuery
       .mockResolvedValueOnce(
         queryResponse([notionPage('page-1', publishedProps())], {
           has_more: true,
@@ -376,8 +480,14 @@ describe('AdminNoticesService', () => {
 
     const items = await service.getPublishedNotices();
 
-    expect(mockPost).toHaveBeenCalledTimes(2);
-    expect(mockPost.mock.calls[1][1]).toEqual(
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    // The second wire call keeps the same path; the cursor travels in the
+    // request body (Notion's database-query pagination contract).
+    const [secondInput, secondInit] = fetchMock.mock.calls[1];
+    expect(String(secondInput)).toBe(
+      'https://api.notion.com/v1/databases/db-123/query',
+    );
+    expect(JSON.parse(String(secondInit?.body))).toEqual(
       expect.objectContaining({ start_cursor: 'cursor-1' }),
     );
     expect(items.map((item) => item.id)).toEqual(['page-1', 'page-2']);
@@ -385,14 +495,14 @@ describe('AdminNoticesService', () => {
 
   it('serves the fresh cache without re-querying Notion', async () => {
     const service = createService();
-    mockPost.mockResolvedValue(
+    mockQuery.mockImplementation(async () =>
       queryResponse([notionPage('page-1', publishedProps())]),
     );
 
     const first = await service.getPublishedNotices();
     const second = await service.getPublishedNotices();
 
-    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
     expect(second).toBe(first);
   });
 
@@ -400,7 +510,7 @@ describe('AdminNoticesService', () => {
     const nowSpy = jest.spyOn(Date, 'now');
     nowSpy.mockReturnValue(1_000_000);
     const service = createService();
-    mockPost.mockResolvedValue(
+    mockQuery.mockImplementation(async () =>
       queryResponse([notionPage('page-1', publishedProps())]),
     );
 
@@ -408,14 +518,14 @@ describe('AdminNoticesService', () => {
     nowSpy.mockReturnValue(1_000_000 + 61_000);
     await service.getPublishedNotices();
 
-    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
   });
 
   it('serves the stale snapshot immediately and refreshes in the background', async () => {
     const nowSpy = jest.spyOn(Date, 'now');
     nowSpy.mockReturnValue(1_000_000);
     const service = createService();
-    mockPost.mockResolvedValueOnce(
+    mockQuery.mockResolvedValueOnce(
       queryResponse([notionPage('page-1', publishedProps())]),
     );
     const first = await service.getPublishedNotices(); // seed the snapshot
@@ -423,7 +533,7 @@ describe('AdminNoticesService', () => {
     // TTL expired: the next read answers from the snapshot at once (the
     // request must not wait for Notion) and kicks off the refresh.
     nowSpy.mockReturnValue(1_000_000 + 61_000);
-    mockPost.mockResolvedValueOnce(
+    mockQuery.mockResolvedValueOnce(
       queryResponse([
         notionPage('page-2', {
           ...publishedProps({
@@ -438,7 +548,7 @@ describe('AdminNoticesService', () => {
     const stale = await service.getPublishedNotices();
 
     expect(stale).toBe(first); // same (old) array reference, no wait
-    expect(mockPost).toHaveBeenCalledTimes(2); // background fetch started
+    expect(mockQuery).toHaveBeenCalledTimes(2); // background fetch started
 
     // Let the background flight settle: the next request serves the refresh.
     await new Promise((resolve) => setImmediate(resolve));
@@ -446,20 +556,20 @@ describe('AdminNoticesService', () => {
 
     expect(refreshed).not.toBe(first);
     expect(refreshed.map((item) => item.title)).toEqual(['갱신된 공지']);
-    expect(mockPost).toHaveBeenCalledTimes(2); // cache is fresh again
+    expect(mockQuery).toHaveBeenCalledTimes(2); // cache is fresh again
   });
 
   it('collapses concurrent stale reads into one background refresh', async () => {
     const nowSpy = jest.spyOn(Date, 'now');
     nowSpy.mockReturnValue(1_000_000);
     const service = createService();
-    mockPost.mockResolvedValueOnce(
+    mockQuery.mockResolvedValueOnce(
       queryResponse([notionPage('page-1', publishedProps())]),
     );
     await service.getPublishedNotices(); // seed the snapshot
 
     nowSpy.mockReturnValue(1_000_000 + 61_000);
-    mockPost.mockResolvedValue(
+    mockQuery.mockImplementation(async () =>
       queryResponse([notionPage('page-1', publishedProps())]),
     );
     const [first, second, third] = await Promise.all([
@@ -471,7 +581,7 @@ describe('AdminNoticesService', () => {
     // All three get the stale snapshot; only one background fetch runs.
     expect(second).toBe(first);
     expect(third).toBe(first);
-    expect(mockPost).toHaveBeenCalledTimes(2); // 1 seed + 1 background
+    expect(mockQuery).toHaveBeenCalledTimes(2); // 1 seed + 1 background
     // Let the background flight settle before the next test starts.
     await new Promise((resolve) => setImmediate(resolve));
   });
@@ -480,7 +590,7 @@ describe('AdminNoticesService', () => {
     const nowSpy = jest.spyOn(Date, 'now');
     nowSpy.mockReturnValue(1_000_000);
     const service = createService({ 'notion.cacheTtlMs': 10_000 });
-    mockPost.mockResolvedValue(
+    mockQuery.mockImplementation(async () =>
       queryResponse([notionPage('page-1', publishedProps())]),
     );
 
@@ -488,35 +598,35 @@ describe('AdminNoticesService', () => {
     nowSpy.mockReturnValue(1_000_000 + 5_000);
     await service.getPublishedNotices();
     // Still inside the injected TTL: served from cache.
-    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
 
     nowSpy.mockReturnValue(1_000_000 + 10_000);
     await service.getPublishedNotices();
     // The injected TTL (10s, shorter than the 60s default) expired: refetched.
-    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
   });
 
   it('falls back to the default TTL when NOTION_CACHE_TTL_MS is not set', async () => {
     const nowSpy = jest.spyOn(Date, 'now');
     nowSpy.mockReturnValue(1_000_000);
     const service = createService({ 'notion.cacheTtlMs': undefined });
-    mockPost.mockResolvedValue(
+    mockQuery.mockImplementation(async () =>
       queryResponse([notionPage('page-1', publishedProps())]),
     );
 
     await service.getPublishedNotices();
     nowSpy.mockReturnValue(1_000_000 + 59_000);
     await service.getPublishedNotices();
-    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
 
     nowSpy.mockReturnValue(1_000_000 + 60_000);
     await service.getPublishedNotices();
-    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
   });
 
   it('shares one Notion fetch across concurrent cache misses (single-flight)', async () => {
     const service = createService();
-    mockPost.mockResolvedValue(
+    mockQuery.mockImplementation(async () =>
       queryResponse([notionPage('page-1', publishedProps())]),
     );
 
@@ -527,14 +637,14 @@ describe('AdminNoticesService', () => {
     ]);
 
     // A visitor burst must collapse into one Notion query sequence.
-    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
     expect(second).toBe(first);
     expect(third).toBe(first);
   });
 
   it('spaces consecutive Notion requests by the configured minimum interval', async () => {
     const service = createService({ 'notion.minRequestIntervalMs': 150 });
-    mockPost
+    mockQuery
       .mockResolvedValueOnce(
         queryResponse([notionPage('page-1', publishedProps())], {
           has_more: true,
@@ -543,11 +653,12 @@ describe('AdminNoticesService', () => {
       )
       .mockResolvedValueOnce(
         queryResponse([
-          notionPage('page-2', {
-            ...publishedProps({
+          notionPage(
+            'page-2',
+            publishedProps({
               [NOTION_PROPERTY.ORDER]: { type: 'number', number: 2 },
             }),
-          }),
+          ),
         ]),
       );
 
@@ -555,8 +666,8 @@ describe('AdminNoticesService', () => {
     const items = await service.getPublishedNotices();
     const elapsedMs = Date.now() - startedAt;
 
-    expect(mockPost).toHaveBeenCalledTimes(2);
-    expect(mockGet).toHaveBeenCalledTimes(2);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    expect(mockBlocks).toHaveBeenCalledTimes(2);
     expect(items).toHaveLength(2);
     // Two requests must be at least one interval apart (~3 req/s budget at default).
     // Block-children listings share the same pacing timeline (4 total).
@@ -567,20 +678,16 @@ describe('AdminNoticesService', () => {
     const nowSpy = jest.spyOn(Date, 'now');
     nowSpy.mockReturnValue(1_000_000);
     const service = createService();
-    mockPost.mockResolvedValueOnce(
+    mockQuery.mockResolvedValueOnce(
       queryResponse([notionPage('page-1', publishedProps())]),
     );
     await service.getPublishedNotices(); // seed the snapshot (1 call)
 
     // Cache expires and Notion answers 429 with Retry-After: 2 seconds.
     nowSpy.mockReturnValue(1_000_000 + 61_000);
-    mockPost.mockRejectedValueOnce({
-      isAxiosError: true,
-      message: 'rate limited',
-      response: { status: 429, headers: { 'retry-after': '2' } },
-    });
+    mockQuery.mockResolvedValueOnce(rateLimitResponse('2'));
     await expect(service.getPublishedNotices()).resolves.toHaveLength(1);
-    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
     // Let the background flight settle so its 429 backoff is recorded under
     // the current mocked clock before the test advances time again.
     await new Promise((resolve) => setImmediate(resolve));
@@ -588,15 +695,15 @@ describe('AdminNoticesService', () => {
     // Inside the pause: served from the snapshot without touching Notion.
     nowSpy.mockReturnValue(1_000_000 + 62_000);
     await expect(service.getPublishedNotices()).resolves.toHaveLength(1);
-    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
 
     // After Retry-After elapsed: queries Notion again.
     nowSpy.mockReturnValue(1_000_000 + 64_000);
-    mockPost.mockResolvedValueOnce(
+    mockQuery.mockResolvedValueOnce(
       queryResponse([notionPage('page-1', publishedProps())]),
     );
     await service.getPublishedNotices();
-    expect(mockPost).toHaveBeenCalledTimes(3);
+    expect(mockQuery).toHaveBeenCalledTimes(3);
     // Drain the refresh so no mock state leaks into the next test.
     await new Promise((resolve) => setImmediate(resolve));
   });
@@ -605,41 +712,35 @@ describe('AdminNoticesService', () => {
     const nowSpy = jest.spyOn(Date, 'now');
     nowSpy.mockReturnValue(1_000_000);
     const service = createService();
-    mockPost.mockRejectedValueOnce({
-      isAxiosError: true,
-      message: 'rate limited',
-      response: { status: 429 },
-    });
+    mockQuery.mockResolvedValueOnce(rateLimitResponse());
 
     await expect(service.getPublishedNotices()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
-    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
 
     // Still inside the default 1s cooldown: no new Notion call.
     nowSpy.mockReturnValue(1_000_000 + 999);
     await expect(service.getPublishedNotices()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
-    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
   it('serves the last good snapshot when Notion fails after a success', async () => {
     const nowSpy = jest.spyOn(Date, 'now');
     nowSpy.mockReturnValue(1_000_000);
     const service = createService();
-    mockPost.mockResolvedValueOnce(
+    mockQuery.mockResolvedValueOnce(
       queryResponse([notionPage('page-1', publishedProps())]),
     );
 
     const first = await service.getPublishedNotices();
 
     nowSpy.mockReturnValue(1_000_000 + 61_000);
-    mockPost.mockRejectedValueOnce({
-      isAxiosError: true,
-      message: 'connect ECONNREFUSED',
-      response: { status: 502, data: { message: 'bad gateway' } },
-    });
+    mockQuery.mockResolvedValueOnce(
+      errorResponse(502, { message: 'bad gateway' }),
+    );
 
     await expect(service.getPublishedNotices()).resolves.toBe(first);
     // Drain the failed background refresh so it cannot disturb later tests.
@@ -648,7 +749,7 @@ describe('AdminNoticesService', () => {
 
   it('fails with 503 when Notion errors and no snapshot exists', async () => {
     const service = createService();
-    mockPost.mockRejectedValue(new Error('network down'));
+    mockQuery.mockRejectedValue(new Error('network down'));
 
     await expect(service.getPublishedNotices()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
