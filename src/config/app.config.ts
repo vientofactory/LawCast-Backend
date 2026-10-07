@@ -34,6 +34,14 @@ export interface AppConfig {
     apiUrl: string;
     timeout: number;
   };
+  notion: {
+    apiKey: string;
+    databaseId: string;
+    apiUrl: string;
+    timeout: number;
+    cacheTtlMs: number;
+    minRequestIntervalMs: number;
+  };
   frontend: {
     urls: string[];
   };
@@ -446,6 +454,21 @@ export default (): AppConfig => ({
     apiUrl:
       process.env.SEMANTIC_SEARCH_API_URL?.trim() || 'http://127.0.0.1:8300',
     timeout: parseInt(process.env.SEMANTIC_SEARCH_TIMEOUT, 10) || 10000,
+  },
+  // Notion-backed admin notice board (read-only; CRUD happens in Notion).
+  // The feature is enabled only when both apiKey and databaseId are set.
+  notion: {
+    apiKey: process.env.NOTION_API_KEY?.trim() || '',
+    databaseId: process.env.NOTION_DATABASE_ID?.trim() || '',
+    apiUrl: process.env.NOTION_API_URL?.trim() || 'https://api.notion.com',
+    timeout: parseInt(process.env.NOTION_TIMEOUT, 10) || 5000,
+    // In-memory notice cache TTL; operators can tune Notion API pressure per environment.
+    cacheTtlMs: parseIntWithDefault(process.env.NOTION_CACHE_TTL_MS, 60 * 1000),
+    // Outbound pacing: keeps Notion traffic under the ~3 req/s integration budget.
+    minRequestIntervalMs: parseIntWithDefault(
+      process.env.NOTION_MIN_REQUEST_INTERVAL_MS,
+      340,
+    ),
   },
   frontend: {
     urls: process.env.FRONTEND_URL

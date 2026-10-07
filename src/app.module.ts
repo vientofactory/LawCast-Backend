@@ -33,6 +33,7 @@ import { SemanticSearchModule } from './modules/semantic-search/semantic-search.
 import { DiscordBridgeModule } from './modules/discord-bridge/discord-bridge.module';
 import { ChangeTrackingModule } from './modules/change-tracking/change-tracking.module';
 import { DiscussionsModule } from './modules/discussions/discussions.module';
+import { AdminNoticesModule } from './modules/admin-notices/admin-notices.module';
 
 @Module({
   imports: [
@@ -98,6 +99,7 @@ import { DiscussionsModule } from './modules/discussions/discussions.module';
     SchedulingModule,
     ChangeTrackingModule,
     DiscussionsModule,
+    AdminNoticesModule,
     // Third-party integration modules
     OllamaModule,
     SemanticSearchModule,
