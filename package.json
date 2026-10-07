@@ -47,7 +47,7 @@
     "discord.js": "^14.26.3",
     "hashguard-client": "^1.5.0",
     "jszip": "^3.10.1",
-    "keyv": "^5.5.4",
+    "keyv": "^6.0.0",
     "node-cache": "^5.1.2",
     "pal-crawl": "^2.0.5",
     "reflect-metadata": "^0.2.0",
