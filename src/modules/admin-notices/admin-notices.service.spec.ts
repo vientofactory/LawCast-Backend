@@ -114,7 +114,8 @@ describe('AdminNoticesService', () => {
   const notionPage = (
     id: string,
     properties: Record<string, unknown>,
-  ): Record<string, unknown> => ({ id, properties });
+    extra: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({ id, ...extra, properties });
 
   const publishedProps = (
     overrides: Record<string, unknown> = {},
@@ -216,11 +217,14 @@ describe('AdminNoticesService', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('queries only published rows and maps title/status/order/urgent/content', async () => {
+  it('queries only published rows and maps title/status/order/urgent/content/createdAt', async () => {
     const service = createService();
     mockQuery.mockImplementation(async () =>
       queryResponse([
-        notionPage('page-1', publishedProps()),
+        notionPage('page-1', publishedProps(), {
+          // Real Notion pages always carry a top-level created_time.
+          created_time: '2026-10-01T03:00:00.000Z',
+        }),
         notionPage('page-2', {
           ...publishedProps({
             [NOTION_PROPERTY.TITLE]: {
@@ -290,6 +294,7 @@ describe('AdminNoticesService', () => {
         // Newlines in the Notion body are preserved (never whitespace-collapsed).
         content: '첫 줄\n두 번째 줄',
         body: '',
+        createdAt: '2026-10-01T03:00:00.000Z',
       },
       {
         id: 'page-2',
@@ -300,6 +305,8 @@ describe('AdminNoticesService', () => {
         urgent: true,
         content: '내용 없음 없음',
         body: '',
+        // created_time missing entirely -> null, never an invalid date string.
+        createdAt: null,
       },
     ]);
     // Only displayable (published + titled) rows get their block tree read.

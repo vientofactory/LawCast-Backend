@@ -28,6 +28,13 @@ export interface AdminNotice {
    * conversion failed — clients then fall back to `content`.
    */
   body: string;
+  /**
+   * Notion page `created_time` — the instant the row was created (UTC ISO
+   * 8601), surfaced as the notice date. Immutable: edits never change it,
+   * so it reflects row creation, not the actual publication moment.
+   * Null when Notion omits the field.
+   */
+  createdAt: string | null;
 }
 
 export interface AdminNoticeListResponse {
@@ -51,6 +58,8 @@ export interface NotionPropertyObject {
 
 export interface NotionPageObject {
   id: string;
+  /** Top-level page field returned by every query — UTC ISO 8601. */
+  created_time?: string;
   properties?: Record<string, NotionPropertyObject>;
 }
 
