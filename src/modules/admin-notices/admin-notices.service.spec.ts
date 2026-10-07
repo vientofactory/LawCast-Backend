@@ -17,12 +17,14 @@ jest.mock('axios');
 describe('AdminNoticesService', () => {
   const mockPost =
     jest.fn<(url: string, body?: unknown) => Promise<{ data: unknown }>>();
+  const mockGet =
+    jest.fn<(url: string, config?: unknown) => Promise<{ data: unknown }>>();
   const mockedAxios = axios as jest.Mocked<typeof axios>;
 
   const createService = (
     overrides: Record<string, unknown> = {},
   ): AdminNoticesService => {
-    mockedAxios.create.mockReturnValue({ post: mockPost } as any);
+    mockedAxios.create.mockReturnValue({ post: mockPost, get: mockGet } as any);
     const values: Record<string, unknown> = {
       'notion.apiKey': 'secret-token',
       'notion.databaseId': 'db-123',
@@ -69,12 +71,17 @@ describe('AdminNoticesService', () => {
     },
     ...overrides,
   });
-
   beforeEach(() => {
     jest.clearAllMocks();
     // Drop any queued one-time implementations from a previous test so an
     // unconsumed Once value can never leak into (and corrupt) the next test.
     mockPost.mockReset();
+    mockGet.mockReset();
+    // Block-children listings default to a page without a block body; tests
+    // that exercise the Markdown body override it with realistic payloads.
+    mockGet.mockResolvedValue({
+      data: { results: [], has_more: false, next_cursor: null },
+    });
     mockedAxios.isAxiosError.mockImplementation(
       (payload: any): payload is AxiosError<any, any, any> =>
         Boolean(payload?.isAxiosError),
@@ -170,6 +177,7 @@ describe('AdminNoticesService', () => {
         urgent: false,
         // Newlines in the Notion body are preserved (never whitespace-collapsed).
         content: '첫 줄\n두 번째 줄',
+        body: '',
       },
       {
         id: 'page-2',
@@ -179,8 +187,137 @@ describe('AdminNoticesService', () => {
         order: 2,
         urgent: true,
         content: '내용 없음 없음',
+        body: '',
       },
     ]);
+    // Only displayable (published + titled) rows get their block tree read.
+    expect(mockGet).toHaveBeenCalledTimes(2);
+    expect(mockGet.mock.calls.map((call) => call[0])).toEqual([
+      '/v1/blocks/page-1/children',
+      '/v1/blocks/page-2/children',
+    ]);
+  });
+
+  it('converts a page block body into markdown via notion-to-md', async () => {
+    const service = createService();
+    mockPost.mockResolvedValue(
+      queryResponse([
+        notionPage(
+          'page-1',
+          publishedProps({
+            // The reported production case: the property is empty because the
+            // real body lives in the page's block children.
+            [NOTION_PROPERTY.CONTENT]: { type: 'rich_text', rich_text: [] },
+          }),
+        ),
+      ]),
+    );
+    const annotations = {
+      bold: false,
+      italic: false,
+      strikethrough: false,
+      underline: false,
+      code: false,
+      color: 'default',
+    };
+    const text = (plain: string, overrides: Record<string, unknown> = {}) => ({
+      type: 'text',
+      text: { content: plain, link: null },
+      annotations: { ...annotations, ...overrides },
+      plain_text: plain,
+      href: null,
+    });
+    mockGet.mockResolvedValue({
+      data: {
+        results: [
+          {
+            object: 'block',
+            id: 'block-1',
+            type: 'heading_1',
+            has_children: false,
+            heading_1: { rich_text: [text('마크다운 테스트')] },
+          },
+          {
+            object: 'block',
+            id: 'block-2',
+            type: 'bulleted_list_item',
+            has_children: false,
+            bulleted_list_item: { rich_text: [text('asdf')] },
+          },
+          {
+            object: 'block',
+            id: 'block-3',
+            type: 'bulleted_list_item',
+            has_children: false,
+            bulleted_list_item: { rich_text: [text('qwer')] },
+          },
+          {
+            object: 'block',
+            id: 'block-4',
+            type: 'paragraph',
+            has_children: false,
+            paragraph: { rich_text: [text('볼드체', { bold: true })] },
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      },
+    });
+
+    const items = await service.getPublishedNotices();
+
+    expect(mockGet).toHaveBeenCalledWith('/v1/blocks/page-1/children', {
+      params: {},
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].content).toBe('');
+    expect(items[0].body).toContain('# 마크다운 테스트');
+    expect(items[0].body).toContain('- asdf\n- qwer');
+    expect(items[0].body).toContain('**볼드체**');
+  });
+
+  it('keeps serving notices when one block body conversion fails', async () => {
+    const service = createService();
+    mockPost.mockResolvedValue(
+      queryResponse([notionPage('page-1', publishedProps())]),
+    );
+    mockGet.mockRejectedValue(new Error('network down'));
+
+    const items = await service.getPublishedNotices();
+
+    // The notice still renders from the property content.
+    expect(items).toHaveLength(1);
+    expect(items[0].content).toBe('첫 줄\n두 번째 줄');
+    expect(items[0].body).toBe('');
+  });
+
+  it('applies the 429 backoff when a block body fetch is rate limited', async () => {
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(1_000_000);
+    const service = createService();
+    mockPost.mockResolvedValue(
+      queryResponse([notionPage('page-1', publishedProps())]),
+    );
+    mockGet.mockRejectedValue({
+      isAxiosError: true,
+      message: 'rate limited',
+      response: { status: 429 },
+    });
+
+    await expect(service.getPublishedNotices()).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockGet).toHaveBeenCalledTimes(1);
+
+    // Inside the default 1s cooldown: block fetches are Notion requests too,
+    // so the whole board stops querying instead of hammering through 429s.
+    nowSpy.mockReturnValue(1_000_000 + 999);
+    await expect(service.getPublishedNotices()).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockGet).toHaveBeenCalledTimes(1);
   });
 
   it('orders by 노출 순서 ascending with missing order last', async () => {
@@ -419,9 +556,11 @@ describe('AdminNoticesService', () => {
     const elapsedMs = Date.now() - startedAt;
 
     expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(mockGet).toHaveBeenCalledTimes(2);
     expect(items).toHaveLength(2);
     // Two requests must be at least one interval apart (~3 req/s budget at default).
-    expect(elapsedMs).toBeGreaterThanOrEqual(140);
+    // Block-children listings share the same pacing timeline (4 total).
+    expect(elapsedMs).toBeGreaterThanOrEqual(440);
   });
 
   it('honors Retry-After after a 429 and stops querying Notion during the pause', async () => {

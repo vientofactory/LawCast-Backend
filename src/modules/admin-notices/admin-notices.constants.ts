@@ -47,3 +47,17 @@ export const NOTION_QUERY_MAX_PAGES = 10;
  * the NOTION_CACHE_TTL_MS env var (see app.config.ts `notion.cacheTtlMs`).
  */
 export const ADMIN_NOTICES_CACHE_TTL_MS = 60 * 1000;
+
+/**
+ * Upper bound on block pages (100 blocks each) converted per notice body so
+ * one pathological page cannot stall a refresh loop.
+ */
+export const NOTION_BODY_MAX_BLOCK_PAGES = 2;
+
+/**
+ * Upper bound on notice bodies converted per refresh. Every body costs at
+ * least one paced Notion request, so the cap keeps one oversized database
+ * from stretching a refresh into minutes; rows beyond the cap keep the
+ * property-based content as their body fallback.
+ */
+export const NOTION_BODY_FETCH_MAX_NOTICES = 50;
