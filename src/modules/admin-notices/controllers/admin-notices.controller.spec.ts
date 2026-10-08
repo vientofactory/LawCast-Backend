@@ -18,7 +18,8 @@ describe('AdminNoticesController', () => {
     return { controller, getPublishedNotices, assertAllowed };
   };
 
-  const req = {} as Request;
+  // Express always populates req.query — mirror that in the fixture.
+  const req = { query: {} } as Request;
 
   it('rate-limits the request and wraps the notice list', async () => {
     const { controller, getPublishedNotices, assertAllowed } =
@@ -50,7 +51,73 @@ describe('AdminNoticesController', () => {
     );
   });
 
-  it('exposes a single GET route and no write endpoints (CRUD stays in Notion)', () => {
+  it('serves only the top display-order notice from GET announcements/top', async () => {
+    const { controller, getPublishedNotices, assertAllowed } =
+      createController();
+    const notices = [
+      {
+        id: 'page-1',
+        title: '1위 공지',
+        urgent: false,
+        content: '긴 본문 미리보기',
+        body: '## 마크다운 본문',
+      },
+      { id: 'page-2', title: '2위 공지', urgent: true },
+    ];
+    getPublishedNotices.mockResolvedValue(notices);
+
+    const response = await controller.getTopAdminNotice(req);
+
+    expect(assertAllowed).toHaveBeenCalledWith(req);
+    expect(getPublishedNotices).toHaveBeenCalledTimes(1);
+    // Cap-1 view: content/body never leave the endpoint, even when present.
+    expect(response).toEqual({
+      success: true,
+      data: { item: { id: 'page-1', title: '1위 공지' } },
+    });
+  });
+
+  it('serves the first urgent notice in display order with urgent=true', async () => {
+    const { controller, getPublishedNotices } = createController();
+    const notices = [
+      { id: 'page-1', title: '보통 공지', urgent: false },
+      { id: 'page-2', title: '긴급 공지', urgent: true },
+      { id: 'page-3', title: '긴급 공지 2', urgent: true },
+    ];
+    getPublishedNotices.mockResolvedValue(notices);
+
+    const response = await controller.getTopAdminNotice({
+      query: { urgent: 'true' },
+    } as unknown as Request);
+
+    expect(response).toEqual({
+      success: true,
+      data: { item: { id: 'page-2', title: '긴급 공지' } },
+    });
+  });
+
+  it('returns a null item when no notice matches the selection', async () => {
+    const { controller, getPublishedNotices } = createController();
+
+    // Empty board: both selections come back null, never a thrown error.
+    getPublishedNotices.mockResolvedValue([]);
+    await expect(controller.getTopAdminNotice(req)).resolves.toEqual({
+      success: true,
+      data: { item: null },
+    });
+
+    // urgent=true with no urgent row marked: null as well.
+    getPublishedNotices.mockResolvedValue([
+      { id: 'page-1', title: '보통 공지', urgent: false },
+    ]);
+    await expect(
+      controller.getTopAdminNotice({
+        query: { urgent: 'true' },
+      } as unknown as Request),
+    ).resolves.toEqual({ success: true, data: { item: null } });
+  });
+
+  it('exposes read-only GET routes (list + top) and no write endpoints (CRUD stays in Notion)', () => {
     const routePath = Reflect.getMetadata(
       PATH_METADATA,
       AdminNoticesController,
@@ -71,13 +138,20 @@ describe('AdminNoticesController', () => {
 
     expect(mappedMethods).toEqual([
       { key: 'getAdminNotices', method: RequestMethod.GET },
+      { key: 'getTopAdminNotice', method: RequestMethod.GET },
     ]);
 
-    // The public route naming is /api/announcements.
-    const methodPath = Reflect.getMetadata(
+    // The public routes are /api/announcements (list) and
+    // /api/announcements/top (single cap-1 notice).
+    const listPath = Reflect.getMetadata(
       PATH_METADATA,
       AdminNoticesController.prototype.getAdminNotices,
     );
-    expect(methodPath).toBe('announcements');
+    expect(listPath).toBe('announcements');
+    const topPath = Reflect.getMetadata(
+      PATH_METADATA,
+      AdminNoticesController.prototype.getTopAdminNotice,
+    );
+    expect(topPath).toBe('announcements/top');
   });
 });
