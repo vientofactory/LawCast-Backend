@@ -687,6 +687,7 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
               failed: 0,
               skipped: 0,
             }),
+            countNotDoneByNoticeNums: jest.fn().mockResolvedValue(0),
             markNoticesDoneByNums: jest.fn().mockResolvedValue(2),
             revertNoticesDoneByNums: jest.fn().mockResolvedValue(0),
             getDoneMarkedNumsPage: jest.fn().mockResolvedValue([]),
@@ -985,6 +986,46 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
       'DB: write timeout',
     );
     expect(service.getIsDoneSyncStatus().status).toBe('failed');
+  });
+
+  it('bulk flip above IS_DONE_SYNC_NOTIFY_LIMIT suppresses change notifications for the run', async () => {
+    crawlingCoreService.searchDone.mockResolvedValue(makeSearchResult([1, 2]));
+    noticeArchiveService.markNoticesDoneByNums.mockResolvedValue(2);
+    noticeArchiveService.countNotDoneByNoticeNums.mockResolvedValue(
+      phaseExecutors.IS_DONE_SYNC_NOTIFY_LIMIT + 1,
+    );
+
+    const result = await service.runIsDoneSync('fault-test');
+
+    // Events are still recorded: the flip itself must not be skipped.
+    expect(result).toEqual(
+      expect.objectContaining({ fetchedDoneCount: 2, markedDoneCount: 2 }),
+    );
+    expect(noticeArchiveService.markNoticesDoneByNums).toHaveBeenCalledTimes(1);
+    expect(
+      noticeArchiveService.beginChangeNotificationSuppression,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      noticeArchiveService.endChangeNotificationSuppression,
+    ).toHaveBeenCalledTimes(1);
+    expect(service.getIsDoneSyncStatus().status).toBe('idle');
+  });
+
+  it('normal isDone run at or below the limit does not suppress change notifications', async () => {
+    crawlingCoreService.searchDone.mockResolvedValue(makeSearchResult([1, 2]));
+    noticeArchiveService.markNoticesDoneByNums.mockResolvedValue(2);
+    noticeArchiveService.countNotDoneByNoticeNums.mockResolvedValue(
+      phaseExecutors.IS_DONE_SYNC_NOTIFY_LIMIT,
+    );
+
+    await service.runIsDoneSync('fault-test');
+
+    expect(
+      noticeArchiveService.beginChangeNotificationSuppression,
+    ).not.toHaveBeenCalled();
+    expect(
+      noticeArchiveService.endChangeNotificationSuppression,
+    ).not.toHaveBeenCalled();
   });
 
   // ── executeSummaryBackfill (Phase 4) ──────────────────────────────────────

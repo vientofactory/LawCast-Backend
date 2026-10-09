@@ -1,6 +1,6 @@
 {
   "name": "lawcast-backend",
-  "version": "1.9.0",
+  "version": "1.10.0",
   "description": "",
   "author": "vientorepublic",
   "private": true,
@@ -16,7 +16,7 @@
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
-    "test:e2e": "jest --testRegex .*\\.e2e-spec\\.ts$ --runInBand",
+    "test:e2e": "NODE_OPTIONS=--experimental-vm-modules jest --testRegex .*\\.e2e-spec\\.ts$ --runInBand",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand"
   },
   "repository": {
@@ -51,7 +51,7 @@
     "keyv": "^5.5.4",
     "node-cache": "^5.1.2",
     "notion-to-md": "^3.1.9",
-    "pal-crawl": "^2.0.5",
+    "pal-crawl": "^2.2.0",
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.1",
     "sharp": "^0.35.0",
@@ -105,7 +105,7 @@
       "^.+\\.(t|j)s$": "ts-jest"
     },
     "transformIgnorePatterns": [
-      "node_modules/(?!(.*/)?(?:@file-kiwi/node|pal-crawl|@puppeteer/browsers)/)"
+      "node_modules/(?!(.*/)?(?:@file-kiwi/node|pal-crawl)/)"
     ],
     "moduleNameMapper": {
       "^@file-kiwi/node$": "<rootDir>/test/mocks/file-kiwi-node.mock.ts"

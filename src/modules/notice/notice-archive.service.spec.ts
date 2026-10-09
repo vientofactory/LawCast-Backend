@@ -6,6 +6,7 @@ import { NoticeArchiveSnapshotState } from './notice-archive-summary-state.entit
 import { computeSha256 } from './notice-archive.helpers';
 import { computeDiff } from '../change-tracking/change-tracking-diff.utils';
 import { CHANGE_EVENT_TYPE } from '../change-tracking/notice-change-event.entity';
+import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 
 describe('NoticeArchiveService', () => {
   const createRepositoryMock = () => ({
@@ -501,7 +502,7 @@ describe('NoticeArchiveService', () => {
     }
   });
 
-  it('selects ended NSM notices for proposalReason backfill in SQLite while preserving eligibility guards', async () => {
+  it('selects empty-proposalReason notices for backfill regardless of origin, preserving eligibility guards', async () => {
     const dataSource = new DataSource({
       type: 'sqlite',
       database: ':memory:',
@@ -521,7 +522,7 @@ describe('NoticeArchiveService', () => {
         {},
         { lifecycleStatus: 'source_deleted' },
         { lifecycleStatus: 'renumbered' },
-        { contentId: 'PRC_PAL' },
+        { contentId: null },
         { proposalReason: 'Already filled' },
         {},
         {},
@@ -531,7 +532,7 @@ describe('NoticeArchiveService', () => {
           buildRow({
             id: index + 1,
             noticeNum: 2200001 + index,
-            contentId: null,
+            contentId: `PRC_PAL_${2200001 + index}`,
             contentBillNumber: ` ${2200001 + index} `,
             proposalReason: '',
             ...override,
@@ -577,19 +578,42 @@ describe('NoticeArchiveService', () => {
         createIntegrityStateRepositoryMock() as any,
       );
 
-      const candidates = await service.getNsmProposalReasonRetryCandidates(10);
+      const candidates = await service.getProposalReasonRetryCandidates(10);
       expect(
         candidates.map(({ notice, billNo }) => ({
           num: notice.num,
+          contentId: notice.contentId,
           isDone: notice.isDone,
           billNo,
         })),
       ).toEqual([
-        { num: 2200001, isDone: true, billNo: '2200001' },
-        { num: 2200002, isDone: false, billNo: '2200002' },
-        { num: 2200009, isDone: false, billNo: '2200009' },
+        {
+          num: 2200001,
+          contentId: 'PRC_PAL_2200001',
+          isDone: true,
+          billNo: '2200001',
+        },
+        {
+          num: 2200002,
+          contentId: 'PRC_PAL_2200002',
+          isDone: false,
+          billNo: '2200002',
+        },
+        // contentId-less NSM row: retried through the NsmLmSts capture path.
+        {
+          num: 2200006,
+          contentId: null,
+          isDone: true,
+          billNo: '2200006',
+        },
+        {
+          num: 2200009,
+          contentId: 'PRC_PAL_2200009',
+          isDone: false,
+          billNo: '2200009',
+        },
       ]);
-      expect(await service.getNsmProposalReasonRetryCandidates(1)).toEqual([
+      expect(await service.getProposalReasonRetryCandidates(1)).toEqual([
         candidates[0],
       ]);
       expect(
@@ -1105,6 +1129,112 @@ describe('NoticeArchiveService', () => {
     });
   });
 
+  describe('appendLikmsProposalReasonRepair', () => {
+    const createService = (
+      repositoryMock: unknown,
+      changeTrackingService: unknown,
+    ) =>
+      new NoticeArchiveService(
+        repositoryMock as any,
+        createSummaryStateRepositoryMock() as any,
+        changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+    it('appends a likms-sourced repair event without touching the archive row', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219810,
+          subject: '제안이유 보정 대상',
+          proposalReason: '',
+          contentId: 'PRC_LIKMS_1',
+          contentBillNumber: '2219810',
+        }),
+      );
+      const service = createService(repositoryMock, changeTrackingService);
+
+      await service.appendLikmsProposalReasonRepair(
+        2219810,
+        '  보정된 제안이유\n둘째 줄  ',
+      );
+
+      expect(changeTrackingService.buildDiffEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          noticeNum: 2219810,
+          source: NoticeChangeSource.ARCHIVE_UPDATE_LIKMS_PROPOSAL_REASON,
+          afterSnapshot: expect.objectContaining({
+            proposalReason: '보정된 제안이유\n둘째 줄',
+          }),
+        }),
+      );
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          noticeNum: 2219810,
+          source: NoticeChangeSource.ARCHIVE_UPDATE_LIKMS_PROPOSAL_REASON,
+        }),
+      );
+      // Archive rows are immutable: the repair is chain-only.
+      expect(repositoryMock.update).not.toHaveBeenCalled();
+      expect(repositoryMock.save).not.toHaveBeenCalled();
+    });
+
+    it('does not append when the change chain already holds the same reason', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldValue.mockResolvedValue(
+        '이미 있는 제안이유',
+      );
+      repositoryMock.findOne.mockResolvedValue(
+        buildRow({
+          noticeNum: 2219811,
+          subject: '이미 보정된 법률안',
+          proposalReason: '',
+          contentId: 'PRC_LIKMS_2',
+          contentBillNumber: '2219811',
+        }),
+      );
+      const service = createService(repositoryMock, changeTrackingService);
+
+      await service.appendLikmsProposalReasonRepair(
+        2219811,
+        '이미 있는 제안이유',
+      );
+
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('does not append when the reason is empty or the row is missing', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      const service = createService(repositoryMock, changeTrackingService);
+
+      await service.appendLikmsProposalReasonRepair(2219812, '   ');
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+
+      repositoryMock.findOne.mockResolvedValue(null);
+      await service.appendLikmsProposalReasonRepair(2219813, '본문');
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
   describe('proposalReason no-op protections', () => {
     it('preserves line breaks when normalizing proposalReason during insert upsert', async () => {
       const repositoryMock = {
@@ -1610,6 +1740,7 @@ describe('NoticeArchiveService', () => {
             proposerCategory: '의원',
             committee: '법사위',
             assemblyLink: 'https://example.com/nsm/2219775',
+            contentId: 'PRC_TEST_2219775',
             contentBillNumber: '2219775',
             attachmentPdfFile: '',
             attachmentHwpFile: '',
@@ -1631,9 +1762,12 @@ describe('NoticeArchiveService', () => {
         createIntegrityStateRepositoryMock() as any,
       );
 
-      const result = await service.getNsmProposalReasonRetryCandidates(10);
+      const result = await service.getProposalReasonRetryCandidates(10);
 
       expect(repositoryMock.createQueryBuilder).toHaveBeenCalledWith('na');
+      expect(qb.where).toHaveBeenCalledWith('na.lifecycle_status = :status', {
+        status: 'active',
+      });
       const notExistsCall = (qb.andWhere as jest.Mock).mock.calls.find(
         (call) =>
           typeof call[0] === 'string' &&
@@ -1660,6 +1794,7 @@ describe('NoticeArchiveService', () => {
         notice: {
           num: 2219775,
           subject: '테스트 법률안',
+          contentId: 'PRC_TEST_2219775',
           aiSummaryStatus: 'not_supported',
         },
       });

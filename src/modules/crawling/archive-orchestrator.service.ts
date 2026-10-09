@@ -934,19 +934,29 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
   // ─────────────────────────────────────────────────────────────────────────
 
   /**
-   * Re-fetches NsmLmSts detail for a single bill and, if `proposalReason` is
-   * successfully obtained, persists the updated HTML + detail to the archive.
+   * Recovers `proposalReason` for a single bill that was archived with an
+   * empty value on the first attempt.
    *
-   * Called by the proposalReason retry queue in CrawlingSchedulerService for
-   * bills that were archived with an empty `proposalReason` on first attempt.
+   * Called by the proposalReason retry queue in CrawlingSchedulerService.
+   * Two paths:
+   * - contentId present (PAL-origin notice): read the reason from the 국회
+   *   의안정보시스템 via LikmsCrawler — plain HTTP, no browser session.
+   * - contentId missing (NSM-origin notice): the browser-based NsmLmSts detail
+   *   capture, including its double-confirmed deletion probe.
    *
    * @returns The trimmed `proposalReason` string on success, or `null` when
-   *   the capture fails or the detail page still has no reason text.
+   *   the fetch fails or the source still has no reason text.
    */
   async fetchAndUpdateProposalReason(
     num: number,
     billNo: string,
+    contentId?: string | null,
   ): Promise<string | null> {
+    const normalizedContentId = contentId?.trim() ?? '';
+    if (normalizedContentId) {
+      return this.fetchProposalReasonViaLikms(num, billNo, normalizedContentId);
+    }
+
     const normalizedBillNo = billNo.trim();
     if (!normalizedBillNo) {
       this.logger.warn(
@@ -1128,6 +1138,75 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         bridgeLevel: BridgeLogLevel.WARN,
         bridgeMessage: `proposalReason backfill failed for bill **${normalizedBillNo}**: ${message}`,
         metadata: { noticeNum: num, billNo: normalizedBillNo },
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Recovers the proposalReason of a PAL-origin notice (contentId present)
+   * from the 국회 의안정보시스템 (likms.assembly.go.kr) through LikmsCrawler.
+   *
+   * Unlike the NSM path this never touches snapshot artifacts: PAL rows
+   * already captured source HTML/screenshot inline, and archive rows are
+   * immutable, so the recovered reason is appended to the diffchain only.
+   *
+   * @returns The canonicalized `proposalReason` on success, or `null` when
+   *   likms returned nothing or the repair could not be persisted.
+   */
+  private async fetchProposalReasonViaLikms(
+    num: number,
+    billNo: string,
+    contentId: string,
+  ): Promise<string | null> {
+    try {
+      const rawProposalReason =
+        await this.crawlingCoreService.getProposalReasonViaLikms(contentId);
+      const proposalReason =
+        canonicalizeProposalReason(rawProposalReason) ?? '';
+
+      if (!proposalReason) {
+        LoggerUtils.debugDev(
+          ArchiveOrchestratorService.name,
+          `[WARN] proposalReason backfill still empty for contentId ${contentId} (notice=${num})`,
+        );
+        return null;
+      }
+
+      await this.noticeArchiveService.appendLikmsProposalReasonRepair(
+        num,
+        proposalReason,
+      );
+
+      const latestReason =
+        await this.noticeArchiveService.getLatestProposalReasonForNotice(num);
+      if (
+        !latestReason ||
+        canonicalizeProposalReasonForComparison(latestReason) !==
+          canonicalizeProposalReasonForComparison(proposalReason)
+      ) {
+        this.logger.warn(
+          `proposalReason backfill verification failed for contentId ${contentId} (notice=${num})`,
+        );
+        return null;
+      }
+
+      LoggerUtils.logDev(
+        ArchiveOrchestratorService.name,
+        `proposalReason backfill succeeded via likms for contentId ${contentId} (${proposalReason.length} chars)`,
+      );
+      return proposalReason;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logAndBridge({
+        method: 'warn',
+        message: `proposalReason backfill (likms) failed for contentId ${contentId}: ${message}`,
+        logger: this.logger,
+        context: ArchiveOrchestratorService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.WARN,
+        bridgeMessage: `proposalReason backfill (likms) failed for contentId **${contentId}**: ${message}`,
+        metadata: { noticeNum: num, billNo, contentId },
       });
       return null;
     }

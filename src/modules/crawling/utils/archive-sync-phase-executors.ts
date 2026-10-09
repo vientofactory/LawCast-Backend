@@ -1351,6 +1351,15 @@ export async function fetchDonePageWithRetry(
   throw lastError;
 }
 
+// Bulk-flip storm guard for the isDone sync phase. A normal run flips at
+// most a few hundred notices (measured daily max 283), while a restore/list
+// reset flipped 17,224 notices in a single run on 2026-08-10. Above this
+// limit the run is treated as an internal backfill: diffchain events are
+// still appended, but change notifications are suppressed for the run so
+// users are not flooded with notice-period-ended alerts. See
+// agent_memories/19-change-notification-exclusion/plan.md.
+export const IS_DONE_SYNC_NOTIFY_LIMIT = 500;
+
 export async function reconcileIsDonePhase(
   deps: ArchiveSyncExecutorDeps,
   options: ArchiveSyncExecutorOptions,
@@ -1367,14 +1376,18 @@ export async function reconcileIsDonePhase(
     `isDone sync config: pageUnit=${options.crawlerPageUnit}, delayMs=${options.crawlerDelayMs}, totalPages=${totalPages}, concurrency=${options.doneCrawlerConcurrency}`,
   );
 
-  let pageNums = (firstPage.items ?? []).map((item) => item.num);
-  fetchedDoneCount += pageNums.length;
-  markedDoneCount +=
-    await deps.noticeArchiveService.markNoticesDoneByNums(pageNums);
-  LoggerUtils.log(
-    'ArchiveSyncService',
-    `isDone sync page 1/${totalPages}: fetchedPage=${pageNums.length}, fetchedAccum=${fetchedDoneCount}, markedAccum=${markedDoneCount}`,
-  );
+  const collectedNumPages: number[][] = [];
+  const collectPageNums = (page: ISearchResult, pageIndex: number): void => {
+    const nums = (page.items ?? []).map((item) => item.num);
+    fetchedDoneCount += nums.length;
+    collectedNumPages.push(nums);
+    LoggerUtils.log(
+      'ArchiveSyncService',
+      `isDone sync page ${pageIndex}/${totalPages}: fetchedPage=${nums.length}, fetchedAccum=${fetchedDoneCount}`,
+    );
+  };
+
+  collectPageNums(firstPage, 1);
 
   const remainingPageIndexes = Array.from(
     { length: Math.max(0, totalPages - 1) },
@@ -1394,26 +1407,53 @@ export async function reconcileIsDonePhase(
     },
   );
 
-  for (let i = 0; i < remainingPages.length; i++) {
-    const pageIndex = remainingPageIndexes[i];
-    const page = remainingPages[i];
-    pageNums = (page.items ?? []).map((item) => item.num);
-    fetchedDoneCount += pageNums.length;
-    markedDoneCount +=
-      await deps.noticeArchiveService.markNoticesDoneByNums(pageNums);
-    LoggerUtils.log(
-      'ArchiveSyncService',
-      `isDone sync page ${pageIndex}/${totalPages}: fetchedPage=${pageNums.length}, fetchedAccum=${fetchedDoneCount}, markedAccum=${markedDoneCount}`,
+  remainingPages.forEach((page, index) =>
+    collectPageNums(page, remainingPageIndexes[index]),
+  );
+
+  // Fetch-all completes before the first flip so no notification can leak
+  // out between pages once the storm decision is made.
+  const pendingFlipCount =
+    await deps.noticeArchiveService.countNotDoneByNoticeNums(
+      collectedNumPages.flat(),
     );
+  const suppressNotifications = pendingFlipCount > IS_DONE_SYNC_NOTIFY_LIMIT;
+  if (suppressNotifications) {
+    logAndBridge({
+      logger: archiveSyncLogger,
+      method: 'warn',
+      message: `isDone sync bulk flip detected: ${pendingFlipCount} notices pending (limit ${IS_DONE_SYNC_NOTIFY_LIMIT}) - change notifications suppressed for this run, diffchain events still recorded`,
+      context: ARCHIVE_SYNC_CONTEXT,
+      discordBridge: deps.discordBridge,
+      bridgeLevel: BridgeLogLevel.WARN,
+      bridgeMessage: `isDone sync detected **${pendingFlipCount}** bulk flips (limit **${IS_DONE_SYNC_NOTIFY_LIMIT}**) - suppressing change notifications for this run`,
+    });
+    deps.noticeArchiveService.beginChangeNotificationSuppression();
+  }
+
+  try {
+    for (let i = 0; i < collectedNumPages.length; i++) {
+      const nums = collectedNumPages[i];
+      markedDoneCount +=
+        await deps.noticeArchiveService.markNoticesDoneByNums(nums);
+      LoggerUtils.log(
+        'ArchiveSyncService',
+        `isDone sync mark page ${i + 1}/${collectedNumPages.length}: fetchedPage=${nums.length}, fetchedAccum=${fetchedDoneCount}, markedAccum=${markedDoneCount}`,
+      );
+    }
+  } finally {
+    if (suppressNotifications) {
+      deps.noticeArchiveService.endChangeNotificationSuppression();
+    }
   }
 
   logAndBridge({
     logger: archiveSyncLogger,
     method: 'log',
-    message: `isDone reconciliation done - fetched=${fetchedDoneCount} marked=${markedDoneCount}`,
+    message: `isDone reconciliation done - fetched=${fetchedDoneCount} marked=${markedDoneCount} notificationsSuppressed=${suppressNotifications}`,
     context: ARCHIVE_SYNC_CONTEXT,
     discordBridge: deps.discordBridge,
-    bridgeMessage: `isDone sync complete - fetched=${fetchedDoneCount} marked=${markedDoneCount}`,
+    bridgeMessage: `isDone sync complete - fetched=${fetchedDoneCount} marked=${markedDoneCount}${suppressNotifications ? ' (notifications suppressed)' : ''}`,
   });
 
   return { fetchedDoneCount, markedDoneCount };

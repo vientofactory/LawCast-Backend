@@ -22,7 +22,7 @@ describe('CrawlingSchedulerProposalRetry', () => {
       proposerCategory: '의원',
       committee: '법사위',
       link: 'https://example.com/2200001',
-      contentId: null,
+      contentId: 'PRC_TEST_2200001',
       isDone: true,
       attachments: { pdfFile: '', hwpFile: '' },
     };
@@ -45,7 +45,6 @@ describe('CrawlingSchedulerProposalRetry', () => {
       noticeArchiveService: {
         getNsmBillNumberByNoticeNums: async () =>
           new Map([[notice.num, '2200001']]),
-        getArchivedNullContentIdNums: async () => new Set([notice.num]),
         getSourceDeletedNoticeNumSet: async () => new Set(),
         updateSummaryStateByNoticeNum,
       } as any,
@@ -64,6 +63,7 @@ describe('CrawlingSchedulerProposalRetry', () => {
     expect(fetchAndUpdateProposalReason).toHaveBeenCalledWith(
       notice.num,
       '2200001',
+      'PRC_TEST_2200001',
     );
     expect(generateSummaryForNotice).toHaveBeenCalledWith({
       ...notice,
@@ -80,7 +80,7 @@ describe('CrawlingSchedulerProposalRetry', () => {
     expect(cacheService.deleteKey).toHaveBeenCalledTimes(1);
   });
 
-  it('prunes PAL-upgraded queue entries before fetching NSM detail', async () => {
+  it('enqueues contentId-less notices and routes every item by contentId', async () => {
     let storedQueue: unknown = null;
     const cacheService = {
       getObject: jest.fn(async () => storedQueue),
@@ -99,9 +99,6 @@ describe('CrawlingSchedulerProposalRetry', () => {
     const noticeArchiveService = {
       getNsmBillNumberByNoticeNums: jest.fn(
         async () => new Map<number, string>(),
-      ),
-      getArchivedNullContentIdNums: jest.fn(
-        async () => new Set<number>([2220591]),
       ),
       getSourceDeletedNoticeNumSet: jest.fn(async () => new Set<number>()),
       updateSummaryStateByNoticeNum: jest.fn(async () => undefined),
@@ -122,29 +119,39 @@ describe('CrawlingSchedulerProposalRetry', () => {
         error: jest.fn(),
       },
     });
-    const notice = (num: number) => ({
+    const notice = (num: number, contentId: string | null) => ({
       num,
       subject: `의안 ${num}`,
       proposerCategory: '의원',
       committee: '산업통상부',
       link: `https://example.com/${num}`,
-      contentId: null,
+      contentId,
       attachments: { pdfFile: null, hwpFile: null },
       aiSummary: null,
       aiSummaryStatus: 'not_requested' as const,
     });
 
-    await retry.enqueue(notice(2220590), { billNo: '2220590' });
-    await retry.enqueue(notice(2220591), { billNo: '2220591' });
+    // PAL row (contentId) -> Likms path; NSM row (no contentId) -> NsmLmSts capture.
+    await retry.enqueue(notice(2220590, 'PRC_TEST_2220590'), {
+      billNo: '2220590',
+    });
+    await retry.enqueue(notice(2220591, null), { billNo: '2220591' });
+
+    expect(await retry.getQueueLength()).toBe(2);
+
     await retry.drain();
 
-    expect(
-      noticeArchiveService.getArchivedNullContentIdNums,
-    ).toHaveBeenCalledWith([2220590, 2220591]);
-    expect(fetchAndUpdateProposalReason).toHaveBeenCalledTimes(1);
+    expect(fetchAndUpdateProposalReason).toHaveBeenCalledTimes(2);
+    expect(fetchAndUpdateProposalReason).toHaveBeenCalledWith(
+      2220590,
+      '2220590',
+      'PRC_TEST_2220590',
+    );
     expect(fetchAndUpdateProposalReason).toHaveBeenCalledWith(
       2220591,
       '2220591',
+      null,
     );
+    expect(await retry.getQueueLength()).toBe(0);
   });
 });

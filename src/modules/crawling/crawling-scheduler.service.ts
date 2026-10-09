@@ -202,9 +202,7 @@ export class CrawlingSchedulerService implements OnModuleInit {
     const queueBefore = await this.proposalRetrySupport.getQueueLength();
 
     const candidates =
-      await this.noticeArchiveService.getNsmProposalReasonRetryCandidates(
-        limit,
-      );
+      await this.noticeArchiveService.getProposalReasonRetryCandidates(limit);
 
     for (const candidate of candidates) {
       await this.proposalRetrySupport.enqueue(candidate.notice, {

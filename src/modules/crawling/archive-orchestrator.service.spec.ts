@@ -104,6 +104,9 @@ describe('ArchiveOrchestratorService', () => {
           useValue: {
             upsertNoticeArchive: jest.fn(),
             updateNsmHtmlAndDetail: jest.fn().mockResolvedValue(undefined),
+            appendLikmsProposalReasonRepair: jest
+              .fn()
+              .mockResolvedValue(undefined),
             getLatestProposalReasonForNotice: jest.fn().mockResolvedValue(null),
             appendSourceDeletedEventByNoticeNum: jest
               .fn()
@@ -139,6 +142,7 @@ describe('ArchiveOrchestratorService', () => {
           useValue: {
             getContent: jest.fn(),
             captureNsmDetailFull: jest.fn(),
+            getProposalReasonViaLikms: jest.fn().mockResolvedValue(null),
             probeNsmDeletedBillAlert: jest.fn().mockResolvedValue(null),
             captureContentScreenshot: jest.fn().mockResolvedValue(null),
           },
@@ -888,6 +892,53 @@ describe('ArchiveOrchestratorService', () => {
   });
 
   describe('fetchAndUpdateProposalReason', () => {
+    it('recovers proposalReason from the Likms crawler when contentId is provided', async () => {
+      (
+        crawlingCoreService.getProposalReasonViaLikms as jest.Mock
+      ).mockResolvedValue('  likms 사유\n둘째 줄  ');
+      (
+        noticeArchiveService.getLatestProposalReasonForNotice as jest.Mock
+      ).mockResolvedValue('likms 사유\n둘째 줄');
+
+      const result = await service.fetchAndUpdateProposalReason(
+        2219798,
+        '2219798',
+        'PRC_TEST_2219798',
+      );
+
+      expect(result).toBe('likms 사유\n둘째 줄');
+      expect(
+        crawlingCoreService.getProposalReasonViaLikms,
+      ).toHaveBeenCalledWith('PRC_TEST_2219798');
+      expect(
+        noticeArchiveService.appendLikmsProposalReasonRepair,
+      ).toHaveBeenCalledWith(2219798, 'likms 사유\n둘째 줄');
+      expect(crawlingCoreService.captureNsmDetailFull).not.toHaveBeenCalled();
+      expect(
+        noticeArchiveService.updateNsmHtmlAndDetail,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('returns null when the Likms crawler has no proposalReason', async () => {
+      (
+        crawlingCoreService.getProposalReasonViaLikms as jest.Mock
+      ).mockResolvedValue(null);
+
+      const result = await service.fetchAndUpdateProposalReason(
+        2219799,
+        '2219799',
+        'PRC_TEST_2219799',
+      );
+
+      expect(result).toBeNull();
+      expect(
+        noticeArchiveService.appendLikmsProposalReasonRepair,
+      ).not.toHaveBeenCalled();
+      expect(
+        noticeArchiveService.getLatestProposalReasonForNotice,
+      ).not.toHaveBeenCalled();
+    });
+
     it('returns proposalReason and appends NSM detail update when capture succeeds', async () => {
       (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockResolvedValue(
         {
