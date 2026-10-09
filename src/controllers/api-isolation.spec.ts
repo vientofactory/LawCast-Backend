@@ -461,18 +461,29 @@ describe('HTTP-Batch Processing Isolation', () => {
         expect(response).toBeDefined();
         expect(response.success).toBe(true);
         expect(Array.isArray(response.data)).toBe(true);
-        expect(responseTime).toBeLessThanOrEqual(15); // Respond within 15ms (with margin)
 
         return responseTime;
       });
 
       const responseTimes = await Promise.all(noticeRequests);
       const maxResponseTime = Math.max(...responseTimes);
+      const avgResponseTime =
+        responseTimes.reduce((sum, time) => sum + time, 0) /
+        responseTimes.length;
 
-      expect(maxResponseTime).toBeLessThanOrEqual(15); // Max within 15ms (with margin)
+      // Same tolerance model as the health-check test above: Date.now() has
+      // 1ms granularity, and 50 concurrently scheduled promises on a loaded
+      // CI runner can round a single sample past 15ms (observed: 16ms on CI
+      // Node 22 while the same commit passed Node 24, the rerun, and local
+      // runs) — scheduling noise, not lost isolation. Actual batch starvation
+      // would land the batch's own 100ms timer delays in the average, so the
+      // tight bound stays on the average while single-sample spikes get the
+      // same 100ms ceiling used by the health-check assertion.
+      expect(avgResponseTime).toBeLessThanOrEqual(15);
+      expect(maxResponseTime).toBeLessThanOrEqual(100);
 
       console.log(
-        `Recent notices API: max response time ${maxResponseTime}ms (50 concurrent requests)`,
+        `Recent notices API: avg ${avgResponseTime.toFixed(2)}ms, max ${maxResponseTime}ms (50 concurrent requests)`,
       );
     });
 
