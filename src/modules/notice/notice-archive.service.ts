@@ -43,7 +43,7 @@ import {
   getArchiveCount,
   getArchiveStartedAtByNoticeNums,
   getLatestProposalReason,
-  getNsmProposalReasonRetryCandidates,
+  getProposalReasonRetryCandidates,
   getRecentNoticesForCache,
   getSummaryStateByNoticeNums,
   runIntegrityScan,
@@ -65,7 +65,10 @@ import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { logAndBridge } from '../../utils/bridge-log.utils';
-import { canonicalizeProposalReason } from '../../utils/proposal-reason.utils';
+import {
+  canonicalizeProposalReason,
+  canonicalizeProposalReasonForComparison,
+} from '../../utils/proposal-reason.utils';
 import {
   recoverCompetentAuthorityName,
   recoverOptionalCompetentAuthorityName,
@@ -908,6 +911,33 @@ export class NoticeArchiveService {
         sourceDeletedAt: diffSourceDeletedAt,
       },
     );
+  }
+
+  /**
+   * Counts how many of the given notices would actually flip to isDone=true
+   * (i.e. the rows `markNoticesDoneByNums` would update).
+   *
+   * Advisory pre-check only: it lets the isDone sync phase detect a bulk-flip
+   * storm and suppress change notifications *before* any event is dispatched.
+   * The authoritative flip still happens in `markNoticesDoneByNums`.
+   */
+  async countNotDoneByNoticeNums(nums: number[]): Promise<number> {
+    if (!this.summaryStateRepository || nums.length === 0) {
+      return 0;
+    }
+
+    const uniqueNums = Array.from(new Set(nums));
+    const pendingRows = await this.summaryStateRepository.find({
+      where: {
+        noticeNum: In(uniqueNums),
+        isDone: false,
+      },
+      select: {
+        noticeNum: true,
+      },
+    });
+
+    return pendingRows.length;
   }
 
   /**
@@ -2300,6 +2330,13 @@ export class NoticeArchiveService {
 
       const resolvedRev = metadata.headRev;
 
+      // Archive rows are immutable, so repairs (proposalReason backfill,
+      // source_deleted detection, renumbering, ...) exist only as appended
+      // diffchain events. Without this overlay the default detail response
+      // would serve the stale snapshot column while list endpoints already
+      // show the chain-head value.
+      await this.applyCurrentOverlayToDetail(detail);
+
       return {
         detail,
         timeline: [],
@@ -2375,6 +2412,49 @@ export class NoticeArchiveService {
     }
 
     return parsed;
+  }
+
+  /**
+   * Applies the diffchain head values to a detail payload.
+   *
+   * The revision-aware path gets chain values from `applyRevisionOverlay`,
+   * but the default detail response (no `rev`, no timeline) skips it — this
+   * helper gives it the same head overlay the list endpoints apply through
+   * `applyCurrentOverlayFromDiffchain`, so a repair that only exists as an
+   * appended event (e.g. the proposalReason backfill) is visible to the UI.
+   *
+   * `isDone` is intentionally untouched: it lives in the summary-state table,
+   * mirroring the excluded field of the revision-aware path.
+   */
+  private async applyCurrentOverlayToDetail(
+    detail: ArchiveDetailResult,
+  ): Promise<void> {
+    if (!this.changeTrackingService) {
+      return;
+    }
+
+    const overlayRow = {
+      noticeNum: detail.notice.num,
+      subject: detail.notice.subject,
+      proposerCategory: detail.notice.proposerCategory,
+      committee: detail.notice.committee,
+      contentId: detail.notice.contentId,
+      proposalReason: detail.originalContent.proposalReason,
+      lifecycleStatus: detail.notice.lifecycleStatus,
+      sourceDeletedAt: detail.notice.sourceDeletedAt,
+    } as unknown as NoticeArchive;
+
+    await this.applyCurrentOverlayFromDiffchain([overlayRow]);
+
+    detail.notice.subject = overlayRow.subject;
+    detail.notice.proposerCategory = overlayRow.proposerCategory;
+    detail.notice.committee = overlayRow.committee;
+    detail.notice.contentId = overlayRow.contentId ?? null;
+    detail.notice.lifecycleStatus = overlayRow.lifecycleStatus;
+    detail.notice.sourceDeletedAt = overlayRow.sourceDeletedAt ?? null;
+    detail.originalContent.contentId =
+      overlayRow.contentId ?? detail.originalContent.contentId;
+    detail.originalContent.proposalReason = overlayRow.proposalReason ?? '';
   }
 
   private applyRevisionOverlay(
@@ -3153,6 +3233,77 @@ export class NoticeArchiveService {
     });
   }
 
+  /**
+   * Appends a proposalReason-only repair event for an archived notice that
+   * already carries a pal.assembly.go.kr contentId.
+   *
+   * `updateNsmHtmlAndDetail` refuses contentId rows by design (its NSM-only
+   * guard), so PAL-origin rows recovered from the 국회 의안정보시스템 through
+   * LikmsCrawler need their own path. Archive rows stay immutable and no
+   * snapshot artifact is touched: the recovered reason is appended to the
+   * diffchain only, mirroring the NSM repair policy.
+   *
+   * No-op when the reason is empty or the chain head already holds the same
+   * text, so repeated backfill runs never emit duplicate events.
+   *
+   * @param noticeNum The notice number to repair.
+   * @param proposalReason The recovered 제안이유 (already trimmed by the caller).
+   */
+  async appendLikmsProposalReasonRepair(
+    noticeNum: number,
+    proposalReason: string,
+  ): Promise<void> {
+    const resolvedProposalReason = canonicalizeProposalReason(proposalReason);
+    if (!resolvedProposalReason) {
+      return;
+    }
+
+    const beforeRow = await this.getTrackedRowByNoticeNum(noticeNum);
+    if (!beforeRow) {
+      return;
+    }
+
+    const beforeSnapshot = await this.buildDiffBaselineSnapshot(
+      noticeNum,
+      beforeRow,
+    );
+    if (!beforeSnapshot) {
+      return;
+    }
+
+    // Chain head wins over the (possibly stale) archive column so a repair
+    // appended by a concurrent run is never replayed from a blank baseline.
+    const latestProposalReason = canonicalizeProposalReason(
+      await this.getLatestProposalReasonForNotice(noticeNum),
+    );
+    if (latestProposalReason !== null) {
+      beforeSnapshot.proposalReason = latestProposalReason;
+    }
+
+    const baselineProposalReason =
+      typeof beforeSnapshot.proposalReason === 'string'
+        ? beforeSnapshot.proposalReason
+        : null;
+    if (
+      canonicalizeProposalReasonForComparison(baselineProposalReason) ===
+      canonicalizeProposalReasonForComparison(resolvedProposalReason)
+    ) {
+      return;
+    }
+
+    await this.appendExplicitEventWithDiff({
+      noticeNum,
+      source: NoticeChangeSource.ARCHIVE_UPDATE_LIKMS_PROPOSAL_REASON,
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
+      beforeSnapshot,
+      afterSnapshot: {
+        ...beforeSnapshot,
+        proposalReason: resolvedProposalReason,
+      },
+      subject: beforeRow.subject,
+    });
+  }
+
   private async getTrackedRowByNoticeNum(
     noticeNum: number,
   ): Promise<TrackedArchiveRow | null> {
@@ -3829,21 +3980,20 @@ export class NoticeArchiveService {
   }
 
   /**
-   * Returns NSM-origin archived notices that still have empty proposalReason.
+   * Returns archived notices that still have an empty proposalReason,
+   * covering both PAL rows (contentId present, recovered via LikmsCrawler)
+   * and contentId-less NSM rows (recovered via NsmLmSts detail capture).
    * Includes ended notice periods and preserves their persisted isDone state.
    * Used by proposalReason backfill cron to periodically re-seed retry queue
    * even when no newly discovered pending bills arrive.
    */
-  async getNsmProposalReasonRetryCandidates(limit: number): Promise<
+  async getProposalReasonRetryCandidates(limit: number): Promise<
     Array<{
       notice: CachedNotice;
       billNo: string | null;
     }>
   > {
-    return getNsmProposalReasonRetryCandidates(
-      this.getMaintenanceDeps(),
-      limit,
-    );
+    return getProposalReasonRetryCandidates(this.getMaintenanceDeps(), limit);
   }
 
   /**

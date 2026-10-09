@@ -5,7 +5,13 @@ import {
   NsmBillDeletedError,
   NsmWaitingroomUnresolvedError,
 } from './crawling-core.service';
-import { NsmLmSts, NsmLmStsParser, PalCrawl, type ITableData } from 'pal-crawl';
+import {
+  NsmLmSts,
+  NsmLmStsParser,
+  PalCrawl,
+  LikmsCrawler,
+  type ITableData,
+} from 'pal-crawl';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 
 // Mock pal-crawl module
@@ -162,6 +168,7 @@ describe('CrawlingCoreService', () => {
           'Cache-Control': 'no-cache',
         },
         hydrateTruncatedTitles: false,
+        hydrateProposalReason: true,
       });
       expect(mockPalCrawl.get).toHaveBeenCalledTimes(1);
       expect(result).toEqual(mockTableData);
@@ -194,6 +201,48 @@ describe('CrawlingCoreService', () => {
     });
   });
 
+  describe('getProposalReasonViaLikms', () => {
+    const getProposalReason = jest.fn();
+
+    beforeEach(() => {
+      getProposalReason.mockReset();
+      (
+        LikmsCrawler as jest.MockedClass<typeof LikmsCrawler>
+      ).mockImplementation(() => ({ getProposalReason }) as any);
+    });
+
+    it('queries the 국회 의안정보시스템 with the trimmed PAL contentId', async () => {
+      getProposalReason.mockResolvedValue('제안이유 본문');
+
+      const result = await service.getProposalReasonViaLikms('  PRC_TEST_1  ');
+
+      expect(result).toBe('제안이유 본문');
+      expect(getProposalReason).toHaveBeenCalledWith('PRC_TEST_1');
+      expect(LikmsCrawler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userAgent: 'LawCast/1.0 (Legislative Notice Crawler)',
+          timeout: 15000,
+          retryCount: 3,
+        }),
+      );
+    });
+
+    it('returns null without constructing a client when contentId is blank', async () => {
+      const result = await service.getProposalReasonViaLikms('   ');
+
+      expect(result).toBeNull();
+      expect(LikmsCrawler).not.toHaveBeenCalled();
+    });
+
+    it('returns null when the crawler reports no reason', async () => {
+      getProposalReason.mockResolvedValue(null);
+
+      await expect(
+        service.getProposalReasonViaLikms('PRC_TEST_2'),
+      ).resolves.toBeNull();
+    });
+  });
+
   describe('getContent', () => {
     it('should return content for given contentId', async () => {
       const contentId = 'test-content-id';
@@ -223,6 +272,9 @@ describe('CrawlingCoreService', () => {
           'Cache-Control': 'no-cache',
         },
         hydrateTruncatedTitles: false,
+        // PAL collection must keep the pal-crawl 2.2.0 proposalReason
+        // hydration path (empty PAL 제안이유 -> 국회 의안정보시스템 보정).
+        hydrateProposalReason: true,
       });
       expect(mockPalCrawl.getContent).toHaveBeenCalledWith(contentId);
       expect(result).toEqual(mockContent);

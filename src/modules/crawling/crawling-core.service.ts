@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import {
+  LikmsCrawler,
   NsmLmSts,
   NsmLmStsParser,
   PalCrawl,
@@ -140,6 +141,10 @@ export class CrawlingCoreService {
       customHeaders: APP_CONSTANTS.CRAWLING.HEADERS,
       hydrateTruncatedTitles:
         APP_CONSTANTS.CRAWLING.NSM_HYDRATE_TRUNCATED_TITLES,
+      // pal-crawl >= 2.2.0 fills an empty proposalReason from the 국회
+      // 의안정보시스템 (likms) inside getContent/getDoneContent. Kept explicit
+      // so PAL collection never silently loses its hydration path.
+      hydrateProposalReason: true,
     };
   }
 
@@ -473,6 +478,35 @@ export class CrawlingCoreService {
    */
   async getContent(contentId: string): Promise<IContentData> {
     return this.createClient().getContent(contentId);
+  }
+
+  /**
+   * Fetches only the 제안이유 및 주요내용 of a PAL notice from the 국회
+   * 의안정보시스템 (likms.assembly.go.kr) via pal-crawl's LikmsCrawler.
+   *
+   * A PAL contentId (`PRC_...`) doubles as the likms billId, so no bill-number
+   * lookup is needed. The crawler never throws: any network/parse failure
+   * resolves to null, which callers must treat as "still no reason".
+   *
+   * Used by the proposalReason backfill cron, where a browser session per
+   * notice would be far too expensive.
+   *
+   * @param contentId The pal.assembly.go.kr contentId of the notice.
+   */
+  async getProposalReasonViaLikms(contentId: string): Promise<string | null> {
+    const normalized = contentId.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const client = new LikmsCrawler({
+      userAgent: this.crawlConfig.userAgent,
+      timeout: this.crawlConfig.timeout,
+      retryCount: this.crawlConfig.retryCount,
+      customHeaders: this.crawlConfig.customHeaders,
+    });
+
+    return client.getProposalReason(normalized);
   }
 
   /**
@@ -995,7 +1029,9 @@ export class CrawlingCoreService {
             });
 
             if (raw.length <= maxBytes) {
-              screenshot = raw;
+              // pal-crawl >= 2.2.0 ships puppeteer 25, whose screenshot() is
+              // typed as Uint8Array — copy into a Buffer for downstream callers.
+              screenshot = Buffer.from(raw);
             } else {
               for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
                 const recompressed = await sharp(raw)

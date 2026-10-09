@@ -525,6 +525,49 @@ describe('Diffchain API (e2e)', () => {
     });
   });
 
+  // Kept last: it seeds an extra notice whose repair event would otherwise
+  // shift the global comparable-change totals asserted above.
+  it('serves a diffchain-repaired proposalReason on the default detail response', async () => {
+    const noticeArchiveService = moduleRef.get(NoticeArchiveService);
+
+    // Seed through the real archive path so the notice gets its genesis event,
+    // exactly like a row archived before the proposalReason backfill runs.
+    await noticeArchiveService.upsertNoticeArchive(
+      {
+        num: 1004,
+        subject: '의안 1004 백필 대상',
+        proposerCategory: '의원',
+        committee: '정무위원회',
+        link: 'https://example.test/notices/1004',
+        contentId: 'content-1004',
+        attachments: { pdfFile: '', hwpFile: '' },
+      },
+      { proposalReason: '' },
+    );
+
+    // Same append-only write path the proposalReason backfill cron uses.
+    await noticeArchiveService.appendLikmsProposalReasonRepair(
+      1004,
+      '백필된 제안이유\n둘째 줄',
+    );
+
+    const response = await request(app.getHttpServer())
+      .get('/api/notices/1004/detail')
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.originalContent.proposalReason).toBe(
+      '백필된 제안이유\n둘째 줄',
+    );
+    expect(response.body.data.revision).toEqual(
+      expect.objectContaining({
+        requestedRev: null,
+        hasDiffchain: true,
+        isHistorical: false,
+      }),
+    );
+  });
+
   async function seedFixtures(): Promise<void> {
     const noticeStateByNum = new Map<number, Record<string, unknown>>();
 

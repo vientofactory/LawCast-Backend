@@ -34,7 +34,17 @@ export interface SummaryStateBulkUpdateInput {
   status: AISummaryStatus;
 }
 
-export async function getNsmProposalReasonRetryCandidates(
+/**
+ * Returns archived notices that still have an empty proposalReason, covering
+ * both origins: PAL rows (contentId present) are recovered from the 국회
+ * 의안정보시스템 via LikmsCrawler, contentId-less NSM rows fall back to the
+ * NsmLmSts detail capture.
+ *
+ * Includes ended notice periods and preserves their persisted isDone state.
+ * Used by the proposalReason backfill cron to periodically re-seed the retry
+ * queue even when no newly discovered pending bills arrive.
+ */
+export async function getProposalReasonRetryCandidates(
   deps: NoticeArchiveMaintenanceDeps,
   limit: number,
 ): Promise<
@@ -53,12 +63,12 @@ export async function getNsmProposalReasonRetryCandidates(
       'na.proposerCategory AS proposerCategory',
       'na.committee AS committee',
       'na.assemblyLink AS assemblyLink',
+      'na.contentId AS contentId',
       'na.content_bill_number AS contentBillNumber',
       'na.attachmentPdfFile AS attachmentPdfFile',
       'na.attachmentHwpFile AS attachmentHwpFile',
     ])
-    .where('na.contentId IS NULL')
-    .andWhere('na.lifecycle_status = :status', {
+    .where('na.lifecycle_status = :status', {
       status: NOTICE_LIFECYCLE_STATUS.ACTIVE,
     })
     .andWhere("(na.proposalReason IS NULL OR TRIM(na.proposalReason) = '')")
@@ -96,6 +106,7 @@ export async function getNsmProposalReasonRetryCandidates(
       proposerCategory: string;
       committee: string;
       assemblyLink: string;
+      contentId: string | null;
       contentBillNumber: string | null;
       attachmentPdfFile: string | null;
       attachmentHwpFile: string | null;
@@ -113,7 +124,7 @@ export async function getNsmProposalReasonRetryCandidates(
       proposerCategory: row.proposerCategory,
       committee: row.committee,
       link: row.assemblyLink,
-      contentId: null,
+      contentId: row.contentId,
       isDone: summaryStates.get(row.noticeNum)?.isDone ?? false,
       proposalReason: null,
       attachments: {

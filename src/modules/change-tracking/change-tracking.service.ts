@@ -197,6 +197,17 @@ export class ChangeTrackingService {
   private readonly NOTIFICATION_SUPPRESSED_SOURCE_PREFIXES = [
     NoticeChangeSourcePrefix.BOOTSTRAP,
   ];
+  // Sources that only record internal backfill/repair runs (NSM detail
+  // backfill, LIGMS proposalReason recovery). The diffchain event itself is
+  // still appended — the revision timeline, chain audit and AI-summary reset
+  // depend on it — but no user-visible bill change happened, so the
+  // notification is skipped here. See
+  // agent_memories/19-change-notification-exclusion/plan.md.
+  private readonly NOTIFICATION_EXCLUDED_SOURCES: ReadonlySet<NoticeChangeSource> =
+    new Set([
+      NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+      NoticeChangeSource.ARCHIVE_UPDATE_LIKMS_PROPOSAL_REASON,
+    ]);
 
   private parseRecentChangesCursor(
     value?: string,
@@ -927,6 +938,29 @@ export class ChangeTrackingService {
       //   ChangeTrackingService.name,
       //   `Skipped change notification for source-suppressed event (notice=${input.event.noticeNum}, source=${input.event.source})`,
       // );
+      return;
+    }
+
+    if (
+      input.event.source !== null &&
+      this.NOTIFICATION_EXCLUDED_SOURCES.has(input.event.source)
+    ) {
+      logAndBridge({
+        logger: {
+          debug: (message: string) =>
+            LoggerUtils.debugDev(ChangeTrackingService.name, message),
+        },
+        method: 'debug',
+        message: `Skipping change notification for notice ${input.event.noticeNum} because source ${input.event.source} is an internal backfill excluded from notifications`,
+        context: ChangeTrackingService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        bridgeMessage: `Skipped change notification for backfill source **${input.event.source}** (notice **${input.event.noticeNum}**)`,
+        metadata: {
+          noticeNum: input.event.noticeNum,
+          source: input.event.source,
+        },
+      });
       return;
     }
 

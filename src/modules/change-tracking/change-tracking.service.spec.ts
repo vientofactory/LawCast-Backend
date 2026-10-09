@@ -110,7 +110,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         noticeNum: 4001,
         detectedAt: new Date('2026-01-01T00:04:00.000Z'),
         eventType: CHANGE_EVENT_TYPE.UPDATED,
-        source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-transition',
       } as any,
       subject: 'NSM->PAL 이관 법률안',
@@ -198,7 +198,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
         noticeNum: 3001,
         detectedAt: new Date('2026-01-01T00:03:00.000Z'),
         eventType: CHANGE_EVENT_TYPE.UPDATED,
-        source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
         eventHash: 'hash-auto',
       } as any,
       subject: '자동 flush 테스트',
@@ -298,6 +298,87 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     expect(
       notificationBatchService.processChangeNotificationBatch,
     ).not.toHaveBeenCalled();
+  });
+
+  it('skips notification dispatch for internal backfill sources (NSM detail backfill, LIGMS repair)', async () => {
+    const { service, notificationBatchService } = createService();
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 9,
+        noticeNum: 7001,
+        detectedAt: new Date('2026-01-01T00:06:00.000Z'),
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+        eventHash: 'hash-backfill-nsm',
+      } as any,
+      subject: 'NSM 디테일 백필 대상',
+      changedFields: ['proposalReason'],
+    });
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 10,
+        noticeNum: 7002,
+        detectedAt: new Date('2026-01-01T00:07:00.000Z'),
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPDATE_LIKMS_PROPOSAL_REASON,
+        eventHash: 'hash-backfill-likms',
+      } as any,
+      subject: 'LIGMS 제안이유 복구 대상',
+      changedFields: ['proposalReason'],
+    });
+
+    await jest.advanceTimersByTimeAsync(200);
+
+    expect(
+      notificationBatchService.processChangeNotificationBatch,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('keeps dispatching regular sources queued after an excluded backfill source', async () => {
+    const { service, notificationBatchService } = createService();
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 11,
+        noticeNum: 7003,
+        detectedAt: new Date('2026-01-01T00:08:00.000Z'),
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+        eventHash: 'hash-backfill-then-real',
+      } as any,
+      subject: '백필 건너뛰고 발송되는 변경',
+      changedFields: ['proposalReason'],
+    });
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 12,
+        noticeNum: 7004,
+        detectedAt: new Date('2026-01-01T00:09:00.000Z'),
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
+        eventHash: 'hash-real-change',
+      } as any,
+      subject: '실제 변경 법률안',
+      changedFields: ['subject'],
+    });
+
+    await jest.advanceTimersByTimeAsync(200);
+
+    expect(
+      notificationBatchService.processChangeNotificationBatch,
+    ).toHaveBeenCalledTimes(1);
+    const [payloads] = (
+      notificationBatchService.processChangeNotificationBatch as jest.Mock
+    ).mock.calls[0];
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      noticeNum: 7004,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+    });
   });
 
   it('suppresses all change notifications while bootstrap suppression is active', async () => {
