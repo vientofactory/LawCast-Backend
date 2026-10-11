@@ -381,6 +381,114 @@ describe('ChangeTrackingService (diffchain batching)', () => {
     });
   });
 
+  it('keeps excluded backfill payloads out of the collection-end flush', async () => {
+    const { service, notificationBatchService } = createService();
+
+    service.beginChangeNotificationCollection();
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 13,
+        noticeNum: 7005,
+        detectedAt: new Date('2026-01-01T00:10:00.000Z'),
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+        eventHash: 'hash-excluded-collection-nsm',
+      } as any,
+      subject: '컬렉션 중 백필 건 (NSM)',
+      changedFields: ['proposalReason'],
+    });
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 14,
+        noticeNum: 7006,
+        detectedAt: new Date('2026-01-01T00:11:00.000Z'),
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPDATE_LIKMS_PROPOSAL_REASON,
+        eventHash: 'hash-excluded-collection-likms',
+      } as any,
+      subject: '컬렉션 중 백필 건 (LIGMS)',
+      changedFields: ['proposalReason'],
+    });
+
+    await service.endChangeNotificationCollection();
+
+    expect(
+      notificationBatchService.processChangeNotificationBatch,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('drops excluded backfill payloads even when a flush is forced explicitly', async () => {
+    const { service, notificationBatchService } = createService();
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 15,
+        noticeNum: 7007,
+        detectedAt: new Date('2026-01-01T00:12:00.000Z'),
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL,
+        eventHash: 'hash-excluded-forced-flush',
+      } as any,
+      subject: '강제 flush 시 백필 건',
+      changedFields: ['proposalDate', 'proposalSession'],
+    });
+
+    await service.flushQueuedChangeNotificationsNow();
+
+    expect(
+      notificationBatchService.processChangeNotificationBatch,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('delivers only the real change when an excluded payload was dispatched first in the same collection', async () => {
+    const { service, notificationBatchService } = createService();
+
+    service.beginChangeNotificationCollection();
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 16,
+        noticeNum: 7008,
+        detectedAt: new Date('2026-01-01T00:13:00.000Z'),
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPDATE_LIKMS_PROPOSAL_REASON,
+        eventHash: 'hash-mixed-first-excluded',
+      } as any,
+      subject: '먼저 들어온 백필 건',
+      changedFields: ['proposalReason'],
+    });
+
+    await service.dispatchChangeNotification({
+      event: {
+        id: 17,
+        noticeNum: 7009,
+        detectedAt: new Date('2026-01-01T00:14:00.000Z'),
+        eventType: CHANGE_EVENT_TYPE.UPDATED,
+        source: NoticeChangeSource.ARCHIVE_UPSERT,
+        eventHash: 'hash-mixed-second-real',
+      } as any,
+      subject: '뒤에 들어온 실제 변경',
+      changedFields: ['subject'],
+    });
+
+    await service.endChangeNotificationCollection();
+
+    expect(
+      notificationBatchService.processChangeNotificationBatch,
+    ).toHaveBeenCalledTimes(1);
+    const [payloads] = (
+      notificationBatchService.processChangeNotificationBatch as jest.Mock
+    ).mock.calls[0];
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      noticeNum: 7009,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+    });
+  });
+
   it('suppresses all change notifications while bootstrap suppression is active', async () => {
     const { service, notificationBatchService } = createService();
 

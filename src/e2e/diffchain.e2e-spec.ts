@@ -566,7 +566,116 @@ describe('Diffchain API (e2e)', () => {
         isHistorical: false,
       }),
     );
+
+    // The repair event must stay off the change-notification batch while
+    // still landing on the chain (the revision above proves it exists).
+    await noticeArchiveService.flushQueuedChangeNotifications();
+    expect(
+      collectChangePayloads().filter(
+        (payload) => payload.source === 'archive:likmsProposalReason',
+      ),
+    ).toHaveLength(0);
+    const likmsTimeline = await changeTrackingService.getNoticeChangeTimeline({
+      noticeNum: 1004,
+    });
+    expect(
+      likmsTimeline.some(
+        (item) =>
+          item.source ===
+          NoticeChangeSource.ARCHIVE_UPDATE_LIKMS_PROPOSAL_REASON,
+      ),
+    ).toBe(true);
   });
+
+  it('appends an NSM detail-backfill event to the chain without queuing a change notification', async () => {
+    const noticeArchiveService = moduleRef.get(NoticeArchiveService);
+
+    // NSM-origin row (contentId null) archived with an empty reason.
+    await noticeArchiveService.upsertNoticeArchive(
+      {
+        num: 1005,
+        subject: '의안 1005 NSM 백필 대상',
+        proposerCategory: '의원',
+        committee: '정무위원회',
+        link: 'https://example.test/notices/1005',
+        contentId: null,
+        attachments: { pdfFile: '', hwpFile: '' },
+      },
+      { proposalReason: '' },
+    );
+
+    await noticeArchiveService.updateNsmHtmlAndDetail(1005, {
+      html: '<html><body>detail</body></html>',
+      sha256: 'sha-1005-detail',
+      proposalReason: '복구된 제안이유 본문',
+      httpMetadata: null,
+    });
+
+    await noticeArchiveService.flushQueuedChangeNotifications();
+
+    expect(
+      collectChangePayloads().filter(
+        (payload) => payload.source === 'archive:updateNsmHtmlAndDetail',
+      ),
+    ).toHaveLength(0);
+
+    const timeline = await changeTrackingService.getNoticeChangeTimeline({
+      noticeNum: 1005,
+    });
+    expect(
+      timeline.some(
+        (item) =>
+          item.source ===
+            NoticeChangeSource.ARCHIVE_UPDATE_NSM_HTML_AND_DETAIL &&
+          item.eventType === CHANGE_EVENT_TYPE.UPDATED,
+      ),
+    ).toBe(true);
+  });
+
+  it('still delivers a real archive:upsert change to the change-notification batch (control)', async () => {
+    const noticeArchiveService = moduleRef.get(NoticeArchiveService);
+
+    // Same bill, changed subject -> a genuine UPDATE diff through the
+    // regular upsert path. Proves the exclusion assertions above are not
+    // vacuously green (the batch mock does receive real payloads).
+    await noticeArchiveService.upsertNoticeArchive(
+      {
+        num: 1005,
+        subject: '의안 1005 수정 제목',
+        proposerCategory: '의원',
+        committee: '정무위원회',
+        link: 'https://example.test/notices/1005',
+        contentId: null,
+        attachments: { pdfFile: '', hwpFile: '' },
+      },
+      { proposalReason: '복구된 제안이유 본문' },
+    );
+
+    await noticeArchiveService.flushQueuedChangeNotifications();
+
+    const upsertPayloads = collectChangePayloads().filter(
+      (payload) =>
+        payload.source === 'archive:upsert' && payload.noticeNum === 1005,
+    );
+    expect(upsertPayloads.length).toBeGreaterThan(0);
+    expect(upsertPayloads[0]).toMatchObject({
+      noticeNum: 1005,
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
+    });
+    expect(upsertPayloads[0].changedFields).toContain('subject');
+  });
+
+  function collectChangePayloads(): Array<Record<string, unknown>> {
+    const batch = moduleRef.get(NotificationBatchService) as unknown as {
+      processChangeNotificationBatch: jest.Mock;
+    };
+    return batch.processChangeNotificationBatch.mock.calls.flatMap(
+      (call: unknown[]) =>
+        (Array.isArray(call[0]) ? call[0] : [call[0]]) as Array<
+          Record<string, unknown>
+        >,
+    );
+  }
 
   async function seedFixtures(): Promise<void> {
     const noticeStateByNum = new Map<number, Record<string, unknown>>();

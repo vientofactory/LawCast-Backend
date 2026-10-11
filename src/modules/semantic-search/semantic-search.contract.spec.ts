@@ -29,6 +29,12 @@ const PY_APP_PATH = path.join(
   'service',
   'app.py',
 );
+const PY_CONFIG_PATH = path.join(
+  WORKSPACE_ROOT,
+  'semantic-search',
+  'lawcast_semantic',
+  'config.py',
+);
 
 const readContractSource = (filePath: string): string => {
   if (!fs.existsSync(filePath)) {
@@ -163,15 +169,45 @@ const pyModels = (): Record<string, FieldMap> => {
   return models;
 };
 
+/**
+ * Numeric constants from both Python contract files. The sidecar request
+ * bounds live in config.py as env-injected values
+ * (`MAX_K = int(os.environ.get('LAWCAST_SEMANTIC_MAX_K', '200'))`), so the
+ * second pattern reads the code default — the value the sidecar serves when
+ * an operator sets no override, which is what the TS side pins.
+ */
 const pyConstants = (): Record<string, number> => {
   const constants: Record<string, number> = {};
-  for (const line of readContractSource(PY_APP_PATH).split('\n')) {
-    const match = line.match(/^([A-Z_]+) = (\d+)$/);
-    if (match) {
-      constants[match[1]] = Number(match[2]);
+  for (const filePath of [PY_APP_PATH, PY_CONFIG_PATH]) {
+    for (const line of readContractSource(filePath).split('\n')) {
+      const match =
+        line.match(/^([A-Z_]+) = (\d+)$/) ??
+        line.match(
+          /^([A-Z_]+) = int\(os\.environ\.get\('[A-Z_]+', '(\d+)'\)\)$/,
+        );
+      if (match) {
+        constants[match[1]] = Number(match[2]);
+      }
     }
   }
   return constants;
+};
+
+/**
+ * Keys emitted by the sidecar's `GET /health` payload. `health()` returns a
+ * plain dict rather than a pydantic model, so unlike the wire models above
+ * it cannot go through `pyModels()` — the emitted keys are read from the
+ * `return {` body instead (fixed indentation: 8 spaces inside the handler).
+ */
+const pyHealthKeys = (): string[] => {
+  const source = readContractSource(PY_APP_PATH);
+  const body = source.match(
+    /@app\.get\('\/health'\)\ndef health\(\)[\s\S]*?return \{([\s\S]*?)\n {4}\}/,
+  )?.[1];
+  if (!body) {
+    throw new Error(`health() payload not found in ${PY_APP_PATH}`);
+  }
+  return [...body.matchAll(/^ {8}'(\w+)':/gm)].map((match) => match[1]);
 };
 
 describe('semantic sidecar cross-language contract', () => {
@@ -188,6 +224,24 @@ describe('semantic sidecar cross-language contract', () => {
   it('pins the sidecar chunk-window cap (MAX_K) to SIDE_CAR_MAX_CHUNK_K', () => {
     // DEFAULT_K is deliberately not pinned: the sidecar default counts
     // chunks while the API default counts notices — different semantics.
+    // MAX_K defaults live in config.py (env-injectable); the pin compares
+    // those code defaults, so `expect(...).toBeDefined()` catches a parse
+    // miss as a failure rather than a silent undefined pass.
+    expect(pyConstants().MAX_K).toBeDefined();
     expect(pyConstants().MAX_K).toBe(tsConstants().SIDE_CAR_MAX_CHUNK_K);
+  });
+
+  it('pins the /health payload (Python) to SemanticSidecarHealthResponse (TS)', () => {
+    // The backend reads the runtime chunk cap (maxK) and the status block
+    // from GET /health; a field rename on either side would silently fall
+    // back to the compiled default or drop a status field, so every key the
+    // TS type declares must be emitted by the sidecar.
+    const pyKeys = pyHealthKeys();
+    expect(pyKeys.length).toBeGreaterThan(0);
+    for (const key of Object.keys(
+      tsInterface('SemanticSidecarHealthResponse'),
+    )) {
+      expect(pyKeys).toContain(key);
+    }
   });
 });
