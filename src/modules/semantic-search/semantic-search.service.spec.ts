@@ -19,7 +19,10 @@ describe('SemanticSearchService', () => {
     jest.fn<(query: unknown) => Promise<Record<string, unknown>>>();
   const mockedAxios = axios as jest.Mocked<typeof axios>;
 
-  const createService = (enabled = true): SemanticSearchService => {
+  const createService = (
+    enabled = true,
+    chunkCapRefreshMs = 60_000,
+  ): SemanticSearchService => {
     mockedAxios.create.mockReturnValue({ get: mockGet } as any);
 
     const configService = {
@@ -27,6 +30,8 @@ describe('SemanticSearchService', () => {
         if (key === 'semanticSearch.enabled') return enabled;
         if (key === 'semanticSearch.apiUrl') return 'http://127.0.0.1:8300';
         if (key === 'semanticSearch.timeout') return 10000;
+        if (key === 'semanticSearch.chunkCapRefreshMs')
+          return chunkCapRefreshMs;
         return undefined;
       }),
     } as unknown as ConfigService;
@@ -48,10 +53,33 @@ describe('SemanticSearchService', () => {
     text,
   });
 
+  /** Calls the service made to the sidecar's `/search` endpoint. */
+  const searchCalls = () =>
+    mockGet.mock.calls.filter((call) => call[0] === '/search');
+
+  /** Calls the service made to the sidecar's `/health` endpoint. */
+  const healthCalls = () =>
+    mockGet.mock.calls.filter((call) => call[0] === '/health');
+
   const requestedChunkK = (): number[] =>
-    mockGet.mock.calls.map(
+    searchCalls().map(
       (call) => (call[1] as { params: { k: number } }).params.k,
     );
+
+  /**
+   * `/health` payload for cap-reading tests; omit `maxK` to model a sidecar
+   * older than the field (it then has the compiled default hardcoded).
+   */
+  const healthPayload = (maxK?: number) => ({
+    data: {
+      status: 'ready',
+      model: 'nlpai-lab/KURE-v1',
+      indexedChunks: 93031,
+      lastUpdateAt: STAMP,
+      lastUpdateTriggeredAt: TRIGGERED_AT,
+      ...(maxK === undefined ? {} : { maxK }),
+    },
+  });
 
   const chunkWindow = (spec: Array<[number, number]>) =>
     spec.flatMap(([noticeNum, count]) =>
@@ -59,6 +87,23 @@ describe('SemanticSearchService', () => {
         sidecarChunk(noticeNum, `청크 ${noticeNum}-${i}`),
       ),
     );
+
+  /** A full-size window holding `notices` distinct notices: the first
+   * notice carries the bulk of the chunks, the rest one each. */
+  const fullWindow = (size: number, notices: number) => ({
+    data: {
+      query: '질의',
+      k: size,
+      model: 'nlpai-lab/KURE-v1',
+      results: chunkWindow([
+        [101, size - notices + 1],
+        ...Array.from(
+          { length: notices - 1 },
+          (_, i) => [102 + i, 1] as [number, number],
+        ),
+      ]),
+    },
+  });
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -103,7 +148,7 @@ describe('SemanticSearchService', () => {
     expect(mockGet).toHaveBeenCalledWith('/search', {
       params: { query: '세입자 보호', k: 15 },
     });
-    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(searchCalls()).toHaveLength(1);
   });
 
   it('keeps weak hits out of results and passes them alongside', async () => {
@@ -160,6 +205,7 @@ describe('SemanticSearchService', () => {
   it('widens the chunk window until k notice hits are filled', async () => {
     const service = createService();
     mockGet
+      .mockResolvedValueOnce(healthPayload(200))
       .mockResolvedValueOnce({
         data: {
           query: '세입자 보호',
@@ -198,25 +244,10 @@ describe('SemanticSearchService', () => {
 
   it('stops widening at the sidecar chunk cap and trims to k', async () => {
     const service = createService();
-    // A full-size window holding `notices` distinct notices: the first
-    // notice carries the bulk of the chunks, the rest one each.
-    const window = (size: number, notices: number) => ({
-      data: {
-        query: '질의',
-        k: size,
-        model: 'nlpai-lab/KURE-v1',
-        results: chunkWindow([
-          [101, size - notices + 1],
-          ...Array.from(
-            { length: notices - 1 },
-            (_, i) => [102 + i, 1] as [number, number],
-          ),
-        ]),
-      },
-    });
     mockGet
-      .mockResolvedValueOnce(window(150, 40))
-      .mockResolvedValueOnce(window(200, 80));
+      .mockResolvedValueOnce(healthPayload(200))
+      .mockResolvedValueOnce(fullWindow(150, 40))
+      .mockResolvedValueOnce(fullWindow(200, 80));
 
     const result = await service.searchSemantic('질의', 50);
 
@@ -236,6 +267,7 @@ describe('SemanticSearchService', () => {
       },
     });
     mockGet
+      .mockResolvedValueOnce(healthPayload(200))
       .mockResolvedValueOnce(singleNoticeWindow(150))
       .mockResolvedValueOnce(singleNoticeWindow(200));
 
@@ -243,7 +275,192 @@ describe('SemanticSearchService', () => {
 
     expect(result.results).toHaveLength(1);
     expect(requestedChunkK()).toEqual([150, 200]);
-    expect(mockGet).toHaveBeenCalledTimes(2);
+    expect(searchCalls()).toHaveLength(2);
+  });
+
+  // Cap negotiation: the sidecar owns the chunk-window cap
+  // (LAWCAST_SEMANTIC_MAX_K) and reports it at `/health`; the backend must
+  // follow it instead of the compiled SIDE_CAR_MAX_CHUNK_K, and must degrade
+  // to that constant whenever the report is unavailable or too old.
+  it('clamps every chunk window to the cap the sidecar reports', async () => {
+    const service = createService();
+    mockGet
+      .mockResolvedValueOnce(healthPayload(30))
+      .mockResolvedValueOnce(fullWindow(30, 2));
+
+    const result = await service.searchSemantic('질의', 50);
+
+    // k * 3 would ask for 150 chunks; the reported cap of 30 wins, and the
+    // window already sits at the cap, so no widening pass follows.
+    expect(requestedChunkK()).toEqual([30]);
+    expect(result.mode).toBe('semantic');
+    expect(result.results).toHaveLength(2);
+    expect(mockSearchNotices).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the compiled cap when /health is unreachable', async () => {
+    const service = createService();
+    mockGet
+      .mockRejectedValueOnce({
+        isAxiosError: true,
+        code: 'ECONNREFUSED',
+        message: 'connect ECONNREFUSED 127.0.0.1:8300',
+      })
+      .mockResolvedValueOnce(fullWindow(150, 40))
+      .mockResolvedValueOnce(fullWindow(200, 80));
+
+    const result = await service.searchSemantic('질의', 50);
+
+    // The health failure degrades to SIDE_CAR_MAX_CHUNK_K: widening still
+    // clamps at 200 and the search keeps serving.
+    expect(result.mode).toBe('semantic');
+    expect(result.results).toHaveLength(50);
+    expect(requestedChunkK()).toEqual([150, 200]);
+    expect(healthCalls()).toHaveLength(1);
+  });
+
+  it('falls back to the compiled cap when an older sidecar omits maxK', async () => {
+    const service = createService();
+    mockGet
+      .mockResolvedValueOnce(healthPayload()) // no maxK field
+      .mockResolvedValueOnce(fullWindow(150, 40))
+      .mockResolvedValueOnce(fullWindow(200, 80));
+
+    await service.searchSemantic('질의', 50);
+
+    // A sidecar predating the field has 200 hardcoded, which is exactly the
+    // compiled default the backend falls back to.
+    expect(requestedChunkK()).toEqual([150, 200]);
+  });
+
+  it('reads the cap once per freshness window instead of once per search', async () => {
+    const service = createService();
+    mockGet
+      .mockResolvedValueOnce(healthPayload(50))
+      .mockResolvedValue(fullWindow(15, 5));
+
+    await service.searchSemantic('질의', 5);
+    await service.searchSemantic('질의', 5);
+
+    expect(healthCalls()).toHaveLength(1);
+    expect(searchCalls()).toHaveLength(2);
+    // The reported cap applies to both searches (15 < 50 stays untouched).
+    expect(requestedChunkK()).toEqual([15, 15]);
+  });
+
+  it('re-reads the cap after the freshness window so a restart lands', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-10-02T00:00:00Z'));
+    try {
+      const service = createService();
+      mockGet
+        .mockResolvedValueOnce(healthPayload(50))
+        .mockResolvedValueOnce(fullWindow(15, 5))
+        .mockResolvedValueOnce(healthPayload(80))
+        .mockResolvedValueOnce(fullWindow(15, 5));
+
+      await service.searchSemantic('질의', 5);
+      jest.setSystemTime(new Date('2026-10-02T00:01:01Z')); // beyond the TTL
+      await service.searchSemantic('질의', 5);
+
+      expect(healthCalls()).toHaveLength(2);
+      expect(searchCalls()).toHaveLength(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('honors an injected cap freshness window longer than the default', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-10-02T00:00:00Z'));
+    try {
+      // SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS = 5 minutes: the search 61s
+      // later must reuse the cached cap instead of re-reading /health.
+      const service = createService(true, 5 * 60 * 1000);
+      mockGet
+        .mockResolvedValueOnce(healthPayload(50))
+        .mockResolvedValueOnce(fullWindow(15, 5))
+        .mockResolvedValueOnce(fullWindow(15, 5));
+
+      await service.searchSemantic('질의', 5);
+      jest.setSystemTime(new Date('2026-10-02T00:01:01Z'));
+      await service.searchSemantic('질의', 5);
+
+      expect(healthCalls()).toHaveLength(1);
+      expect(searchCalls()).toHaveLength(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('re-reads the cap every search when the injected window is zero', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-10-02T00:00:00Z'));
+    try {
+      const service = createService(true, 0);
+      mockGet
+        .mockResolvedValueOnce(healthPayload(50))
+        .mockResolvedValueOnce(fullWindow(15, 5))
+        .mockResolvedValueOnce(healthPayload(50))
+        .mockResolvedValueOnce(fullWindow(15, 5));
+
+      await service.searchSemantic('질의', 5);
+      await service.searchSemantic('질의', 5);
+
+      // A zero window disables caching (immediate propagation).
+      expect(healthCalls()).toHaveLength(2);
+      expect(searchCalls()).toHaveLength(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('refreshes the cap and retries when a stale cap gets the first window rejected', async () => {
+    const service = createService();
+    mockGet
+      .mockResolvedValueOnce(healthPayload(200)) // cached cap (pre-restart)
+      .mockRejectedValueOnce({
+        isAxiosError: true,
+        response: { status: 422 },
+        message: 'Request failed with status code 422',
+      }) // first window asked for 150 chunks, cap is now 50
+      .mockResolvedValueOnce(healthPayload(50)) // forced re-read
+      .mockResolvedValueOnce({
+        data: {
+          query: '질의',
+          k: 50,
+          model: 'nlpai-lab/KURE-v1',
+          results: chunkWindow([[101, 50]]),
+        },
+      });
+
+    const result = await service.searchSemantic('질의', 50);
+
+    // The rejection was cap staleness, not a client error: one re-read, one
+    // retry clamped to the reported cap, no keyword fallback involved.
+    expect(result.mode).toBe('semantic');
+    expect(requestedChunkK()).toEqual([150, 50]);
+    expect(healthCalls()).toHaveLength(2);
+    expect(mockSearchNotices).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a 422 a refreshed cap cannot explain without a second window', async () => {
+    const service = createService();
+    mockGet
+      .mockResolvedValueOnce(healthPayload(200))
+      .mockRejectedValueOnce({
+        isAxiosError: true,
+        response: { status: 422 },
+        message: 'Request failed with status code 422',
+      })
+      .mockResolvedValueOnce(healthPayload(200)); // re-read says nothing changed
+
+    await expect(service.searchSemantic('질의', 50)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(searchCalls()).toHaveLength(1);
+    expect(healthCalls()).toHaveLength(2);
+    expect(mockSearchNotices).not.toHaveBeenCalled();
   });
 
   // Failure-policy matrix: a failed WIDENING request never discards the
@@ -280,6 +497,7 @@ describe('SemanticSearchService', () => {
     async (_label, rejection) => {
       const service = createService();
       mockGet
+        .mockResolvedValueOnce(healthPayload(200))
         .mockResolvedValueOnce({
           data: {
             query: '세입자 보호',
@@ -322,7 +540,7 @@ describe('SemanticSearchService', () => {
     expect(result.fallbackReason).toContain('키워드 검색');
     // No sidecar response ever arrived -> no index time to report.
     expect(result.lastUpdateAt).toBeNull();
-    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(searchCalls()).toHaveLength(1);
     expect(mockSearchNotices).toHaveBeenCalledTimes(1);
   });
 
@@ -350,7 +568,7 @@ describe('SemanticSearchService', () => {
     expect(result.weakResults).toEqual([]);
     // The sidecar DID answer, so its index time still rides the response.
     expect(result.lastUpdateAt).toBe(STAMP);
-    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(searchCalls()).toHaveLength(1);
     expect(mockSearchNotices).not.toHaveBeenCalled();
   });
 

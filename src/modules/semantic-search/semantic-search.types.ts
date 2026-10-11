@@ -73,3 +73,20 @@ export interface SemanticEngineHealthResponse {
   lastUpdateAt: string | null;
   lastUpdateTriggeredAt: string | null;
 }
+
+/**
+ * Sidecar `GET /health` payload as the service consumes it (field names
+ * verbatim from `health()` in semantic-search/service/app.py): a superset of
+ * the UI-facing `SemanticEngineHealthResponse`, whose extra fields never
+ * cross the backend API boundary.
+ */
+export interface SemanticSidecarHealthResponse extends SemanticEngineHealthResponse {
+  /**
+   * Chunk-window cap the sidecar enforces on `/search` (unit: chunks, not
+   * notices) — the value of its `LAWCAST_SEMANTIC_MAX_K`, so the backend
+   * follows an env change after a sidecar restart without a backend deploy.
+   * Optional: a sidecar older than this field omits it, and the service then
+   * falls back to `SIDE_CAR_MAX_CHUNK_K` (which that sidecar has hardcoded).
+   */
+  maxK?: number;
+}

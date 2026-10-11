@@ -33,6 +33,12 @@ export interface AppConfig {
     enabled: boolean;
     apiUrl: string;
     timeout: number;
+    /**
+     * Freshness window (ms) for the sidecar chunk-window cap read from
+     * `GET /health` (`maxK`). A sidecar restart that changes
+     * `LAWCAST_SEMANTIC_MAX_K` reaches the backend within this window.
+     */
+    chunkCapRefreshMs: number;
   };
   notion: {
     apiKey: string;
@@ -454,6 +460,14 @@ export default (): AppConfig => ({
     apiUrl:
       process.env.SEMANTIC_SEARCH_API_URL?.trim() || 'http://127.0.0.1:8300',
     timeout: parseInt(process.env.SEMANTIC_SEARCH_TIMEOUT, 10) || 10000,
+    // How often the backend re-reads the sidecar's reported chunk cap
+    // (`maxK`). Kept out of the code so an operator can tighten the window
+    // (or force a re-read every search) without a backend deploy. The
+    // compiled default mirrors the historical hardcoded 60s.
+    chunkCapRefreshMs: parseIntWithDefault(
+      process.env.SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS,
+      60 * 1000,
+    ),
   },
   // Notion-backed admin notice board (read-only; CRUD happens in Notion).
   // The feature is enabled only when both apiKey and databaseId are set.

@@ -16,6 +16,7 @@ import {
   SemanticEngineHealthResponse,
   SemanticSearchResponse,
   SemanticSidecarChunk,
+  SemanticSidecarHealthResponse,
   SemanticSidecarSearchResponse,
 } from './semantic-search.types';
 
@@ -31,12 +32,32 @@ export class SemanticSearchService {
   );
   private readonly http: AxiosInstance;
   private readonly enabled: boolean;
+  /**
+   * Chunk-window cap last reported by the sidecar's `/health` (`maxK`).
+   * Starts at the compiled default so the first search behaves exactly like
+   * the pre-negotiation code when health is unreachable or too old to report.
+   */
+  private chunkCap = SIDE_CAR_MAX_CHUNK_K;
+  /** Date.now() of the last cap read; stamped even when the read fails. */
+  private chunkCapReadAt = 0;
+  /**
+   * Cap freshness window (ms): `/health` is read at most this often, so a
+   * cap change on the sidecar (`LAWCAST_SEMANTIC_MAX_K`, sidecar restart)
+   * reaches the backend within this window, while the happy path costs at
+   * most one extra request per window instead of one per search. Injected
+   * from `SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS` (default 60s) so operators
+   * can tune how fast a sidecar cap change is picked up without a backend
+   * deploy; a non-positive value forces a re-read on every search.
+   */
+  private readonly chunkCapRefreshMs: number;
 
   constructor(
     configService: ConfigService,
     private readonly noticeSearchService: NoticeSearchService,
   ) {
     this.enabled = configService.get<boolean>('semanticSearch.enabled') ?? true;
+    this.chunkCapRefreshMs =
+      configService.get<number>('semanticSearch.chunkCapRefreshMs') ?? 60_000;
     this.http = axios.create({
       baseURL: configService.get<string>('semanticSearch.apiUrl'),
       timeout: configService.get<number>('semanticSearch.timeout') ?? 10000,
@@ -162,27 +183,115 @@ export class SemanticSearchService {
   }
 
   /**
-   * Collect chunk windows until they cover k distinct notices.
+   * Collect chunk windows until they cover k distinct notices — the outer
+   * policy: resolve the sidecar's current cap, then recover once from a cap
+   * that went stale between the cache read and a sidecar restart.
+   *
+   * The cache can be older than a restart that LOWERED
+   * `LAWCAST_SEMANTIC_MAX_K`; the first window would then ask for more
+   * chunks than the sidecar accepts and be rejected with 422 (a widening
+   * rejection never reaches here — that path answers with the partial
+   * chunks already collected). One forced health re-read + retry follows,
+   * but only when the sidecar actually reports a lower cap: an unchanged
+   * cap means the 422 is a genuine client-contract violation (e.g. an
+   * over-long query) and is surfaced immediately without a second request.
+   */
+  private async collectChunks(query: string, k: number) {
+    const cap = await this.resolveChunkCap();
+    try {
+      return await this.collectChunkWindows(query, k, cap);
+    } catch (error) {
+      if (!this.isChunkWindowRejected(error)) {
+        throw error;
+      }
+      const refreshed = await this.resolveChunkCap(true);
+      if (refreshed >= cap) {
+        throw error;
+      }
+      this.logger.warn(
+        `semantic sidecar chunk cap changed (${cap} -> ${refreshed}); ` +
+          'retrying the first window',
+      );
+      return this.collectChunkWindows(query, k, refreshed);
+    }
+  }
+
+  /**
+   * Chunk-window cap currently enforced by the sidecar, TTL-cached from
+   * `GET /health` (`maxK`). Reading the cap here — instead of hardcoding it —
+   * is what lets an operator change `LAWCAST_SEMANTIC_MAX_K` with only a
+   * sidecar restart. Failure policy: a failed read keeps the last known cap
+   * (a health blip must not downgrade a known custom cap to the compiled
+   * default, which could overshoot and get the search rejected), and the
+   * read attempt is stamped either way so a dead sidecar costs one health
+   * probe per window rather than one per search.
+   */
+  private async resolveChunkCap(force = false): Promise<number> {
+    const now = Date.now();
+    if (!force && now - this.chunkCapReadAt < this.chunkCapRefreshMs) {
+      return this.chunkCap;
+    }
+    this.chunkCapReadAt = now;
+    try {
+      const response =
+        await this.http.get<SemanticSidecarHealthResponse>('/health');
+      this.adoptChunkCap(response.data);
+    } catch (error) {
+      this.logger.warn(
+        `semantic sidecar health unavailable while reading the chunk cap ` +
+          `(${this.describeError(error)}); using ${this.chunkCap}`,
+      );
+    }
+    return this.chunkCap;
+  }
+
+  /**
+   * Adopt the `maxK` of a `/health` payload. Absent or invalid values keep
+   * the current cap: a sidecar older than the field has the default
+   * hardcoded anyway, and keeping a known cap after an image downgrade can
+   * only under-ask (never overshoot into a 422).
+   */
+  private adoptChunkCap(payload: SemanticSidecarHealthResponse | undefined) {
+    const reported = payload?.maxK;
+    if (
+      typeof reported === 'number' &&
+      Number.isInteger(reported) &&
+      reported >= 1
+    ) {
+      this.chunkCap = reported;
+    }
+  }
+
+  /** A 422 from `/search`: query or k outside the sidecar's accepted bounds. */
+  private isChunkWindowRejected(error: unknown): boolean {
+    return axios.isAxiosError(error) && error.response?.status === 422;
+  }
+
+  /**
+   * Collect chunk windows until they cover k distinct notices, clamping
+   * every request to `cap` (the sidecar's reported chunk-window cap; `k`
+   * counts CHUNKS here).
    *
    * `k` is a result count, not a cap: the sidecar ranks chunks, so one
    * top-chunkK fetch can collapse to fewer than k distinct notices. Fetch an
-   * oversized chunk window first and widen it (growth up to the sidecar cap)
-   * while dedup leaves the result short. Widening stops as soon as the
-   * sidecar runs out of chunks (it returned fewer than requested), so a
-   * small corpus costs exactly one request. The sidecar splits each window
-   * into a clear tier (`results`) and a weak band (`weakResults`); both ride
-   * along, and exhaustion counts the two tiers together (the tiers cut the
-   * same top-k window).
+   * oversized chunk window first and widen it (growth up to `cap`) while
+   * dedup leaves the result short. Widening stops as soon as the sidecar runs
+   * out of chunks (it returned fewer than requested), so a small corpus
+   * costs exactly one request. The sidecar splits each window into a clear
+   * tier (`results`) and a weak band (`weakResults`); both ride along, and
+   * exhaustion counts the two tiers together (the tiers cut the same top-k
+   * window).
    *
    * Failure policy: only a failed FIRST window propagates (the caller turns
    * it into a fallback or a request error). A failed widening request keeps
-   * the chunks collected so far — partial results beat discarding them.
-   * The sidecar's `lastUpdateAt` rides along: the last successful window
-   * carries the serving generation's index time.
+   * the chunks collected so far — partial results beat discarding them. The
+   * sidecar's `lastUpdateAt` rides along: the last successful window carries
+   * the serving generation's index time.
    */
-  private async collectChunks(
+  private async collectChunkWindows(
     query: string,
     k: number,
+    cap: number,
   ): Promise<{
     chunks: SemanticSidecarChunk[];
     weakChunks: SemanticSidecarChunk[];
@@ -191,7 +300,7 @@ export class SemanticSearchService {
     const collected: SemanticSidecarChunk[] = [];
     const weakCollected: SemanticSidecarChunk[] = [];
     let lastUpdateAt: string | null = null;
-    let chunkK = Math.min(k * CHUNK_FETCH_INITIAL_FACTOR, SIDE_CAR_MAX_CHUNK_K);
+    let chunkK = Math.min(k * CHUNK_FETCH_INITIAL_FACTOR, cap);
     for (;;) {
       let window: SemanticSidecarSearchResponse;
       try {
@@ -222,18 +331,14 @@ export class SemanticSearchService {
       const hits = this.toNoticeHits(collected);
       const corpusExhausted =
         window.results.length + windowWeak.length < chunkK;
-      if (
-        hits.length >= k ||
-        corpusExhausted ||
-        chunkK >= SIDE_CAR_MAX_CHUNK_K
-      ) {
+      if (hits.length >= k || corpusExhausted || chunkK >= cap) {
         return {
           chunks: collected,
           weakChunks: weakCollected,
           lastUpdateAt,
         };
       }
-      chunkK = Math.min(chunkK * CHUNK_FETCH_GROWTH, SIDE_CAR_MAX_CHUNK_K);
+      chunkK = Math.min(chunkK * CHUNK_FETCH_GROWTH, cap);
     }
   }
 
@@ -253,7 +358,12 @@ export class SemanticSearchService {
     }
     try {
       const response =
-        await this.http.get<SemanticEngineHealthResponse>('/health');
+        await this.http.get<SemanticSidecarHealthResponse>('/health');
+      // A health read is also a fresh cap read: the frontend status poll
+      // keeps the chunk cap warm for free. Only the UI subset below is
+      // returned — `maxK` stays internal to this service.
+      this.chunkCapReadAt = Date.now();
+      this.adoptChunkCap(response.data);
       const { status, indexedChunks, lastUpdateAt, lastUpdateTriggeredAt } =
         response.data;
       return { status, indexedChunks, lastUpdateAt, lastUpdateTriggeredAt };
