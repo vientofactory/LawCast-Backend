@@ -273,7 +273,7 @@ describe('CrawlingCoreService', () => {
         },
         hydrateTruncatedTitles: false,
         // PAL collection must keep the pal-crawl 2.2.0 proposalReason
-        // hydration path (empty PAL 제안이유 -> 국회 의안정보시스템 보정).
+        // hydration path (empty PAL `제안이유` -> `국회 의안정보시스템` correction).
         hydrateProposalReason: true,
       });
       expect(mockPalCrawl.getContent).toHaveBeenCalledWith(contentId);

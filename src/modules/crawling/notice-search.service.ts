@@ -14,7 +14,6 @@ export interface SearchNoticesQuery {
   page: number;
   limit: number;
   includeDone?: boolean;
-  fullText?: boolean;
 }
 
 export interface SearchNoticesItem {
@@ -57,7 +56,7 @@ export class NoticeSearchService {
   ) {}
 
   async searchNotices(query: SearchNoticesQuery): Promise<SearchNoticesResult> {
-    const key = `${query.keyword.trim()}|${(query.proposer || '').trim()}|${query.page}|${query.limit}|${query.includeDone ?? true}|${query.fullText ?? false}`;
+    const key = `${query.keyword.trim()}|${(query.proposer || '').trim()}|${query.page}|${query.limit}|${query.includeDone ?? true}`;
 
     const existing = this.inFlight.get(key);
     if (existing) {
@@ -75,7 +74,7 @@ export class NoticeSearchService {
   private async executeSearch(
     query: SearchNoticesQuery,
   ): Promise<SearchNoticesResult> {
-    const { page, limit, includeDone = true, fullText = false } = query;
+    const { page, limit, includeDone = true } = query;
     const keyword = query.keyword.trim();
     const proposer = (query.proposer || '').trim();
     const extractedNames = proposer ? extractProposerName(proposer) : [];
@@ -103,7 +102,6 @@ export class NoticeSearchService {
           search: keyword,
           proposer: extractedProposer,
           sortOrder: 'desc',
-          fullText,
         }),
         shouldQueryCrawler
           ? this.crawlingCoreService.search(crawlerQuery)

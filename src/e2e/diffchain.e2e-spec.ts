@@ -10,6 +10,7 @@ import { DiscordBridgeService } from '../modules/discord-bridge/discord-bridge.s
 import { NotificationBatchService } from '../modules/notification/notification-batch.service';
 import { CronJobsService } from '../modules/scheduling/cronjobs.service';
 import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
+import { NoticesHybridSearchService } from '../modules/semantic-search/notices-hybrid-search.service';
 import { CrawlingService } from '../modules/crawling/crawling.service';
 import { HealthCheckService } from '../modules/health/health-check.service';
 import { WebhookRegistrationService } from '../modules/notification/webhook-registration.service';
@@ -176,6 +177,10 @@ describe('Diffchain API (e2e)', () => {
         {
           provide: ApiReadRateLimitService,
           useValue: { assertAllowed: jest.fn() },
+        },
+        {
+          provide: NoticesHybridSearchService,
+          useValue: { search: jest.fn() },
         },
         {
           provide: WebhookRegistrationService,

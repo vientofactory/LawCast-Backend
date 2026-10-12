@@ -36,8 +36,8 @@ export interface SummaryStateBulkUpdateInput {
 
 /**
  * Returns archived notices that still have an empty proposalReason, covering
- * both origins: PAL rows (contentId present) are recovered from the 국회
- * 의안정보시스템 via LikmsCrawler, contentId-less NSM rows fall back to the
+ * both origins: PAL rows (contentId present) are recovered from the likms
+ * bill database via LikmsCrawler, contentId-less NSM rows fall back to the
  * NsmLmSts detail capture.
  *
  * Includes ended notice periods and preserves their persisted isDone state.

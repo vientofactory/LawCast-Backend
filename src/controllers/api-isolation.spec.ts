@@ -27,6 +27,7 @@ import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
 import { CronJobsService } from '../modules/scheduling/cronjobs.service';
 import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
+import { NoticesHybridSearchService } from '../modules/semantic-search/notices-hybrid-search.service';
 import { IpMaskingUtil } from '../modules/discussions/utils/ip-masking.util';
 
 describe('HTTP-Batch Processing Isolation', () => {
@@ -259,6 +260,10 @@ describe('HTTP-Batch Processing Isolation', () => {
         { provide: WebhookCleanupService, useValue: mockWebhookCleanupService },
         { provide: NoticeArchiveService, useValue: mockNoticeArchiveService },
         { provide: NoticesQueryService, useValue: mockNoticesQueryService },
+        {
+          provide: NoticesHybridSearchService,
+          useValue: { search: jest.fn() },
+        },
         {
           provide: NoticeSearchService,
           useValue: {
@@ -690,6 +695,61 @@ describe('HTTP-Batch Processing Isolation', () => {
       console.log(
         `Memory usage: ${(memoryIncrease / 1024 / 1024).toFixed(2)}MB increase`,
       );
+    });
+  });
+
+  describe('Archive search mode routing', () => {
+    const request = { headers: {}, ip: '10.0.0.1' } as any;
+
+    it('routes an explicit semantic mode to the hybrid search service', async () => {
+      const hybrid = module.get<NoticesHybridSearchService>(
+        NoticesHybridSearchService,
+      );
+      (hybrid.search as jest.Mock).mockResolvedValue({ items: [] });
+      const queryService = module.get<NoticesQueryService>(NoticesQueryService);
+
+      await controller.getArchivedNotices(
+        request,
+        1,
+        20,
+        '임대차',
+        undefined,
+        undefined,
+        undefined,
+        'desc',
+        undefined,
+        undefined,
+        'semantic',
+      );
+
+      expect(hybrid.search).toHaveBeenCalledWith(
+        expect.objectContaining({ searchMode: 'semantic', search: '임대차' }),
+      );
+      expect(queryService.getArchivedNotices).not.toHaveBeenCalled();
+    });
+
+    it('keeps the keyword path when searchMode is absent or keyword', async () => {
+      const hybrid = module.get<NoticesHybridSearchService>(
+        NoticesHybridSearchService,
+      );
+      const queryService = module.get<NoticesQueryService>(NoticesQueryService);
+
+      await controller.getArchivedNotices(
+        request,
+        1,
+        20,
+        '임대차',
+        undefined,
+        undefined,
+        undefined,
+        'desc',
+        undefined,
+        undefined,
+        'keyword',
+      );
+
+      expect(queryService.getArchivedNotices).toHaveBeenCalled();
+      expect(hybrid.search).not.toHaveBeenCalled();
     });
   });
 });

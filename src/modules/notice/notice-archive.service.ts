@@ -84,8 +84,6 @@ export interface ArchiveListQuery {
   endDate?: Date;
   sortOrder?: 'asc' | 'desc';
   isDone?: boolean;
-  /** When true, also searches proposalReason (원문). Expensive on large tables. */
-  fullText?: boolean;
 }
 
 export interface ArchiveOffsetQuery {
@@ -99,8 +97,6 @@ export interface ArchiveOffsetQuery {
   isDone?: boolean;
   /** Pre-computed total; when provided, the COUNT query is skipped. */
   knownTotal?: number;
-  /** When true, also searches proposalReason (원문). Expensive on large tables. */
-  fullText?: boolean;
 }
 
 export interface ArchiveNumCompareCountQuery {
@@ -1046,7 +1042,7 @@ export class NoticeArchiveService {
    * Marks active NSM-originated archive rows (contentId IS NULL) whose
    * noticeNum is absent from `seenNsmActiveNums` as source_deleted.
    *
-   * This catches bills that have been removed from 국민참여입법센터 entirely
+   * This catches bills that have been removed from the NSM portal entirely
    * (not just from a detail page). It runs at the end of the pending-sync
    * phase after the full NSM list crawl is complete.
    *
@@ -1134,7 +1130,7 @@ export class NoticeArchiveService {
 
     // Priority 1: probe bills whose detail page was never successfully
     // captured (content_bill_number IS NULL) - the strongest candidates for
-    // having been deleted on NSM (국민참여입법센터). Random order (rather than a
+    // having been deleted on the NSM portal. Random order (rather than a
     // fixed noticeNum DESC slice) so that when this pool is >= limit, the
     // same top-N rows aren't probed forever while the rest of the pool never
     // gets checked.
@@ -1687,7 +1683,6 @@ export class NoticeArchiveService {
       proposer?: string;
       startDate?: Date;
       endDate?: Date;
-      fullText?: boolean;
     },
   ): void {
     const search = (params.search || '').trim();
@@ -1752,7 +1747,14 @@ export class NoticeArchiveService {
       return;
     }
 
-    const ftsQuery = params.fullText ? this.buildFtsMatchQuery(search) : null;
+    // proposalReason is always part of a keyword search now. Its
+    // body text is far too large for a LIKE scan, so it is matched through the
+    // FTS5 index (see the FTS migration); `subject`/`committee`/
+    // `contentProposer` keep their LIKE predicates because FTS tokenizes on
+    // word boundaries and Korean bill names are single tokens (searching
+    // "보호" must still find "상가건물 임대차보호법"). The LIKE fallback only
+    // applies when the query has no indexable term at all.
+    const ftsQuery = this.buildFtsMatchQuery(search);
 
     qb.andWhere(
       new Brackets((query) => {
@@ -1767,17 +1769,15 @@ export class NoticeArchiveService {
             search: `%${search}%`,
           });
 
-        if (params.fullText) {
-          if (ftsQuery) {
-            query.orWhere(
-              'archive.rowid IN (SELECT rowid FROM notice_archives_fts WHERE notice_archives_fts MATCH :ftsQuery)',
-              { ftsQuery },
-            );
-          } else {
-            query.orWhere('archive.proposalReason LIKE :search', {
-              search: `%${search}%`,
-            });
-          }
+        if (ftsQuery) {
+          query.orWhere(
+            'archive.rowid IN (SELECT rowid FROM notice_archives_fts WHERE notice_archives_fts MATCH :ftsQuery)',
+            { ftsQuery },
+          );
+        } else {
+          query.orWhere('archive.proposalReason LIKE :search', {
+            search: `%${search}%`,
+          });
         }
       }),
     );
@@ -1805,7 +1805,6 @@ export class NoticeArchiveService {
     proposer?: string;
     startDate?: Date;
     endDate?: Date;
-    fullText?: boolean;
     sortOrder: 'asc' | 'desc';
     skip: number;
     take: number;
@@ -2020,7 +2019,6 @@ export class NoticeArchiveService {
         proposer: query.proposer,
         startDate: query.startDate,
         endDate: query.endDate,
-        fullText: query.fullText,
         sortOrder,
         skip,
         take: limit,
@@ -2046,7 +2044,6 @@ export class NoticeArchiveService {
         proposer: query.proposer,
         startDate: query.startDate,
         endDate: query.endDate,
-        fullText: query.fullText,
       });
 
       const [fetchedRows, fetchedTotal] = await baseQb
@@ -2116,6 +2113,83 @@ export class NoticeArchiveService {
     return rows.map((row) => mapArchiveEntityToNoticeItem(row));
   }
 
+  /**
+   * Fetch archive notices for a pre-ranked list of notice numbers, preserving
+   * that rank order and applying the same archive filters (date range,
+   * proposer, isDone) as the keyword search path. The semantic board mode uses
+   * this to hydrate engine-ranked notice numbers into card rows without
+   * letting `noticeNum` ordering overrule relevance.
+   *
+   * The notice-number list is bounded by the caller (semantic candidate cap),
+   * so the whole matching set is fetched and rank-sorted in memory; the caller
+   * paginates the returned items.
+   */
+  async getArchiveNoticesByRankedNums(params: {
+    noticeNums: number[];
+    proposer?: string;
+    startDate?: Date;
+    endDate?: Date;
+    isDone?: boolean;
+  }): Promise<{ items: ArchiveNoticeItem[]; total: number }> {
+    const uniqueNums = Array.from(new Set(params.noticeNums)).filter(
+      (num) => Number.isInteger(num) && num > 0,
+    );
+
+    if (uniqueNums.length === 0) {
+      return { items: [], total: 0 };
+    }
+
+    const qb = this.createArchiveNoticeItemQueryBuilder('archive');
+    qb.andWhere('archive.noticeNum IN (:...rankedNoticeNums)', {
+      rankedNoticeNums: uniqueNums,
+    });
+
+    // isDone is derived from the snapshot-state table, mirroring the keyword
+    // path's EXISTS predicate (queryArchiveNoticeNumsByIsDoneFilter).
+    if (params.isDone !== undefined && this.summaryStateRepository) {
+      qb.andWhere(
+        `EXISTS (
+            SELECT 1
+            FROM notice_archive_snapshot_states summary
+            WHERE summary.notice_num = archive.noticeNum
+              AND summary.is_done = :isDone
+          )`,
+        { isDone: params.isDone ? 1 : 0 },
+      );
+    }
+
+    this.applyArchiveSearchFilters(qb, {
+      proposer: params.proposer,
+      startDate: params.startDate,
+      endDate: params.endDate,
+    });
+
+    const rows = await qb.getMany();
+    const rank = new Map(uniqueNums.map((num, idx) => [num, idx] as const));
+    rows.sort(
+      (a, b) => (rank.get(a.noticeNum) ?? 0) - (rank.get(b.noticeNum) ?? 0),
+    );
+
+    if (this.summaryStateRepository && rows.length > 0) {
+      const summaryStates = await this.getSummaryStateByNoticeNums(
+        rows.map((row) => row.noticeNum),
+      );
+
+      for (const row of rows) {
+        const summaryState = summaryStates.get(row.noticeNum);
+        if (!summaryState) continue;
+        row.isDone = summaryState.isDone;
+        row.aiSummary = summaryState.aiSummary;
+        row.aiSummaryStatus = summaryState.aiSummaryStatus;
+      }
+    }
+
+    await this.applyCurrentOverlayFromDiffchain(rows);
+
+    const items = rows.map((row) => mapArchiveEntityToNoticeItem(row));
+    return { items, total: items.length };
+  }
+
   async getArchiveNoticesByNoticeNums(
     noticeNums: number[],
   ): Promise<ArchiveNoticeItem[]> {
@@ -2175,7 +2249,6 @@ export class NoticeArchiveService {
       proposer: query.proposer,
       startDate: query.startDate,
       endDate: query.endDate,
-      fullText: query.fullText,
     });
 
     let total: number;
@@ -2191,7 +2264,6 @@ export class NoticeArchiveService {
         proposer: query.proposer,
         startDate: query.startDate,
         endDate: query.endDate,
-        fullText: query.fullText,
         sortOrder,
         skip,
         take,
@@ -2233,7 +2305,6 @@ export class NoticeArchiveService {
         proposer: query.proposer,
         startDate: query.startDate,
         endDate: query.endDate,
-        fullText: query.fullText,
         sortOrder,
         skip,
         take,
@@ -3238,7 +3309,7 @@ export class NoticeArchiveService {
    * already carries a pal.assembly.go.kr contentId.
    *
    * `updateNsmHtmlAndDetail` refuses contentId rows by design (its NSM-only
-   * guard), so PAL-origin rows recovered from the 국회 의안정보시스템 through
+   * guard), so PAL-origin rows recovered from the likms bill database through
    * LikmsCrawler need their own path. Archive rows stay immutable and no
    * snapshot artifact is touched: the recovered reason is appended to the
    * diffchain only, mirroring the NSM repair policy.

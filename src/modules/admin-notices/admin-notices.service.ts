@@ -34,7 +34,8 @@ const UNAVAILABLE_MESSAGE =
 /**
  * Read-only Notion client for the admin notice board. The Notion database is
  * the single source of truth (CRUD happens only in Notion); this service
- * queries published rows sorted by 노출 순서 and serves them from a
+ * queries published rows sorted by the `노출 순서` property and serves them
+ * from a
  * short-lived in-memory cache with stale-while-revalidate refresh, so page
  * views neither hit the Notion API on every request nor wait for it.
  */
@@ -331,7 +332,7 @@ export class AdminNoticesService {
     const properties = page.properties ?? {};
     const title = this.readPlainText(properties[NOTION_PROPERTY.TITLE]?.title);
 
-    // Defense in depth: the query already filters on 공개 여부.
+    // Defense in depth: the query already filters on `공개 여부`.
     const published = properties[NOTION_PROPERTY.PUBLISHED]?.checkbox === true;
     if (!published || !title) {
       return null;
@@ -380,7 +381,8 @@ export class AdminNoticesService {
   }
 
   /**
-   * Re-applies 노출 순서 ascending in memory (nulls last). Array.sort is
+   * Re-applies `노출 순서` (display order) ascending in memory (nulls last).
+   * Array.sort is
    * stable, so equal/missing orders keep the order Notion returned.
    */
   private sortByOrder(notices: AdminNotice[]): AdminNotice[] {

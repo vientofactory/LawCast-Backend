@@ -7,7 +7,7 @@
  * Path 2: upsertNoticeArchive — existing source_deleted record re-crawled
  *          -> diff event preserves source_deleted (no spurious restoration)
  *
- * Covers bill 2214911 scenario: deleted from 국민참여입법센터, must not be
+ * Covers bill 2214911 scenario: deleted from `국민참여입법센터` (NSM), must not be
  * restored to active during subsequent sync cycles.
  */
 import { Test, TestingModule } from '@nestjs/testing';
@@ -32,7 +32,7 @@ describe('Source deletion detection (bill 2214911 scenario)', () => {
   let crawlingCoreService: CrawlingCoreService;
   let discordBridgeService: DiscordBridgeService;
 
-  /** NSM bill item that exists in the 국민참여입법센터 list but is deleted at detail level. */
+  /** NSM bill item that exists in the `국민참여입법센터` list but is deleted at detail level. */
   const deletedNsmBillItem = {
     billNo: '2214911',
     billName: '무효 법률안 (삭제됨)',

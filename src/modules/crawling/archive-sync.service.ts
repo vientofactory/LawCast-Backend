@@ -177,7 +177,7 @@ export interface ArchiveSyncExecutionState {
  *  3. Integrity check - Verifies SHA-256 hashes of archived HTML content
  *  4. Summary backfill - Generates AI summaries via Ollama
  *  5. Chain integrity audit - Verifies change-chain Merkle root hash
- *  6. Pending sync - Archives bills in proposed state from 국민참여입법센터
+ *  6. Pending sync - Archives bills in proposed state from `국민참여입법센터`
  *  7. Legacy genesis seed - Seeds genesis events for legacy notices
  *
  * Phases execute sequentially on module init to ensure DB consistency

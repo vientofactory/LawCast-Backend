@@ -4,17 +4,17 @@
  * database exactly (CRUD is done in Notion only; this side is read-only).
  */
 export const NOTION_PROPERTY = {
-  /** 제목 (title) */
+  /** Notion `제목` (title) property name. */
   TITLE: '제목',
-  /** 공개 여부 (checkbox) — the publication gate: only checked rows are exposed */
+  /** Notion `공개 여부` (checkbox): the publication gate, only checked rows are exposed. */
   PUBLISHED: '공개 여부',
-  /** 상태 (status | select) — surfaced as metadata, never used as a gate */
+  /** Notion `상태` (status | select): surfaced as metadata, never used as a gate. */
   STATUS: '상태',
-  /** 노출 순서 (number) — ascending display order */
+  /** Notion `노출 순서` (number): ascending display order. */
   ORDER: '노출 순서',
-  /** 긴급 (checkbox) — urgent flag: the top urgent notice renders a site-wide banner */
+  /** Notion `긴급` (checkbox): the top urgent notice renders a site-wide banner. */
   URGENT: '긴급',
-  /** 내용 (rich text) — notice body shown on the main page */
+  /** Notion `내용` (rich text): notice body shown on the main page. */
   CONTENT: '내용',
 } as const;
 

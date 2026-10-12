@@ -39,6 +39,12 @@ export interface AppConfig {
      * `LAWCAST_SEMANTIC_MAX_K` reaches the backend within this window.
      */
     chunkCapRefreshMs: number;
+    /**
+     * Notice-level candidate cap the board's semantic/hybrid search mode
+     * resolves per query, before archive filters are applied. Bounded by the
+     * sidecar chunk cap; the public semantic endpoint's MAX_K stays separate.
+     */
+    hybridMaxNotices: number;
   };
   notion: {
     apiKey: string;
@@ -467,6 +473,14 @@ export default (): AppConfig => ({
     chunkCapRefreshMs: parseIntWithDefault(
       process.env.SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS,
       60 * 1000,
+    ),
+    // Candidate cap for the board's semantic search mode. The engine ranks
+    // chunks; a larger cap widens recall under restrictive archive filters at
+    // the cost of more hydration per search. Separate from the public
+    // semantic endpoint's MAX_K (semantic-search.constants.ts).
+    hybridMaxNotices: parseIntWithDefault(
+      process.env.SEMANTIC_SEARCH_HYBRID_MAX_NOTICES,
+      100,
     ),
   },
   // Notion-backed admin notice board (read-only; CRUD happens in Notion).
