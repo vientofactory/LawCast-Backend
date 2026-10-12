@@ -634,13 +634,14 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
   }
 
   /**
-   * Archives NsmLmSts pending bills (발의 상태) by fetching their full detail page
-   * (proposalReason, proposalInfo, session, etc.) and persisting everything to
-   * the archive database.
+   * Archives NsmLmSts pending bills ("proposed" status) by fetching their
+   * full detail page (proposalReason, proposalInfo, session, etc.) and
+   * persisting everything to the archive database.
    *
    * Unlike `archiveNotices`, this method fetches NsmLmSts detail directly
    * rather than relying on a pal.assembly.go.kr contentId (which does not
-   * exist yet for bills that have not entered the formal 입법예고 process).
+   * exist yet for bills that have not entered the formal legislative-notice
+   * process).
    *
    * The screenshot is captured in the same Puppeteer session, mirroring the
    * inline capture `archiveNotices` performs for newly detected notices.
@@ -939,8 +940,9 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
    *
    * Called by the proposalReason retry queue in CrawlingSchedulerService.
    * Two paths:
-   * - contentId present (PAL-origin notice): read the reason from the 국회
-   *   의안정보시스템 via LikmsCrawler — plain HTTP, no browser session.
+   * - contentId present (PAL-origin notice): read the reason from the National
+   *   Assembly Bill Information System via LikmsCrawler — plain HTTP, no browser
+   *   session.
    * - contentId missing (NSM-origin notice): the browser-based NsmLmSts detail
    *   capture, including its double-confirmed deletion probe.
    *
@@ -1145,7 +1147,8 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
 
   /**
    * Recovers the proposalReason of a PAL-origin notice (contentId present)
-   * from the 국회 의안정보시스템 (likms.assembly.go.kr) through LikmsCrawler.
+   * from the National Assembly Bill Information System
+   * (likms.assembly.go.kr) through LikmsCrawler.
    *
    * Unlike the NSM path this never touches snapshot artifacts: PAL rows
    * already captured source HTML/screenshot inline, and archive rows are
@@ -1244,7 +1247,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
 
   /**
    * Probes a batch of existing archived NSM bills via their detail pages to
-   * detect bills that国民참여입법센터 has deleted but the list API still returns.
+   * detect bills that the NSM portal has deleted but the list API still returns.
    *
    * This catches the gap where markSourceDeletedByMissingNsmNums (list-based)
    * misses bills that are still in the NSM list but have "안건정보가 없습니다"

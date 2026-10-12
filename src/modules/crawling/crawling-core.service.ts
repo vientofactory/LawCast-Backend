@@ -141,9 +141,10 @@ export class CrawlingCoreService {
       customHeaders: APP_CONSTANTS.CRAWLING.HEADERS,
       hydrateTruncatedTitles:
         APP_CONSTANTS.CRAWLING.NSM_HYDRATE_TRUNCATED_TITLES,
-      // pal-crawl >= 2.2.0 fills an empty proposalReason from the 국회
-      // 의안정보시스템 (likms) inside getContent/getDoneContent. Kept explicit
-      // so PAL collection never silently loses its hydration path.
+      // pal-crawl >= 2.2.0 fills an empty proposalReason from the National
+      // Assembly Bill Information System (likms) inside
+      // getContent/getDoneContent. Kept explicit so PAL collection never
+      // silently loses its hydration path.
       hydrateProposalReason: true,
     };
   }
@@ -416,10 +417,10 @@ export class CrawlingCoreService {
   }
 
   /**
-   * Derives the proposer category (제안자 구분) from the proposer name string.
-   * - 위원장 -> '위원장'
-   * - Contains '의원' -> '의원'
-   * - Otherwise (government ministry/department name) -> '정부'
+   * Derives the proposer category from the proposer name string:
+   * - Contains the committee-chair title -> '위원장'
+   * - Contains the Assembly-member title -> '의원'
+   * - Otherwise (a government ministry/department name) -> '정부'
    */
   static extractProposerCategory(proposer: string): string {
     const s = proposer.trim();
@@ -432,10 +433,11 @@ export class CrawlingCoreService {
    * Converts a NsmLmSts bill item into the CachedNotice shape used throughout
    * the archive and notification pipeline.
    *
-   * Bills returned by NsmLmSts are in "발의" (proposed) state and do not yet
-   * have a pal.assembly.go.kr contentId. The `committee` field from the list
-   * page is empty until the bill is referred to a standing committee, so
-   * `ministry` (소관부처) is used as a fallback to preserve 소관 information.
+   * Bills returned by NsmLmSts are in "proposed" state and do not yet have a
+   * pal.assembly.go.kr contentId. The `committee` field from the list page is
+   * empty until the bill is referred to a standing committee, so `ministry`
+   * (the competent-ministry field) is used as a fallback to preserve
+   * competent-authority information.
    */
   static nsmBillToCachedNotice(item: INsmBillItem): CachedNotice {
     const committee = item.committee?.trim() || '';
@@ -481,8 +483,9 @@ export class CrawlingCoreService {
   }
 
   /**
-   * Fetches only the 제안이유 및 주요내용 of a PAL notice from the 국회
-   * 의안정보시스템 (likms.assembly.go.kr) via pal-crawl's LikmsCrawler.
+   * Fetches only the proposal-reason section ("제안이유 및 주요내용") of a PAL
+   * notice from the National Assembly Bill Information System
+   * (likms.assembly.go.kr) via pal-crawl's LikmsCrawler.
    *
    * A PAL contentId (`PRC_...`) doubles as the likms billId, so no bill-number
    * lookup is needed. The crawler never throws: any network/parse failure
@@ -590,7 +593,8 @@ export class CrawlingCoreService {
   }
 
   /**
-   * Fetches all pages of active NSM bills from 국민참여입법센터 (opinion.lawmaking.go.kr) via NsmLmSts.
+   * Fetches all pages of active NSM bills from the National Assembly
+   * public-participation portal (opinion.lawmaking.go.kr) via NsmLmSts.
    *
    * Includes Waitingroom redirect retry: when a 307 response is detected,
    * the client is recreated after a back-off delay and the stream restarts.
@@ -813,11 +817,12 @@ export class CrawlingCoreService {
   }
 
   /**
-   * Fetches the full detail of a single bill from 국회입법현황 (NsmLmSts).
+   * Fetches the full detail of a single bill from the legislation-status site
+   * (NsmLmSts).
    * Returns the parsed INsmBillDetail including proposalReason, proposalInfo,
    * session, proposer, proposalDate and attachments.
    *
-   * @param billNo The 의안번호 of the bill (e.g. "2200001").
+   * @param billNo The assembly bill number (e.g. "2200001").
    */
   async getNsmDetail(billNo: string): Promise<INsmBillDetail> {
     try {
@@ -873,12 +878,14 @@ export class CrawlingCoreService {
   }
 
   /**
-   * Async generator that yields every page of pending ("발의" status) bills
-   * from 국민참여입법센터 (opinion.lawmaking.go.kr) via NsmLmSts.
+   * Async generator that yields every page of pending ("proposed" status)
+   * bills from the National Assembly public-participation portal
+   * (opinion.lawmaking.go.kr) via NsmLmSts.
    *
    * Pending bills are those proposed in the National Assembly but not yet
    * referred to a standing committee. Streaming them here lets the system
-   * detect new legislation well before the formal 입법예고 process begins.
+   * detect new legislation well before the formal legislative-notice process
+   * ("입법예고") begins.
    *
    * Includes Waitingroom redirect retry (same strategy as getAllNsmPages).
    *
@@ -935,13 +942,14 @@ export class CrawlingCoreService {
   }
 
   /**
-   * Captures a screenshot of a bill's detail page on 국회입법현황 (NsmLmSts).
+   * Captures a screenshot of a bill's detail page on the legislation-status
+   * site (NsmLmSts).
    * Used for pending bills that do not yet have a pal.assembly.go.kr contentId.
    *
    * Applies the same JPEG recompression pipeline as `captureContentScreenshot`
    * to keep screenshots within the configured size limit.
    *
-   * @param billNo The 의안번호 of the bill (e.g. "2200001").
+   * @param billNo The assembly bill number (e.g. "2200001").
    */
   async captureNsmDetailFull(billNo: string): Promise<{
     html: string;
@@ -1071,7 +1079,7 @@ export class CrawlingCoreService {
    * Used by the screenshot backfill queue for bills whose screenshot is still
    * missing after the initial archive (e.g. when captureNsmDetailFull failed).
    *
-   * @param billNo 의안번호 (e.g. "2200001")
+   * @param billNo The assembly bill number (e.g. "2200001")
    */
   async captureNsmDetailScreenshot(billNo: string): Promise<Buffer | null> {
     const client = new NsmLmSts({

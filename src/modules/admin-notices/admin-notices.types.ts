@@ -6,18 +6,18 @@
 export interface AdminNotice {
   /** Notion page id */
   id: string;
-  /** Notion `제목` — notice title */
+  /** Notion `제목` (title): notice title. */
   title: string;
-  /** 공개 여부 — always true in responses (unpublished rows are filtered out) */
+  /** `공개 여부` (checkbox): always true in responses, unpublished rows are filtered out. */
   published: boolean;
-  /** 상태 (status/select option name), null when unset */
+  /** `상태` (status/select option name), null when unset. */
   status: string | null;
-  /** 노출 순서, null when the property is empty */
+  /** `노출 순서` (display order), null when the property is empty. */
   order: number | null;
-  /** 긴급 checkbox — true when the operator marked the row urgent */
+  /** `긴급` checkbox: true when the operator marked the row urgent. */
   urgent: boolean;
   /**
-   * 내용 — plain text preview from the Notion rich text property,
+   * `내용` (rich text): plain text preview from the Notion property,
    * newlines preserved. Serves as the list preview and as the body
    * fallback when the page has no block children.
    */

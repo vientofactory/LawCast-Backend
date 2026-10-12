@@ -26,6 +26,10 @@ import { BatchProcessingService } from '../modules/shared/batch-processing.servi
 import { NoticeArchiveService } from '../modules/notice/notice-archive.service';
 import { NoticesQueryService } from '../modules/crawling/notices-query.service';
 import { NoticeSearchService } from '../modules/crawling/notice-search.service';
+import {
+  NoticesHybridSearchService,
+  type BoardSearchMode,
+} from '../modules/semantic-search/notices-hybrid-search.service';
 import { CreateWebhookDto } from '../modules/webhook/dto/create-webhook.dto';
 import { ApiResponseUtils } from '../utils/api-response.utils';
 import { APP_CONSTANTS } from '../config/app.config';
@@ -80,6 +84,7 @@ export class ApiController {
     private readonly changeTrackingService: ChangeTrackingService,
     private readonly cronJobsService: CronJobsService,
     private readonly apiReadRateLimitService: ApiReadRateLimitService,
+    private readonly noticesHybridSearchService: NoticesHybridSearchService,
   ) {}
 
   private readonly nodeEnv: string = this.configService.get<string>('nodeEnv');
@@ -225,8 +230,8 @@ export class ApiController {
     @Query('endDate') endDate?: string,
     @Query('sortOrder') sortOrder?: string,
     @Query('isDone') isDoneRaw?: string,
-    @Query('fullText') fullTextRaw?: string,
     @Query('noticeNums') noticeNums?: string,
+    @Query('searchMode') searchModeRaw?: string,
   ) {
     assertValidPage(page);
     assertSearchLength(search);
@@ -235,7 +240,23 @@ export class ApiController {
     await this.apiReadRateLimitService.assertAllowed(req, 'expensive');
     const isDone =
       isDoneRaw === 'true' ? true : isDoneRaw === 'false' ? false : undefined;
-    const fullText = fullTextRaw === 'true';
+    const searchMode = this.parseSearchMode(searchModeRaw);
+    // Scoped notice-number lists (digest view) have no query to rank, so they
+    // always take the keyword path.
+    if (searchMode !== 'keyword' && !(noticeNums || '').trim()) {
+      const hybridResult = await this.noticesHybridSearchService.search({
+        searchMode,
+        search: search || '',
+        proposer,
+        startDate,
+        endDate,
+        sortOrder: sortOrder === 'asc' ? 'asc' : 'desc',
+        isDone,
+        page,
+        limit,
+      });
+      return ApiResponseUtils.success(hybridResult);
+    }
     const archiveResult = await this.noticesQueryService.getArchivedNotices({
       page,
       limit,
@@ -245,10 +266,20 @@ export class ApiController {
       endDate,
       sortOrder: sortOrder === 'asc' ? 'asc' : 'desc',
       isDone,
-      fullText,
       noticeNums,
     });
     return ApiResponseUtils.success(archiveResult);
+  }
+
+  /**
+   * `searchMode` is lenient like the board's other query params: only the
+   * explicit `semantic`/`auto` values switch paths, everything else (including
+   * absent, `keyword`, or garbage) keeps the existing keyword behavior so the
+   * endpoint stays backward compatible.
+   */
+  private parseSearchMode(raw?: string): BoardSearchMode {
+    const value = (raw ?? '').trim().toLowerCase();
+    return value === 'semantic' || value === 'auto' ? value : 'keyword';
   }
 
   @Get('notices/search')
@@ -269,7 +300,6 @@ export class ApiController {
     )
     limit: number,
     @Query('includeDone') includeDoneRaw?: string,
-    @Query('fullText') fullTextRaw?: string,
   ) {
     assertValidPage(page);
     assertSearchLength(q);
@@ -290,14 +320,12 @@ export class ApiController {
       });
     }
     const includeDone = includeDoneRaw !== 'false';
-    const fullText = fullTextRaw === 'true';
     const result = await this.noticeSearchService.searchNotices({
       keyword,
       proposer: proposer || undefined,
       page,
       limit,
       includeDone,
-      fullText,
     });
     return ApiResponseUtils.success(result);
   }

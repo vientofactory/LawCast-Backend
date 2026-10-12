@@ -289,7 +289,7 @@ describe('AdminNoticesService', () => {
         published: true,
         status: '게시중',
         order: 1,
-        // The 긴급 property is absent entirely -> urgent stays false.
+        // The `긴급` property is absent entirely -> urgent stays false.
         urgent: false,
         // Newlines in the Notion body are preserved (never whitespace-collapsed).
         content: '첫 줄\n두 번째 줄',

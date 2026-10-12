@@ -15,8 +15,9 @@
 ### 조회 및 검색
 
 - 최근 입법예고와 전체 아카이브를 페이지 단위로 조회할 수 있습니다.
-- 의안명, 의안번호, 제안 이유, 발의자 정보를 검색할 수 있습니다.
-- 날짜, 처리 상태, 정렬 순서, 원문 포함 여부로 결과를 필터링할 수 있습니다.
+- 의안명, 의안번호, 발의자 정보를 검색할 수 있고, 제안 이유(원문)도 함께 검색합니다. 제안 이유는 FTS5 인덱스로 매칭됩니다.
+- 날짜, 처리 상태, 정렬 순서로 결과를 필터링할 수 있습니다.
+- 의미 검색(시맨틱) 모드로 질의와 뜻이 가까운 법률안을 관련도순으로 조회할 수 있습니다. 엔진을 쓸 수 없으면 키워드 결과로 대체됩니다.
 - 자주 쓰는 검색어를 빠른 검색용 키워드로 제공합니다.
 - Redis 캐시로 최근 목록/검색 응답 성능을 높입니다.
 
@@ -140,6 +141,13 @@ REDIS_URL=redis://localhost:6379
 REDIS_KEY_PREFIX=lawcast:
 REDIS_TTL=1800
 
+# Semantic search (sidecar; optional)
+SEMANTIC_SEARCH_ENABLED=true
+SEMANTIC_SEARCH_API_URL=http://127.0.0.1:8300
+SEMANTIC_SEARCH_TIMEOUT=10000
+SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS=60000
+SEMANTIC_SEARCH_HYBRID_MAX_NOTICES=100
+
 # Anonymous discussions
 DISCUSSION_IP_SALT=
 DISCUSSION_AUTHOR_ID_SECRET=
@@ -233,6 +241,26 @@ WEB_PUSH_SUBJECT=mailto:lawcast@example.com
 
 `WEB_PUSH_ENABLED=true`이고 공개키/비밀키가 모두 설정되어야 Web Push가 활성화됩니다. 개발 도메인과 운영 도메인은 각각 별도 브라우저 구독이 필요합니다.
 
+### 시맨틱 검색 설정
+
+의미 검색은 별도 사이드카(`semantic-search/`, FastAPI + KURE-v1 + FAISS)가 담당하고 백엔드는 그 엔진을 프록시합니다. 사이드카가 떠 있지 않아도 나머지 기능은 정상 동작하며, 의미 검색 요청만 키워드 결과로 대체됩니다.
+
+```env
+SEMANTIC_SEARCH_ENABLED=true
+SEMANTIC_SEARCH_API_URL=http://127.0.0.1:8300
+SEMANTIC_SEARCH_TIMEOUT=10000
+SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS=60000
+SEMANTIC_SEARCH_HYBRID_MAX_NOTICES=100
+```
+
+- `SEMANTIC_SEARCH_ENABLED=false` 또는 사이드카 미기동: `/api/notices/semantic-search`는 키워드 폴백 응답을, `/api/notices/semantic-search/health`는 `503`을 반환합니다. 검색 화면도 500 대신 키워드 결과와 폴백 안내를 보여줍니다.
+- `SEMANTIC_SEARCH_API_URL`: 사이드카 주소. Compose 환경에서는 `http://semantic-search:8300`입니다.
+- `SEMANTIC_SEARCH_TIMEOUT`: 사이드카 호출 제한 시간(ms).
+- `SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS`: 사이드카가 `/health`로 보고하는 청크 상한(`maxK`)을 다시 읽는 주기(ms). 사이드카의 `LAWCAST_SEMANTIC_MAX_K` 변경이 이 주기 안에 반영되며, `0`이면 매 검색마다 재조회합니다.
+- `SEMANTIC_SEARCH_HYBRID_MAX_NOTICES`: `/notices`의 의미 검색 모드가 한 번에 조회하는 **법률안(후보) 수 상한**. 엔진이 청크 단위로 순위를 매기므로 청크를 넉넉히 받아 법률안 단위로 접은 뒤 이 상한을 적용합니다. 값을 키우면 필터가 빡빡한 질의의 재현율이 올라가고 검색당 조회 비용이 늘어납니다. 사이드카 청크 상한(`SIDE_CAR_MAX_CHUNK_K`) 안에서 동작하며, 의미 검색 엔드포인트의 `k` 상한(`MAX_K`)과는 별개입니다.
+
+보드의 검색 방식 컨트롤은 프론트엔드 플래그 `PUBLIC_SEMANTIC_SEARCH_ENABLED`가 함께 켜져야 나타납니다.
+
 ### 데이터베이스 미러 설정
 
 `FILE_MIRROR_ENABLED=true`로 설정하면 지정 스케줄에 맞춰 민감 테이블을 제외한 SQLite 덤프를 file.kiwi에 업로드합니다. 로컬 덤프 보존 여부와 Discord 알림 채널도 추가 설정할 수 있습니다.
@@ -245,28 +273,30 @@ Base path: `/api`
 
 요청 제한은 Redis 캐시 카운터와 클라이언트 IP의 SHA-256 해시를 이용해 적용합니다. 제한을 초과하면 API는 `429 Too Many Requests`를 반환합니다.
 
-| 대상           | 제한                      | 적용 엔드포인트                                                                               |
-| -------------- | ------------------------- | --------------------------------------------------------------------------------------------- |
-| 비용이 큰 조회 | 60초당 30회               | `GET /notices/archive`, `GET /notices/search`, `GET /notices/changes`, `GET /stats/proposals` |
-| 토론 조회      | 엔드포인트별 60초당 300회 | 토론 스레드 및 의견 조회 API                                                                  |
-| 토론 쓰기      | 60초당 10회               | 토론 스레드·의견 생성, 수정, 삭제 및 상태 변경 API                                            |
+| 대상             | 제한                        | 적용 엔드포인트                                                                                                                      |
+| -------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| 비용이 큰 조회       | 60초당 30회                  | `GET /notices/archive`, `GET /notices/search`, `GET /notices/semantic-search`, `GET /notices/changes`, `GET /stats/proposals` |
+| 토론 조회          | 엔드포인트별 60초당 300회          | 토론 스레드 및 의견 조회 API                                                                                                            |
+| 토론 쓰기          | 60초당 10회                  | 토론 스레드·의견 생성, 수정, 삭제 및 상태 변경 API                                                                                              |
 
 목록 API의 `limit`은 최대 100개입니다. `GET /notices/archive`의 `noticeNums`는 최대 100개, 검색어는 최대 120자로 제한됩니다.
 
 ### 법률안 및 아카이브
 
-| Method | Path                       | Description                              |
-| ------ | -------------------------- | ---------------------------------------- |
-| `GET`  | `/notices/recent`          | 최근 입법예고 목록                       |
-| `GET`  | `/notices/keywords`        | 빠른 검색용 추천 키워드                  |
-| `GET`  | `/notices/archive`         | 아카이브 목록 조회, 필터 및 페이지네이션 |
-| `GET`  | `/notices/search`          | 법률안 통합 검색                         |
-| `GET`  | `/notices/:num/detail`     | 법률안 상세 또는 특정 리비전 조회        |
-| `GET`  | `/notices/:num/changes`    | 법률안별 변경 타임라인                   |
-| `GET`  | `/notices/changes`         | 전체 변경 이벤트 목록                    |
-| `GET`  | `/notices/changes/summary` | 비교 가능한 변경 이벤트 통계             |
-| `GET`  | `/notices/:num/screenshot` | 보관된 법률안 스크린샷                   |
-| `GET`  | `/notices/:num/export`     | 법률안 아카이브 ZIP 내보내기             |
+| Method | Path                              | Description                              |
+| ------ | --------------------------------- | ---------------------------------------- |
+| `GET`  | `/notices/recent`                 | 최근 입법예고 목록                               |
+| `GET`  | `/notices/keywords`               | 빠른 검색용 추천 키워드                            |
+| `GET`  | `/notices/archive`                | 아카이브 목록 조회, 필터 및 페이지네이션                  |
+| `GET`  | `/notices/search`                 | 법률안 통합 검색                                |
+| `GET`  | `/notices/semantic-search`        | 의미 검색(사이드카 프록시, 키워드 폴백)                  |
+| `GET`  | `/notices/semantic-search/health` | 의미 검색 엔진 상태                              |
+| `GET`  | `/notices/:num/detail`            | 법률안 상세 또는 특정 리비전 조회                      |
+| `GET`  | `/notices/:num/changes`           | 법률안별 변경 타임라인                             |
+| `GET`  | `/notices/changes`                | 전체 변경 이벤트 목록                             |
+| `GET`  | `/notices/changes/summary`        | 비교 가능한 변경 이벤트 통계                         |
+| `GET`  | `/notices/:num/screenshot`        | 보관된 법률안 스크린샷                             |
+| `GET`  | `/notices/:num/export`            | 법률안 아카이브 ZIP 내보내기                        |
 
 ### 알림
 
@@ -300,13 +330,24 @@ Base path: `/api`
 
 - `page`: 페이지, 기본값 `1`
 - `limit`: 페이지당 항목 수, 기본값 `10`, 최대 `50`
-- `search`: 검색어
+- `search`: 검색어. 법률안명·소관위원회·제안자와 제안이유(원문)를 함께 검색한다.
+  제안이유는 FTS5 인덱스(`notice_archives_fts`)로 매칭된다.
 - `startDate`, `endDate`: 날짜 범위
 - `sortOrder`: `asc` 또는 `desc`, 기본값 `desc`
 - `isDone`: 종료 여부 (`true` 또는 `false`)
-- `fullText`: `true`이면 원문 텍스트 포함 검색
+- `noticeNums`: 의안번호 목록(쉼표 구분, 최대 100개). 지정하면 `searchMode`와 무관하게 키워드 경로로 처리한다.
+- `searchMode`: `keyword`(기본), `semantic`, `auto`. `semantic`·`auto`는 의미 검색 모드이며, `auto`는 엔진을 쓸 수 있으면 의미 검색, 아니면 키워드로 처리한다. 그 밖의 값이나 미지정은 기존 키워드 경로 그대로다.
+  - 응답은 키워드 경로와 같은 필드에 `searchMode`(요청값), `appliedMode`(`keyword` 또는 `semantic`), `semantic`(엔진 메타데이터: `candidateTotal`, `lastUpdateAt`, `weakResults`, `fallbackReason`)을 더하고, 의미 검색 항목에는 `relevance`(`score`, `section`, `excerpt`, `weak`)가 붙는다.
+  - 결과는 관련도순으로 정렬되며 후보 수는 `SEMANTIC_SEARCH_HYBRID_MAX_NOTICES`로 제한된다. 엔진을 쓸 수 없으면 `semantic.mode`가 `keyword_fallback`인 키워드 결과를 반환한다.
 
-`GET /api/notices/search`
+`GET /api/notices/semantic-search`
+
+- `query`: 검색어(필수, 최대 120자)
+- `k`: 법률안 결과 수, 기본값 `5`, 최대 `50`
+
+`GET /api/notices/semantic-search/health`
+
+- 파라미터 없음. 엔진 상태(준비 여부, 색인 청크 수, 마지막 갱신 시각)를 반환하고, 엔진이 응답하지 않으면 `503`을 반환한다.
 
 - `q`: 검색어
 - `page`: 페이지, 기본값 `1`

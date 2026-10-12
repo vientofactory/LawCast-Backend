@@ -155,7 +155,6 @@ export class SemanticSearchService {
         page: 1,
         limit: k,
         includeDone: true,
-        fullText: false,
       });
       return {
         query,

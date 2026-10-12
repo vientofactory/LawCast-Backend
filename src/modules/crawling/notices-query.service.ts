@@ -23,7 +23,6 @@ interface ArchivedNoticesQuery {
   endDate?: string;
   sortOrder?: 'asc' | 'desc';
   isDone?: boolean;
-  fullText?: boolean;
   noticeNums?: string;
 }
 
@@ -44,7 +43,6 @@ export class NoticesQueryService {
     endDate,
     sortOrder,
     isDone,
-    fullText,
     noticeNums,
   }: ArchivedNoticesQuery) {
     const safePage = Math.max(APP_CONSTANTS.API.PAGINATION.MIN_PAGE, page);
@@ -130,7 +128,6 @@ export class NoticesQueryService {
         endDate: parsedDateRange.endDate,
         sortOrder: normalizedSortOrder,
         isDone,
-        fullText,
       });
 
     const cacheInsertionEntries = this.buildCacheInsertionEntries({
@@ -175,7 +172,6 @@ export class NoticesQueryService {
         sortOrder: normalizedSortOrder,
         isDone,
         knownTotal: archiveFilteredTotal.total,
-        fullText,
       });
 
     const totalArchiveCount = archiveFilteredTotal.total;
@@ -220,6 +216,49 @@ export class NoticesQueryService {
         mergedCount: total,
       },
     };
+  }
+
+  /**
+   * Cached (active, not-yet-archived) notices matching the keyword/proposer,
+   * excluding any notice number already present in the archive. Extracted from
+   * getArchivedNotices' cache-merge step so the semantic board mode can append
+   * freshly crawled matches the engine index (built from notice_archives)
+   * cannot see. Returns [] when neither a keyword nor a proposer is given.
+   */
+  async getCacheOnlySearchMatches(params: {
+    search?: string;
+    proposer?: string;
+  }): Promise<ReturnType<NoticesQueryService['mapCachedNoticeToListItem']>[]> {
+    const search = (params.search || '').trim();
+    const proposer = (params.proposer || '').trim();
+
+    if (!search && !proposer) {
+      return [];
+    }
+
+    const cachedNotices = await this.crawlingService.getRecentNotices(
+      APP_CONSTANTS.CACHE.MAX_SIZE,
+    );
+    const matched = cachedNotices.filter((notice) =>
+      this.matchesSearchKeyword(notice, search, proposer),
+    );
+
+    const normalizedNums = matched
+      .map((notice) => normalizeNoticeNum(notice.num))
+      .filter((num): num is number => num !== null);
+    const existingArchivedNums =
+      await this.noticeArchiveService.getExistingNoticeNumSet(normalizedNums);
+
+    return matched
+      .filter((notice) => {
+        const normalizedNum = normalizeNoticeNum(notice.num);
+        if (normalizedNum === null) {
+          return true;
+        }
+        return !existingArchivedNums.has(normalizedNum);
+      })
+      .map((notice) => this.mapCachedNoticeToListItem(notice))
+      .sort((a, b) => b.num - a.num);
   }
 
   private mapCachedNoticeToListItem(notice: CachedNotice) {
@@ -272,15 +311,16 @@ export class NoticesQueryService {
     const extractedProposer = extractProposerFromSubject(notice.subject).join(
       ' ',
     );
-    // NOTE: proposalReason (original text) is intentionally excluded because
-    // CachedNotice does not carry that field. A cache-only item whose keyword
-    // appears only in the original text will therefore not match here, which
-    // is an acceptable trade-off to keep the cache lightweight.
+    // proposalReason is part of every keyword search — the archive
+    // path matches it through FTS, and cached notices carry the same field
+    // (getRecentNoticesForCache selects it), so omitting it here would make a
+    // bill with a proposalReason-only match appear only after it reaches the archive.
     const target = [
       notice.subject,
       notice.proposerCategory,
       extractedProposer,
       notice.committee,
+      notice.proposalReason || '',
       notice.aiSummary || '',
     ]
       .join(' ')
@@ -293,7 +333,11 @@ export class NoticesQueryService {
     return sortOrder === 'asc' ? 'asc' : 'desc';
   }
 
-  private parseDateRange(
+  /**
+   * Parse the raw KST date inputs into a Date range. Public so the semantic
+   * board mode reuses the exact same range semantics as the keyword path.
+   */
+  parseDateRange(
     startDate?: string,
     endDate?: string,
   ): {

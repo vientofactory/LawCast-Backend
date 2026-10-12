@@ -4,7 +4,7 @@
  */
 
 /**
- * Extracts all proposer names (대표발의자/제안자) from a proposer string.
+ * Extracts all proposer names (`대표발의자`/`제안자`) from a proposer string.
  *
  * Examples:
  * - "윤한홍의원 등 10인" -> ["윤한홍"]
@@ -104,11 +104,12 @@ export function extractProposerFromSubject(
     return [];
   }
 
-  // Look for trailing parenthesis, e.g. (윤한홍의원 등 10인) or (정부)
+  // Look for trailing parenthesis, e.g. `(윤한홍의원 등 10인)` or `(정부)`
   const parenMatch = trimmed.match(/\(([^()]+)\)\s*(?:\(수정\))?\s*$/u);
   if (parenMatch && parenMatch[1]) {
     const inside = parenMatch[1].trim();
-    // Only extract if it looks like a proposer (contains 의원, 등/외, 정부, 장관, 위원장, etc.)
+    // Only extract if it looks like a proposer (contains `의원`, `등`/`외`,
+    // `정부`, `장관`, `위원장`, etc.)
     if (
       /의원/u.test(inside) ||
       /(?:등|외)\s*\d+\s*(?:인|명)/u.test(inside) ||

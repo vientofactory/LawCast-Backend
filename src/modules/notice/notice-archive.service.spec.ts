@@ -2517,7 +2517,9 @@ describe('NoticeArchiveService', () => {
       });
     });
 
-    it('uses FTS candidates for full-text archive search', () => {
+    it('matches proposal reasons through the FTS index for every archive search', () => {
+      // No opt-in flag: `제안이유` is part of a keyword search, matched via FTS
+      // (the LIKE predicates stay for substring matching on the short columns).
       const service = new NoticeArchiveService(
         createRepositoryMock() as any,
         createSummaryStateRepositoryMock() as any,
@@ -2530,7 +2532,6 @@ describe('NoticeArchiveService', () => {
 
       (service as any).applyArchiveSearchFilters(qb, {
         search: 'PAL 제안이유',
-        fullText: true,
       });
 
       const brackets = qb.andWhere.mock.calls[0][0] as {
@@ -2554,6 +2555,38 @@ describe('NoticeArchiveService', () => {
       expect(nested.orWhere.mock.calls[2][1]).toEqual({
         ftsQuery: '"PAL"* AND "제안이유"*',
       });
+    });
+
+    it('falls back to a proposalReason LIKE scan when no term is indexable', () => {
+      const service = new NoticeArchiveService(
+        createRepositoryMock() as any,
+        createSummaryStateRepositoryMock() as any,
+        createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+      const qb = { andWhere: jest.fn() };
+
+      // Punctuation-only query: buildFtsMatchQuery yields no terms, so the FTS
+      // MATCH predicate would throw; the LIKE predicate keeps the search valid.
+      (service as any).applyArchiveSearchFilters(qb, { search: '!!!' });
+
+      const brackets = qb.andWhere.mock.calls[0][0] as {
+        whereFactory: (query: any) => void;
+      };
+      const nested = {
+        where: jest.fn().mockReturnThis(),
+        orWhere: jest.fn().mockReturnThis(),
+      };
+      brackets.whereFactory(nested);
+
+      const predicates = [
+        ...nested.where.mock.calls,
+        ...nested.orWhere.mock.calls,
+      ].map((call) => String(call[0]));
+      expect(predicates).toHaveLength(4);
+      expect(predicates[3]).toBe('archive.proposalReason LIKE :search');
     });
 
     it('overlays PAL chain-head fields when rebuilding the restart cache', async () => {

@@ -19,6 +19,7 @@ import { WebPushNotificationService } from '../modules/notification/web-push-not
 import { WebPushRegistrationService } from '../modules/notification/web-push-registration.service';
 import { CronJobsService } from '../modules/scheduling/cronjobs.service';
 import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
+import { NoticesHybridSearchService } from '../modules/semantic-search/notices-hybrid-search.service';
 
 // Mock NoticeArchiveService
 const mockBuildArchiveExportZip = jest.fn();
@@ -118,6 +119,10 @@ describe('ApiController archive export', () => {
           useValue: {
             getArchivedNotices: jest.fn(),
           },
+        },
+        {
+          provide: NoticesHybridSearchService,
+          useValue: { search: jest.fn() },
         },
         {
           provide: NoticeSearchService,

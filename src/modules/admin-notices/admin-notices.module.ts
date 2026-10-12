@@ -5,8 +5,9 @@ import { AdminNoticesService } from './admin-notices.service';
 
 /**
  * Notion-backed admin notice board (read-only). Queries the configured Notion
- * database and serves only published notices sorted by 노출 순서; CRUD stays
- * in Notion, so the module has no write endpoints and no local persistence.
+ * database and serves only published notices sorted by the `노출 순서`
+ * (display order) property; CRUD stays in Notion, so the module has no write
+ * endpoints and no local persistence.
  * SharedModule provides the API read rate limiter.
  */
 @Module({

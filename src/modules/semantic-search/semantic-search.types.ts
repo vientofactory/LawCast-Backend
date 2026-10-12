@@ -59,8 +59,8 @@ export interface SemanticSidecarSearchResponse {
 export type SemanticEngineStatus = 'loading' | 'ready' | 'failed';
 
 /**
- * Engine status fields shown in the frontend 의미 검색 status block and
- * its search-unavailable overlay.
+ * Engine status fields shown in the frontend `의미 검색` (semantic search)
+ * status block and its search-unavailable overlay.
  *
  * Field names are passed through verbatim from the sidecar's `GET /health`
  * payload (`health()` in semantic-search/service/app.py), which carries more

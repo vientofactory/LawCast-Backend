@@ -140,7 +140,6 @@ export function buildArchiveWhereConditions(params: {
   endDate?: Date;
   noticeNumCondition?: FindOperator<number>;
   isDone?: boolean;
-  fullText?: boolean;
 }):
   | FindOptionsWhere<NoticeArchive>
   | FindOptionsWhere<NoticeArchive>[]
@@ -172,20 +171,15 @@ export function buildArchiveWhereConditions(params: {
     return Object.keys(baseWhere).length > 0 ? baseWhere : undefined;
   }
 
-  const conditions: FindOptionsWhere<NoticeArchive>[] = [
+  // proposalReason (`제안이유`) is part of a keyword search by design: the query
+  // builder path matches it through FTS, and this find-options helper covers it
+  // with a LIKE because TypeORM find options cannot express a MATCH predicate.
+  return [
     { ...baseWhere, subject: ILike(`%${normalizedSearch}%`) },
     { ...baseWhere, committee: ILike(`%${normalizedSearch}%`) },
     { ...baseWhere, contentProposer: ILike(`%${normalizedSearch}%`) },
+    { ...baseWhere, proposalReason: ILike(`%${normalizedSearch}%`) },
   ];
-
-  if (params.fullText) {
-    conditions.push({
-      ...baseWhere,
-      proposalReason: ILike(`%${normalizedSearch}%`),
-    });
-  }
-
-  return conditions;
 }
 
 export function parseHttpMetadata(raw: string | null): ArchiveHttpMetadata {
