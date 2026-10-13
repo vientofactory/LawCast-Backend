@@ -221,6 +221,7 @@ LawCast는 두 소스에서 입법예고를 수집합니다.
 - 두 소스를 모두 `false`로 두면 부트스트랩에서 예외가 발생하고 프로세스가 `process.exit(1)`로 종료됩니다.
 - 비활성화된 소스는 데이터 수집뿐 아니라 스냅샷 저장·변경 추적(diffchain)·소스 삭제 감지·스냅샷 백필 경로에도 진입하지 않습니다.
 - `CRAWLING_NSM_DELETION_DETECTION_ENABLED=false`는 NSM 소스가 켜져 있어도 삭제 감지만 건너뛰는 별도 킬 스위치입니다.
+- 활성화 상태는 부트스트랩 로그(`Crawler activation: PAL=..., NSM=...`)와 프론트 `/status` 화면의 크롤러 카드에 그대로 드러납니다. 비활성 크롤러는 카드 배지와 다음 실행 시각이 `비활성`으로 표시되며, 전체 상태 판정과 `lastError` 표시는 활성화 여부와 무관하게 기존과 동일하게 동작합니다.
 
 ```env
 CRAWLING_PAL_ENABLED=true
