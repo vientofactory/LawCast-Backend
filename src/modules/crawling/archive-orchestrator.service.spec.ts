@@ -1175,6 +1175,45 @@ describe('ArchiveOrchestratorService', () => {
       );
     });
 
+    it('skips source_deleted handling entirely when deletion detection is disabled at runtime', async () => {
+      process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED = 'false';
+      try {
+        (
+          crawlingCoreService.captureNsmDetailFull as jest.Mock
+        ).mockRejectedValue(
+          new NsmBillDeletedError('2219717', '안건정보가 없습니다.'),
+        );
+
+        const result = await service.fetchAndUpdateProposalReason(
+          2219717,
+          '2219717',
+        );
+
+        expect(result).toBeNull();
+        expect(
+          crawlingCoreService.probeNsmDeletedBillAlert,
+        ).not.toHaveBeenCalled();
+        expect(
+          noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+        ).not.toHaveBeenCalled();
+        expect(
+          noticeArchiveService.flushQueuedChangeNotifications,
+        ).not.toHaveBeenCalled();
+        expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
+          BridgeLogLevel.VERBOSE,
+          'ArchiveOrchestratorService',
+          'NSM deletion detection disabled; skipped source_deleted handling for bill **2219717** (notice=2219717)',
+          expect.objectContaining({
+            noticeNum: 2219717,
+            billNo: '2219717',
+            detectionDisabled: true,
+          }),
+        );
+      } finally {
+        delete process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED;
+      }
+    });
+
     it('marks source as deleted via HTTP probe when capture times out', async () => {
       (crawlingCoreService.captureNsmDetailFull as jest.Mock).mockRejectedValue(
         new Error('Navigation timeout of 30000 ms exceeded'),
@@ -1705,6 +1744,83 @@ describe('ArchiveOrchestratorService', () => {
       expect(
         noticeArchiveService.appendSourceDeletedEventByNoticeNum,
       ).not.toHaveBeenCalled();
+    });
+
+    it('skips the whole probe batch when deletion detection is disabled at runtime', async () => {
+      process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED = 'false';
+      try {
+        const markedCount =
+          await service.probeExistingNsmBillsForSourceDeletion(50);
+
+        expect(markedCount).toBe(0);
+        expect(
+          noticeArchiveService.getActiveNsmBillsForProbe,
+        ).not.toHaveBeenCalled();
+        expect(crawlingCoreService.captureNsmDetailFull).not.toHaveBeenCalled();
+        expect(
+          crawlingCoreService.probeNsmDeletedBillAlert,
+        ).not.toHaveBeenCalled();
+        expect(
+          noticeArchiveService.appendSourceDeletedEventByNoticeNum,
+        ).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED;
+      }
+    });
+  });
+
+  describe('crawler activation backstops', () => {
+    afterEach(() => {
+      delete process.env.CRAWLING_PAL_ENABLED;
+      delete process.env.CRAWLING_NSM_ENABLED;
+      delete process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED;
+    });
+
+    it('does not archive PAL notices or open change-tracking when the PAL crawler is disabled', async () => {
+      process.env.CRAWLING_PAL_ENABLED = 'false';
+
+      const saved = await service.archiveNotices([mockNotice]);
+
+      expect(saved).toBe(0);
+      expect(
+        noticeArchiveService.beginChangeNotificationCollection,
+      ).not.toHaveBeenCalled();
+      expect(noticeArchiveService.upsertNoticeArchive).not.toHaveBeenCalled();
+      expect(crawlingCoreService.getContent).not.toHaveBeenCalled();
+    });
+
+    it('does not archive NSM bills or open change-tracking when the NSM crawler is disabled', async () => {
+      process.env.CRAWLING_NSM_ENABLED = 'false';
+
+      const saved = await service.archiveNsmBillItems([mockNsmBillItem]);
+
+      expect(saved).toEqual([]);
+      expect(
+        noticeArchiveService.beginChangeNotificationCollection,
+      ).not.toHaveBeenCalled();
+      expect(noticeArchiveService.upsertNoticeArchive).not.toHaveBeenCalled();
+      expect(crawlingCoreService.captureNsmDetailFull).not.toHaveBeenCalled();
+    });
+
+    it('skips the NSM detail probe when the NSM crawler is disabled', async () => {
+      process.env.CRAWLING_NSM_ENABLED = 'false';
+
+      const markedCount =
+        await service.probeExistingNsmBillsForSourceDeletion(50);
+
+      expect(markedCount).toBe(0);
+      expect(
+        noticeArchiveService.getActiveNsmBillsForProbe,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('skips NSM proposalReason backfill when the NSM crawler is disabled', async () => {
+      process.env.CRAWLING_NSM_ENABLED = 'false';
+
+      const result = await service.fetchAndUpdateProposalReason(2, '2219776');
+
+      expect(result).toBeNull();
+      expect(crawlingCoreService.captureNsmDetailFull).not.toHaveBeenCalled();
     });
   });
 });

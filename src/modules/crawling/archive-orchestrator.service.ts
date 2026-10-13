@@ -23,6 +23,11 @@ import { delayMs } from '../../utils/async-delay.utils';
 import { logAndBridge } from '../../utils/bridge-log.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { normalizeNoticeNum } from '../../utils/notice-num.utils';
+import { isNsmDeletionDetectionEnabled } from '../../utils/source-deletion-detection.utils';
+import {
+  isNsmCrawlerEnabled,
+  isPalCrawlerEnabled,
+} from '../../utils/crawler-activation.utils';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import {
   canonicalizeProposalReason,
@@ -263,26 +268,28 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         await this.noticeArchiveService.getNoticesWithMissingSnapshotArtifacts(
           limit,
         );
-      const nsmTargets = targets.nsm.slice(
-        0,
-        NSM_SNAPSHOT_ARTIFACT_BACKFILL_MAX_PER_RUN,
-      );
+      // A disabled crawler must not have its snapshot artifacts backfilled:
+      // skip the matching source's targets so no snapshot write happens for it.
+      const palTargets = isPalCrawlerEnabled() ? targets.pal : [];
+      const nsmTargets = isNsmCrawlerEnabled()
+        ? targets.nsm.slice(0, NSM_SNAPSHOT_ARTIFACT_BACKFILL_MAX_PER_RUN)
+        : [];
 
-      if (targets.pal.length === 0 && nsmTargets.length === 0) {
+      if (palTargets.length === 0 && nsmTargets.length === 0) {
         return empty;
       }
 
       const result = {
         ...empty,
-        palScanned: targets.pal.length,
+        palScanned: palTargets.length,
         nsmScanned: nsmTargets.length,
       };
 
       const concurrency =
         this.noticeArchiveService.getRecommendedWriteConcurrency?.(5) ?? 5;
 
-      for (let i = 0; i < targets.pal.length; i += concurrency) {
-        const chunk = targets.pal.slice(i, i + concurrency);
+      for (let i = 0; i < palTargets.length; i += concurrency) {
+        const chunk = palTargets.slice(i, i + concurrency);
         const filled = await Promise.all(
           chunk.map(async (target) => {
             try {
@@ -418,6 +425,23 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     notices: CachedNotice[],
     options?: ArchiveRunOptions,
   ): Promise<number> {
+    // Backstop: PAL-originated notices must not be written to the archive
+    // (snapshot) nor produce diffchain events (change tracking) when the PAL
+    // crawler is disabled. Collection entry points already short-circuit, so
+    // this only guards against a stray caller.
+    if (!isPalCrawlerEnabled()) {
+      logAndBridge({
+        logger: this.logger,
+        method: 'log',
+        message: `PAL crawler disabled (CRAWLING_PAL_ENABLED); skipping archive of ${notices.length} notice(s)`,
+        context: ArchiveOrchestratorService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        bridgeMessage: `PAL crawler disabled; skipped archiving **${notices.length}** notice(s)`,
+      });
+      return 0;
+    }
+
     if (notices.length === 0) {
       return 0;
     }
@@ -654,6 +678,23 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     items: INsmBillItem[],
     options?: NsmPendingArchiveOptions,
   ): Promise<CachedNotice[]> {
+    // Backstop: NSM bills must not be written to the archive (snapshot) nor
+    // produce diffchain events (change tracking) when the NSM crawler is
+    // disabled. Collection entry points already short-circuit, so this only
+    // guards against a stray caller.
+    if (!isNsmCrawlerEnabled()) {
+      logAndBridge({
+        logger: this.logger,
+        method: 'log',
+        message: `NSM crawler disabled (CRAWLING_NSM_ENABLED); skipping archive of ${items.length} NSM bill(s)`,
+        context: ArchiveOrchestratorService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        bridgeMessage: `NSM crawler disabled; skipped archiving **${items.length}** bill(s)`,
+      });
+      return [];
+    }
+
     if (items.length === 0) {
       return [];
     }
@@ -765,6 +806,28 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
               // template), so require an independent HTTP probe confirmation
               // before marking source_deleted — mirrors the backfill path.
               if (error instanceof NsmBillDeletedError) {
+                // Runtime kill switch: skip source_deleted handling entirely
+                // (no probe request, no event) when deletion detection is
+                // disabled via CRAWLING_NSM_DELETION_DETECTION_ENABLED.
+                if (!isNsmDeletionDetectionEnabled()) {
+                  logAndBridge({
+                    logger: this.logger,
+                    method: 'log',
+                    message: `NSM deletion detection disabled; skipping source_deleted handling for bill ${item.billNo} during NSM archive`,
+                    context: ArchiveOrchestratorService.name,
+                    discordBridge: this.discordBridge,
+                    bridgeLevel: BridgeLogLevel.VERBOSE,
+                    bridgeMessage: `NSM deletion detection disabled; skipped source_deleted handling for bill **${item.billNo}** (notice=${notice.num})`,
+                    metadata: {
+                      billNo: item.billNo,
+                      noticeNum: notice.num,
+                      responseUrl: error.responseUrl,
+                      detectionDisabled: true,
+                    },
+                  });
+                  return null;
+                }
+
                 const probeAlertMessage =
                   await this.crawlingCoreService.probeNsmDeletedBillAlert(
                     item.billNo,
@@ -959,6 +1022,16 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       return this.fetchProposalReasonViaLikms(num, billNo, normalizedContentId);
     }
 
+    // NSM-origin rows (no contentId) are recovered through the NSM detail
+    // capture. Skip that browser path entirely when the NSM crawler is off.
+    if (!isNsmCrawlerEnabled()) {
+      LoggerUtils.debugDev(
+        ArchiveOrchestratorService.name,
+        `proposalReason backfill skipped for notice ${num}: NSM crawler is disabled (CRAWLING_NSM_ENABLED)`,
+      );
+      return null;
+    }
+
     const normalizedBillNo = billNo.trim();
     if (!normalizedBillNo) {
       this.logger.warn(
@@ -1052,6 +1125,28 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       return proposalReason;
     } catch (error) {
       if (error instanceof NsmBillDeletedError) {
+        // Runtime kill switch: skip source_deleted handling entirely when
+        // deletion detection is disabled via
+        // CRAWLING_NSM_DELETION_DETECTION_ENABLED.
+        if (!isNsmDeletionDetectionEnabled()) {
+          logAndBridge({
+            method: 'log',
+            message: `NSM deletion detection disabled; skipping source_deleted handling for bill ${normalizedBillNo} during proposalReason backfill`,
+            logger: this.logger,
+            context: ArchiveOrchestratorService.name,
+            discordBridge: this.discordBridge,
+            bridgeLevel: BridgeLogLevel.VERBOSE,
+            bridgeMessage: `NSM deletion detection disabled; skipped source_deleted handling for bill **${normalizedBillNo}** (notice=${num})`,
+            metadata: {
+              noticeNum: num,
+              billNo: normalizedBillNo,
+              responseUrl: error.responseUrl,
+              detectionDisabled: true,
+            },
+          });
+          return null;
+        }
+
         const probeAlertMessage =
           await this.crawlingCoreService.probeNsmDeletedBillAlert(
             normalizedBillNo,
@@ -1103,7 +1198,9 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
 
       const message = error instanceof Error ? error.message : String(error);
       const isTimeoutError = /timeout/i.test(message);
-      if (isTimeoutError) {
+      // The timeout fallback probe is part of deletion detection, so it is
+      // skipped when CRAWLING_NSM_DELETION_DETECTION_ENABLED is off.
+      if (isTimeoutError && isNsmDeletionDetectionEnabled()) {
         const deletionAlertMessage =
           await this.crawlingCoreService.probeNsmDeletedBillAlert(
             normalizedBillNo,
@@ -1260,6 +1357,41 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
   async probeExistingNsmBillsForSourceDeletion(
     limit: number = 50,
   ): Promise<number> {
+    // A disabled NSM crawler must not run the NSM detail probe at all (no
+    // candidate query, no Puppeteer captures, no HTTP probes).
+    if (!isNsmCrawlerEnabled()) {
+      logAndBridge({
+        logger: this.logger,
+        method: 'log',
+        message:
+          'NSM detail probe skipped: NSM crawler is disabled (CRAWLING_NSM_ENABLED)',
+        context: ArchiveOrchestratorService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        bridgeMessage:
+          'NSM detail probe skipped: NSM crawler is disabled (CRAWLING_NSM_ENABLED)',
+      });
+      return 0;
+    }
+
+    // Runtime kill switch: skip the whole probe batch (candidate query,
+    // Puppeteer captures and HTTP probes) when deletion detection is
+    // disabled via CRAWLING_NSM_DELETION_DETECTION_ENABLED.
+    if (!isNsmDeletionDetectionEnabled()) {
+      logAndBridge({
+        logger: this.logger,
+        method: 'log',
+        message:
+          'NSM detail probe skipped: source deletion detection is disabled',
+        context: ArchiveOrchestratorService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        bridgeMessage:
+          'NSM detail probe skipped: source deletion detection is disabled',
+      });
+      return 0;
+    }
+
     // Probe ALL content_bill_number IS NULL bills first (high priority),
     // then fill remaining slots with rotating broader pool.
     const candidates =

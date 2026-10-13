@@ -6,11 +6,11 @@
 
 ### 입법예고 수집 및 아카이브
 
-- PAL과 NSM의 신규·진행 중 법률안을 정기 수집합니다.
-- NSM에서 먼저 확인된 법률안이 PAL에 공개되면 동일 의안으로 연결합니다.
+- [국회 입법예고](https://pal.assembly.go.kr/)와 [국민참여입법센터](https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out)의 신규·진행 중 법률안을 정기 수집합니다.
+- 국민참여입법센터에서 먼저 확인된 법률안이 국회 입법예고에 공개되면 동일 의안으로 연결합니다.
 - 원문, HTTP 메타데이터, 스크린샷을 보존하고 SHA-256으로 무결성을 검증합니다.
 - 누락된 원문·제안 이유·요약 데이터는 정기 작업으로 다시 수집합니다.
-- 심사 종료 법률안의 상태를 주기적으로 갱신합니다.
+- 입법예고 기간 종료 법률안의 상태를 주기적으로 갱신합니다.
 
 ### 조회 및 검색
 
@@ -183,6 +183,11 @@ ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_SIZE=5
 ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS=250
 ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_CONCURRENCY=1
 
+# Crawler sources (each can be disabled independently)
+CRAWLING_PAL_ENABLED=true
+CRAWLING_NSM_ENABLED=true
+# CRAWLING_NSM_DELETION_DETECTION_ENABLED=true
+
 # Database mirror to file.kiwi (optional)
 FILE_MIRROR_ENABLED=false
 FILE_MIRROR_CRON=47 6 * * *
@@ -201,6 +206,25 @@ DISCORD_BRIDGE_CHANNEL_ID=
 DISCORD_BRIDGE_LOG_CHANNEL_ID=
 DISCORD_BRIDGE_LOG_LEVEL=LOG
 DISCORD_BRIDGE_ADMIN_USER_IDS=
+```
+
+### 크롤러 활성화 설정
+
+LawCast는 두 소스에서 입법예고를 수집합니다.
+
+- PAL: 국회 입법예고(`pal.assembly.go.kr`)
+- NSM: 국민참여입법센터(`opinion.lawmaking.go.kr`, NsmLmSts)
+
+각 소스는 `CRAWLING_PAL_ENABLED`, `CRAWLING_NSM_ENABLED`로 독립적으로 켜고 끌 수 있습니다.
+
+- 미설정/빈 값/알 수 없는 값은 활성(true)으로 처리됩니다(opt-out). 따라서 기존 동작이 그대로 유지됩니다.
+- 두 소스를 모두 `false`로 두면 부트스트랩에서 예외가 발생하고 프로세스가 `process.exit(1)`로 종료됩니다.
+- 비활성화된 소스는 데이터 수집뿐 아니라 스냅샷 저장·변경 추적(diffchain)·소스 삭제 감지·스냅샷 백필 경로에도 진입하지 않습니다.
+- `CRAWLING_NSM_DELETION_DETECTION_ENABLED=false`는 NSM 소스가 켜져 있어도 삭제 감지만 건너뛰는 별도 킬 스위치입니다.
+
+```env
+CRAWLING_PAL_ENABLED=true
+CRAWLING_NSM_ENABLED=true
 ```
 
 ### Ollama 설정
@@ -273,11 +297,11 @@ Base path: `/api`
 
 요청 제한은 Redis 캐시 카운터와 클라이언트 IP의 SHA-256 해시를 이용해 적용합니다. 제한을 초과하면 API는 `429 Too Many Requests`를 반환합니다.
 
-| 대상             | 제한                        | 적용 엔드포인트                                                                                                                      |
+| 대상           | 제한                      | 적용 엔드포인트                                                                                                               |
 | -------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| 비용이 큰 조회       | 60초당 30회                  | `GET /notices/archive`, `GET /notices/search`, `GET /notices/semantic-search`, `GET /notices/changes`, `GET /stats/proposals` |
-| 토론 조회          | 엔드포인트별 60초당 300회          | 토론 스레드 및 의견 조회 API                                                                                                            |
-| 토론 쓰기          | 60초당 10회                  | 토론 스레드·의견 생성, 수정, 삭제 및 상태 변경 API                                                                                              |
+| 비용이 큰 조회 | 60초당 30회               | `GET /notices/archive`, `GET /notices/search`, `GET /notices/semantic-search`, `GET /notices/changes`, `GET /stats/proposals` |
+| 토론 조회      | 엔드포인트별 60초당 300회 | 토론 스레드 및 의견 조회 API                                                                                                  |
+| 토론 쓰기      | 60초당 10회               | 토론 스레드·의견 생성, 수정, 삭제 및 상태 변경 API                                                                            |
 
 목록 API의 `limit`은 최대 100개입니다. `GET /notices/archive`의 `noticeNums`는 최대 100개, 검색어는 최대 120자로 제한됩니다.
 
@@ -285,18 +309,18 @@ Base path: `/api`
 
 | Method | Path                              | Description                              |
 | ------ | --------------------------------- | ---------------------------------------- |
-| `GET`  | `/notices/recent`                 | 최근 입법예고 목록                               |
-| `GET`  | `/notices/keywords`               | 빠른 검색용 추천 키워드                            |
-| `GET`  | `/notices/archive`                | 아카이브 목록 조회, 필터 및 페이지네이션                  |
-| `GET`  | `/notices/search`                 | 법률안 통합 검색                                |
-| `GET`  | `/notices/semantic-search`        | 의미 검색(사이드카 프록시, 키워드 폴백)                  |
-| `GET`  | `/notices/semantic-search/health` | 의미 검색 엔진 상태                              |
-| `GET`  | `/notices/:num/detail`            | 법률안 상세 또는 특정 리비전 조회                      |
-| `GET`  | `/notices/:num/changes`           | 법률안별 변경 타임라인                             |
-| `GET`  | `/notices/changes`                | 전체 변경 이벤트 목록                             |
-| `GET`  | `/notices/changes/summary`        | 비교 가능한 변경 이벤트 통계                         |
-| `GET`  | `/notices/:num/screenshot`        | 보관된 법률안 스크린샷                             |
-| `GET`  | `/notices/:num/export`            | 법률안 아카이브 ZIP 내보내기                        |
+| `GET`  | `/notices/recent`                 | 최근 입법예고 목록                       |
+| `GET`  | `/notices/keywords`               | 빠른 검색용 추천 키워드                  |
+| `GET`  | `/notices/archive`                | 아카이브 목록 조회, 필터 및 페이지네이션 |
+| `GET`  | `/notices/search`                 | 법률안 통합 검색                         |
+| `GET`  | `/notices/semantic-search`        | 의미 검색(사이드카 프록시, 키워드 폴백)  |
+| `GET`  | `/notices/semantic-search/health` | 의미 검색 엔진 상태                      |
+| `GET`  | `/notices/:num/detail`            | 법률안 상세 또는 특정 리비전 조회        |
+| `GET`  | `/notices/:num/changes`           | 법률안별 변경 타임라인                   |
+| `GET`  | `/notices/changes`                | 전체 변경 이벤트 목록                    |
+| `GET`  | `/notices/changes/summary`        | 비교 가능한 변경 이벤트 통계             |
+| `GET`  | `/notices/:num/screenshot`        | 보관된 법률안 스크린샷                   |
+| `GET`  | `/notices/:num/export`            | 법률안 아카이브 ZIP 내보내기             |
 
 ### 알림
 

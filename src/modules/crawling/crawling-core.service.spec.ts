@@ -434,6 +434,7 @@ describe('CrawlingCoreService', () => {
   describe('probeNsmDeletedBillAlert', () => {
     afterEach(() => {
       mockFetchHtmlPage.mockReset();
+      delete process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED;
     });
 
     it('confirms deletion when the fetched detail page has the alert and no core structure', async () => {
@@ -476,6 +477,88 @@ describe('CrawlingCoreService', () => {
       const result = await service.probeNsmDeletedBillAlert('2219887');
 
       expect(result).toBeNull();
+    });
+
+    it('returns null without issuing a request when deletion detection is disabled at runtime', async () => {
+      process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED = 'false';
+
+      const result = await service.probeNsmDeletedBillAlert('2219887');
+
+      expect(result).toBeNull();
+      expect(mockFetchHtmlPage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('crawler activation guards', () => {
+    afterEach(() => {
+      delete process.env.CRAWLING_PAL_ENABLED;
+      delete process.env.CRAWLING_NSM_ENABLED;
+      delete process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED;
+    });
+
+    it('yields no PAL pages and never creates a PAL client when disabled', async () => {
+      process.env.CRAWLING_PAL_ENABLED = 'false';
+      (mockPalCrawl as any).getAllPages = jest.fn().mockReturnValue(
+        (async function* () {
+          yield { items: mockTableData, currentPage: 1, totalPages: 1 };
+        })(),
+      );
+
+      const pages: unknown[] = [];
+      for await (const page of service.getAllPages()) {
+        pages.push(page);
+      }
+
+      expect(pages).toEqual([]);
+      expect((mockPalCrawl as any).getAllPages).not.toHaveBeenCalled();
+    });
+
+    it('yields PAL pages when the PAL crawler is enabled (default)', async () => {
+      (mockPalCrawl as any).getAllPages = jest.fn().mockReturnValue(
+        (async function* () {
+          yield { items: mockTableData, currentPage: 1, totalPages: 1 };
+        })(),
+      );
+
+      const pages: unknown[] = [];
+      for await (const page of service.getAllPages()) {
+        pages.push(page);
+      }
+
+      expect(pages).toHaveLength(1);
+    });
+
+    it('yields no NSM list or pending pages when disabled', async () => {
+      process.env.CRAWLING_NSM_ENABLED = 'false';
+      (mockNsmLmSts as any).getAllPages = jest.fn().mockReturnValue(
+        (async function* () {
+          yield { items: [], currentPage: 1, totalPages: 1 };
+        })(),
+      );
+
+      const allPages: unknown[] = [];
+      for await (const page of service.getAllNsmPages()) {
+        allPages.push(page);
+      }
+
+      const pendingPages: unknown[] = [];
+      for await (const page of service.getAllNsmPendingPages()) {
+        pendingPages.push(page);
+      }
+
+      expect(allPages).toEqual([]);
+      expect(pendingPages).toEqual([]);
+      expect((mockNsmLmSts as any).getAllPages).not.toHaveBeenCalled();
+    });
+
+    it('skips the NSM deletion probe when the NSM crawler is disabled', async () => {
+      process.env.CRAWLING_NSM_ENABLED = 'false';
+      mockFetchHtmlPage.mockResolvedValue({ data: '<html></html>' } as any);
+
+      await expect(
+        service.probeNsmDeletedBillAlert('2219776'),
+      ).resolves.toBeNull();
+      expect(mockFetchHtmlPage).not.toHaveBeenCalled();
     });
   });
 });

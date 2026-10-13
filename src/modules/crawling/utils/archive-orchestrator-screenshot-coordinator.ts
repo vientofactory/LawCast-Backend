@@ -9,6 +9,10 @@ import { delayMs } from '../../../utils/async-delay.utils';
 import { logAndBridge } from '../../../utils/bridge-log.utils';
 import { mapConcurrently } from '../../../utils/concurrency.utils';
 import {
+  isNsmCrawlerEnabled,
+  isPalCrawlerEnabled,
+} from '../../../utils/crawler-activation.utils';
+import {
   ScreenshotFailureReason,
   classifyScreenshotError,
   formatScreenshotCaptureError,
@@ -84,7 +88,11 @@ export class ArchiveOrchestratorScreenshotCoordinator {
         ),
       ]);
 
-      if (missing.length === 0 && nsmMissing.length === 0) {
+      // A disabled crawler must not have its snapshot screenshots backfilled.
+      const palTargets = isPalCrawlerEnabled() ? missing : [];
+      const nsmTargets = isNsmCrawlerEnabled() ? nsmMissing : [];
+
+      if (palTargets.length === 0 && nsmTargets.length === 0) {
         LoggerUtils.debugDev(
           'ArchiveOrchestratorService',
           'Screenshot backfill: no missing screenshots found',
@@ -92,26 +100,26 @@ export class ArchiveOrchestratorScreenshotCoordinator {
         return;
       }
 
-      const total = missing.length + nsmMissing.length;
+      const total = palTargets.length + nsmTargets.length;
       logAndBridge({
         logger: this.options.logger,
         method: 'log',
         message:
           `Screenshot backfill: queuing ${total} notice(s) with missing screenshots` +
-          ` (${missing.length} pal, ${nsmMissing.length} NsmLmSts)`,
+          ` (${palTargets.length} pal, ${nsmTargets.length} NsmLmSts)`,
         context: 'ArchiveOrchestratorService',
         discordBridge: this.options.discordBridge,
         bridgeLevel: BridgeLogLevel.LOG,
         bridgeMessage: `Screenshot backfill: queuing **${total}** notice(s)`,
-        metadata: { total, pal: missing.length, nsm: nsmMissing.length },
+        metadata: { total, pal: palTargets.length, nsm: nsmTargets.length },
       });
 
-      if (missing.length > 0) {
-        this.scheduleScreenshots(missing);
+      if (palTargets.length > 0) {
+        this.scheduleScreenshots(palTargets);
       }
-      if (nsmMissing.length > 0) {
+      if (nsmTargets.length > 0) {
         this.scheduleScreenshots(
-          nsmMissing.map(({ num }) => ({
+          nsmTargets.map(({ num }) => ({
             num,
             contentId: '',
             isDone: false,
@@ -251,6 +259,11 @@ export class ArchiveOrchestratorScreenshotCoordinator {
     notice: ScreenshotQueueItem,
     forceNsmSpacing = false,
   ): Promise<ScreenshotQueueItem | null> {
+    // Drop queued captures for a disabled source instead of opening a browser.
+    if (notice.nsmBillNo ? !isNsmCrawlerEnabled() : !isPalCrawlerEnabled()) {
+      return null;
+    }
+
     try {
       if (notice.retryCount > 0) {
         await delayMs(APP_CONSTANTS.SCREENSHOT.RETRY_DELAY_MS);

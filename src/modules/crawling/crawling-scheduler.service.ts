@@ -24,6 +24,10 @@ import { CrawlingSchedulerSummarySupport } from './utils/crawling-scheduler-summ
 import { CrawlingSchedulerProposalRetry } from './utils/crawling-scheduler-proposal-retry';
 import { handlePendingCronInternal } from './utils/crawling-scheduler-pending-support';
 import { AI_SUMMARY_STATUS } from './utils/ai-summary-status.utils';
+import {
+  isNsmCrawlerEnabled,
+  isPalCrawlerEnabled,
+} from '../../utils/crawler-activation.utils';
 
 const { PENDING_CRAWL_MAX_RETRIES, PENDING_CRAWL_RETRY_BASE_MS } =
   APP_CONSTANTS.ARCHIVE_SYNC;
@@ -148,6 +152,16 @@ export class CrawlingSchedulerService implements OnModuleInit {
   }
 
   async handleCron() {
+    // Disabled PAL crawler: skip the PAL crawl + notification cycle entirely,
+    // so no notices are collected and no snapshot / change-tracking work runs.
+    if (!isPalCrawlerEnabled()) {
+      LoggerUtils.debugDev(
+        CrawlingSchedulerService.name,
+        'PAL crawler disabled (CRAWLING_PAL_ENABLED); skipping crawling cron',
+      );
+      return;
+    }
+
     if (!this.isInitialized) {
       this.logger.warn('Cache not initialized yet, skipping cron job');
       return;
@@ -936,6 +950,16 @@ export class CrawlingSchedulerService implements OnModuleInit {
    * a slow NsmLmSts response never delays pal.assembly.go.kr processing.
    */
   async handlePendingCron(): Promise<void> {
+    // Disabled NSM crawler: skip the NSM pending-bills crawl entirely, so no
+    // NSM list is collected and no snapshot / change-tracking work runs.
+    if (!isNsmCrawlerEnabled()) {
+      LoggerUtils.debugDev(
+        CrawlingSchedulerService.name,
+        'NSM crawler disabled (CRAWLING_NSM_ENABLED); skipping pending bills cron',
+      );
+      return;
+    }
+
     if (!this.isInitialized) {
       this.logger.warn('Cache not initialized yet, skipping pending cron job');
       return;

@@ -65,6 +65,8 @@ import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { logAndBridge } from '../../utils/bridge-log.utils';
+import { isNsmDeletionDetectionEnabled } from '../../utils/source-deletion-detection.utils';
+import { isNsmCrawlerEnabled } from '../../utils/crawler-activation.utils';
 import {
   canonicalizeProposalReason,
   canonicalizeProposalReasonForComparison,
@@ -1059,6 +1061,27 @@ export class NoticeArchiveService {
     seenNsmActiveNums: Set<number>,
     confirmDeletion?: (billNo: string) => Promise<boolean>,
   ): Promise<number> {
+    // A disabled NSM crawler means no NSM list was collected, so there is no
+    // reconciliation to run: skip entirely (no candidate query, no marking).
+    if (!isNsmCrawlerEnabled()) {
+      LoggerUtils.debugDev(
+        'NoticeArchiveService',
+        'markSourceDeletedByMissingNsmNums: NSM crawler is disabled (CRAWLING_NSM_ENABLED); skipped list reconciliation',
+      );
+      return 0;
+    }
+
+    // Runtime kill switch: when deletion detection is disabled via
+    // CRAWLING_NSM_DELETION_DETECTION_ENABLED, skip list reconciliation
+    // entirely (no candidate query, no marking).
+    if (!isNsmDeletionDetectionEnabled()) {
+      LoggerUtils.log(
+        'NoticeArchiveService',
+        'markSourceDeletedByMissingNsmNums: NSM source deletion detection is disabled; skipped list reconciliation',
+      );
+      return 0;
+    }
+
     if (seenNsmActiveNums.size === 0) {
       return 0;
     }

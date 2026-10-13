@@ -21,6 +21,11 @@ import { APP_CONSTANTS } from '../../config/app.config';
 import { type CachedNotice } from '../../types/cache.types';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
+import { isNsmDeletionDetectionEnabled } from '../../utils/source-deletion-detection.utils';
+import {
+  isNsmCrawlerEnabled,
+  isPalCrawlerEnabled,
+} from '../../utils/crawler-activation.utils';
 import { BrowserLeaseManagerService } from './browser-lease-manager.service';
 import { recoverCompetentAuthorityName } from './utils/competent-authority-autocomplete.utils';
 import {
@@ -384,6 +389,20 @@ export class CrawlingCoreService {
    * Returns the deletion alert message if confirmed, or null otherwise.
    */
   async probeNsmDeletedBillAlert(billNo: string): Promise<string | null> {
+    // A disabled NSM crawler never issues the probe request at all: callers
+    // treat null as "not confirmed" and therefore never mark source_deleted.
+    if (!isNsmCrawlerEnabled()) {
+      return null;
+    }
+
+    // Runtime kill switch (CRAWLING_NSM_DELETION_DETECTION_ENABLED): when
+    // deletion detection is disabled, never issue the probe request —
+    // callers treat null as "not confirmed" and therefore never mark
+    // source_deleted.
+    if (!isNsmDeletionDetectionEnabled()) {
+      return null;
+    }
+
     const normalized = billNo.trim();
     if (!normalized) {
       return null;
@@ -548,6 +567,17 @@ export class CrawlingCoreService {
     query?: Omit<ISearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
   ): AsyncGenerator<ISearchResult> {
+    // Disabled PAL crawler: yield no pages so full sync, the hot-path cron
+    // crawl and the NSM->PAL refresh never collect data (and therefore never
+    // reach the archive snapshot / diffchain paths).
+    if (!isPalCrawlerEnabled()) {
+      LoggerUtils.debugDev(
+        CrawlingCoreService.name,
+        'PAL crawler disabled (CRAWLING_PAL_ENABLED); skipping PAL list crawl',
+      );
+      return;
+    }
+
     yield* this.createClient().getAllPages(query, options);
   }
 
@@ -604,6 +634,16 @@ export class CrawlingCoreService {
     query?: Omit<INsmSearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
   ): AsyncGenerator<INsmSearchResult> {
+    // Disabled NSM crawler: yield no pages so pending sync and the pending
+    // cron never collect NSM data or reach snapshot/change-tracking paths.
+    if (!isNsmCrawlerEnabled()) {
+      LoggerUtils.debugDev(
+        CrawlingCoreService.name,
+        'NSM crawler disabled (CRAWLING_NSM_ENABLED); skipping NSM list crawl',
+      );
+      return;
+    }
+
     const maxRetries = APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES;
     let currentPage = 0;
     let yieldedPages = 0;
@@ -896,6 +936,15 @@ export class CrawlingCoreService {
     query?: Omit<INsmSearchQuery, 'pageIndex'>,
     options?: IBulkOptions,
   ): AsyncGenerator<INsmSearchResult> {
+    // Disabled NSM crawler: yield no pages (see getAllNsmPages).
+    if (!isNsmCrawlerEnabled()) {
+      LoggerUtils.debugDev(
+        CrawlingCoreService.name,
+        'NSM crawler disabled (CRAWLING_NSM_ENABLED); skipping NSM pending list crawl',
+      );
+      return;
+    }
+
     const maxRetries = APP_CONSTANTS.CRAWLING.MAX_WAITINGROOM_RETRIES;
     let currentPage = 0;
     let yieldedPages = 0;
@@ -1082,6 +1131,11 @@ export class CrawlingCoreService {
    * @param billNo The assembly bill number (e.g. "2200001")
    */
   async captureNsmDetailScreenshot(billNo: string): Promise<Buffer | null> {
+    // Disabled NSM crawler: never open a browser to capture NSM snapshots.
+    if (!isNsmCrawlerEnabled()) {
+      return null;
+    }
+
     const client = new NsmLmSts({
       ...this.crawlConfig,
       screenshot: SCREENSHOT_CONFIG,
