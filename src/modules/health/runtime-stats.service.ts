@@ -16,6 +16,10 @@ import { ArchiveSyncService } from '../crawling/archive-sync.service';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 import { WebPushSubscriptionService } from '../notification/web-push-subscription.service';
 import { APP_CONSTANTS } from '../../config/app.config';
+import {
+  isNsmCrawlerEnabled,
+  isPalCrawlerEnabled,
+} from '../../utils/crawler-activation.utils';
 import { NoticeArchive } from '../notice/notice-archive.entity';
 import { NoticeChangeEvent } from '../change-tracking/notice-change-event.entity';
 import type { CronJobsService } from '../scheduling/cronjobs.service';
@@ -353,10 +357,17 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     const palCron = APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK;
     const nsmCron = APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK;
 
+    // Read the runtime gates on every aggregation (not at module load) so the
+    // status page reflects an operator toggling CRAWLING_PAL_ENABLED /
+    // CRAWLING_NSM_ENABLED without a server restart.
+    const palEnabled = isPalCrawlerEnabled();
+    const nsmEnabled = isNsmCrawlerEnabled();
+
     return {
       palCrawler: {
         name: '국회 입법예고 크롤러',
         source: 'pal.assembly.go.kr',
+        enabled: palEnabled,
         status: schedulerState.isProcessing
           ? ('running' as const)
           : palPhase?.status === 'failed'
@@ -373,6 +384,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
       nsmPendingCrawler: {
         name: '국민참여입법센터 입법진행현황 크롤러',
         source: 'opinion.lawmaking.go.kr',
+        enabled: nsmEnabled,
         status: schedulerState.isPendingProcessing
           ? ('running' as const)
           : pendingSyncPhase?.status === 'failed'
