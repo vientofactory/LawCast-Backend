@@ -1,4 +1,4 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { DataSource } from 'typeorm';
 import { NoticeArchiveService } from './notice-archive.service';
 import { NoticeArchive } from '../notice/notice-archive.entity';
@@ -3559,6 +3559,67 @@ describe('NoticeArchiveService', () => {
 
       expect(result).toEqual({ pal: [], nsm: [] });
       expect(repositoryMock.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('markSourceDeletedByMissingNsmNums', () => {
+    const buildService = (repositoryMock: any) =>
+      new NoticeArchiveService(
+        repositoryMock as any,
+        createSummaryStateRepositoryMock() as any,
+        createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+    afterEach(() => {
+      delete process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED;
+    });
+
+    it('skips list reconciliation entirely when deletion detection is disabled at runtime', async () => {
+      process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED = 'false';
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest.fn<(...args: any[]) => Promise<any[]>>(),
+      };
+      const confirmDeletion = jest
+        .fn<(billNo: string) => Promise<boolean>>()
+        .mockResolvedValue(true);
+
+      const markedCount = await buildService(
+        repositoryMock,
+      ).markSourceDeletedByMissingNsmNums(new Set([2219001]), confirmDeletion);
+
+      expect(markedCount).toBe(0);
+      expect(repositoryMock.find).not.toHaveBeenCalled();
+      expect(confirmDeletion).not.toHaveBeenCalled();
+    });
+
+    it('runs list reconciliation normally when deletion detection is enabled', async () => {
+      process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED = 'true';
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
+          {
+            noticeNum: 2219002,
+            subject: 'Deletion detection gate test',
+            contentBillNumber: '2219002',
+          },
+        ]),
+      };
+      const confirmDeletion = jest
+        .fn<(billNo: string) => Promise<boolean>>()
+        .mockResolvedValue(false);
+
+      const markedCount = await buildService(
+        repositoryMock,
+      ).markSourceDeletedByMissingNsmNums(new Set([2219001]), confirmDeletion);
+
+      expect(markedCount).toBe(0);
+      expect(repositoryMock.find).toHaveBeenCalled();
+      expect(confirmDeletion).toHaveBeenCalledWith('2219002');
+      expect(repositoryMock.update).not.toHaveBeenCalled();
     });
   });
 });

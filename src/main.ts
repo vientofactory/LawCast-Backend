@@ -12,12 +12,27 @@ import { CrawlingSchedulerService } from './modules/crawling/crawling-scheduler.
 import { ArchiveSyncService } from './modules/crawling/archive-sync.service';
 import { LoggerUtils } from './utils/logger.utils';
 import { logAndBridge } from './utils/bridge-log.utils';
+import {
+  assertAtLeastOneCrawlerEnabled,
+  getCrawlerActivationState,
+} from './utils/crawler-activation.utils';
 
 if (!process.env.TZ) {
   process.env.TZ = 'Asia/Seoul';
 }
 
 async function bootstrap() {
+  const loggerContext = 'Bootstrap';
+  const crawlerActivation = getCrawlerActivationState();
+  LoggerUtils.log(
+    loggerContext,
+    `Crawler activation: PAL=${crawlerActivation.pal ? 'enabled' : 'disabled'}, NSM=${crawlerActivation.nsm ? 'enabled' : 'disabled'}`,
+  );
+
+  // Fail fast if no crawler is enabled
+  assertAtLeastOneCrawlerEnabled();
+
+  // Nest application setup
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
   const dataSource = app.get(DataSource);
@@ -25,7 +40,6 @@ async function bootstrap() {
   const discordBridge = app.get(DiscordBridgeService);
   const crawlingSchedulerService = app.get(CrawlingSchedulerService);
   const archiveSyncService = app.get(ArchiveSyncService);
-  const loggerContext = 'Bootstrap';
   const frontendUrls = configService.get<string[]>('frontend.urls');
   const { getValidationPipeOptions } = WebhookValidationUtils;
 

@@ -1468,3 +1468,101 @@ describe('[Fault Isolation] CrawlingCoreService.crawlAllPages partial failure', 
     );
   });
 });
+
+// ─── Crawler activation skips ────────────────────────────────────────────────
+
+describe('ArchiveSyncService crawler activation skips', () => {
+  let service: ArchiveSyncService;
+  let crawlingCoreService: jest.Mocked<CrawlingCoreService>;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ArchiveSyncService,
+        {
+          provide: CrawlingCoreService,
+          useValue: {
+            getAllPages: jest.fn(),
+            getAllNsmPages: jest.fn(),
+            getAllNsmPendingPages: jest.fn(),
+            searchDone: jest.fn(),
+          },
+        },
+        {
+          provide: NoticeArchiveService,
+          useValue: {
+            beginChangeNotificationSuppression: jest.fn(),
+            endChangeNotificationSuppression: jest.fn(),
+            reconcileStaleLifecycleStatuses: jest.fn().mockResolvedValue(0),
+            getPendingSummaryPage: jest.fn().mockResolvedValue([]),
+            getUnavailableSummaryPage: jest.fn().mockResolvedValue([]),
+          },
+        },
+        {
+          provide: ArchiveOrchestratorService,
+          useValue: {},
+        },
+        {
+          provide: SummaryGenerationService,
+          useValue: {},
+        },
+        {
+          provide: CacheService,
+          useValue: { getObject: jest.fn().mockResolvedValue(null) },
+        },
+        {
+          provide: ChangeTrackingService,
+          useValue: {},
+        },
+        {
+          provide: DiscordBridgeService,
+          useValue: { logEvent: jest.fn(), sendCriticalAlert: jest.fn() },
+        },
+      ],
+    }).compile();
+
+    service = module.get(ArchiveSyncService);
+    crawlingCoreService = module.get(CrawlingCoreService);
+  });
+
+  afterEach(() => {
+    delete process.env.CRAWLING_PAL_ENABLED;
+    delete process.env.CRAWLING_NSM_ENABLED;
+  });
+
+  it('runFullSync does not touch the PAL crawler when the PAL crawler is disabled', async () => {
+    process.env.CRAWLING_PAL_ENABLED = 'false';
+
+    const result = await service.runFullSync('test');
+
+    expect(result).toEqual({
+      totalPagesScanned: 0,
+      totalNoticesScanned: 0,
+      newlyArchivedCount: 0,
+    });
+    expect(crawlingCoreService.getAllPages).not.toHaveBeenCalled();
+  });
+
+  it('runPendingSync does not touch the NSM crawler when the NSM crawler is disabled', async () => {
+    process.env.CRAWLING_NSM_ENABLED = 'false';
+
+    const result = await service.runPendingSync('test');
+
+    expect(result).toEqual({
+      totalScanned: 0,
+      newlyArchivedCount: 0,
+      sourceDeletedCount: 0,
+    });
+    expect(crawlingCoreService.getAllNsmPages).not.toHaveBeenCalled();
+    expect(crawlingCoreService.getAllNsmPendingPages).not.toHaveBeenCalled();
+  });
+
+  it('runIsDoneSync does not touch the PAL done search when the PAL crawler is disabled', async () => {
+    process.env.CRAWLING_PAL_ENABLED = 'false';
+
+    const result = await service.runIsDoneSync('test');
+
+    expect(result).toEqual({ fetchedDoneCount: 0, markedDoneCount: 0 });
+    expect(crawlingCoreService.searchDone).not.toHaveBeenCalled();
+  });
+});

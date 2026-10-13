@@ -32,6 +32,10 @@ import {
   type ArchiveSyncExecutorOptions,
 } from './utils/archive-sync-phase-executors';
 import { delayMs } from '../../utils/async-delay.utils';
+import {
+  isNsmCrawlerEnabled,
+  isPalCrawlerEnabled,
+} from '../../utils/crawler-activation.utils';
 
 const {
   CRAWLER_PAGE_UNIT,
@@ -665,6 +669,20 @@ export class ArchiveSyncService implements OnModuleInit {
   }
 
   private async executeFullSync(): Promise<FullSyncResult> {
+    // Disabled PAL crawler: skip the full PAL sync entirely so no notices are
+    // collected and no snapshot / diffchain (change-tracking) writes occur.
+    if (!isPalCrawlerEnabled()) {
+      LoggerUtils.debugDev(
+        ArchiveSyncService.name,
+        'Full sync skipped: PAL crawler is disabled (CRAWLING_PAL_ENABLED)',
+      );
+      return {
+        totalPagesScanned: 0,
+        totalNoticesScanned: 0,
+        newlyArchivedCount: 0,
+      };
+    }
+
     return executeFullSyncPhase(this.getExecutorDeps(), this.executorOptions);
   }
 
@@ -699,6 +717,16 @@ export class ArchiveSyncService implements OnModuleInit {
   private async executePendingSync(
     trigger: string,
   ): Promise<PendingSyncResult> {
+    // Disabled NSM crawler: skip the NSM pending sync entirely (no NSM list
+    // crawl, no snapshot / diffchain writes, no deletion reconciliation).
+    if (!isNsmCrawlerEnabled()) {
+      LoggerUtils.debugDev(
+        ArchiveSyncService.name,
+        'Pending sync skipped: NSM crawler is disabled (CRAWLING_NSM_ENABLED)',
+      );
+      return { totalScanned: 0, newlyArchivedCount: 0, sourceDeletedCount: 0 };
+    }
+
     return executePendingSyncPhase(
       this.getExecutorDeps(),
       this.executorOptions,
@@ -739,6 +767,17 @@ export class ArchiveSyncService implements OnModuleInit {
    *            noticeNum is absent from the fetched done-set.
    */
   private async reconcileIsDone(): Promise<IsDoneSyncResult> {
+    // isDone reconciliation reads the PAL completed-notice listing and flips
+    // archive lifecycle rows (change tracking), so it is skipped when the PAL
+    // crawler is disabled.
+    if (!isPalCrawlerEnabled()) {
+      LoggerUtils.debugDev(
+        ArchiveSyncService.name,
+        'isDone sync skipped: PAL crawler is disabled (CRAWLING_PAL_ENABLED)',
+      );
+      return { fetchedDoneCount: 0, markedDoneCount: 0 };
+    }
+
     return reconcileIsDonePhase(this.getExecutorDeps(), this.executorOptions);
   }
 

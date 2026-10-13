@@ -217,6 +217,17 @@ describe('CrawlingSchedulerService', () => {
       expect(crawlingCoreService.crawlAllPages).not.toHaveBeenCalled();
     });
 
+    it('should skip when the PAL crawler is disabled', async () => {
+      process.env.CRAWLING_PAL_ENABLED = 'false';
+      try {
+        await service.handleCron();
+
+        expect(crawlingCoreService.crawlAllPages).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.CRAWLING_PAL_ENABLED;
+      }
+    });
+
     it('should perform crawling and notification when new notices found', async () => {
       const newNotices = [mockTableData[0]];
       const existingNotices = [mockTableData[1]];
@@ -549,6 +560,20 @@ describe('CrawlingSchedulerService', () => {
 
       expect(crawlingCoreService.getAllNsmPages).not.toHaveBeenCalled();
       expect(crawlingCoreService.getAllNsmPendingPages).not.toHaveBeenCalled();
+    });
+
+    it('should skip when the NSM crawler is disabled', async () => {
+      process.env.CRAWLING_NSM_ENABLED = 'false';
+      try {
+        await service.handlePendingCron();
+
+        expect(crawlingCoreService.getAllNsmPages).not.toHaveBeenCalled();
+        expect(
+          crawlingCoreService.getAllNsmPendingPages,
+        ).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.CRAWLING_NSM_ENABLED;
+      }
     });
 
     it('should retry on ECONNRESET with exponential backoff and succeed', async () => {
