@@ -23,7 +23,10 @@ import { delayMs } from '../../utils/async-delay.utils';
 import { logAndBridge } from '../../utils/bridge-log.utils';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { normalizeNoticeNum } from '../../utils/notice-num.utils';
-import { isNsmDeletionDetectionEnabled } from '../../utils/source-deletion-detection.utils';
+import {
+  describeNsmDeletionDetectionDisabled,
+  isNsmDeletionDetectionEnabled,
+} from '../../utils/source-deletion-detection.utils';
 import {
   isNsmCrawlerEnabled,
   isPalCrawlerEnabled,
@@ -814,11 +817,11 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
                   logAndBridge({
                     logger: this.logger,
                     method: 'log',
-                    message: `NSM deletion detection disabled; skipping source_deleted handling for bill ${item.billNo} during NSM archive`,
+                    message: `Skipping source_deleted handling for bill ${item.billNo} during NSM archive: ${describeNsmDeletionDetectionDisabled()}`,
                     context: ArchiveOrchestratorService.name,
                     discordBridge: this.discordBridge,
                     bridgeLevel: BridgeLogLevel.VERBOSE,
-                    bridgeMessage: `NSM deletion detection disabled; skipped source_deleted handling for bill **${item.billNo}** (notice=${notice.num})`,
+                    bridgeMessage: `Skipped source_deleted handling for bill **${item.billNo}** (notice=${notice.num}): ${describeNsmDeletionDetectionDisabled()}`,
                     metadata: {
                       billNo: item.billNo,
                       noticeNum: notice.num,
@@ -1132,12 +1135,12 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         if (!isNsmDeletionDetectionEnabled()) {
           logAndBridge({
             method: 'log',
-            message: `NSM deletion detection disabled; skipping source_deleted handling for bill ${normalizedBillNo} during proposalReason backfill`,
+            message: `Skipping source_deleted handling for bill ${normalizedBillNo} during proposalReason backfill: ${describeNsmDeletionDetectionDisabled()}`,
             logger: this.logger,
             context: ArchiveOrchestratorService.name,
             discordBridge: this.discordBridge,
             bridgeLevel: BridgeLogLevel.VERBOSE,
-            bridgeMessage: `NSM deletion detection disabled; skipped source_deleted handling for bill **${normalizedBillNo}** (notice=${num})`,
+            bridgeMessage: `Skipped source_deleted handling for bill **${normalizedBillNo}** (notice=${num}): ${describeNsmDeletionDetectionDisabled()}`,
             metadata: {
               noticeNum: num,
               billNo: normalizedBillNo,
@@ -1382,13 +1385,11 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
       logAndBridge({
         logger: this.logger,
         method: 'log',
-        message:
-          'NSM detail probe skipped: source deletion detection is disabled',
+        message: `NSM detail probe skipped: ${describeNsmDeletionDetectionDisabled()}`,
         context: ArchiveOrchestratorService.name,
         discordBridge: this.discordBridge,
         bridgeLevel: BridgeLogLevel.DEBUG,
-        bridgeMessage:
-          'NSM detail probe skipped: source deletion detection is disabled',
+        bridgeMessage: `NSM detail probe skipped: ${describeNsmDeletionDetectionDisabled()}`,
       });
       return 0;
     }

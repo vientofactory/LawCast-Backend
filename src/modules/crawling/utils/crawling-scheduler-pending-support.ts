@@ -18,6 +18,7 @@ import { delayMs } from '../../../utils/async-delay.utils';
 import { logAndBridge } from '../../../utils/bridge-log.utils';
 import { AI_SUMMARY_STATUS } from './ai-summary-status.utils';
 import { reportNsmListScanOutcome } from './nsm-list-scan-reporting';
+import { isNsmPendingStreamRedundant } from '../../../utils/crawler-activation.utils';
 
 interface PendingErrorDiagnostics {
   message: string;
@@ -320,11 +321,21 @@ export async function performPendingBillsCrawlInternal(
       collectPageItems(page.items ?? [], 'all');
     }
 
-    for await (const page of deps.crawlingCoreService.getAllNsmPendingPages(
-      query,
-      crawlOptions,
-    )) {
-      collectPageItems(page.items ?? [], 'pending');
+    // Skipped when the active source derives its pending list from the same
+    // list the all-bills scan just walked (see `isNsmPendingStreamRedundant`):
+    // a second traversal would only double the request count against that portal
+    // without adding a pending bill.
+    if (isNsmPendingStreamRedundant()) {
+      deps.logger.log(
+        'NSM pending stream skipped: the active source classifies pending bills from the all-bills scan',
+      );
+    } else {
+      for await (const page of deps.crawlingCoreService.getAllNsmPendingPages(
+        query,
+        crawlOptions,
+      )) {
+        collectPageItems(page.items ?? [], 'pending');
+      }
     }
   } catch (error) {
     if (deps.isRetryableNetworkError(error)) {

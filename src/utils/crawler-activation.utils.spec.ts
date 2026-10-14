@@ -7,6 +7,7 @@ import {
   isCrawlerEnabled,
   isLikmsNsmSourceEnabled,
   isNsmCrawlerEnabled,
+  isNsmPendingStreamRedundant,
   isPalCrawlerEnabled,
 } from './crawler-activation.utils';
 
@@ -115,6 +116,31 @@ describe('crawler-activation.utils', () => {
 
       process.env.CRAWLING_NSM_SOURCE = 'nsm';
       expect(isLikmsNsmSourceEnabled()).toBe(false);
+    });
+  });
+
+  describe('isNsmPendingStreamRedundant', () => {
+    it('keeps the pending stream for the NSM portal', () => {
+      expect(isNsmPendingStreamRedundant()).toBe(false);
+
+      process.env.CRAWLING_NSM_SOURCE = 'nsm';
+      expect(isNsmPendingStreamRedundant()).toBe(false);
+    });
+
+    it('skips it for the LIKMS source, which filters the same list client-side', () => {
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+
+      expect(isNsmPendingStreamRedundant()).toBe(true);
+    });
+
+    it('reads the source on every call so it can be toggled at runtime', () => {
+      expect(isNsmPendingStreamRedundant()).toBe(false);
+
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+      expect(isNsmPendingStreamRedundant()).toBe(true);
+
+      delete process.env.CRAWLING_NSM_SOURCE;
+      expect(isNsmPendingStreamRedundant()).toBe(false);
     });
   });
 

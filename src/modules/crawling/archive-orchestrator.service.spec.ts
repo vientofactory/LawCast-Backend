@@ -1208,7 +1208,7 @@ describe('ArchiveOrchestratorService', () => {
         expect(discordBridgeService.logEvent).toHaveBeenCalledWith(
           BridgeLogLevel.VERBOSE,
           'ArchiveOrchestratorService',
-          'NSM deletion detection disabled; skipped source_deleted handling for bill **2219717** (notice=2219717)',
+          'Skipped source_deleted handling for bill **2219717** (notice=2219717): deletion detection is off via CRAWLING_NSM_DELETION_DETECTION_ENABLED',
           expect.objectContaining({
             noticeNum: 2219717,
             billNo: '2219717',

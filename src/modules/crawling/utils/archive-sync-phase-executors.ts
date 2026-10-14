@@ -9,6 +9,7 @@ import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../../utils/logger.utils';
 import { mapConcurrently } from '../../../utils/concurrency.utils';
 import { reportNsmListScanOutcome } from './nsm-list-scan-reporting';
+import { isNsmPendingStreamRedundant } from '../../../utils/crawler-activation.utils';
 import { type DiscordBridgeService } from '../../discord-bridge/discord-bridge.service';
 import {
   ArchiveReason,
@@ -1099,6 +1100,18 @@ export async function executePendingSyncPhase(
     };
 
     const scanPendingStream = async () => {
+      // Skipped when the active source derives its pending list from the same
+      // list the all-bills stream already walked (see
+      // `isNsmPendingStreamRedundant`): a second traversal would only double the
+      // request count against that portal without adding a pending bill.
+      if (isNsmPendingStreamRedundant()) {
+        LoggerUtils.log(
+          'ArchiveSyncService',
+          'Pending sync NSM(pending) stream skipped: the active source classifies pending bills from the all-bills scan',
+        );
+        return;
+      }
+
       for await (const page of deps.crawlingCoreService.getAllNsmPendingPages(
         query,
         pendingCrawlOptions,
