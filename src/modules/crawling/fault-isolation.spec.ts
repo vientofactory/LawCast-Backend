@@ -690,7 +690,9 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
               skipped: 0,
             }),
             countNotDoneByNoticeNums: jest.fn().mockResolvedValue(0),
+            countLegacyNotDoneNotices: jest.fn().mockResolvedValue(0),
             markNoticesDoneByNums: jest.fn().mockResolvedValue(2),
+            markLegacyNoticesDone: jest.fn().mockResolvedValue(0),
             revertNoticesDoneByNums: jest.fn().mockResolvedValue(0),
             getDoneMarkedNumsPage: jest.fn().mockResolvedValue([]),
             updateSummaryStateByNoticeNum: jest
@@ -1106,6 +1108,38 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(
       noticeArchiveService.endChangeNotificationSuppression,
     ).not.toHaveBeenCalled();
+  });
+
+  it('marks earlier-Assembly rows done even when absent from the fetched done list', async () => {
+    crawlingCoreService.searchDone.mockResolvedValue(makeSearchResult([1, 2]));
+    noticeArchiveService.markNoticesDoneByNums.mockResolvedValue(2);
+    noticeArchiveService.markLegacyNoticesDone.mockResolvedValue(3);
+
+    const result = await service.runIsDoneSync('fault-test');
+
+    expect(noticeArchiveService.markLegacyNoticesDone).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(
+      expect.objectContaining({ fetchedDoneCount: 2, markedDoneCount: 5 }),
+    );
+  });
+
+  it('counts legacy pending flips toward the bulk-flip suppression limit', async () => {
+    crawlingCoreService.searchDone.mockResolvedValue(makeSearchResult([1, 2]));
+    noticeArchiveService.markNoticesDoneByNums.mockResolvedValue(2);
+    noticeArchiveService.markLegacyNoticesDone.mockResolvedValue(0);
+    noticeArchiveService.countNotDoneByNoticeNums.mockResolvedValue(1);
+    noticeArchiveService.countLegacyNotDoneNotices.mockResolvedValue(
+      phaseExecutors.IS_DONE_SYNC_NOTIFY_LIMIT,
+    );
+
+    await service.runIsDoneSync('fault-test');
+
+    expect(
+      noticeArchiveService.beginChangeNotificationSuppression,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      noticeArchiveService.endChangeNotificationSuppression,
+    ).toHaveBeenCalledTimes(1);
   });
 
   // ── executeSummaryBackfill (Phase 4) ──────────────────────────────────────

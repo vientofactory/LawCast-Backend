@@ -1036,6 +1036,59 @@ export class NoticeArchiveService {
   }
 
   /**
+   * Counts archive rows from earlier Assemblies that are still marked active.
+   *
+   * Notice numbers encode their Assembly (`<assembly><5-digit serial>`), so
+   * rows below `BACKFILL_MIN_NOTICE_NUM` belong to an Assembly whose
+   * completed-notice listing is no longer published: the isDone sync fetch can
+   * never return them, and without an explicit rule they stay active forever.
+   */
+  async countLegacyNotDoneNotices(): Promise<number> {
+    if (!this.summaryStateRepository) {
+      return 0;
+    }
+
+    return this.summaryStateRepository.count({
+      where: {
+        noticeNum: LessThan(APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM),
+        isDone: false,
+      },
+    });
+  }
+
+  /**
+   * Marks archive rows from earlier Assemblies as done.
+   *
+   * The isDone sync only flips rows present in the fetched completed-notice
+   * listing, which covers the current Assembly alone. Rows below
+   * `BACKFILL_MIN_NOTICE_NUM` finished their notice periods years ago, so they
+   * are flipped unconditionally through the same `markNoticesDoneByNums` path
+   * (diffchain events included).
+   * @returns Number of rows actually changed
+   */
+  async markLegacyNoticesDone(): Promise<number> {
+    if (!this.summaryStateRepository) {
+      return 0;
+    }
+
+    const legacyRows = await this.summaryStateRepository.find({
+      where: {
+        noticeNum: LessThan(APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM),
+        isDone: false,
+      },
+      select: {
+        noticeNum: true,
+      },
+    });
+
+    if (legacyRows.length === 0) {
+      return 0;
+    }
+
+    return this.markNoticesDoneByNums(legacyRows.map((row) => row.noticeNum));
+  }
+
+  /**
    * Bulk-reverts archive records matching the given notice numbers to isDone=false.
    * Records already marked as active are not touched.
    * @returns Number of rows actually changed
