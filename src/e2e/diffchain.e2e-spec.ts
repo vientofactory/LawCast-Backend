@@ -670,6 +670,77 @@ describe('Diffchain API (e2e)', () => {
     expect(upsertPayloads[0].changedFields).toContain('subject');
   });
 
+  it('serves every chain-head detail field on the default response, not the previous revision', async () => {
+    const noticeArchiveService = moduleRef.get(NoticeArchiveService);
+
+    // LIKMS-era row archived by the broken capture path: the immutable
+    // snapshot holds only the list fields.
+    await noticeArchiveService.upsertNoticeArchive(
+      {
+        num: 1006,
+        subject: '의안 1006 상세 백필 대상',
+        proposerCategory: '의원',
+        committee: '',
+        link: 'https://example.test/notices/1006',
+        contentId: null,
+        attachments: { pdfFile: '', hwpFile: '' },
+      },
+      { proposalReason: '' },
+    );
+
+    // Same append-only repair the proposalReason backfill cron runs: the
+    // recovered detail lands on the diffchain, never on the snapshot row.
+    const detailHtml = '<html><body>likms detail</body></html>';
+    await noticeArchiveService.updateNsmHtmlAndDetail(1006, {
+      html: detailHtml,
+      sha256: createHash('sha256').update(detailHtml).digest('hex'),
+      proposalReason: '복구된 제안이유 본문',
+      billNumber: '2221891',
+      proposer: '송영길의원 등 11인',
+      proposalDate: '2026-10-14',
+      committee: '보건복지위원회',
+      referralDate: '2026-10-15',
+      noticePeriod: '2026-10-14 ~ 2026-10-28',
+      proposalSession: '제439회',
+      httpMetadata: null,
+    });
+
+    const defaultResponse = await request(app.getHttpServer())
+      .get('/api/notices/1006/detail')
+      .expect(200);
+
+    const headRev = defaultResponse.body.data.revision.headRev;
+    expect(headRev).not.toBeNull();
+    expect(defaultResponse.body.data.revision).toMatchObject({
+      requestedRev: null,
+      headRev,
+      isHistorical: false,
+    });
+
+    const explicitResponse = await request(app.getHttpServer())
+      .get(`/api/notices/1006/detail?rev=${headRev}`)
+      .expect(200);
+
+    const expectedHeadFields: Record<string, string> = {
+      proposalReason: '복구된 제안이유 본문',
+      billNumber: '2221891',
+      proposer: '송영길의원 등 11인',
+      proposalDate: '2026-10-14',
+      committee: '보건복지위원회',
+      referralDate: '2026-10-15',
+      noticePeriod: '2026-10-14 ~ 2026-10-28',
+      proposalSession: '제439회',
+    };
+
+    // `?rev=headRev` is the reference reading of the chain head; the default
+    // response must agree with it, otherwise the UI labels the page
+    // `rev #{headRev}` while rendering the previous revision.
+    for (const [fieldPath, value] of Object.entries(expectedHeadFields)) {
+      expect(explicitResponse.body.data.originalContent[fieldPath]).toBe(value);
+      expect(defaultResponse.body.data.originalContent[fieldPath]).toBe(value);
+    }
+  });
+
   function collectChangePayloads(): Array<Record<string, unknown>> {
     const batch = moduleRef.get(NotificationBatchService) as unknown as {
       processChangeNotificationBatch: jest.Mock;

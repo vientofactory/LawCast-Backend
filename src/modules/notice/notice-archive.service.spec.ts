@@ -66,6 +66,13 @@ describe('NoticeArchiveService', () => {
       getNoticeNumsWithInvalidatedEvent: jest
         .fn<(...args: any[]) => Promise<Set<number>>>()
         .mockResolvedValue(new Set()),
+      getNoticeRevisionMetadata: jest
+        .fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValue({
+          headRev: null,
+          hasLegacyGenesisBoundary: false,
+          legacyGenesisBoundaryAt: null,
+        }),
       buildDiffEvent: jest.fn((input: any) => {
         const diff = computeDiff(input.beforeSnapshot, input.afterSnapshot);
         const lifecycleStatus =
@@ -2518,6 +2525,75 @@ describe('NoticeArchiveService', () => {
         num: 2220590,
         contentId: 'PRC_2220590',
         committee: '산업통상자원중소벤처기업위원회',
+      });
+    });
+
+    it('serves the chain head on the default detail response instead of the stale snapshot', async () => {
+      // LIKMS-era row archived by the broken capture path: the immutable
+      // snapshot holds only the list fields, so every detail column is empty.
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        findOne: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(
+          buildRow({
+            noticeNum: 2220590,
+            contentId: null,
+            committee: '',
+            proposalReason: '',
+          }),
+        ),
+        query: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue([{ sourceHtmlSize: 6207, hasScreenshot: 1 }]),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getNoticeRevisionMetadata.mockResolvedValue({
+        headRev: 7,
+        hasLegacyGenesisBoundary: false,
+        legacyGenesisBoundaryAt: null,
+      });
+      changeTrackingService.getLatestFieldValuesForFields.mockResolvedValue(
+        new Map([
+          [
+            2220590,
+            new Map<string, string | null>([
+              ['billNumber', '2221891'],
+              ['proposer', '송영길의원 등 11인'],
+              ['proposalDate', '2026-10-14'],
+              ['contentCommittee', '보건복지위원회'],
+              ['referralDate', '2026-10-15'],
+              ['noticePeriod', '2026-10-14 ~ 2026-10-28'],
+              ['proposalSession', '제439회'],
+            ]),
+          ],
+        ]),
+      );
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        createSummaryStateRepositoryMock() as any,
+        changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+      const result = await service.getArchivedNoticeDetailWithRevision(2220590);
+
+      // The response advertises the head revision, so it must carry the head
+      // revision's values rather than the previous revision's empty snapshot.
+      expect(result.revision).toMatchObject({
+        requestedRev: null,
+        resolvedRev: 7,
+        headRev: 7,
+        isHistorical: false,
+      });
+      expect(result.detail.originalContent).toMatchObject({
+        billNumber: '2221891',
+        proposer: '송영길의원 등 11인',
+        proposalDate: '2026-10-14',
+        committee: '보건복지위원회',
+        referralDate: '2026-10-15',
+        noticePeriod: '2026-10-14 ~ 2026-10-28',
+        proposalSession: '제439회',
       });
     });
 
