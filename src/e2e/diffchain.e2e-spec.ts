@@ -28,6 +28,9 @@ import { RuntimeStatsService } from '../modules/health/runtime-stats.service';
 import { ArchiveSyncService } from '../modules/crawling/archive-sync.service';
 import { PackagesService } from '../modules/shared/packages.service';
 import { ChangeTrackingService } from '../modules/change-tracking/change-tracking.service';
+import { CrawlingCoreService } from '../modules/crawling/crawling-core.service';
+import { SummaryGenerationService } from '../modules/crawling/summary-generation.service';
+import { OllamaClientService } from '../modules/ollama/ollama-client.service';
 import { getTrackedFieldsForCanonVersion } from '../modules/change-tracking/change-tracking-diff.utils';
 import { NoticeChangeSource } from '../modules/change-tracking/notice-change-source.enum';
 import { NoticeArchive } from '../modules/notice/notice-archive.entity';
@@ -786,6 +789,65 @@ describe('Diffchain API (e2e)', () => {
     const secondPage =
       await noticeArchiveService.getNotSupportedSummaryRecoveryPage(5, 5);
     expect(secondPage.map((row) => row.num)).toEqual([9106, 9107]);
+  });
+
+  it('summarizes a contentId row from the chain head when the live payload has no reason', async () => {
+    const noticeArchiveService = moduleRef.get(NoticeArchiveService);
+
+    // The archive snapshot column is empty and so is the live PAL payload, so
+    // the only source of the reason is the chain event the LIKMS backfill
+    // appended. The row must still get a summary instead of `not_supported`.
+    await noticeArchiveService.upsertNoticeArchive(
+      {
+        num: 9301,
+        subject: '의안 9301 요약 백필 대상',
+        proposerCategory: '의원',
+        committee: '정무위원회',
+        link: 'https://example.test/notices/9301',
+        contentId: 'likms-9301',
+        attachments: { pdfFile: '', hwpFile: '' },
+      },
+      { proposalReason: '' },
+    );
+
+    await noticeArchiveService.appendLikmsProposalReasonRepair(
+      9301,
+      '체인에서 회수한 제안이유 본문',
+    );
+
+    const summarizeProposal = jest.fn().mockResolvedValue('체인 복구 요약');
+    const getContent = jest.fn().mockResolvedValue({
+      title: 'LIKMS 9301 상세',
+      proposalReason: '',
+    });
+    const summaryGenerationService = new SummaryGenerationService(
+      {
+        isEnabled: () => true,
+        summarizeProposal,
+      } as unknown as OllamaClientService,
+      { getContent } as unknown as CrawlingCoreService,
+      noticeArchiveService,
+    );
+
+    const result = await summaryGenerationService.generateSummaryForNotice({
+      num: 9301,
+      subject: '의안 9301 요약 백필 대상',
+      proposerCategory: '의원',
+      committee: '정무위원회',
+      numComments: 0,
+      link: 'https://example.test/notices/9301',
+      contentId: 'likms-9301',
+      attachments: { pdfFile: '', hwpFile: '' },
+    });
+
+    expect(result).toEqual({
+      aiSummary: '체인 복구 요약',
+      aiSummaryStatus: 'ready',
+    });
+    expect(summarizeProposal).toHaveBeenCalledWith(
+      'LIKMS 9301 상세',
+      '체인에서 회수한 제안이유 본문',
+    );
   });
 
   function collectChangePayloads(): Array<Record<string, unknown>> {

@@ -4,6 +4,7 @@ import { OllamaClientService } from '../ollama/ollama-client.service';
 import { NoticeArchiveService } from '../notice/notice-archive.service';
 import { CrawlingCoreService } from './crawling-core.service';
 import { type ITableData } from 'pal-crawl';
+import { type CachedNotice } from '../../types/cache.types';
 
 describe('SummaryGenerationService', () => {
   let service: SummaryGenerationService;
@@ -320,7 +321,86 @@ describe('SummaryGenerationService', () => {
         aiSummary: null,
         aiSummaryStatus: 'not_supported',
       });
+      // The chain is the last source consulted before giving up on the row.
+      expect(
+        noticeArchiveService.getLatestProposalReasonForNotice,
+      ).toHaveBeenCalledWith(mockNotice.num);
       expect(ollamaClientService.summarizeProposal).not.toHaveBeenCalled();
+    });
+
+    it('should summarize a contentId row from the change chain when the content payload has no proposalReason', async () => {
+      (ollamaClientService.isEnabled as jest.Mock).mockReturnValue(true);
+      (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
+        title: 'Test Title',
+        proposalReason: '',
+      });
+      (
+        noticeArchiveService.getLatestProposalReasonForNotice as jest.Mock
+      ).mockResolvedValue('LIKMS 복구 제안이유');
+      (ollamaClientService.summarizeProposal as jest.Mock).mockResolvedValue(
+        '체인 기반 요약',
+      );
+
+      const result = await service.generateSummaryForNotice(mockNotice);
+
+      expect(result).toEqual({
+        aiSummary: '체인 기반 요약',
+        aiSummaryStatus: 'ready',
+      });
+      expect(ollamaClientService.summarizeProposal).toHaveBeenCalledWith(
+        'Test Title',
+        'LIKMS 복구 제안이유',
+      );
+    });
+
+    it('should use a caller-resolved proposalReason for a contentId row before reading the change chain', async () => {
+      (ollamaClientService.isEnabled as jest.Mock).mockReturnValue(true);
+      (crawlingCoreService.getContent as jest.Mock).mockResolvedValue({
+        title: 'Test Title',
+        proposalReason: '',
+      });
+      (ollamaClientService.summarizeProposal as jest.Mock).mockResolvedValue(
+        '회수 경로 요약',
+      );
+
+      const result = await service.generateSummaryForNotice({
+        ...mockNotice,
+        proposalReason: '회수된 제안이유',
+      } as CachedNotice);
+
+      expect(result).toEqual({
+        aiSummary: '회수 경로 요약',
+        aiSummaryStatus: 'ready',
+      });
+      expect(ollamaClientService.summarizeProposal).toHaveBeenCalledWith(
+        'Test Title',
+        '회수된 제안이유',
+      );
+      expect(
+        noticeArchiveService.getLatestProposalReasonForNotice,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('should fall back to the notice subject when the content payload is unavailable', async () => {
+      (ollamaClientService.isEnabled as jest.Mock).mockReturnValue(true);
+      (crawlingCoreService.getContent as jest.Mock).mockResolvedValue(null);
+      (
+        noticeArchiveService.getLatestProposalReasonForNotice as jest.Mock
+      ).mockResolvedValue('체인에서 회수한 제안이유');
+      (ollamaClientService.summarizeProposal as jest.Mock).mockResolvedValue(
+        '제목 대체 요약',
+      );
+
+      const result = await service.generateSummaryForNotice(mockNotice);
+
+      expect(result).toEqual({
+        aiSummary: '제목 대체 요약',
+        aiSummaryStatus: 'ready',
+      });
+      expect(ollamaClientService.summarizeProposal).toHaveBeenCalledWith(
+        mockNotice.subject,
+        '체인에서 회수한 제안이유',
+      );
     });
 
     it('should return ready status when summary is generated successfully', async () => {
@@ -343,6 +423,10 @@ describe('SummaryGenerationService', () => {
         'Test Title',
         'Test Proposal Reason',
       );
+      // The healthy path must not pay for an extra chain read.
+      expect(
+        noticeArchiveService.getLatestProposalReasonForNotice,
+      ).not.toHaveBeenCalled();
     });
 
     it('should return unavailable status when summary generation fails', async () => {
