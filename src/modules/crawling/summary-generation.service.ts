@@ -188,12 +188,10 @@ export class SummaryGenerationService {
     if (!notice.contentId) {
       // NsmLmSts bills (proposing status) have no contentId but may have proposalReason
       // stored in the archive snapshot or, after bootstrap repair, in the change chain.
-      const storedReason = (notice as CachedNotice).proposalReason?.trim();
-      const latestReason = storedReason
-        ? storedReason
-        : await this.noticeArchiveService.getLatestProposalReasonForNotice(
-            notice.num,
-          );
+      const latestReason = await this.resolveSummaryProposalReason(
+        notice,
+        null,
+      );
 
       if (!latestReason) {
         if (logOllamaActivity) {
@@ -257,10 +255,19 @@ export class SummaryGenerationService {
         notice.contentId,
       );
 
-      if (!content?.proposalReason?.trim()) {
+      // A contentId row is not guaranteed to carry its `proposalReason` in the
+      // live PAL payload: the text can live only in the archive snapshot or in
+      // the change chain, where a LIKMS repair appended it after the initial
+      // archive. Resolve those sources before declaring the row unsupported.
+      const proposalReason = await this.resolveSummaryProposalReason(
+        notice,
+        content?.proposalReason,
+      );
+
+      if (!proposalReason) {
         if (logOllamaActivity) {
           this.logOllama(
-            `Skip summary ${progressLabel} (contentId=${notice.contentId}) - empty proposalReason`,
+            `Skip summary ${progressLabel} (contentId=${notice.contentId}) - no proposalReason in content payload, archive snapshot, or change chain`,
             phase,
           );
         }
@@ -279,8 +286,8 @@ export class SummaryGenerationService {
       }
 
       const summary = await this.ollamaClientService.summarizeProposal(
-        content.title,
-        content.proposalReason,
+        content?.title || notice.subject,
+        proposalReason,
       );
 
       if (logOllamaActivity) {
@@ -314,6 +321,42 @@ export class SummaryGenerationService {
         aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
       };
     }
+  }
+
+  /**
+   * Resolves the `proposalReason` a summary request should use.
+   *
+   * Precedence:
+   * 1. `liveReason` - the reason carried by a freshly fetched source payload.
+   * 2. `notice.proposalReason` - a reason the caller already resolved (archive
+   *    snapshot or a recovery fetch).
+   * 3. The latest reason recorded in the change chain, which is where a LIKMS
+   *    repair lands when the snapshot column was archived empty.
+   *
+   * @param notice The notice the summary is generated for.
+   * @param liveReason The reason from the live payload, when one was fetched.
+   * @returns The resolved reason, or `null` when no source carries one.
+   */
+  private async resolveSummaryProposalReason(
+    notice: ITableData | CachedNotice,
+    liveReason: string | null | undefined,
+  ): Promise<string | null> {
+    const trimmedLiveReason = liveReason?.trim();
+    if (trimmedLiveReason) {
+      return trimmedLiveReason;
+    }
+
+    const storedReason = (notice as CachedNotice).proposalReason?.trim();
+    if (storedReason) {
+      return storedReason;
+    }
+
+    const chainedReason =
+      await this.noticeArchiveService.getLatestProposalReasonForNotice(
+        notice.num,
+      );
+
+    return chainedReason?.trim() || null;
   }
 
   /**

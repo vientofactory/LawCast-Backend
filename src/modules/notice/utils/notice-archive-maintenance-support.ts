@@ -410,7 +410,16 @@ export async function updateSummaryStatesByNoticeNums(
       // Avoid entity-return mapping on SQLite upsert path where id may not be returned.
       .updateEntity(false)
       // Use physical DB column names for SQLite ON CONFLICT compatibility.
-      .orUpdate(['ai_summary', 'ai_summary_status'], ['notice_num'])
+      // `updated_at` is listed explicitly: TypeORM only emits
+      // `updated_at = DEFAULT` for the conflicting row on drivers outside the
+      // SQLite family, so without this the backfill's bulk write left the
+      // column at its insert-time value and a processed row was
+      // indistinguishable from an untouched one (`updated_at` is the only
+      // per-row record of when a summary was written).
+      .orUpdate(
+        ['ai_summary', 'ai_summary_status', 'updated_at'],
+        ['notice_num'],
+      )
       .execute();
 
     return new Set(values.map((value) => value.noticeNum));

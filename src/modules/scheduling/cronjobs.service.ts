@@ -175,6 +175,7 @@ export class CronJobsService {
     taskName: string,
     shouldSkip: boolean,
     reason: string,
+    options: { visibleInProduction?: boolean } = {},
   ): boolean {
     if (!shouldSkip) {
       return false;
@@ -182,7 +183,10 @@ export class CronJobsService {
 
     const message = `${taskName} skipped - ${reason}`;
     logAndBridge({
-      method: 'debugDev',
+      // A visible skip is for a task the operator expects to see running: its
+      // cadence is the only evidence it was considered, and a skipped tick is
+      // otherwise indistinguishable from a scheduler that never fired.
+      method: options.visibleInProduction ? 'log' : 'debugDev',
       message,
       logger: this.logger,
       bridgeLevel: BridgeLogLevel.DEBUG,
@@ -249,6 +253,35 @@ export class CronJobsService {
       taskName,
       this.crawlingService.isSchedulerBusy({ includeBackground: true }),
       'crawling scheduler is busy',
+    );
+  }
+
+  /**
+   * The summary backfill shares the `proposalReason` tick but only the
+   * archive-sync guard, never the crawl/browser one.
+   *
+   * `runSummaryBackfill` writes single summary rows and calls Ollama; PAL
+   * content is fetched over HTTP, so it opens no browser session and does not
+   * contend with a crawl for the browser lease. Inheriting
+   * `shouldSkipProposalReasonBackfillCron` starved it in production: every
+   * 15-minute tick landed on a crawl or bootstrap window, so this task's
+   * `lastRunAt` stayed `null` for a whole container uptime and only the
+   * start-up pass ever staged rows. Archive-sync phases and their apply drains
+   * stay off limits - skipping them is logged at production level so a
+   * deliberate deferral is never silent.
+   */
+  private shouldSkipSummaryBackfillCron(taskName: string): boolean {
+    const archiveState = this.archiveSyncService.getExecutionState();
+    const runningWriteHeavy =
+      archiveState.runningWriteHeavyPhases.length > 0
+        ? archiveState.runningWriteHeavyPhases.join(', ')
+        : 'none';
+
+    return this.shouldSkipCron(
+      taskName,
+      archiveState.isWriteHeavyPhaseRunning,
+      `archive sync write-heavy activity is currently running (runningWriteHeavyActivities=${runningWriteHeavy})`,
+      { visibleInProduction: true },
     );
   }
 
@@ -385,14 +418,28 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handleProposalReasonBackfillDrain(): Promise<void> {
-    if (
-      this.shouldSkipProposalReasonBackfillCron('proposalReason backfill drain')
-    ) {
-      return;
-    }
+    // The NSM reason drain drives a browser session, so it keeps yielding to
+    // archive sync and to crawl workloads. The summary backfill only keeps the
+    // archive-sync half of that guard - see `shouldSkipSummaryBackfillCron`.
+    const skipNsmReasonDrain = this.shouldSkipProposalReasonBackfillCron(
+      'proposalReason NSM reason drain',
+    );
 
+    // The tick is recorded even when both parts defer, so the status snapshot
+    // shows the schedule is firing (the phase status reports the actual run).
     await this.execute('proposalReason backfill drain', async () => {
-      await this.crawlingService.handleProposalReasonBackfillCron();
+      if (!skipNsmReasonDrain) {
+        await this.crawlingService.handleProposalReasonBackfillCron();
+      }
+
+      if (
+        this.shouldSkipSummaryBackfillCron(
+          'summary backfill (proposalReason cron)',
+        )
+      ) {
+        return;
+      }
+
       await this.archiveSyncService.runSummaryBackfill('proposal-reason-cron');
     });
   }
