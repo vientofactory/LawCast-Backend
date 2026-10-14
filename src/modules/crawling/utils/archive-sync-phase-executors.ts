@@ -8,6 +8,7 @@ import { APP_CONSTANTS } from '../../../config/app.config';
 import { BridgeLogLevel } from '../../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../../utils/logger.utils';
 import { mapConcurrently } from '../../../utils/concurrency.utils';
+import { reportNsmListScanOutcome } from './nsm-list-scan-reporting';
 import { type DiscordBridgeService } from '../../discord-bridge/discord-bridge.service';
 import {
   ArchiveReason,
@@ -1051,19 +1052,26 @@ export async function executePendingSyncPhase(
     let pendingPagesScanned = 0;
     let allItemsObserved = 0;
     let pendingItemsObserved = 0;
-    const isPendingLike = (item: INsmBillItem): boolean =>
-      item.progressStatus?.trim() === '발의';
     const collectPageItems = (
       items: INsmBillItem[] | null | undefined,
       source: 'all' | 'pending',
     ) => {
       for (const item of items ?? []) {
+        // Items without a numeric `의안번호` (e.g. LIKMS non-bill rows) cannot be
+        // addressed by the notice-keyed pipeline, so skip them before mapping.
+        if (!CrawlingCoreService.isCrawlableNsmBill(item)) {
+          continue;
+        }
+
         const notice = CrawlingCoreService.nsmBillToCachedNotice(item);
         if (!rawItemMap.has(notice.num)) {
           rawItemMap.set(notice.num, item);
           nsmNotices.push(notice);
         }
-        if (source === 'pending' || isPendingLike(item)) {
+        if (
+          source === 'pending' ||
+          CrawlingCoreService.isPendingProgressStatus(item.progressStatus)
+        ) {
           pendingCandidateNums.add(notice.num);
         }
       }
@@ -1144,14 +1152,26 @@ export async function executePendingSyncPhase(
         bridgeLevel: BridgeLogLevel.WARN,
         bridgeMessage: `Skipping NSM source-missing detection: scan error occurred (**${seenNsmActiveNums.size}** items collected, scan incomplete)`,
       });
-    } else if (seenNsmActiveNums.size > 0) {
+    } else if (
+      !(await reportNsmListScanOutcome({
+        deps: {
+          cacheService: deps.cacheService,
+          logger: archiveSyncLogger,
+          discordBridge: deps.discordBridge,
+        },
+        itemsObserved: seenNsmActiveNums.size,
+        context: ARCHIVE_SYNC_CONTEXT,
+        label: 'Pending sync scan',
+        nextStepDescription:
+          'nothing was archived and source-missing detection was skipped',
+      }))
+    ) {
       sourceDeletedCount =
         await deps.noticeArchiveService.markSourceDeletedByMissingNsmNums(
           seenNsmActiveNums,
           async (billNo) =>
-            (await deps.crawlingCoreService.probeNsmDeletedBillAlert(
-              billNo,
-            )) !== null,
+            (await deps.crawlingCoreService.probeNsmDeletedBillOutcome(billNo))
+              .outcome,
         );
       if (sourceDeletedCount > 0) {
         logAndBridge({

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import {
   LikmsCrawler,
+  LikmsNsmAdapter,
   NsmLmSts,
   NsmLmStsParser,
   PalCrawl,
@@ -8,11 +9,14 @@ import {
   type IContentData,
   type INsmBillDetail,
   type INsmBillItem,
+  type INsmDetailCrawler,
+  type INsmListCrawler,
   type ISearchQuery,
   type ISearchResult,
   type INsmSearchQuery,
   type INsmSearchResult,
   type ITableData,
+  type LikmsStateCrawlerConfig,
   type PalCrawlConfig,
 } from 'pal-crawl';
 import { URL } from 'node:url';
@@ -20,9 +24,14 @@ import sharp from 'sharp';
 import { APP_CONSTANTS } from '../../config/app.config';
 import { type CachedNotice } from '../../types/cache.types';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
+import {
+  createCrawlerClientHeaders,
+  createCrawlerFetchHeaders,
+} from '../../utils/browser-request-headers.util';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { isNsmDeletionDetectionEnabled } from '../../utils/source-deletion-detection.utils';
 import {
+  isLikmsNsmSourceEnabled,
   isNsmCrawlerEnabled,
   isPalCrawlerEnabled,
 } from '../../utils/crawler-activation.utils';
@@ -35,6 +44,7 @@ import {
   isWaitingroomPage,
   isWaitingroomHtml,
 } from './utils/waitingroom-bypass';
+import { isNsmPortalErrorPageHtml } from './utils/nsm-portal-error-page.util';
 import { AI_SUMMARY_STATUS } from './utils/ai-summary-status.utils';
 
 /**
@@ -82,12 +92,68 @@ type NsmCrawlConfig = PalCrawlConfig & {
   hydrateTruncatedTitles?: boolean;
 };
 
+/**
+ * The pending-list port shared by `NsmLmSts` and `LikmsNsmAdapter`.
+ *
+ * pal-crawl deliberately keeps `searchPending`/`getAllPendingPages` out of
+ * `INsmListCrawler`: NSM narrows server-side (`rslRsltNmL=900101`), while LIKMS
+ * has no equivalent filter and must scan pages, so hiding the cost behind the
+ * same interface would misrepresent it. Both implementations expose the method
+ * with the same shape, which is what this local port captures.
+ */
+type NsmPendingListCrawler = {
+  getAllPendingPages(
+    query?: Omit<INsmSearchQuery, 'pageIndex'>,
+    options?: IBulkOptions,
+  ): AsyncGenerator<INsmSearchResult>;
+};
+
+/**
+ * The NSM-shaped list/detail client used by the crawling pipeline.
+ *
+ * `NsmLmSts` (`국민참여입법센터`) satisfies the ports structurally;
+ * `LikmsNsmAdapter` (`국회 의안정보시스템` `계류의안`) implements them explicitly.
+ * Selecting between
+ * the two therefore needs no change at any call site — every consumer keeps
+ * working against the same `INsmBillItem`/`INsmSearchResult` shapes.
+ */
+type NsmCrawlerClient = INsmListCrawler &
+  INsmDetailCrawler &
+  NsmPendingListCrawler;
+
 /** JPEG quality levels tried in order when the full-page capture is too large. */
 const SCREENSHOT_FALLBACK_QUALITIES =
   APP_CONSTANTS.SCREENSHOT.FALLBACK_QUALITIES;
 
+/**
+ * Progress-status values that mean "filed but not yet referred to a standing
+ * committee": NSM (`rslRsltNmL=900101`) reports `발의`, while the LIKMS adapter
+ * reports the assembly-system word `접수` for the same stage.
+ */
+const PENDING_PROGRESS_STATUSES = new Set(['발의', '접수']);
+
 type NsmDeletionCheck = {
   confirmed: boolean;
+  alertMessage: string | null;
+};
+
+/**
+ * Outcome of one NSM detail-page deletion probe.
+ *
+ * - `deleted`: the real detail page confirmed the deletion alert.
+ * - `alive`: the real detail page was read and the bill is still listed.
+ * - `blocked`: the portal answered with its own error page or the Waitingroom,
+ *   so the response says nothing about the bill. Callers must not treat this
+ *   as "alive" for logging or throttling purposes: it is a read failure.
+ * - `error`: the request failed (timeout, connection, DNS).
+ * - `disabled`: the NSM crawler or deletion detection is off, so no request
+ *   was issued.
+ */
+export type NsmDeletionProbeOutcome =
+  'deleted' | 'alive' | 'blocked' | 'error' | 'disabled';
+
+export type NsmDeletionProbeResult = {
+  outcome: NsmDeletionProbeOutcome;
   alertMessage: string | null;
 };
 
@@ -139,11 +205,12 @@ export class CrawlingCoreService {
   constructor(
     private readonly browserLeaseManager: BrowserLeaseManagerService,
   ) {
+    // Identity fields are deliberately absent: every client is built through
+    // `buildClientConfig()` so it gets its own browser identity instead of one
+    // shared by the process (see `createCrawlerClientHeaders`).
     this.crawlConfig = {
-      userAgent: APP_CONSTANTS.CRAWLING.USER_AGENT,
       timeout: APP_CONSTANTS.CRAWLING.TIMEOUT,
       retryCount: APP_CONSTANTS.CRAWLING.RETRY_COUNT,
-      customHeaders: APP_CONSTANTS.CRAWLING.HEADERS,
       hydrateTruncatedTitles:
         APP_CONSTANTS.CRAWLING.NSM_HYDRATE_TRUNCATED_TITLES,
       // pal-crawl >= 2.2.0 fills an empty proposalReason from the National
@@ -154,12 +221,61 @@ export class CrawlingCoreService {
     };
   }
 
-  private createClient(): PalCrawl {
-    return new PalCrawl(this.crawlConfig);
+  /**
+   * Builds a pal-crawl client config carrying a real browser identity.
+   *
+   * One config is built per client, and pal-crawl keeps it for the client's
+   * whole lifetime, so a crawl operation rotates the User-Agent per request
+   * while presenting one browser family for the operation (see
+   * `createCrawlerClientHeaders`). Either way the headers describe the same
+   * browser as the User-Agent, which is what stops a portal from sorting these
+   * requests out by header shape.
+   */
+  private buildClientConfig(
+    extra: Partial<NsmCrawlConfig> = {},
+  ): NsmCrawlConfig {
+    const { userAgent, customHeaders } = createCrawlerClientHeaders();
+
+    return {
+      ...this.crawlConfig,
+      userAgent,
+      customHeaders,
+      ...extra,
+    };
   }
 
-  private createNsmClient(): NsmLmSts {
-    return new NsmLmSts(this.crawlConfig);
+  private createClient(): PalCrawl {
+    return new PalCrawl(this.buildClientConfig());
+  }
+
+  /**
+   * Builds the NSM-shaped list/detail client for the current source.
+   *
+   * Default: `NsmLmSts` (`국민참여입법센터` `입법진행현황`).
+   * With `CRAWLING_NSM_SOURCE=likms`: pal-crawl's `LikmsNsmAdapter`, which serves
+   * the National Assembly Bill Information System (`국회 의안정보시스템` `계류의안`)
+   * through the same NSM ports so the existing
+   * list -> `nsmBillToCachedNotice` -> archive/cache/notification pipeline runs
+   * unchanged.
+   *
+   * The LIKMS config intentionally omits `hydrateProposalReason`: the pipeline
+   * backfills proposal reasons through its own retry paths, and per-item
+   * hydration would add two requests per bill to every bulk list scan.
+   */
+  private createNsmClient(): NsmCrawlerClient {
+    if (isLikmsNsmSourceEnabled()) {
+      const clientConfig = this.buildClientConfig();
+      const likmsConfig: LikmsStateCrawlerConfig = {
+        userAgent: clientConfig.userAgent,
+        timeout: clientConfig.timeout,
+        retryCount: clientConfig.retryCount,
+        customHeaders: clientConfig.customHeaders,
+      };
+
+      return new LikmsNsmAdapter(likmsConfig);
+    }
+
+    return new NsmLmSts(this.buildClientConfig());
   }
 
   /**
@@ -234,7 +350,7 @@ export class CrawlingCoreService {
 
     // We need a browser session. Create a throwaway NsmLmSts to use its
     // closeBrowser() for cleanup inside runWithLease.
-    const session = new NsmLmSts(this.crawlConfig);
+    const session = new NsmLmSts(this.buildClientConfig());
 
     const allPages = await this.browserLeaseManager.runWithLease(
       `${label}-browser-fallback`,
@@ -387,40 +503,73 @@ export class CrawlingCoreService {
   /**
    * Probes the NSM detail page for a bill to see if it has been deleted.
    * Returns the deletion alert message if confirmed, or null otherwise.
+   *
+   * Thin wrapper over `probeNsmDeletedBillOutcome` kept for callers that only
+   * need the confirmed deletion signal (and for the pre-existing contract that
+   * "anything other than a confirmed deletion is null"). Prefer the outcome
+   * variant when the caller also logs or throttles on the probe result, so a
+   * blocked/unreadable response is not reported as a live bill.
    */
   async probeNsmDeletedBillAlert(billNo: string): Promise<string | null> {
+    const { outcome, alertMessage } =
+      await this.probeNsmDeletedBillOutcome(billNo);
+    return outcome === 'deleted' ? alertMessage : null;
+  }
+
+  /**
+   * Probes the NSM detail page and reports *why* no deletion was confirmed.
+   *
+   * The portal answers refused requests (blacklisted User-Agent, removed path,
+   * anti-bot/session rejection) with its own error page at HTTP 200, and it
+   * answers rate-limited requests with the Waitingroom. Neither response is the
+   * bill's detail page, so both are reported as `blocked` instead of `alive` —
+   * callers can then stop a batch early and say so in the logs, instead of
+   * silently retrying the whole candidate set every cycle. A confirmed deletion
+   * still requires BOTH the deletion alert text and the deleted-page structure
+   * (see `detectNsmDeletedBillFromHtml`).
+   */
+  async probeNsmDeletedBillOutcome(
+    billNo: string,
+  ): Promise<NsmDeletionProbeResult> {
     // A disabled NSM crawler never issues the probe request at all: callers
-    // treat null as "not confirmed" and therefore never mark source_deleted.
+    // treat anything but `deleted` as "not confirmed" and therefore never mark
+    // source_deleted.
     if (!isNsmCrawlerEnabled()) {
-      return null;
+      return { outcome: 'disabled', alertMessage: null };
     }
 
     // Runtime kill switch (CRAWLING_NSM_DELETION_DETECTION_ENABLED): when
-    // deletion detection is disabled, never issue the probe request —
-    // callers treat null as "not confirmed" and therefore never mark
-    // source_deleted.
+    // deletion detection is disabled, never issue the probe request.
     if (!isNsmDeletionDetectionEnabled()) {
-      return null;
+      return { outcome: 'disabled', alertMessage: null };
     }
 
     const normalized = billNo.trim();
     if (!normalized) {
-      return null;
+      return { outcome: 'error', alertMessage: null };
     }
 
     const detailUrl = buildNsmDetailUrl(normalized);
 
     try {
+      // A fresh identity per probe: unlike the pal-crawl clients, this call
+      // builds its whole header object, so the family can rotate too.
+      const { userAgent, customHeaders } = createCrawlerFetchHeaders();
       const response = await fetchHtmlPage(detailUrl, {
-        userAgent: this.crawlConfig.userAgent,
-        customHeaders: this.crawlConfig.customHeaders,
+        userAgent,
+        customHeaders,
         timeoutMs: 15000,
       });
 
       const html = response.data;
+
+      if (isNsmPortalErrorPageHtml(html) || isWaitingroomHtml(html)) {
+        return { outcome: 'blocked', alertMessage: null };
+      }
+
       const check = this.detectNsmDeletedBillFromHtml(html);
       if (check.confirmed) {
-        return check.alertMessage;
+        return { outcome: 'deleted', alertMessage: check.alertMessage };
       }
 
       if (check.alertMessage) {
@@ -429,10 +578,35 @@ export class CrawlingCoreService {
           `NSM deletion alert observed but structure not confirmed for bill ${normalized}`,
         );
       }
-      return null;
+      return { outcome: 'alive', alertMessage: null };
     } catch {
-      return null;
+      return { outcome: 'error', alertMessage: null };
     }
+  }
+
+  /**
+   * Whether an item's progress status marks it as pending-like (filed but not
+   * yet referred to a standing committee). Shared by the NSM and LIKMS sources
+   * so both classify pending bills identically.
+   */
+  static isPendingProgressStatus(
+    progressStatus: string | null | undefined,
+  ): boolean {
+    return PENDING_PROGRESS_STATUSES.has(progressStatus?.trim() ?? '');
+  }
+
+  /**
+   * Whether an NSM-shaped list item can enter the notice pipeline.
+   *
+   * The pipeline addresses notices by their numeric `의안번호` (`num`): archive
+   * rows, diffchain events, cache keys and notifications all key on it. The
+   * LIKMS `계류의안` list also carries non-bill items (for example an
+   * `인사청문요청안` whose `billNo` is `ZZ22142`), which have no numeric id and
+   * must be dropped before mapping instead of being archived as `num=NaN`.
+   */
+  static isCrawlableNsmBill(item: INsmBillItem): boolean {
+    const parsed = Number.parseInt(item.billNo?.trim() ?? '', 10);
+    return Number.isInteger(parsed) && parsed > 0;
   }
 
   /**
@@ -521,11 +695,12 @@ export class CrawlingCoreService {
       return null;
     }
 
+    const { userAgent, customHeaders } = createCrawlerClientHeaders();
     const client = new LikmsCrawler({
-      userAgent: this.crawlConfig.userAgent,
+      userAgent,
       timeout: this.crawlConfig.timeout,
       retryCount: this.crawlConfig.retryCount,
-      customHeaders: this.crawlConfig.customHeaders,
+      customHeaders,
     });
 
     return client.getProposalReason(normalized);
@@ -761,7 +936,7 @@ export class CrawlingCoreService {
   ): Promise<Buffer | null> {
     const capture = async (fullPage: boolean): Promise<Buffer> => {
       const client = new PalCrawl({
-        ...this.crawlConfig,
+        ...this.buildClientConfig(),
         screenshot: { ...SCREENSHOT_CONFIG, fullPage },
       });
 
@@ -895,7 +1070,7 @@ export class CrawlingCoreService {
     const detailUrl = buildNsmDetailUrl(normalized);
     const parser = new NsmLmStsParser();
 
-    const session = new NsmLmSts(this.crawlConfig);
+    const session = new NsmLmSts(this.buildClientConfig());
 
     return this.browserLeaseManager.runWithLease(
       `getNsmDetail(${normalized})-browser-fallback`,
@@ -1011,7 +1186,7 @@ export class CrawlingCoreService {
     if (!normalized) throw new Error('billNo is required');
 
     const client = new NsmLmSts({
-      ...this.crawlConfig,
+      ...this.buildClientConfig(),
       screenshot: SCREENSHOT_CONFIG,
     });
 
@@ -1137,7 +1312,7 @@ export class CrawlingCoreService {
     }
 
     const client = new NsmLmSts({
-      ...this.crawlConfig,
+      ...this.buildClientConfig(),
       screenshot: SCREENSHOT_CONFIG,
     });
 

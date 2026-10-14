@@ -5,6 +5,7 @@ import {
   assertAtLeastOneCrawlerEnabled,
   getCrawlerActivationState,
   isCrawlerEnabled,
+  isLikmsNsmSourceEnabled,
   isNsmCrawlerEnabled,
   isPalCrawlerEnabled,
 } from './crawler-activation.utils';
@@ -13,6 +14,7 @@ describe('crawler-activation.utils', () => {
   afterEach(() => {
     delete process.env.CRAWLING_PAL_ENABLED;
     delete process.env.CRAWLING_NSM_ENABLED;
+    delete process.env.CRAWLING_NSM_SOURCE;
   });
 
   describe('isPalCrawlerEnabled / isNsmCrawlerEnabled', () => {
@@ -81,6 +83,38 @@ describe('crawler-activation.utils', () => {
 
       process.env.CRAWLING_NSM_ENABLED = 'false';
       expect(isCrawlerEnabled(CRAWLER_SOURCE.NSM)).toBe(false);
+    });
+  });
+
+  describe('isLikmsNsmSourceEnabled', () => {
+    it('defaults to the NSM source when unset', () => {
+      expect(isLikmsNsmSourceEnabled()).toBe(false);
+    });
+
+    it.each(['likms', 'LIKMS', ' Likms '])(
+      'switches to the LIKMS source for CRAWLING_NSM_SOURCE=%s',
+      (value) => {
+        process.env.CRAWLING_NSM_SOURCE = value;
+        expect(isLikmsNsmSourceEnabled()).toBe(true);
+      },
+    );
+
+    it.each(['nsm', '', 'banana', '1', 'true'])(
+      'keeps the NSM source for CRAWLING_NSM_SOURCE=%s',
+      (value) => {
+        process.env.CRAWLING_NSM_SOURCE = value;
+        expect(isLikmsNsmSourceEnabled()).toBe(false);
+      },
+    );
+
+    it('reads the env var on every call so it can be toggled at runtime', () => {
+      expect(isLikmsNsmSourceEnabled()).toBe(false);
+
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+      expect(isLikmsNsmSourceEnabled()).toBe(true);
+
+      process.env.CRAWLING_NSM_SOURCE = 'nsm';
+      expect(isLikmsNsmSourceEnabled()).toBe(false);
     });
   });
 

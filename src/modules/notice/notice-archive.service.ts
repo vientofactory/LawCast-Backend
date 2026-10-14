@@ -7,7 +7,9 @@ import { InjectRepository } from '@nestjs/typeorm';
 import {
   In,
   IsNull,
+  LessThan,
   Not,
+  Or,
   SelectQueryBuilder,
   type FindOptionsWhere,
   Repository,
@@ -18,6 +20,8 @@ import {
   type CachedNotice,
 } from '../../types/cache.types';
 import { AI_SUMMARY_STATUS } from '../crawling/utils/ai-summary-status.utils';
+import { APP_CONSTANTS } from '../../config/app.config';
+import { type NsmDeletionProbeOutcome } from '../crawling/crawling-core.service';
 import {
   NoticeArchive,
   NOTICE_LIFECYCLE_STATUS,
@@ -212,6 +216,13 @@ export interface SnapshotArtifactFillResult {
 }
 
 export const INTEGRITY_SKIP_REASON_MISSING_SOURCE = 'missing_source_or_hash';
+
+/**
+ * Bound notices per `notice_archives` UPDATE when stamping list sightings.
+ * Keeps every statement far below SQLite's bound-parameter ceiling while a
+ * single cycle still stamps a full list (~16k rows) on a handful of queries.
+ */
+const NSM_LIST_SEEN_STAMP_CHUNK_SIZE = 400;
 
 type TrackedArchiveRow = Pick<
   NoticeArchive,
@@ -1041,28 +1052,64 @@ export class NoticeArchiveService {
   }
 
   /**
-   * Marks active NSM-originated archive rows (contentId IS NULL) whose
-   * noticeNum is absent from `seenNsmActiveNums` as source_deleted.
+   * Reconciles a completed NSM-shaped list scan against the archive: records
+   * when each returned notice was last seen, then marks active NSM-originated
+   * rows (contentId IS NULL) whose list absence is confirmed by a detail-page
+   * probe as source_deleted.
    *
-   * This catches bills that have been removed from the NSM portal entirely
-   * (not just from a detail page). It runs at the end of the pending-sync
-   * phase after the full NSM list crawl is complete.
+   * This catches bills that have been removed from the NSM list entirely (not
+   * just from a detail page). It runs at the end of the pending-sync phase,
+   * after the full list crawl completed.
    *
-   * Absence from one list scan is NOT sufficient evidence of deletion (a
-   * bill can legitimately drop off the "current status" listing while its
-   * detail page still exists, or a page can be missed by a flaky scan).
-   * `confirmDeletion`, when provided, is called with the bill's detail-page
-   * number and must independently confirm the deletion (e.g. via an HTTP
-   * probe) before the row is actually marked; candidates it rejects are
-   * left active for the next cycle instead of being marked on list-absence
-   * alone.
+   * **Two signals decide who is worth probing** (both were added because "every
+   * active row the latest scan did not return" is not a candidate set — with a
+   * pending-only list such as LIKMS `계류의안` in front of an NSM archive it was
+   * ~10k rows, re-probed identically on every 20-minute cycle):
+   *
+   * - `nsm_last_seen_in_list_at` is stamped for every notice this scan returned,
+   *   so absence becomes an episode that starts when a previously seen row stops
+   *   being returned (`nsmLastSeenInListAt < scannedAt`). Rows stamped by this
+   *   very scan are therefore never candidates.
+   * - `nsm_list_absence_probed_at` is stamped whenever a probe investigates a
+   *   row without confirming a deletion, which keeps that row out of the
+   *   candidate set for `cooldownHours`. A bill that merely dropped off the
+   *   listing, or a source that refuses every request, stops reproducing the
+   *   same candidate set every cycle.
+   *
+   * Rows never returned by a list scan (`NULL`) stay eligible, but only as
+   * filler behind the rows that newly disappeared and only under the same
+   * cooldown, so an archive that predates this tracking drains at
+   * `maxCandidates` per pass instead of being swept in one go.
+   *
+   * Absence from one list scan is NOT sufficient evidence of deletion (a bill
+   * can legitimately drop off the listing while its detail page still exists,
+   * or a page can be missed by a flaky scan), so `confirmDeletion` must
+   * independently confirm it. It may return a plain boolean (confirmed / not
+   * confirmed, the legacy contract) or a probe outcome, which separates "the
+   * detail page was read and the bill is still listed" from "the response could
+   * not be read at all" (portal error page, Waitingroom, network failure). A
+   * pass that reads no page at all is aborted early instead of hammering a
+   * source that is refusing every request.
+   *
+   * At most `options.maxCandidates` rows are probed per pass, oldest list
+   * absence first, then never-seen rows.
+   *
+   * @returns Number of rows marked source_deleted in this pass
    */
   async markSourceDeletedByMissingNsmNums(
     seenNsmActiveNums: Set<number>,
-    confirmDeletion?: (billNo: string) => Promise<boolean>,
+    confirmDeletion?: (
+      billNo: string,
+    ) => Promise<boolean | NsmDeletionProbeOutcome>,
+    options?: {
+      maxCandidates?: number;
+      unusableAbortThreshold?: number;
+      cooldownHours?: number;
+    },
   ): Promise<number> {
     // A disabled NSM crawler means no NSM list was collected, so there is no
-    // reconciliation to run: skip entirely (no candidate query, no marking).
+    // reconciliation to run: skip entirely (no stamping, no candidate query,
+    // no marking).
     if (!isNsmCrawlerEnabled()) {
       LoggerUtils.debugDev(
         'NoticeArchiveService',
@@ -1071,58 +1118,135 @@ export class NoticeArchiveService {
       return 0;
     }
 
+    if (seenNsmActiveNums.size === 0) {
+      // An empty seen-set is a failed list scan, not a list that lost every
+      // bill: nothing is stamped and nothing is probed. (The caller reports the
+      // zero-row scan itself.)
+      return 0;
+    }
+
+    const scannedAt = new Date();
+    const stampedCount = await this.stampNsmListSeen(
+      seenNsmActiveNums,
+      scannedAt,
+    );
+
     // Runtime kill switch: when deletion detection is disabled via
-    // CRAWLING_NSM_DELETION_DETECTION_ENABLED, skip list reconciliation
-    // entirely (no candidate query, no marking).
+    // CRAWLING_NSM_DELETION_DETECTION_ENABLED, only the sightings above are
+    // recorded — no candidate query and no marking. Stamping still happens so
+    // re-enabling detection resumes with "rows that disappeared while it was
+    // off" instead of treating the whole archive as never-seen.
     if (!isNsmDeletionDetectionEnabled()) {
       LoggerUtils.log(
         'NoticeArchiveService',
-        'markSourceDeletedByMissingNsmNums: NSM source deletion detection is disabled; skipped list reconciliation',
+        `markSourceDeletedByMissingNsmNums: NSM source deletion detection is disabled; recorded ${stampedCount} list sighting(s) and skipped the probe pass`,
       );
       return 0;
     }
 
-    if (seenNsmActiveNums.size === 0) {
+    const maxCandidates =
+      options?.maxCandidates ??
+      APP_CONSTANTS.ARCHIVE_SYNC.NSM_MISSING_PROBE_MAX_CANDIDATES;
+    const unusableAbortThreshold =
+      options?.unusableAbortThreshold ??
+      APP_CONSTANTS.ARCHIVE_SYNC.NSM_MISSING_PROBE_UNUSABLE_ABORT_THRESHOLD;
+    const cooldownHours =
+      options?.cooldownHours ??
+      APP_CONSTANTS.ARCHIVE_SYNC.NSM_LIST_ABSENCE_REPROBE_COOLDOWN_HOURS;
+    const cooldownCutoff = new Date(
+      scannedAt.getTime() - Math.max(0, cooldownHours) * 60 * 60 * 1000,
+    );
+
+    if (maxCandidates <= 0) {
       return 0;
     }
 
-    // Only NSM-originated rows (contentId IS NOT NULL means PAL-originated,
-    // so contentId IS NULL means NSM-only) that are currently active.
-    const activeNsmRows = await this.archiveRepository.find({
-      where: {
-        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
-        contentId: IsNull(),
-      },
-      select: {
-        noticeNum: true,
-        subject: true,
-        contentBillNumber: true,
-      },
+    // Disappeared rows first (a previously seen row that this scan did not
+    // return), then never-seen rows filling the remaining slots.
+    const disappearedRows = await this.findNsmListAbsenceCandidates({
+      scannedAt,
+      cooldownCutoff,
+      limit: maxCandidates,
+      includeNeverSeen: false,
     });
+    const remainingSlots = Math.max(0, maxCandidates - disappearedRows.length);
+    const neverSeenRows =
+      remainingSlots > 0
+        ? await this.findNsmListAbsenceCandidates({
+            scannedAt,
+            cooldownCutoff,
+            limit: remainingSlots,
+            includeNeverSeen: true,
+          })
+        : [];
+    const candidates = [...disappearedRows, ...neverSeenRows];
 
-    const missingRows = activeNsmRows.filter(
-      (row) => !seenNsmActiveNums.has(row.noticeNum),
-    );
-
-    LoggerUtils.debugDev(
+    LoggerUtils.log(
       'NoticeArchiveService',
-      `markSourceDeletedByMissingNsmNums: seenNsmNums=${seenNsmActiveNums.size}, activeNsmRows=${activeNsmRows.length}, missing=${missingRows.length}`,
+      `markSourceDeletedByMissingNsmNums: seen=${seenNsmActiveNums.size}, stamped=${stampedCount}, disappeared=${disappearedRows.length}, neverSeen=${neverSeenRows.length}, probing=${candidates.length} (cap=${maxCandidates}, cooldownHours=${cooldownHours})`,
     );
 
-    if (missingRows.length === 0) {
+    if (candidates.length === 0) {
       return 0;
     }
 
     let markedCount = 0;
-    for (const row of missingRows) {
+    let probedCount = 0;
+    let readableCount = 0;
+    let unreadableCount = 0;
+
+    for (const row of candidates) {
       if (confirmDeletion) {
         const billNo = row.contentBillNumber ?? row.noticeNum.toString();
-        const confirmed = await confirmDeletion(billNo);
-        if (!confirmed) {
+        const result = await confirmDeletion(billNo);
+        probedCount++;
+
+        // A boolean result carries no reason, so it keeps the legacy meaning:
+        // false means "checked, not confirmed" and is reported as still-listed.
+        const outcome: NsmDeletionProbeOutcome =
+          typeof result === 'string' ? result : result ? 'deleted' : 'alive';
+
+        if (outcome !== 'deleted') {
+          if (outcome === 'alive') {
+            readableCount++;
+          } else {
+            unreadableCount++;
+          }
+
+          // Record the investigation so this row drops out of the candidate
+          // set for the cooldown. A `blocked`/`error` outcome is stamped too:
+          // the pass learned nothing, and re-probing the same rows while the
+          // source refuses every request is exactly the loop that turned one
+          // blocked portal into a per-cycle sweep of the whole pool.
+          if (outcome !== 'disabled') {
+            await this.markNsmListAbsenceProbed(row.noticeNum, scannedAt);
+          }
+
           LoggerUtils.debugDev(
             'NoticeArchiveService',
-            `markSourceDeletedByMissingNsmNums: notice ${row.noticeNum} missing from list scan but not confirmed deleted on detail page; left active`,
+            `markSourceDeletedByMissingNsmNums: notice ${row.noticeNum} missing from list scan but ${this.describeProbeOutcome(outcome)}; left active`,
           );
+
+          if (
+            unreadableCount >= unusableAbortThreshold &&
+            readableCount === 0
+          ) {
+            logAndBridge({
+              logger: this.logger,
+              method: 'warn',
+              message: `markSourceDeletedByMissingNsmNums: aborted after ${unreadableCount} unreadable probes with no readable detail page — the notice source is refusing or failing every request, so the remaining ${candidates.length - probedCount} candidate(s) were skipped`,
+              context: NoticeArchiveService.name,
+              discordBridge: this.discordBridge,
+              bridgeLevel: BridgeLogLevel.WARN,
+              metadata: {
+                candidates: candidates.length,
+                probed: probedCount,
+                outcome,
+              },
+            });
+            break;
+          }
+
           continue;
         }
       }
@@ -1138,7 +1262,141 @@ export class NoticeArchiveService {
       }
     }
 
+    if (unreadableCount > 0) {
+      this.logger.warn(
+        `markSourceDeletedByMissingNsmNums: ${unreadableCount} of ${probedCount} probe(s) returned no readable detail page (blocked or failed); deletion detection is degraded`,
+      );
+    }
+
     return markedCount;
+  }
+
+  /**
+   * Records `seenAt` as the last list-scan sighting of every notice the scan
+   * returned, in chunks that stay well under SQLite's bound-parameter limit.
+   *
+   * Rows already stamped at or after `seenAt` are left untouched, so a second
+   * scan in the same cycle (the cron pending pass and the archive-sync pending
+   * phase both run this) does not rewrite the whole set again. Only the two
+   * tracking columns change, which the archive immutability trigger allows.
+   *
+   * @returns Number of rows whose sighting was actually refreshed
+   */
+  async stampNsmListSeen(
+    noticeNums: Iterable<number>,
+    seenAt: Date,
+  ): Promise<number> {
+    const uniqueNums = Array.from(new Set(noticeNums)).filter(
+      (noticeNum) => Number.isInteger(noticeNum) && noticeNum > 0,
+    );
+
+    if (uniqueNums.length === 0) {
+      return 0;
+    }
+
+    let stampedCount = 0;
+
+    for (
+      let offset = 0;
+      offset < uniqueNums.length;
+      offset += NSM_LIST_SEEN_STAMP_CHUNK_SIZE
+    ) {
+      const chunk = uniqueNums.slice(
+        offset,
+        offset + NSM_LIST_SEEN_STAMP_CHUNK_SIZE,
+      );
+      const result = await this.archiveRepository.update(
+        {
+          noticeNum: In(chunk),
+          nsmLastSeenInListAt: Or(IsNull(), LessThan(seenAt)),
+        },
+        { nsmLastSeenInListAt: seenAt },
+      );
+      stampedCount += result?.affected ?? 0;
+    }
+
+    return stampedCount;
+  }
+
+  /**
+   * Selects the rows whose list absence is worth a detail probe this pass.
+   *
+   * `includeNeverSeen: false` returns rows this scan dropped after an earlier
+   * sighting (oldest disappearance first, so one capped pass cannot starve the
+   * rest of the pool); `includeNeverSeen: true` returns rows no list scan has
+   * returned since the tracking columns were added. Both groups exclude rows
+   * probed within the cooldown, and only active NSM-originated rows are
+   * considered (a PAL row is not in the NSM list by design).
+   */
+  private async findNsmListAbsenceCandidates(params: {
+    scannedAt: Date;
+    cooldownCutoff: Date;
+    limit: number;
+    includeNeverSeen: boolean;
+  }): Promise<Array<{ noticeNum: number; contentBillNumber: string | null }>> {
+    const { scannedAt, cooldownCutoff, limit, includeNeverSeen } = params;
+
+    if (limit <= 0) {
+      return [];
+    }
+
+    return this.archiveRepository.find({
+      where: {
+        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
+        contentId: IsNull(),
+        sourceDeletedAt: IsNull(),
+        nsmLastSeenInListAt: includeNeverSeen ? IsNull() : LessThan(scannedAt),
+        nsmListAbsenceProbedAt: Or(IsNull(), LessThan(cooldownCutoff)),
+      },
+      select: {
+        noticeNum: true,
+        contentBillNumber: true,
+      },
+      order: includeNeverSeen
+        ? { noticeNum: 'ASC' }
+        : { nsmLastSeenInListAt: 'ASC' },
+      take: limit,
+    });
+  }
+
+  /**
+   * Records that a row's list absence was investigated without a confirmed
+   * deletion, which keeps it out of the candidate set for the cooldown.
+   */
+  private async markNsmListAbsenceProbed(
+    noticeNum: number,
+    probedAt: Date,
+  ): Promise<void> {
+    try {
+      await this.archiveRepository.update(
+        { noticeNum },
+        { nsmListAbsenceProbedAt: probedAt },
+      );
+    } catch (error) {
+      // Throttling is an optimisation, not a correctness requirement: losing a
+      // stamp means the row may be probed again next cycle, which must never
+      // abort the pass or hide a confirmed deletion elsewhere in it.
+      this.logger.warn(
+        `markSourceDeletedByMissingNsmNums: failed to record list-absence probe for notice ${noticeNum}: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Turns a probe outcome into the reason phrase used by the reconciliation
+   * log, so a blocked or failed read is never reported as a live bill.
+   */
+  private describeProbeOutcome(outcome: NsmDeletionProbeOutcome): string {
+    switch (outcome) {
+      case 'alive':
+        return 'still present on the detail page';
+      case 'blocked':
+        return 'the detail response was unreadable (portal error page or Waitingroom)';
+      case 'disabled':
+        return 'deletion detection is disabled';
+      default:
+        return 'the detail probe failed';
+    }
   }
 
   /**

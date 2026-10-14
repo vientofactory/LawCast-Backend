@@ -146,7 +146,9 @@ describe('NoticeArchiveService', () => {
       .mockResolvedValue(undefined),
   });
 
-  const createDiscordBridgeMock = () => ({}) as any;
+  // `logAndBridge` calls `logEvent` on the injected bridge, so the double must
+  // expose it even in suites that do not assert on Discord payloads.
+  const createDiscordBridgeMock = () => ({ logEvent: jest.fn() }) as any;
 
   const buildRow = (overrides: Partial<NoticeArchive> = {}): NoticeArchive => {
     const sourceHtml = '<html><body>LawCast Integrity Test</body></html>';
@@ -189,6 +191,8 @@ describe('NoticeArchiveService', () => {
       isDone: false,
       lifecycleStatus: 'active',
       sourceDeletedAt: null,
+      nsmLastSeenInListAt: null,
+      nsmListAbsenceProbedAt: null,
       archiveStartedAt: new Date('2026-04-17T00:00:02.000Z'),
       screenshotBlob: null,
       screenshotFormat: null,
@@ -3577,12 +3581,9 @@ describe('NoticeArchiveService', () => {
       delete process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED;
     });
 
-    it('skips list reconciliation entirely when deletion detection is disabled at runtime', async () => {
+    it('records list sightings but skips probing when deletion detection is disabled at runtime', async () => {
       process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED = 'false';
-      const repositoryMock = {
-        ...createRepositoryMock(),
-        find: jest.fn<(...args: any[]) => Promise<any[]>>(),
-      };
+      const repositoryMock = createAbsenceRepositoryMock([]);
       const confirmDeletion = jest
         .fn<(billNo: string) => Promise<boolean>>()
         .mockResolvedValue(true);
@@ -3594,23 +3595,25 @@ describe('NoticeArchiveService', () => {
       expect(markedCount).toBe(0);
       expect(repositoryMock.find).not.toHaveBeenCalled();
       expect(confirmDeletion).not.toHaveBeenCalled();
+      // The sighting is still recorded: re-enabling detection has to resume with
+      // "disappeared while it was off", not with the whole archive as never-seen.
+      expect(repositoryMock.update).toHaveBeenCalledWith(
+        expect.objectContaining({ noticeNum: expect.anything() }),
+        { nsmLastSeenInListAt: expect.any(Date) },
+      );
     });
 
     it('runs list reconciliation normally when deletion detection is enabled', async () => {
       process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED = 'true';
-      const repositoryMock = {
-        ...createRepositoryMock(),
-        find: jest.fn<(...args: any[]) => Promise<any[]>>().mockResolvedValue([
-          {
-            noticeNum: 2219002,
-            subject: 'Deletion detection gate test',
-            contentBillNumber: '2219002',
-          },
-        ]),
-      };
+      const repositoryMock = createAbsenceRepositoryMock([
+        {
+          noticeNum: 2219002,
+          contentBillNumber: '2219002',
+        },
+      ]);
       const confirmDeletion = jest
-        .fn<(billNo: string) => Promise<boolean>>()
-        .mockResolvedValue(false);
+        .fn<(billNo: string) => Promise<any>>()
+        .mockResolvedValue('alive');
 
       const markedCount = await buildService(
         repositoryMock,
@@ -3619,7 +3622,189 @@ describe('NoticeArchiveService', () => {
       expect(markedCount).toBe(0);
       expect(repositoryMock.find).toHaveBeenCalled();
       expect(confirmDeletion).toHaveBeenCalledWith('2219002');
-      expect(repositoryMock.update).not.toHaveBeenCalled();
+    });
+
+    it('records the investigation so the same absence is not re-probed every cycle', async () => {
+      const repositoryMock = createAbsenceRepositoryMock(buildMissingRows(1));
+      const confirmDeletion = jest
+        .fn<(billNo: string) => Promise<any>>()
+        .mockResolvedValue('alive');
+
+      await buildService(repositoryMock).markSourceDeletedByMissingNsmNums(
+        new Set([2219001]),
+        confirmDeletion,
+      );
+
+      const probedStamps = getUpdateCalls(repositoryMock).filter(
+        ([, partial]) => partial?.nsmListAbsenceProbedAt instanceof Date,
+      );
+      expect(probedStamps).toHaveLength(1);
+      expect(probedStamps[0][0]).toEqual({ noticeNum: 2219100 });
+    });
+
+    const buildMissingRows = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        noticeNum: 2219100 + index,
+        subject: 'list-absence candidate',
+        contentBillNumber: String(2219100 + index),
+      }));
+
+    /**
+     * List-absence candidates arrive as two grouped `find` calls: rows that
+     * newly disappeared from the list (filtered with `LessThan(scannedAt)`) and
+     * rows no scan has returned since the tracking columns were added
+     * (`IsNull()`). The mock answers per group and honours `take`, so these
+     * tests exercise the cap/priority the service pushes into the query.
+     */
+    const createAbsenceRepositoryMock = (
+      disappeared: Array<{
+        noticeNum: number;
+        contentBillNumber: string | null;
+      }>,
+      neverSeen: Array<{
+        noticeNum: number;
+        contentBillNumber: string | null;
+      }> = [],
+    ) => {
+      const find = jest.fn(async (options: any) => {
+        const operatorType = (
+          options?.where?.nsmLastSeenInListAt as { type?: string } | undefined
+        )?.type;
+        const group = operatorType === 'isNull' ? neverSeen : disappeared;
+        const take =
+          typeof options?.take === 'number' ? options.take : group.length;
+        return group.slice(0, take);
+      });
+
+      return { ...createRepositoryMock(), find };
+    };
+
+    const getUpdateCalls = (
+      repositoryMock: ReturnType<typeof createAbsenceRepositoryMock>,
+    ) =>
+      (repositoryMock.update as jest.Mock).mock.calls as Array<
+        [Record<string, unknown>, Record<string, unknown>]
+      >;
+
+    it('probes at most the configured number of candidates per pass', async () => {
+      const repositoryMock = createAbsenceRepositoryMock(buildMissingRows(10));
+      const confirmDeletion = jest
+        .fn<(billNo: string) => Promise<any>>()
+        .mockResolvedValue('alive');
+
+      await buildService(repositoryMock).markSourceDeletedByMissingNsmNums(
+        new Set([2219001]),
+        confirmDeletion,
+        { maxCandidates: 3 },
+      );
+
+      expect(confirmDeletion).toHaveBeenCalledTimes(3);
+    });
+
+    it('fills the remaining slots with never-seen rows after the newly disappeared ones', async () => {
+      const repositoryMock = createAbsenceRepositoryMock(buildMissingRows(2), [
+        { noticeNum: 2219200, contentBillNumber: '2219200' },
+        { noticeNum: 2219201, contentBillNumber: '2219201' },
+        { noticeNum: 2219202, contentBillNumber: '2219202' },
+      ]);
+      const confirmDeletion = jest
+        .fn<(billNo: string) => Promise<any>>()
+        .mockResolvedValue('alive');
+
+      await buildService(repositoryMock).markSourceDeletedByMissingNsmNums(
+        new Set([2219001]),
+        confirmDeletion,
+        { maxCandidates: 3 },
+      );
+
+      // A row the latest scan actually dropped beats a row the source has never
+      // listed since tracking started.
+      expect(confirmDeletion.mock.calls.map(([billNo]) => billNo)).toEqual([
+        '2219100',
+        '2219101',
+        '2219200',
+      ]);
+    });
+
+    it('aborts the pass when every probe is unreadable and none could be read', async () => {
+      const repositoryMock = createAbsenceRepositoryMock(buildMissingRows(20));
+      const confirmDeletion = jest
+        .fn<(billNo: string) => Promise<any>>()
+        .mockResolvedValue('blocked');
+
+      const markedCount = await buildService(
+        repositoryMock,
+      ).markSourceDeletedByMissingNsmNums(new Set([2219001]), confirmDeletion, {
+        maxCandidates: 50,
+        unusableAbortThreshold: 3,
+      });
+
+      // A blocked source must not be hammered with the whole candidate set:
+      // the pass stops as soon as the block is unambiguous.
+      expect(confirmDeletion).toHaveBeenCalledTimes(3);
+      expect(markedCount).toBe(0);
+      expect(
+        getUpdateCalls(repositoryMock).filter(
+          ([, partial]) => 'lifecycleStatus' in partial,
+        ),
+      ).toHaveLength(0);
+    });
+
+    it('keeps probing past the abort threshold once a readable page proves the source answers', async () => {
+      const repositoryMock = createAbsenceRepositoryMock(buildMissingRows(5));
+      const outcomes = ['blocked', 'blocked', 'alive', 'blocked', 'blocked'];
+      let callIndex = 0;
+      const confirmDeletion = jest
+        .fn<(billNo: string) => Promise<any>>()
+        .mockImplementation(async () => outcomes[callIndex++] ?? 'alive');
+
+      await buildService(repositoryMock).markSourceDeletedByMissingNsmNums(
+        new Set([2219001]),
+        confirmDeletion,
+        { maxCandidates: 5, unusableAbortThreshold: 3 },
+      );
+
+      expect(confirmDeletion).toHaveBeenCalledTimes(5);
+    });
+
+    it('treats a legacy boolean callback as a readable result so it never trips the abort', async () => {
+      const repositoryMock = createAbsenceRepositoryMock(buildMissingRows(5));
+      const confirmDeletion = jest
+        .fn<(billNo: string) => Promise<boolean>>()
+        .mockResolvedValue(false);
+
+      await buildService(repositoryMock).markSourceDeletedByMissingNsmNums(
+        new Set([2219001]),
+        confirmDeletion,
+        { maxCandidates: 5, unusableAbortThreshold: 2 },
+      );
+
+      expect(confirmDeletion).toHaveBeenCalledTimes(5);
+      expect(
+        getUpdateCalls(repositoryMock).filter(
+          ([, partial]) => 'lifecycleStatus' in partial,
+        ),
+      ).toHaveLength(0);
+    });
+
+    it('marks source_deleted when the probe reports a confirmed deletion', async () => {
+      const repositoryMock = createAbsenceRepositoryMock(buildMissingRows(1));
+      const confirmDeletion = jest
+        .fn<(billNo: string) => Promise<any>>()
+        .mockResolvedValue('deleted');
+      const service = buildService(repositoryMock);
+      const appendSpy = jest
+        .spyOn(service, 'appendSourceDeletedEventByNoticeNum')
+        .mockResolvedValue(undefined);
+
+      const markedCount = await service.markSourceDeletedByMissingNsmNums(
+        new Set([2219001]),
+        confirmDeletion,
+        { maxCandidates: 5 },
+      );
+
+      expect(markedCount).toBe(1);
+      expect(appendSpy).toHaveBeenCalledWith(2219100);
     });
   });
 });

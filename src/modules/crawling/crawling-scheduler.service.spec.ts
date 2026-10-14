@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { CrawlingSchedulerService } from './crawling-scheduler.service';
 import { CacheService } from '../cache/cache.service';
@@ -886,6 +887,168 @@ describe('CrawlingSchedulerService', () => {
       ).toHaveBeenCalledWith([newPendingItem], {
         reason: NsmArchiveReason.NEW_PENDING_BILLS,
       });
+    });
+
+    it('classifies LIKMS `접수` items from the full sweep as pending', async () => {
+      const likmsPendingItem = {
+        billNo: '2221883',
+        billName: '계류 법안',
+        proposer: '홍길동의원',
+        progressStatus: '접수',
+        committee: '',
+        ministry: '법무부',
+        link: 'https://likms.assembly.go.kr/bill/billDetail.do?billId=PRC_X1',
+      };
+
+      (crawlingCoreService.getAllNsmPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {
+          yield { items: [likmsPendingItem], currentPage: 1, totalPages: 1 };
+        },
+      });
+      // The LIKMS pending scan is scan-based and capped by maxPages, so it can
+      // legitimately return nothing while the full sweep still sees `접수` bills.
+      (crawlingCoreService.getAllNsmPendingPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {},
+      });
+      (
+        archiveOrchestratorService.filterAlreadyArchivedNotices as jest.Mock
+      ).mockResolvedValue([
+        {
+          num: 2221883,
+          subject: '계류 법안',
+          proposerCategory: '의원',
+          committee: '법무부',
+          link: 'https://likms.assembly.go.kr/bill/billDetail.do?billId=PRC_X1',
+          contentId: null,
+          attachments: { pdfFile: null, hwpFile: null },
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested',
+        },
+      ]);
+      (
+        archiveOrchestratorService.archiveNsmBillItems as jest.Mock
+      ).mockResolvedValue([]);
+      (cacheService.getRecentNotices as jest.Mock).mockResolvedValue([]);
+      (cacheService.updateCache as jest.Mock).mockResolvedValue(undefined);
+
+      await service.handlePendingCron();
+
+      expect(
+        archiveOrchestratorService.archiveNsmBillItems,
+      ).toHaveBeenCalledWith([likmsPendingItem], {
+        reason: NsmArchiveReason.NEW_PENDING_BILLS,
+      });
+      expect(
+        archiveOrchestratorService.archiveNsmBillItems,
+      ).not.toHaveBeenCalledWith(expect.anything(), {
+        reason: NsmArchiveReason.NEW_SYNC_ONLY_BILLS,
+      });
+    });
+
+    it('drops LIKMS non-bill rows with non-numeric ids before archiving', async () => {
+      const nonBillItem = {
+        billNo: 'ZZ22142',
+        billName: '중대범죄수사청장후보자 인사청문요청안',
+        proposer: '대통령',
+        progressStatus: '소관위접수',
+        committee: '',
+        ministry: '',
+        link: 'https://likms.assembly.go.kr/bill/bi/billDetailPage.do?billId=PRC_X9',
+      };
+
+      (crawlingCoreService.getAllNsmPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {
+          yield { items: [nonBillItem], currentPage: 1, totalPages: 1 };
+        },
+      });
+      (crawlingCoreService.getAllNsmPendingPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {},
+      });
+
+      await service.handlePendingCron();
+
+      expect(
+        archiveOrchestratorService.filterAlreadyArchivedNotices,
+      ).not.toHaveBeenCalled();
+      expect(
+        archiveOrchestratorService.archiveNsmBillItems,
+      ).not.toHaveBeenCalled();
+      expect(
+        noticeArchiveService.markSourceDeletedByMissingNsmNums,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('warns when the pending scan returns no notices at all', async () => {
+      // A scan that completed with zero rows means the list source served
+      // nothing (refused request, moved URL, adapter mismatch). It must not be
+      // reported as a normal "nothing new" result, which can hide a dead
+      // crawler for weeks.
+      (crawlingCoreService.getAllNsmPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {},
+      });
+      (crawlingCoreService.getAllNsmPendingPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {},
+      });
+
+      const warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+
+      // Assertions run before the spy is restored: `mockRestore()` also clears
+      // the recorded calls.
+      try {
+        await service.handlePendingCron();
+
+        expect(
+          noticeArchiveService.markSourceDeletedByMissingNsmNums,
+        ).not.toHaveBeenCalled();
+        expect(
+          warnSpy.mock.calls.map(([message]) => String(message)),
+        ).toContainEqual(expect.stringContaining('returned 0 notices'));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('escalates to an error alert once consecutive cycles return no notices', async () => {
+      // A run of zero-row scans is a stalled collector, not "nothing new": the
+      // escalation is what keeps a blocked source from hiding for weeks.
+      (crawlingCoreService.getAllNsmPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {},
+      });
+      (crawlingCoreService.getAllNsmPendingPages as jest.Mock).mockReturnValue({
+        [Symbol.asyncIterator]: async function* () {},
+      });
+
+      const errorSpy = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      const cycleStart = Date.now();
+
+      jest.useFakeTimers();
+
+      try {
+        for (let cycle = 0; cycle < 3; cycle++) {
+          // 20 minutes apart: real cron cycles, not the two scan paths of one
+          // cycle, so the zero-row streak actually grows.
+          jest.setSystemTime(new Date(cycleStart + cycle * 20 * 60 * 1000));
+          await service.handlePendingCron();
+
+          if (cycle < 2) {
+            expect(errorSpy).not.toHaveBeenCalled();
+          }
+        }
+
+        const errorMessages = errorSpy.mock.calls.map(([message]) =>
+          String(message),
+        );
+        expect(errorMessages).toContainEqual(
+          expect.stringContaining('collection is degraded'),
+        );
+      } finally {
+        jest.useRealTimers();
+        errorSpy.mockRestore();
+      }
     });
   });
 });

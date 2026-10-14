@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { RuntimeStatsService } from './runtime-stats.service';
+import { NSM_LIST_SCAN_HEALTH_CACHE_KEY } from '../crawling/utils/nsm-list-scan-health.util';
 
 const CRAWLER_STATUS_CASES = [
   {
@@ -24,13 +25,53 @@ const CRAWLER_STATUS_CASES = [
   },
 ] as const;
 
+/** Minimal chainable TypeORM query-builder double for the transparency aggregations. */
+function createQueryBuilderStub(
+  rawRows: Array<Record<string, unknown>> = [],
+  countValue = 0,
+) {
+  const qb: any = {
+    select: jest.fn(() => qb),
+    addSelect: jest.fn(() => qb),
+    groupBy: jest.fn(() => qb),
+    where: jest.fn(() => qb),
+    getRawMany: jest.fn(async () => rawRows),
+    getCount: jest.fn(async () => countValue),
+  };
+  return qb;
+}
+
+/**
+ * The subset of the transparency payload these tests assert on.
+ * `getTransparencyStats()` widens its cached branch to `Record<string, unknown>`,
+ * so the test narrows the parts it inspects instead of reaching for `any`.
+ */
+type TransparencyPayload = {
+  noticeSources: Array<{ id: string; name: string; url: string }>;
+  schedules: Array<{ id: string; name: string }>;
+  transferFlow: { description: string };
+};
+
 function buildService(params?: {
   palPhaseFailed?: boolean;
   isProcessing?: boolean;
+  nsmListScanHealth?: unknown;
 }) {
-  const cacheManager = { get: jest.fn(), set: jest.fn() } as any;
-  const archiveRepo = {} as any;
-  const changeEventRepo = {} as any;
+  const cacheManager = {
+    get: jest.fn(async (key: string) =>
+      key === NSM_LIST_SCAN_HEALTH_CACHE_KEY
+        ? (params?.nsmListScanHealth ?? undefined)
+        : undefined,
+    ),
+    set: jest.fn(),
+  } as any;
+  const archiveRepo = {
+    count: jest.fn(async () => 0),
+    createQueryBuilder: jest.fn(() => createQueryBuilderStub()),
+  } as any;
+  const changeEventRepo = {
+    createQueryBuilder: jest.fn(() => createQueryBuilderStub()),
+  } as any;
   const service = new RuntimeStatsService(
     cacheManager,
     archiveRepo,
@@ -110,6 +151,7 @@ function buildService(params?: {
 
   return {
     service,
+    getTransparency: () => service.getTransparencyStats(),
     getStats: () =>
       service.getAggregatedStats(
         { nodeEnv: 'production' },
@@ -188,5 +230,127 @@ describe('RuntimeStatsService crawler activation', () => {
 
     expect(stats.crawlers.palCrawler.enabled).toBe(true);
     expect(stats.crawlers.palCrawler.status).toBe('running');
+  });
+});
+
+describe('RuntimeStatsService NSM list scan health', () => {
+  const degradedHealth = {
+    source: 'nsm',
+    lastScanAt: '2026-10-14T00:50:00.000Z',
+    lastScanItemCount: 0,
+    lastSuccessfulScanAt: '2026-10-13T21:50:00.000Z',
+    lastSuccessfulScanItemCount: 15203,
+    consecutiveZeroRowScans: 3,
+    degraded: true,
+    degradedSince: '2026-10-14T00:50:00.000Z',
+    lastAlertAt: '2026-10-14T00:50:00.000Z',
+  };
+
+  it('reports an unknown list-scan state instead of a fake healthy one', async () => {
+    const { getStats } = buildService();
+
+    const stats = await getStats();
+
+    expect(stats.crawlers.nsmPendingCrawler.status).toBe('idle');
+    expect(stats.crawlers.nsmPendingCrawler.listScan).toEqual({
+      degraded: false,
+      consecutiveZeroRowScans: 0,
+      lastScanAt: null,
+      lastScanItemCount: null,
+      lastSuccessfulScanAt: null,
+      lastSuccessfulScanItemCount: null,
+      degradedSince: null,
+      staleHours: null,
+      description: null,
+    });
+  });
+
+  it('marks the collector degraded when the list has served zero rows for consecutive scans', async () => {
+    const { getStats } = buildService({
+      nsmListScanHealth: degradedHealth,
+    });
+
+    const stats = await getStats();
+    const nsm = stats.crawlers.nsmPendingCrawler;
+
+    // A run that completes while reading nothing must not look idle: the
+    // degraded state is what the status page escalates on.
+    expect(nsm.status).toBe('degraded');
+    expect(nsm.listScan.degraded).toBe(true);
+    expect(nsm.listScan.consecutiveZeroRowScans).toBe(3);
+    expect(nsm.listScan.lastSuccessfulScanAt).toBe('2026-10-13T21:50:00.000Z');
+    expect(nsm.listScan.lastScanItemCount).toBe(0);
+    expect(nsm.listScan.staleHours).toBeGreaterThan(0);
+    expect(nsm.listScan.description).toContain(
+      'last list scan that returned rows',
+    );
+  });
+});
+
+describe('RuntimeStatsService NSM source reporting', () => {
+  afterEach(() => {
+    delete process.env.CRAWLING_NSM_SOURCE;
+  });
+
+  it('reports the public-participation portal by default', async () => {
+    const { getStats, getTransparency } = buildService();
+
+    const stats = await getStats();
+    expect(stats.crawlers.nsmPendingCrawler.source).toBe(
+      'opinion.lawmaking.go.kr',
+    );
+    expect(stats.crawlers.nsmPendingCrawler.name).toBe(
+      '국민참여입법센터 입법진행현황 크롤러',
+    );
+
+    const transparency = (await getTransparency()) as TransparencyPayload;
+    const nsmSource = transparency.noticeSources.find(
+      (source) => source.id === 'nsm',
+    );
+    expect(nsmSource?.url).toBe('https://opinion.lawmaking.go.kr');
+    expect(nsmSource?.name).toBe('국민참여입법센터 입법진행현황');
+
+    const nsmSchedule = transparency.schedules.find(
+      (schedule) => schedule.id === 'nsm-pending',
+    );
+    expect(nsmSchedule?.name).toBe('국민참여입법센터 입법진행현황 수집');
+    expect(transparency.transferFlow.description).toContain('국민참여입법센터');
+  });
+
+  it('reports the National Assembly Bill Information System under CRAWLING_NSM_SOURCE=likms', async () => {
+    process.env.CRAWLING_NSM_SOURCE = 'likms';
+    const { getStats, getTransparency } = buildService();
+
+    const stats = await getStats();
+    expect(stats.crawlers.nsmPendingCrawler.source).toBe(
+      'likms.assembly.go.kr',
+    );
+    expect(stats.crawlers.nsmPendingCrawler.name).toContain('의안정보시스템');
+
+    const transparency = (await getTransparency()) as TransparencyPayload;
+    const nsmSource = transparency.noticeSources.find(
+      (source) => source.id === 'nsm',
+    );
+    expect(nsmSource?.url).toBe('https://likms.assembly.go.kr');
+    expect(nsmSource?.name).toBe('국회 의안정보시스템 계류의안');
+
+    const nsmSchedule = transparency.schedules.find(
+      (schedule) => schedule.id === 'nsm-pending',
+    );
+    expect(nsmSchedule?.name).toBe('국회 의안정보시스템 계류의안 수집');
+    expect(transparency.transferFlow.description).toContain('계류의안');
+  });
+
+  it('reads the source on every aggregation so a runtime switch is reflected', async () => {
+    const { getStats } = buildService();
+
+    expect((await getStats()).crawlers.nsmPendingCrawler.source).toBe(
+      'opinion.lawmaking.go.kr',
+    );
+
+    process.env.CRAWLING_NSM_SOURCE = 'likms';
+    expect((await getStats()).crawlers.nsmPendingCrawler.source).toBe(
+      'likms.assembly.go.kr',
+    );
   });
 });
