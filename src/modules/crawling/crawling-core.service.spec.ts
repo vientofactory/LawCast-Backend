@@ -10,9 +10,12 @@ import {
   NsmLmStsParser,
   PalCrawl,
   LikmsCrawler,
+  LikmsNsmAdapter,
   type ITableData,
 } from 'pal-crawl';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
+import { BROWSER_IDENTITIES } from '../../utils/browser-identities.util';
+import { buildBrowserRequestHeaders } from '../../utils/browser-request-headers.util';
 
 // Mock pal-crawl module
 jest.mock('pal-crawl');
@@ -23,6 +26,42 @@ jest.mock('../../utils/http-fetch.utils', () => ({
 const mockFetchHtmlPage = fetchHtmlPage as jest.MockedFunction<
   typeof fetchHtmlPage
 >;
+
+/** A real browser identity, not the retired product token. */
+const BROWSER_UA_PATTERN = /^Mozilla\/5\.0 \(/;
+
+/**
+ * Asserts a client config carries a browser identity whose User-Agent is in the
+ * pool. The header set itself is verified on the wire in
+ * `browser-request-headers.util.spec.ts`, because pal-crawl evaluates the
+ * `customHeaders` accessors per request.
+ */
+function expectBrowserClientConfig(config: {
+  userAgent?: string;
+  customHeaders?: Record<string, string>;
+}): void {
+  expect(config.userAgent).toMatch(BROWSER_UA_PATTERN);
+  expect(config.customHeaders?.['User-Agent']).toMatch(BROWSER_UA_PATTERN);
+  expect(config.customHeaders?.Accept).toContain('text/html');
+}
+
+/**
+ * Asserts a single fetch's headers are one coherent browser identity: every
+ * hint header belongs to the User-Agent it is sent with.
+ */
+function expectBrowserFetchHeaders(config: {
+  userAgent: string;
+  customHeaders: Record<string, string>;
+}): void {
+  const identity = BROWSER_IDENTITIES.find(
+    (entry) => entry.userAgent === config.userAgent,
+  );
+
+  expect(identity).toBeDefined();
+  expect(config.customHeaders).toEqual(
+    buildBrowserRequestHeaders(identity as (typeof BROWSER_IDENTITIES)[number]),
+  );
+}
 
 describe('CrawlingCoreService', () => {
   let service: CrawlingCoreService;
@@ -38,6 +77,11 @@ describe('CrawlingCoreService', () => {
   };
   let mockNsmLmStsParser: {
     parseDetail: jest.Mock;
+  };
+  let mockLikmsAdapter: {
+    getAllPages: jest.Mock;
+    getAllPendingPages: jest.Mock;
+    getDetail: jest.Mock;
   };
   let mockPage: {
     setViewport: jest.Mock;
@@ -109,6 +153,12 @@ describe('CrawlingCoreService', () => {
       parseDetail: jest.fn().mockReturnValue({ proposalReason: 'reason' }),
     };
 
+    mockLikmsAdapter = {
+      getAllPages: jest.fn().mockReturnValue((async function* () {})()),
+      getAllPendingPages: jest.fn().mockReturnValue((async function* () {})()),
+      getDetail: jest.fn().mockResolvedValue({ proposalReason: 'reason' }),
+    };
+
     (PalCrawl as jest.MockedClass<typeof PalCrawl>).mockImplementation(
       () => mockPalCrawl,
     );
@@ -118,6 +168,9 @@ describe('CrawlingCoreService', () => {
     (
       NsmLmStsParser as jest.MockedClass<typeof NsmLmStsParser>
     ).mockImplementation(() => mockNsmLmStsParser as any);
+    (
+      LikmsNsmAdapter as jest.MockedClass<typeof LikmsNsmAdapter>
+    ).mockImplementation(() => mockLikmsAdapter as any);
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [BrowserLeaseManagerService, CrawlingCoreService],
@@ -157,19 +210,18 @@ describe('CrawlingCoreService', () => {
 
       const result = await service.crawlData();
 
-      expect(PalCrawl).toHaveBeenCalledWith({
-        userAgent: 'LawCast/1.0 (Legislative Notice Crawler)',
-        timeout: 15000,
-        retryCount: 3,
-        customHeaders: {
-          'Accept-Language': 'ko-KR,ko;q=0.9',
-          Accept:
-            'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Cache-Control': 'no-cache',
-        },
-        hydrateTruncatedTitles: false,
-        hydrateProposalReason: true,
-      });
+      expect(PalCrawl).toHaveBeenCalledTimes(1);
+      const palConfig = (PalCrawl as jest.MockedClass<typeof PalCrawl>).mock
+        .calls[0][0];
+      expectBrowserClientConfig(palConfig);
+      expect(palConfig).toEqual(
+        expect.objectContaining({
+          timeout: 15000,
+          retryCount: 3,
+          hydrateTruncatedTitles: false,
+          hydrateProposalReason: true,
+        }),
+      );
       expect(mockPalCrawl.get).toHaveBeenCalledTimes(1);
       expect(result).toEqual(mockTableData);
     });
@@ -218,12 +270,13 @@ describe('CrawlingCoreService', () => {
 
       expect(result).toBe('제안이유 본문');
       expect(getProposalReason).toHaveBeenCalledWith('PRC_TEST_1');
-      expect(LikmsCrawler).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userAgent: 'LawCast/1.0 (Legislative Notice Crawler)',
-          timeout: 15000,
-          retryCount: 3,
-        }),
+      expect(LikmsCrawler).toHaveBeenCalledTimes(1);
+      const likmsClientConfig = (
+        LikmsCrawler as jest.MockedClass<typeof LikmsCrawler>
+      ).mock.calls[0][0];
+      expectBrowserClientConfig(likmsClientConfig);
+      expect(likmsClientConfig).toEqual(
+        expect.objectContaining({ timeout: 15000, retryCount: 3 }),
       );
     });
 
@@ -261,21 +314,20 @@ describe('CrawlingCoreService', () => {
 
       const result = await service.getContent(contentId);
 
-      expect(PalCrawl).toHaveBeenCalledWith({
-        userAgent: 'LawCast/1.0 (Legislative Notice Crawler)',
-        timeout: 15000,
-        retryCount: 3,
-        customHeaders: {
-          'Accept-Language': 'ko-KR,ko;q=0.9',
-          Accept:
-            'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Cache-Control': 'no-cache',
-        },
-        hydrateTruncatedTitles: false,
-        // PAL collection must keep the pal-crawl 2.2.0 proposalReason
-        // hydration path (empty PAL `제안이유` -> `국회 의안정보시스템` correction).
-        hydrateProposalReason: true,
-      });
+      expect(PalCrawl).toHaveBeenCalledTimes(1);
+      const palContentConfig = (PalCrawl as jest.MockedClass<typeof PalCrawl>)
+        .mock.calls[0][0];
+      expectBrowserClientConfig(palContentConfig);
+      expect(palContentConfig).toEqual(
+        expect.objectContaining({
+          timeout: 15000,
+          retryCount: 3,
+          hydrateTruncatedTitles: false,
+          // PAL collection must keep the pal-crawl 2.2.0 proposalReason
+          // hydration path (empty PAL `제안이유` -> `국회 의안정보시스템` correction).
+          hydrateProposalReason: true,
+        }),
+      );
       expect(mockPalCrawl.getContent).toHaveBeenCalledWith(contentId);
       expect(result).toEqual(mockContent);
     });
@@ -489,6 +541,119 @@ describe('CrawlingCoreService', () => {
     });
   });
 
+  describe('probeNsmDeletedBillOutcome', () => {
+    const detailPageHtml = `
+      <html><head><title>법률안 상세</title></head>
+      <body>
+        <div id="containerWrap">
+          <p class="subjectHead_tit">학교체육 진흥법 일부개정법률안</p>
+          <table class="gridCnt_table"><tbody><tr><td>제안이유</td></tr></tbody></table>
+          <form name="VIEW_FM"></form>
+        </div>
+      </body></html>
+    `;
+
+    afterEach(() => {
+      mockFetchHtmlPage.mockReset();
+      delete process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED;
+      delete process.env.CRAWLING_NSM_ENABLED;
+    });
+
+    it('reports a confirmed deletion as `deleted` with the alert message', async () => {
+      mockFetchHtmlPage.mockResolvedValue({
+        data: `<html><head><title>안건정보</title></head>
+          <body><script>alert("안건정보가 없습니다."); history.back();</script></body></html>`,
+      } as any);
+
+      await expect(
+        service.probeNsmDeletedBillOutcome('2219887'),
+      ).resolves.toEqual({
+        outcome: 'deleted',
+        alertMessage: '안건정보가 없습니다.',
+      });
+    });
+
+    it('reports a readable, live detail page as `alive`', async () => {
+      mockFetchHtmlPage.mockResolvedValue({ data: detailPageHtml } as any);
+
+      await expect(
+        service.probeNsmDeletedBillOutcome('2219887'),
+      ).resolves.toEqual({ outcome: 'alive', alertMessage: null });
+    });
+
+    it('probes the detail page with a coherent browser identity', async () => {
+      mockFetchHtmlPage.mockResolvedValue({ data: detailPageHtml } as any);
+
+      await service.probeNsmDeletedBillOutcome('2219887');
+
+      expect(mockFetchHtmlPage).toHaveBeenCalledTimes(1);
+      const [url, options] = mockFetchHtmlPage.mock.calls[0];
+      expect(url).toBe(
+        'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219887/detailRP',
+      );
+      expectBrowserFetchHeaders(
+        options as {
+          userAgent: string;
+          customHeaders: Record<string, string>;
+        },
+      );
+    });
+
+    it('reports the portal error page as `blocked` instead of a live bill', async () => {
+      // The portal answers refused requests (for example a blacklisted
+      // User-Agent) with HTTP 200 and this shell page. Reading it as `alive`
+      // would hide the block and keep every candidate re-probed forever.
+      mockFetchHtmlPage.mockResolvedValue({
+        data: `<html><head><title>국민참여입법센터</title></head>
+          <body class="errorWrap"><section class="errorPanel">
+          <button onclick="location.href='/'">메인화면으로 이동</button>
+          <button onclick="history.back()">이전화면으로 이동</button>
+          </section></body></html>`,
+      } as any);
+
+      await expect(
+        service.probeNsmDeletedBillOutcome('2219887'),
+      ).resolves.toEqual({ outcome: 'blocked', alertMessage: null });
+    });
+
+    it('reports an unresolved Waitingroom as `blocked`, not as a live bill', async () => {
+      mockFetchHtmlPage.mockResolvedValue({
+        data: `<html><head><title>Waitingroom</title></head><body>대기중</body></html>`,
+      } as any);
+
+      await expect(
+        service.probeNsmDeletedBillOutcome('2219887'),
+      ).resolves.toEqual({ outcome: 'blocked', alertMessage: null });
+    });
+
+    it('reports a failed request as `error`', async () => {
+      mockFetchHtmlPage.mockRejectedValue(new Error('network error'));
+
+      await expect(
+        service.probeNsmDeletedBillOutcome('2219887'),
+      ).resolves.toEqual({ outcome: 'error', alertMessage: null });
+    });
+
+    it('reports `disabled` without issuing a request when deletion detection is off', async () => {
+      process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED = 'false';
+
+      await expect(
+        service.probeNsmDeletedBillOutcome('2219887'),
+      ).resolves.toEqual({ outcome: 'disabled', alertMessage: null });
+      expect(mockFetchHtmlPage).not.toHaveBeenCalled();
+    });
+
+    it('keeps the alert-only wrapper returning null for a blocked response', async () => {
+      mockFetchHtmlPage.mockResolvedValue({
+        data: '<html><body class="errorWrap">요청페이지가 없습니다.</body></html>',
+      } as any);
+
+      await expect(
+        service.probeNsmDeletedBillAlert('2219887'),
+      ).resolves.toBeNull();
+    });
+  });
+
   describe('crawler activation guards', () => {
     afterEach(() => {
       delete process.env.CRAWLING_PAL_ENABLED;
@@ -559,6 +724,174 @@ describe('CrawlingCoreService', () => {
         service.probeNsmDeletedBillAlert('2219776'),
       ).resolves.toBeNull();
       expect(mockFetchHtmlPage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('NSM source selection (CRAWLING_NSM_SOURCE)', () => {
+    beforeEach(() => {
+      // Isolate from other specs in this file that toggle the enable flags.
+      delete process.env.CRAWLING_NSM_ENABLED;
+      delete process.env.CRAWLING_NSM_SOURCE;
+    });
+
+    afterEach(() => {
+      delete process.env.CRAWLING_NSM_SOURCE;
+    });
+
+    it('uses NsmLmSts for NSM list, pending and detail by default', async () => {
+      (mockNsmLmSts as any).getAllPages = jest.fn().mockReturnValue(
+        (async function* () {
+          yield { items: [], currentPage: 1, totalPages: 1 };
+        })(),
+      );
+      (mockNsmLmSts as any).getAllPendingPages = jest.fn().mockReturnValue(
+        (async function* () {
+          yield { items: [], currentPage: 1, totalPages: 1 };
+        })(),
+      );
+
+      for await (const _page of service.getAllNsmPages()) {
+        // Drain the empty stream.
+      }
+
+      expect(NsmLmSts).toHaveBeenCalled();
+      expect(LikmsNsmAdapter).not.toHaveBeenCalled();
+    });
+
+    it('routes list, pending and detail crawls through LikmsNsmAdapter when CRAWLING_NSM_SOURCE=likms', async () => {
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+
+      const likmsItem = {
+        billName: '계류 법안',
+        billNo: '2221883',
+        link: 'https://likms.assembly.go.kr/bill/billDetail.do?billId=PRC_X1',
+        proposer: '홍길동의원',
+        proposalDate: '2026-10-13',
+        committee: '법제사법위원회',
+        ministry: '',
+        progressStatus: '접수',
+        progressDate: '',
+        resolutionStatus: '',
+        resolutionDate: '',
+      };
+
+      mockLikmsAdapter.getAllPages.mockReturnValue(
+        (async function* () {
+          yield { items: [likmsItem], currentPage: 1, totalPages: 1 };
+        })(),
+      );
+      mockLikmsAdapter.getAllPendingPages.mockReturnValue(
+        (async function* () {
+          yield { items: [likmsItem], currentPage: 1, totalPages: 1 };
+        })(),
+      );
+
+      const allPages: unknown[] = [];
+      for await (const page of service.getAllNsmPages()) {
+        allPages.push(page);
+      }
+
+      const pendingPages: unknown[] = [];
+      for await (const page of service.getAllNsmPendingPages()) {
+        pendingPages.push(page);
+      }
+
+      const detail = await service.getNsmDetail('2221883');
+
+      expect(allPages).toHaveLength(1);
+      expect(pendingPages).toHaveLength(1);
+      expect(detail).toEqual({ proposalReason: 'reason' });
+      expect(NsmLmSts).not.toHaveBeenCalled();
+
+      const likmsConfig = (
+        LikmsNsmAdapter as jest.MockedClass<typeof LikmsNsmAdapter>
+      ).mock.calls[0][0];
+      expectBrowserClientConfig(likmsConfig);
+      expect(likmsConfig).toEqual(
+        expect.objectContaining({ timeout: 15000, retryCount: 3 }),
+      );
+      // Bulk scans must not hydrate per-item proposal reasons (2 extra requests each).
+      expect(likmsConfig).not.toHaveProperty('hydrateProposalReason');
+    });
+
+    it('maps adapter items into the same CachedNotice shape as NSM items', () => {
+      const notice = CrawlingCoreService.nsmBillToCachedNotice({
+        billName: '계류 법안',
+        billNo: '2221883',
+        link: 'https://likms.assembly.go.kr/bill/billDetail.do?billId=PRC_X1',
+        proposer: '홍길동의원',
+        proposalDate: '2026-10-13',
+        committee: '법제사법위원회',
+        ministry: '',
+        progressStatus: '접수',
+        progressDate: '',
+        resolutionStatus: '',
+        resolutionDate: '',
+      });
+
+      expect(notice.num).toBe(2221883);
+      expect(notice.subject).toBe('계류 법안');
+      expect(notice.proposerCategory).toBe('의원');
+      expect(notice.committee).toBe('법제사법위원회');
+      expect(notice.contentId).toBeNull();
+    });
+  });
+
+  describe('NSM item classification for the pipeline', () => {
+    const baseItem = {
+      billName: '계류 법안',
+      link: 'https://example.com',
+      proposer: '홍길동의원',
+      proposalDate: '2026-10-13',
+      committee: '',
+      ministry: '',
+      progressStatus: '접수',
+      progressDate: '',
+      resolutionStatus: '',
+      resolutionDate: '',
+    };
+
+    it('treats both NSM `발의` and LIKMS `접수` as pending-like', () => {
+      expect(CrawlingCoreService.isPendingProgressStatus('발의')).toBe(true);
+      expect(CrawlingCoreService.isPendingProgressStatus('접수')).toBe(true);
+      expect(CrawlingCoreService.isPendingProgressStatus(' 접수 ')).toBe(true);
+      expect(CrawlingCoreService.isPendingProgressStatus('위원회 회부')).toBe(
+        false,
+      );
+      expect(CrawlingCoreService.isPendingProgressStatus('소관위접수')).toBe(
+        false,
+      );
+      expect(CrawlingCoreService.isPendingProgressStatus(null)).toBe(false);
+      expect(CrawlingCoreService.isPendingProgressStatus(undefined)).toBe(
+        false,
+      );
+    });
+
+    it('accepts numeric bill numbers and rejects LIKMS non-bill ids', () => {
+      expect(
+        CrawlingCoreService.isCrawlableNsmBill({
+          ...baseItem,
+          billNo: '2221883',
+        }),
+      ).toBe(true);
+      expect(
+        CrawlingCoreService.isCrawlableNsmBill({
+          ...baseItem,
+          billNo: ' 2221883 ',
+        }),
+      ).toBe(true);
+      expect(
+        CrawlingCoreService.isCrawlableNsmBill({
+          ...baseItem,
+          billNo: 'ZZ22142',
+        }),
+      ).toBe(false);
+      expect(
+        CrawlingCoreService.isCrawlableNsmBill({ ...baseItem, billNo: '' }),
+      ).toBe(false);
+      expect(
+        CrawlingCoreService.isCrawlableNsmBill({ ...baseItem, billNo: '0' }),
+      ).toBe(false);
     });
   });
 });

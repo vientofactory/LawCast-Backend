@@ -29,6 +29,7 @@ import {
   isPalCrawlerEnabled,
 } from '../../utils/crawler-activation.utils';
 import { fetchHtmlPage } from '../../utils/http-fetch.utils';
+import { createCrawlerFetchHeaders } from '../../utils/browser-request-headers.util';
 import {
   canonicalizeProposalReason,
   canonicalizeProposalReasonForComparison,
@@ -1561,8 +1562,10 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
     sha256: string;
     httpMetadata: ArchiveHttpMetadata;
   }> {
+    const { userAgent, customHeaders } = createCrawlerFetchHeaders();
     const response = await fetchHtmlPage(link, {
-      userAgent: APP_CONSTANTS.CRAWLING.USER_AGENT,
+      userAgent,
+      customHeaders,
       timeoutMs: 15000,
     });
 

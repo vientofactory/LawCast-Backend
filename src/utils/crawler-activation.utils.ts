@@ -35,6 +35,7 @@ export type CrawlerSource =
 
 const PAL_ENABLED_ENV_KEY = 'CRAWLING_PAL_ENABLED';
 const NSM_ENABLED_ENV_KEY = 'CRAWLING_NSM_ENABLED';
+const NSM_SOURCE_ENV_KEY = 'CRAWLING_NSM_SOURCE';
 
 const ENABLED_VALUES = new Set(['1', 'true', 'yes', 'on']);
 const DISABLED_VALUES = new Set(['0', 'false', 'no', 'off']);
@@ -74,6 +75,47 @@ export function isPalCrawlerEnabled(): boolean {
 /** Returns whether the NSM (`opinion.lawmaking.go.kr`) crawler is enabled. */
 export function isNsmCrawlerEnabled(): boolean {
   return parseEnabled(process.env[NSM_ENABLED_ENV_KEY]);
+}
+
+/**
+ * Selectable backend for the NSM-shaped bill list/detail crawl.
+ *
+ * - `nsm`: `국민참여입법센터` `입법진행현황` (`opinion.lawmaking.go.kr`, `NsmLmSts`).
+ * - `likms`: `국회 의안정보시스템` `계류의안` (`likms.assembly.go.kr`), reached through
+ *   pal-crawl's `LikmsNsmAdapter` which implements the same list/detail ports.
+ */
+export const NSM_SOURCE = {
+  NSM: 'nsm',
+  LIKMS: 'likms',
+} as const;
+
+export type NsmSource = (typeof NSM_SOURCE)[keyof typeof NSM_SOURCE];
+
+/**
+ * Returns whether NSM-shaped list/detail crawling should be served by the
+ * National Assembly Bill Information System (the `계류의안` list) instead of the
+ * public-participation portal.
+ *
+ * Only the exact value `likms` (case-insensitive, trimmed) switches the source;
+ * an unset or unrecognized value keeps the existing NSM behavior, so the flag is
+ * strictly opt-in. Read from `process.env` on every call (like the enable flags)
+ * so operators can flip it without a restart and tests can toggle it per case.
+ */
+export function isLikmsNsmSourceEnabled(): boolean {
+  const raw = process.env[NSM_SOURCE_ENV_KEY];
+  if (raw == null) {
+    return false;
+  }
+
+  return raw.trim().toLowerCase() === NSM_SOURCE.LIKMS;
+}
+
+/**
+ * Returns the NSM-shaped source currently serving list/detail crawls, so log
+ * lines can name the portal a zero-row scan or an unreadable probe came from.
+ */
+export function getActiveNsmSource(): NsmSource {
+  return isLikmsNsmSourceEnabled() ? NSM_SOURCE.LIKMS : NSM_SOURCE.NSM;
 }
 
 /** Returns whether the given crawler source is currently enabled. */

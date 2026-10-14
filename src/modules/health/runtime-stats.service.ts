@@ -17,12 +17,18 @@ import { ChangeTrackingService } from '../change-tracking/change-tracking.servic
 import { WebPushSubscriptionService } from '../notification/web-push-subscription.service';
 import { APP_CONSTANTS } from '../../config/app.config';
 import {
+  isLikmsNsmSourceEnabled,
   isNsmCrawlerEnabled,
   isPalCrawlerEnabled,
 } from '../../utils/crawler-activation.utils';
 import { NoticeArchive } from '../notice/notice-archive.entity';
 import { NoticeChangeEvent } from '../change-tracking/notice-change-event.entity';
 import type { CronJobsService } from '../scheduling/cronjobs.service';
+import {
+  describeNsmListScanHealth,
+  readNsmListScanHealth,
+  type NsmListScanHealth,
+} from '../crawling/utils/nsm-list-scan-health.util';
 import cronstrue from 'cronstrue/i18n';
 
 /**
@@ -59,6 +65,54 @@ function resolveCronDisplay(expr: string): {
   return {
     intervalMs: CRON_INTERVAL_MAP[expr] ?? 0,
     description,
+  };
+}
+
+/**
+ * Presentation metadata for the active NSM-shaped list/detail source.
+ *
+ * The NSM crawler can read either the public-participation portal
+ * (`opinion.lawmaking.go.kr`, `NsmLmSts`) or the National Assembly Bill
+ * Information System (`likms.assembly.go.kr`, `LikmsNsmAdapter`), selected by
+ * `CRAWLING_NSM_SOURCE`. Resolved on every aggregation rather than at module
+ * load, so an operator toggling the source is reported without a restart.
+ */
+function resolveNsmSourceInfo(): {
+  source: string;
+  name: string;
+  url: string;
+  description: string;
+  crawlerName: string;
+  scheduleName: string;
+  scheduleDescription: string;
+  transferFlowDescription: string;
+} {
+  if (isLikmsNsmSourceEnabled()) {
+    return {
+      source: 'likms.assembly.go.kr',
+      name: '국회 의안정보시스템 계류의안',
+      url: 'https://likms.assembly.go.kr',
+      description: '국회 의안정보시스템의 계류의안 목록을 수집합니다.',
+      crawlerName: '국회 의안정보시스템 계류의안 크롤러',
+      scheduleName: '국회 의안정보시스템 계류의안 수집',
+      scheduleDescription:
+        '국회 의안정보시스템의 계류의안 목록을 주기적으로 수집합니다.',
+      transferFlowDescription:
+        '국회 의안정보시스템의 계류의안이 국회입법현황으로 이관되면, 크롤러가 이를 자동으로 감지하여 동기화합니다.',
+    };
+  }
+
+  return {
+    source: 'opinion.lawmaking.go.kr',
+    name: '국민참여입법센터 입법진행현황',
+    url: 'https://opinion.lawmaking.go.kr',
+    description: '국민참여입법센터의 입법진행현황(국회입법현황)을 수집합니다.',
+    crawlerName: '국민참여입법센터 입법진행현황 크롤러',
+    scheduleName: '국민참여입법센터 입법진행현황 수집',
+    scheduleDescription:
+      '국민참여입법센터의 입법진행현황(국회입법현황)을 주기적으로 수집합니다.',
+    transferFlowDescription:
+      '국민참여입법센터의 입법진행현황에서 국회입법현황으로 이관된 의안이 있으면, 크롤러가 이를 자동으로 감지하여 동기화합니다.',
   };
 }
 
@@ -185,8 +239,27 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         crawlingService,
         archiveSyncService,
         cronJobsService,
+        await this.readNsmListScanHealth(),
       ),
     };
+  }
+
+  /**
+   * Reads the NSM list-scan health record written by the crawl paths.
+   *
+   * `null` means "nothing recorded yet" (fresh install, flushed cache) and is
+   * reported as unknown rather than healthy. A read failure must not break the
+   * status endpoint, so it degrades to the same unknown state.
+   */
+  private async readNsmListScanHealth(): Promise<NsmListScanHealth | null> {
+    try {
+      return await readNsmListScanHealth({
+        getObject: async <T>(key: string) =>
+          (await this.cacheManager.get<T>(key)) ?? null,
+      });
+    } catch {
+      return null;
+    }
   }
 
   getNodeRuntimeStats() {
@@ -266,6 +339,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     const palCron = APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK;
     const nsmCron = APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK;
     const isDoneCron = APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC;
+    const nsmSource = resolveNsmSourceInfo();
 
     const result = {
       noticeSources: [
@@ -280,10 +354,9 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         },
         {
           id: 'nsm',
-          name: '국민참여입법센터 입법진행현황',
-          url: 'https://opinion.lawmaking.go.kr',
-          description:
-            '국민참여입법센터의 입법진행현황(국회입법현황)을 수집합니다.',
+          name: nsmSource.name,
+          url: nsmSource.url,
+          description: nsmSource.description,
           noticeCount: archiveAgg.nsmCount,
           intervalMs: CRON_INTERVAL_MAP[nsmCron] ?? 0,
           intervalLabel: resolveCronDisplay(nsmCron).description,
@@ -309,11 +382,10 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         },
         {
           id: 'nsm-pending',
-          name: '국민참여입법센터 입법진행현황 수집',
+          name: nsmSource.scheduleName,
           intervalMs: CRON_INTERVAL_MAP[nsmCron] ?? 0,
           intervalLabel: resolveCronDisplay(nsmCron).description,
-          description:
-            '국민참여입법센터의 입법진행현황(국회입법현황)을 주기적으로 수집합니다.',
+          description: nsmSource.scheduleDescription,
         },
         {
           id: 'isdone-sync',
@@ -325,8 +397,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         },
       ],
       transferFlow: {
-        description:
-          '국민참여입법센터의 입법진행현황에서 국회입법현황으로 이관된 의안이 있으면, 크롤러가 이를 자동으로 감지하여 동기화합니다.',
+        description: nsmSource.transferFlowDescription,
         nsmToPalIndicator:
           '국회입법현황에서 의안으로 등록된 경우, 크롤러가 자동으로 동기화하여 관리합니다.',
       },
@@ -341,10 +412,37 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     return result;
   }
 
+  /**
+   * Reports the NSM list scan as the status API sees it.
+   *
+   * `degraded` means every completed list scan in a row returned zero rows, so
+   * the collector is not reading a list at all — the state that a silent "no new
+   * notices" used to hide. `staleHours` counts from the last scan that returned
+   * rows, which is the earliest signal of a stall even before the threshold is
+   * crossed.
+   */
+  private buildNsmListScanStatus(health: NsmListScanHealth | null, now: Date) {
+    const { staleHours, lastSuccessfulScanAgoLabel } =
+      describeNsmListScanHealth(health, now);
+
+    return {
+      degraded: health?.degraded ?? false,
+      consecutiveZeroRowScans: health?.consecutiveZeroRowScans ?? 0,
+      lastScanAt: health?.lastScanAt ?? null,
+      lastScanItemCount: health?.lastScanItemCount ?? null,
+      lastSuccessfulScanAt: health?.lastSuccessfulScanAt ?? null,
+      lastSuccessfulScanItemCount: health?.lastSuccessfulScanItemCount ?? null,
+      degradedSince: health?.degradedSince ?? null,
+      staleHours,
+      description: lastSuccessfulScanAgoLabel,
+    };
+  }
+
   private buildCrawlersStatus(
     crawlingService: CrawlingService,
     archiveSyncService?: ArchiveSyncService,
     cronJobsService?: CronJobsService,
+    nsmListScanHealth: NsmListScanHealth | null = null,
   ) {
     const schedulerState = crawlingService.getSchedulerExecutionState();
     const archiveState = archiveSyncService.getExecutionState();
@@ -362,6 +460,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     // CRAWLING_NSM_ENABLED without a server restart.
     const palEnabled = isPalCrawlerEnabled();
     const nsmEnabled = isNsmCrawlerEnabled();
+    const nsmSource = resolveNsmSourceInfo();
 
     return {
       palCrawler: {
@@ -382,19 +481,24 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         },
       },
       nsmPendingCrawler: {
-        name: '국민참여입법센터 입법진행현황 크롤러',
-        source: 'opinion.lawmaking.go.kr',
+        name: nsmSource.crawlerName,
+        source: nsmSource.source,
         enabled: nsmEnabled,
+        // `degraded` outranks a stale `failed` phase: a run that completed while
+        // reading nothing is the state an operator has to act on first.
         status: schedulerState.isPendingProcessing
           ? ('running' as const)
-          : pendingSyncPhase?.status === 'failed'
-            ? ('failed' as const)
-            : ('idle' as const),
+          : nsmListScanHealth?.degraded
+            ? ('degraded' as const)
+            : pendingSyncPhase?.status === 'failed'
+              ? ('failed' as const)
+              : ('idle' as const),
         lastRunAt:
           schedulerState.lastNsmPendingCronRunAt ??
           pendingSyncPhase?.lastRunAt ??
           null,
         lastError: pendingSyncPhase?.lastError ?? null,
+        listScan: this.buildNsmListScanStatus(nsmListScanHealth, new Date()),
         cron: {
           expression: nsmCron,
           ...resolveCronDisplay(nsmCron),

@@ -165,9 +165,44 @@ export const APP_CONSTANTS = {
     },
   },
   CRAWLING: {
-    USER_AGENT: 'LawCast/1.0 (Legislative Notice Crawler)',
+    /**
+     * Pinned User-Agent for the crawler's plain-HTTP requests; empty means
+     * "rotate".
+     *
+     * Unset (the default): every request carries a real browser User-Agent
+     * drawn from `utils/browser-identities.util.ts`, together with the User-Agent
+     * client hints, `Sec-Fetch-*` and `Upgrade-Insecure-Requests` headers that
+     * identity would send (`utils/browser-request-headers.util.ts`), so a portal
+     * cannot separate the crawler from a browser by header shape alone.
+     *
+     * Set: every request sends exactly this value with the generic header set
+     * below and no browser client hints. Kept as an operator escape hatch — a
+     * portal that refuses the rotation serves no data at all, and whether to
+     * identify as the crawler product instead is the operator's call, not
+     * something this code decides.
+     */
+    USER_AGENT: process.env.CRAWLING_USER_AGENT?.trim() || '',
     TIMEOUT: 15000, // 15 seconds timeout
     RETRY_COUNT: 3, // 3 retries
+    /**
+     * Consecutive completed NSM list scans returning zero rows before the
+     * collector is reported as degraded (status API + ERROR-level alert). At
+     * the 20-minute pending-cron cadence the default of 3 means roughly one
+     * hour of a source that serves nothing — a list that normally returns
+     * thousands of rows never legitimately returns zero.
+     */
+    NSM_LIST_SCAN_DEGRADED_THRESHOLD: parseIntWithDefault(
+      process.env.CRAWLING_NSM_LIST_SCAN_DEGRADED_THRESHOLD,
+      3,
+    ),
+    /**
+     * Hours between repeat ERROR alerts while the collector stays degraded, so
+     * a long outage keeps nagging without alerting on every 20-minute cycle.
+     */
+    NSM_LIST_SCAN_ALERT_REPEAT_HOURS: parseIntWithDefault(
+      process.env.CRAWLING_NSM_LIST_SCAN_ALERT_REPEAT_HOURS,
+      6,
+    ),
     /** Hydrates truncated NSM list titles with detail-page requests. Disabled to avoid list-crawl N+1 traffic. */
     NSM_HYDRATE_TRUNCATED_TITLES: parseBooleanWithDefault(
       process.env.CRAWLING_NSM_HYDRATE_TRUNCATED_TITLES,
@@ -239,6 +274,11 @@ export const APP_CONSTANTS = {
       process.env.CRAWLING_BROWSER_SYSTEM_GUARD_MIN_MEM_AVAILABLE_MB,
       256,
     ),
+    /**
+     * Generic header set used verbatim when `USER_AGENT` pins an identity.
+     * While the crawler rotates browser identities these are replaced by the
+     * per-request headers from `utils/browser-request-headers.util.ts`.
+     */
     HEADERS: {
       'Accept-Language': 'ko-KR,ko;q=0.9',
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -336,6 +376,42 @@ export const APP_CONSTANTS = {
     NSM_REASON_RETRY_MAX_ATTEMPTS: 5,
     /** Max age (ms) for items in the proposalReason retry queue before they are evicted. */
     NSM_REASON_RETRY_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+    /**
+     * Max list-absence candidates probed per source-deletion reconciliation
+     * pass. The candidate set is "every active NSM archive row the list scan did
+     * not return", which is small when the list covers the same population as
+     * the archive but can reach tens of thousands when it does not (for example
+     * a pending-only list such as LIKMS `계류의안`). Candidates beyond the cap
+     * are
+     * drawn at random so the whole pool is still covered over several passes.
+     */
+    NSM_MISSING_PROBE_MAX_CANDIDATES: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_NSM_MISSING_PROBE_MAX_CANDIDATES,
+      50,
+    ),
+    /**
+     * Aborts a reconciliation pass after this many consecutive unreadable
+     * probes (portal error page, Waitingroom or network failure) that found no
+     * readable page at all. Stops a blocked portal from being hammered with the
+     * full candidate set on every cycle.
+     */
+    NSM_MISSING_PROBE_UNUSABLE_ABORT_THRESHOLD: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_NSM_MISSING_PROBE_UNUSABLE_ABORT_THRESHOLD,
+      5,
+    ),
+    /**
+     * How long (hours) a row whose list absence was already probed stays out of
+     * the candidate set while the probe did not confirm a deletion. A bill that
+     * legitimately drops off the listing, and a source that refuses every
+     * detail request, must not reproduce the same candidate set on every cycle
+     * — that repetition is what turned one blocked portal into a
+     * multi-thousand-request sweep. Rows whose absence is confirmed deleted
+     * leave the pool through `lifecycle_status` instead.
+     */
+    NSM_LIST_ABSENCE_REPROBE_COOLDOWN_HOURS: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_NSM_LIST_ABSENCE_REPROBE_COOLDOWN_HOURS,
+      168,
+    ),
     PROPOSAL_REASON_RETRY_QUEUE: {
       KEY: 'crawling:proposalReasonRetryQueue',
       MAX_SIZE: 5000,

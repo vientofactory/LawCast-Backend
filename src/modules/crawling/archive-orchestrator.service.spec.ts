@@ -222,7 +222,13 @@ describe('ArchiveOrchestratorService', () => {
       expect(mockFetchHtmlPage).toHaveBeenCalledWith(
         'https://example.com/notice/1',
         expect.objectContaining({
-          userAgent: 'LawCast/1.0 (Legislative Notice Crawler)',
+          // The archive fetch presents a real browser identity whose hint
+          // headers describe the same browser as its User-Agent.
+          userAgent: expect.stringMatching(/^Mozilla\/5\.0 \(/),
+          customHeaders: expect.objectContaining({
+            'User-Agent': expect.stringMatching(/^Mozilla\/5\.0 \(/),
+            Accept: expect.stringContaining('text/html'),
+          }),
           timeoutMs: 15000,
         }),
       );

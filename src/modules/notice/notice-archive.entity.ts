@@ -181,6 +181,37 @@ export class NoticeArchive {
   @Column({ type: 'datetime', name: 'source_deleted_at', nullable: true })
   sourceDeletedAt: Date | null;
 
+  /**
+   * When this notice was last returned by a completed NSM-shaped list scan.
+   *
+   * Source-deletion detection uses it to turn list absence into an episode that
+   * starts when a previously seen row stops being returned, instead of
+   * treating every active row the latest scan did not return as a candidate
+   * (which re-probed ~10k rows per cycle whenever the scanned list covered a
+   * different population than the archive). `NULL` means "not seen since this
+   * tracking was introduced".
+   */
+  @Column({
+    type: 'datetime',
+    name: 'nsm_last_seen_in_list_at',
+    nullable: true,
+  })
+  nsmLastSeenInListAt: Date | null;
+
+  /**
+   * When the NSM detail probe last investigated this row's list absence
+   * without confirming a deletion. Bounds re-probing of a row that stays
+   * absent (or is never listed by the active source) to once per
+   * `ARCHIVE_SYNC_NSM_LIST_ABSENCE_REPROBE_COOLDOWN_HOURS` instead of once per
+   * cycle.
+   */
+  @Column({
+    type: 'datetime',
+    name: 'nsm_list_absence_probed_at',
+    nullable: true,
+  })
+  nsmListAbsenceProbedAt: Date | null;
+
   @Column({ type: 'blob', name: 'screenshot_blob', nullable: true })
   screenshotBlob: Buffer | null;
 

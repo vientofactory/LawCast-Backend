@@ -15,6 +15,7 @@
  * real network, DB, or Ollama connection is required.
  */
 
+import { Logger } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { CrawlingSchedulerService } from './crawling-scheduler.service';
 import { ArchiveSyncService } from './archive-sync.service';
@@ -38,6 +39,7 @@ import { APP_CONSTANTS } from '../../config/app.config';
 import { type ITableData, type ISearchResult } from 'pal-crawl';
 import { NsmArchiveReason } from './archive-orchestrator.service';
 import { executeSummaryBackfillPhase } from './utils/archive-sync-phase-executors';
+import { NSM_LIST_SCAN_HEALTH_CACHE_KEY } from './utils/nsm-list-scan-health.util';
 import * as phaseExecutors from './utils/archive-sync-phase-executors';
 
 // ─── Shared test fixtures ─────────────────────────────────────────────────────
@@ -1382,6 +1384,42 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     resolveFirst();
     const firstResult = await firstCall;
     expect(firstResult).not.toBeNull();
+  });
+
+  it('warns when the pending scan returns no notices at all', async () => {
+    // Zero rows from a completed scan means the list source served nothing
+    // (refused request, moved URL, adapter mismatch) - not "nothing new".
+    crawlingCoreService.getAllNsmPages.mockImplementation(
+      async function* () {},
+    );
+    crawlingCoreService.getAllNsmPendingPages.mockImplementation(
+      async function* () {},
+    );
+
+    const warnSpy = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => undefined);
+
+    // Assertions run before the spy is restored: `mockRestore()` also clears
+    // the recorded calls.
+    try {
+      await service.runPendingSync('zero-scan');
+
+      expect(
+        noticeArchiveService.markSourceDeletedByMissingNsmNums,
+      ).not.toHaveBeenCalled();
+      expect(
+        warnSpy.mock.calls.map(([message]) => String(message)),
+      ).toContainEqual(expect.stringContaining('returned 0 notices'));
+      // The archive-sync path has to record the failed observation too, not just
+      // log it: the run-length state is what escalates a stalled collector.
+      expect(cacheService.setObject).toHaveBeenCalledWith(
+        NSM_LIST_SCAN_HEALTH_CACHE_KEY,
+        expect.objectContaining({ consecutiveZeroRowScans: 1 }),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
