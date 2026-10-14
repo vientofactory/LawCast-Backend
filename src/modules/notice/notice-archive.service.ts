@@ -69,7 +69,10 @@ import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { logAndBridge } from '../../utils/bridge-log.utils';
-import { isNsmDeletionDetectionEnabled } from '../../utils/source-deletion-detection.utils';
+import {
+  describeNsmDeletionDetectionDisabled,
+  isNsmDeletionDetectionEnabled,
+} from '../../utils/source-deletion-detection.utils';
 import { isNsmCrawlerEnabled } from '../../utils/crawler-activation.utils';
 import {
   canonicalizeProposalReason,
@@ -1139,7 +1142,7 @@ export class NoticeArchiveService {
     if (!isNsmDeletionDetectionEnabled()) {
       LoggerUtils.log(
         'NoticeArchiveService',
-        `markSourceDeletedByMissingNsmNums: NSM source deletion detection is disabled; recorded ${stampedCount} list sighting(s) and skipped the probe pass`,
+        `markSourceDeletedByMissingNsmNums: recorded ${stampedCount} list sighting(s) and skipped the probe pass — ${describeNsmDeletionDetectionDisabled()}`,
       );
       return 0;
     }
@@ -1393,7 +1396,7 @@ export class NoticeArchiveService {
       case 'blocked':
         return 'the detail response was unreadable (portal error page or Waitingroom)';
       case 'disabled':
-        return 'deletion detection is disabled';
+        return describeNsmDeletionDetectionDisabled();
       default:
         return 'the detail probe failed';
     }

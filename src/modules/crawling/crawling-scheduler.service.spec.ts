@@ -577,6 +577,73 @@ describe('CrawlingSchedulerService', () => {
       }
     });
 
+    it('should classify LIKMS pending bills from the all-bills scan and skip the pending stream', async () => {
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+
+      const pendingItem = {
+        billNo: '2221883',
+        billName: '접수 단계 법안',
+        proposer: '주진우의원 등 10인',
+        progressStatus: '접수',
+        committee: '',
+        ministry: '',
+        link: 'https://likms.assembly.go.kr/bill/2221883',
+      };
+      const referredItem = {
+        billNo: '2221882',
+        billName: '소관위 접수 법안',
+        proposer: '최혁진의원 등 12인',
+        progressStatus: '소관위접수',
+        committee: '교육위원회',
+        ministry: '',
+        link: 'https://likms.assembly.go.kr/bill/2221882',
+      };
+
+      try {
+        (crawlingCoreService.getAllNsmPages as jest.Mock).mockReturnValue({
+          [Symbol.asyncIterator]: async function* () {
+            yield {
+              items: [pendingItem, referredItem],
+              currentPage: 1,
+              totalPages: 1,
+            };
+          },
+        });
+        (
+          archiveOrchestratorService.filterAlreadyArchivedNotices as jest.Mock
+        ).mockResolvedValue([
+          {
+            num: 2221883,
+            subject: '접수 단계 법안',
+            proposerCategory: '의원',
+            committee: '',
+            link: 'https://likms.assembly.go.kr/bill/2221883',
+            contentId: null,
+            attachments: { pdfFile: null, hwpFile: null },
+            aiSummary: null,
+            aiSummaryStatus: 'not_requested',
+          },
+        ]);
+        (
+          archiveOrchestratorService.archiveNsmBillItems as jest.Mock
+        ).mockResolvedValue([]);
+
+        await service.handlePendingCron();
+
+        expect(crawlingCoreService.getAllNsmPages).toHaveBeenCalledTimes(1);
+        expect(
+          crawlingCoreService.getAllNsmPendingPages,
+        ).not.toHaveBeenCalled();
+        expect(
+          archiveOrchestratorService.archiveNsmBillItems,
+        ).toHaveBeenCalledWith([pendingItem], {
+          reason: NsmArchiveReason.NEW_PENDING_BILLS,
+        });
+      } finally {
+        delete process.env.CRAWLING_NSM_SOURCE;
+      }
+    });
+
     it('should retry on ECONNRESET with exponential backoff and succeed', async () => {
       const econnreset = Object.assign(new Error('read ECONNRESET'), {
         code: 'ECONNRESET',

@@ -118,6 +118,25 @@ export function getActiveNsmSource(): NsmSource {
   return isLikmsNsmSourceEnabled() ? NSM_SOURCE.LIKMS : NSM_SOURCE.NSM;
 }
 
+/**
+ * Returns whether the separate pending-list scan is redundant for the active
+ * source, so callers can skip a second traversal of the same list.
+ *
+ * The LIKMS adapter builds its pending list (`접수`) from the very same
+ * `계류의안` list the all-bills scan already walked and filters rows
+ * client-side (`progressStatus === '접수'`), which is exactly the vocabulary
+ * `CrawlingCoreService.isPendingProgressStatus` recognises. Walking it a second
+ * time therefore costs a full extra traversal of a ~160-page list while adding
+ * no bill the all-bills scan did not already classify as pending-like.
+ *
+ * The NSM portal answers a separate server-filtered query
+ * (`rslRsltNmL=900101`), whose result is not guaranteed to be a subset of its
+ * all-bills list, so the NSM pending stream is still walked.
+ */
+export function isNsmPendingStreamRedundant(): boolean {
+  return isLikmsNsmSourceEnabled();
+}
+
 /** Returns whether the given crawler source is currently enabled. */
 export function isCrawlerEnabled(source: CrawlerSource): boolean {
   return source === CRAWLER_SOURCE.NSM

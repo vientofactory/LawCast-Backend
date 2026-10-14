@@ -883,6 +883,84 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     );
   });
 
+  it('LIKMS pending sync skips the redundant pending stream and keeps the pending classification', async () => {
+    process.env.CRAWLING_NSM_SOURCE = 'likms';
+
+    const pendingItem = {
+      billNo: '2221883',
+      billName: '접수 단계 법안',
+      proposer: '주진우의원 등 10인',
+      progressStatus: '접수',
+      committee: '',
+      ministry: '',
+      link: 'https://likms.assembly.go.kr/bill/2221883',
+    };
+    const referredItem = {
+      billNo: '2221882',
+      billName: '소관위 접수 법안',
+      proposer: '최혁진의원 등 12인',
+      progressStatus: '소관위접수',
+      committee: '교육위원회',
+      ministry: '',
+      link: 'https://likms.assembly.go.kr/bill/2221882',
+    };
+
+    try {
+      crawlingCoreService.getAllNsmPages.mockImplementation(async function* () {
+        yield {
+          currentPage: 1,
+          totalPages: 1,
+          items: [pendingItem, referredItem],
+        } as any;
+      });
+      archiveOrchestratorService.filterAlreadyArchivedNotices.mockResolvedValue(
+        [
+          {
+            num: 2221883,
+            subject: '접수 단계 법안',
+            proposerCategory: '의원',
+            committee: '',
+            link: 'https://likms.assembly.go.kr/bill/2221883',
+            contentId: null,
+            attachments: { pdfFile: null, hwpFile: null },
+            aiSummary: null,
+            aiSummaryStatus: 'not_requested',
+          },
+          {
+            num: 2221882,
+            subject: '소관위 접수 법안',
+            proposerCategory: '의원',
+            committee: '교육위원회',
+            link: 'https://likms.assembly.go.kr/bill/2221882',
+            contentId: null,
+            attachments: { pdfFile: null, hwpFile: null },
+            aiSummary: null,
+            aiSummaryStatus: 'not_requested',
+          },
+        ] as any,
+      );
+      archiveOrchestratorService.archiveNsmBillItems.mockResolvedValue([]);
+
+      const result = await service.runPendingSync('fault-test');
+
+      expect(result).not.toBeNull();
+      expect(crawlingCoreService.getAllNsmPages).toHaveBeenCalledTimes(1);
+      expect(crawlingCoreService.getAllNsmPendingPages).not.toHaveBeenCalled();
+      expect(
+        archiveOrchestratorService.archiveNsmBillItems,
+      ).toHaveBeenCalledWith([pendingItem], {
+        reason: NsmArchiveReason.NEW_PENDING_BILLS,
+      });
+      expect(
+        archiveOrchestratorService.archiveNsmBillItems,
+      ).toHaveBeenCalledWith([referredItem], {
+        reason: NsmArchiveReason.NEW_SYNC_ONLY_BILLS,
+      });
+    } finally {
+      delete process.env.CRAWLING_NSM_SOURCE;
+    }
+  });
+
   it('pal-crawl streams one valid page then throws -> safeRun swallows error in bootstrap, next phase runs', async () => {
     // Replace crawlingCoreService mock with a generator that yields 1 page then throws
     crawlingCoreService.getAllPages.mockImplementation(() =>
