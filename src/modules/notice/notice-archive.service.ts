@@ -8,6 +8,7 @@ import {
   In,
   IsNull,
   LessThan,
+  MoreThanOrEqual,
   Not,
   Or,
   SelectQueryBuilder,
@@ -1826,6 +1827,13 @@ export class NoticeArchiveService {
    * wired) and is the only value a caller may compare against the page size to
    * detect the end of the scan. `rows` is the hydrated subset that still has
    * an `active` archive row, so it can be shorter than `cursorCount`.
+   *
+   * The scan starts at the current Assembly (`BACKFILL_MIN_NOTICE_NUM`): bills
+   * archived from earlier Assemblies are historical records whose sources
+   * publish no detail page, so a summary pass over them can only re-derive
+   * `not_supported`. They are the lowest notice numbers in the table, which put
+   * them at the head of every page and spent each pass re-confirming what they
+   * already hold.
    */
   private async readSummaryBackfillCursorPage(
     status: AISummaryStatus,
@@ -1834,7 +1842,12 @@ export class NoticeArchiveService {
   ): Promise<{ cursorCount: number; rows: CachedNotice[] }> {
     if (!this.summaryStateRepository) {
       const rows = await this.archiveRepository.find({
-        where: { aiSummaryStatus: status },
+        where: {
+          aiSummaryStatus: status,
+          noticeNum: MoreThanOrEqual(
+            APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
+          ),
+        },
         select: {
           noticeNum: true,
           subject: true,
@@ -1862,6 +1875,9 @@ export class NoticeArchiveService {
     const summaryRows = await this.summaryStateRepository.find({
       where: {
         aiSummaryStatus: status,
+        noticeNum: MoreThanOrEqual(
+          APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
+        ),
       },
       select: {
         noticeNum: true,

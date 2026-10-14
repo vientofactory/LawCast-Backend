@@ -41,6 +41,16 @@ const TICK_CRON_EXPRESSION =
 export const SEED_LIMIT =
   APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_BATCH_SIZE;
 
+/**
+ * Lowest notice number the drain can seed, from the constant the candidate
+ * query filters on. The pool below this floor is out of scope for the backfill
+ * (bills from earlier Assemblies, whose sources publish no detail page), so
+ * including it here would report a backlog the drain is not supposed to work
+ * through.
+ */
+export const POOL_MIN_NOTICE_NUM =
+  APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM;
+
 /** One cron interval, used for tick bucketing and the cost budget check. */
 export const DEFAULT_TICK_STEP_MINUTES = 15;
 
@@ -481,13 +491,15 @@ export function toSqliteUtc(date: Date): string {
  * that costs over two minutes per snapshot is not usable per window, and the
  * difference is purely how the same predicate is evaluated.
  *
- * The three conditions mirror `getProposalReasonRetryCandidates`
+ * The conditions mirror `getProposalReasonRetryCandidates`
  * (`modules/notice/utils/notice-archive-maintenance-support.ts`) exactly:
- * active lifecycle, empty reason column, no recorded reason arrival, and no
- * recorded `source_deleted` transition.
+ * active lifecycle, at or above the current Assembly's first notice number,
+ * empty reason column, no recorded reason arrival, and no recorded
+ * `source_deleted` transition.
  */
 export const POOL_PREDICATE_SQL = `
   na.lifecycle_status = 'active'
+  AND na.noticeNum >= ${POOL_MIN_NOTICE_NUM}
   AND (na.proposalReason IS NULL OR TRIM(na.proposalReason) = '')
   AND reason.noticeNum IS NULL
   AND gone.noticeNum IS NULL
@@ -1061,6 +1073,9 @@ export function renderReport(report: DrainObservationReport): string {
         ? 'tracked'
         : 'MISSING (migration not deployed)'
     }`,
+  );
+  lines.push(
+    `  pool scope          noticeNum >= ${POOL_MIN_NOTICE_NUM} (Assembly ${APP_CONSTANTS.ARCHIVE_SYNC.CURRENT_ASSEMBLY} and later)`,
   );
   lines.push(
     `  pool snapshot       ${
