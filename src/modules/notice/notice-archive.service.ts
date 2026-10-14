@@ -1695,6 +1695,11 @@ export class NoticeArchiveService {
   /**
    * Returns one page of `not_requested` rows for offset-based staging scans.
    * Unlike getPendingSummaryPage, this never falls back to not_supported.
+   *
+   * Callers advance `skip` by the batch size. The cursor runs over the
+   * summary-state rows, so a page shorter than the batch size means the
+   * `not_requested` set is exhausted - rows dropped by the active-archive join
+   * do not make the page short (see `collectSummaryBackfillCandidates`).
    */
   async getPendingSummaryPageByOffset(
     skip: number,
@@ -1710,6 +1715,12 @@ export class NoticeArchiveService {
   /**
    * Returns one page of NSM recovery candidates (`not_supported` + contentId IS NULL)
    * for offset-based staging scans.
+   *
+   * Callers advance `skip` by the batch size. The cursor runs over the
+   * summary-state rows, so rows whose archive turned `source_deleted`
+   * (dropped by the active-archive join) no longer end the scan early - that
+   * regression left every later recovery candidate unreachable
+   * (`agent_memories/38-summary-backfill-recovery-wedge/`).
    */
   async getNotSupportedSummaryRecoveryPage(
     skip: number,
@@ -1731,7 +1742,9 @@ export class NoticeArchiveService {
    * advance `skip` by the batch size on each iteration.  Unlike
    * `getPendingSummaryPage` this is NOT a drain loop: rows that remain
    * `'unavailable'` after a retry do not drop out of subsequent queries, so
-   * the caller must increment `skip` to make forward progress.
+   * the caller must increment `skip` to make forward progress. The cursor runs
+   * over the summary-state rows, so only an exhausted `unavailable` set makes
+   * a page shorter than the batch size.
    */
   async getUnavailableSummaryPage(
     skip: number,
@@ -1744,6 +1757,23 @@ export class NoticeArchiveService {
     );
   }
 
+  /**
+   * Collects up to `take` backfill candidates whose `aiSummaryStatus` is
+   * `status`, walking the result set with a cursor.
+   *
+   * The cursor advances over the **summary-state** rows (the source of truth
+   * for `aiSummaryStatus`), never over the hydrated rows. A hydrated page is
+   * legitimately shorter than its cursor page, because rows whose archive is
+   * missing or no longer `active` (`source_deleted`/`renumbered`) are dropped
+   * from the join. Reading that shorter array as end-of-data stopped the
+   * `not_supported` recovery scan for good at the first inactive row and
+   * starved every later candidate - see
+   * `agent_memories/38-summary-backfill-recovery-wedge/`.
+   *
+   * The cursor advances by exactly one page per iteration, so callers keep
+   * their `skip += batchSize` contract and a short return still means the
+   * cursor source is exhausted.
+   */
   private async collectSummaryBackfillCandidates(
     status: AISummaryStatus,
     skip: number,
@@ -1752,43 +1782,51 @@ export class NoticeArchiveService {
   ): Promise<CachedNotice[]> {
     const pageSize = Math.max(take, 1);
     const candidates: CachedNotice[] = [];
-    let rawSkip = Math.max(skip, 0);
+    let cursor = Math.max(skip, 0);
 
     for (;;) {
-      const rows = await this.getSummaryPageByStatus(status, rawSkip, pageSize);
-      if (rows.length === 0) {
-        break;
-      }
+      const page = await this.readSummaryBackfillCursorPage(
+        status,
+        cursor,
+        pageSize,
+      );
 
-      const filteredRows = rawRowFilter ? rows.filter(rawRowFilter) : rows;
+      if (page.cursorCount > 0) {
+        const filteredRows = rawRowFilter
+          ? page.rows.filter(rawRowFilter)
+          : page.rows;
 
-      if (filteredRows.length === 0) {
-        if (rows.length < pageSize) {
-          break;
+        if (filteredRows.length > 0) {
+          candidates.push(
+            ...(await this.resolveSummaryBackfillCandidates(filteredRows)),
+          );
         }
-        rawSkip += pageSize;
-        continue;
       }
 
-      const eligibleRows =
-        await this.resolveSummaryBackfillCandidates(filteredRows);
-      candidates.push(...eligibleRows);
-
-      if (candidates.length >= pageSize || rows.length < pageSize) {
+      if (candidates.length >= pageSize || page.cursorCount < pageSize) {
         break;
       }
 
-      rawSkip += pageSize;
+      cursor += pageSize;
     }
 
     return candidates.slice(0, pageSize);
   }
 
-  private async getSummaryPageByStatus(
+  /**
+   * Reads one cursor page of summary-backfill rows.
+   *
+   * `cursorCount` is how many rows the cursor source returned (the
+   * summary-state table, or the archive table when no state repository is
+   * wired) and is the only value a caller may compare against the page size to
+   * detect the end of the scan. `rows` is the hydrated subset that still has
+   * an `active` archive row, so it can be shorter than `cursorCount`.
+   */
+  private async readSummaryBackfillCursorPage(
     status: AISummaryStatus,
-    skip: number,
+    cursor: number,
     take: number,
-  ): Promise<CachedNotice[]> {
+  ): Promise<{ cursorCount: number; rows: CachedNotice[] }> {
     if (!this.summaryStateRepository) {
       const rows = await this.archiveRepository.find({
         where: { aiSummaryStatus: status },
@@ -1806,11 +1844,14 @@ export class NoticeArchiveService {
           aiSummaryStatus: true,
         },
         order: { noticeNum: 'ASC' },
-        skip,
+        skip: cursor,
         take,
       });
 
-      return rows.map((row) => mapArchiveEntityToCachedNotice(row, status));
+      return {
+        cursorCount: rows.length,
+        rows: rows.map((row) => mapArchiveEntityToCachedNotice(row, status)),
+      };
     }
 
     const summaryRows = await this.summaryStateRepository.find({
@@ -1825,13 +1866,13 @@ export class NoticeArchiveService {
       order: {
         noticeNum: 'ASC',
       },
-      skip,
+      skip: cursor,
       take,
     });
 
     const noticeNums = summaryRows.map((row) => row.noticeNum);
     if (noticeNums.length === 0) {
-      return [];
+      return { cursorCount: 0, rows: [] };
     }
 
     const archives = await this.archiveRepository.find({
@@ -1856,7 +1897,7 @@ export class NoticeArchiveService {
       archives.map((archive) => [archive.noticeNum, archive] as const),
     );
 
-    return summaryRows
+    const rows = summaryRows
       .map((summary) => {
         const archive = archiveByNoticeNum.get(summary.noticeNum);
         if (!archive) {
@@ -1881,6 +1922,8 @@ export class NoticeArchiveService {
         );
       })
       .filter((row): row is CachedNotice => row !== null);
+
+    return { cursorCount: summaryRows.length, rows };
   }
 
   private async resolveSummaryBackfillCandidates(
