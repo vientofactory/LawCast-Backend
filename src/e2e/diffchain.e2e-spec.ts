@@ -741,6 +741,53 @@ describe('Diffchain API (e2e)', () => {
     }
   });
 
+  it('keeps scanning the not_supported recovery set past an inactive archive row', async () => {
+    const noticeArchiveService = moduleRef.get(NoticeArchiveService);
+
+    // LIKMS-style recovery rows: no contentId, empty snapshot reason and a
+    // `not_supported` summary state left over from when the reason was still
+    // missing.
+    const recoveryNums = [9101, 9102, 9103, 9104, 9105, 9106, 9107];
+    for (const noticeNum of recoveryNums) {
+      await noticeArchiveService.upsertNoticeArchive(
+        {
+          num: noticeNum,
+          subject: `의안 ${noticeNum} 요약 복구 대상`,
+          proposerCategory: '의원',
+          committee: '정무위원회',
+          link: `https://example.test/notices/${noticeNum}`,
+          contentId: null,
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        { proposalReason: '' },
+      );
+      await noticeArchiveService.updateSummaryStateByNoticeNum(
+        noticeNum,
+        null,
+        'not_supported',
+      );
+    }
+
+    // 9104 leaves the active-archive join, shortening the page that holds it.
+    await archiveRepository.update(
+      { noticeNum: 9104 },
+      { lifecycleStatus: 'source_deleted' },
+    );
+
+    const firstPage =
+      await noticeArchiveService.getNotSupportedSummaryRecoveryPage(0, 5);
+
+    // The short page must not end the scan: the pre-fix collector stopped at
+    // 9105 and left every later recovery candidate unreachable.
+    expect(firstPage.map((row) => row.num)).toEqual([
+      9101, 9102, 9103, 9105, 9106,
+    ]);
+
+    const secondPage =
+      await noticeArchiveService.getNotSupportedSummaryRecoveryPage(5, 5);
+    expect(secondPage.map((row) => row.num)).toEqual([9106, 9107]);
+  });
+
   function collectChangePayloads(): Array<Record<string, unknown>> {
     const batch = moduleRef.get(NotificationBatchService) as unknown as {
       processChangeNotificationBatch: jest.Mock;

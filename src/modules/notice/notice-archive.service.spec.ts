@@ -1110,6 +1110,118 @@ describe('NoticeArchiveService', () => {
     });
   });
 
+  describe('summary backfill cursor paging', () => {
+    const buildStateRow = (noticeNum: number) => ({
+      noticeNum,
+      aiSummary: null,
+      aiSummaryStatus: 'not_supported',
+    });
+
+    // Pages the summary-state table the way TypeORM does (noticeNum ascending,
+    // honouring skip/take) so the cursor contract is exercised by real paging
+    // instead of a single canned response.
+    const createPagingSummaryStateRepository = (
+      stateRows: Array<ReturnType<typeof buildStateRow>>,
+    ) => {
+      const repository = createSummaryStateRepositoryMock();
+      repository.find.mockImplementation(async (options: any) => {
+        const status = options?.where?.aiSummaryStatus;
+        const matching = stateRows.filter(
+          (row) => !status || row.aiSummaryStatus === status,
+        );
+        const skip = options?.skip ?? 0;
+        const take = options?.take ?? matching.length;
+        return matching.slice(skip, skip + take);
+      });
+      return repository;
+    };
+
+    it('does not treat a page shortened by the active-archive join as end-of-data', async () => {
+      const stateRows = [1001, 1002, 1003, 1004, 1005, 1006, 1007].map(
+        (noticeNum) => buildStateRow(noticeNum),
+      );
+      const summaryStateRepository =
+        createPagingSummaryStateRepository(stateRows);
+      // 1004's archive is no longer active, so the join drops it from its page
+      // without shortening the cursor page.
+      const archivedRows = [1001, 1002, 1003, 1005, 1006, 1007].map(
+        (noticeNum) =>
+          buildRow({
+            noticeNum,
+            contentId: null,
+            proposalReason: '',
+            aiSummaryStatus: 'not_supported',
+          }),
+      );
+      const repoMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+          .mockResolvedValue(archivedRows),
+      };
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        summaryStateRepository as any,
+        createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+      const firstPage = await service.getNotSupportedSummaryRecoveryPage(0, 5);
+
+      // The pre-fix scan stopped at the 4-row page and never reached 1006.
+      expect(firstPage.map((row) => row.num)).toEqual([
+        1001, 1002, 1003, 1005, 1006,
+      ]);
+
+      // Callers still advance `skip` by the batch size; rows the collector
+      // pulled beyond the returned page are simply offered again and deduped
+      // by the apply-queue key.
+      const secondPage = await service.getNotSupportedSummaryRecoveryPage(5, 5);
+      expect(secondPage.map((row) => row.num)).toEqual([1006, 1007]);
+    });
+
+    it('stops only when the summary-state cursor is exhausted', async () => {
+      const stateRows = [2001, 2002, 2003].map((noticeNum) =>
+        buildStateRow(noticeNum),
+      );
+      const summaryStateRepository =
+        createPagingSummaryStateRepository(stateRows);
+      const archivedRows = stateRows.map((row) =>
+        buildRow({
+          noticeNum: row.noticeNum,
+          contentId: null,
+          proposalReason: '',
+          aiSummaryStatus: 'not_supported',
+        }),
+      );
+      const repoMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+          .mockResolvedValue(archivedRows),
+      };
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        summaryStateRepository as any,
+        createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+      expect(
+        (await service.getNotSupportedSummaryRecoveryPage(0, 5)).map(
+          (row) => row.num,
+        ),
+      ).toEqual([2001, 2002, 2003]);
+      expect(await service.getNotSupportedSummaryRecoveryPage(5, 5)).toEqual(
+        [],
+      );
+    });
+  });
+
   describe('change notification collection bridge', () => {
     it('forwards begin/end/flush calls to ChangeTrackingService when available', async () => {
       const repositoryMock = createRepositoryMock();

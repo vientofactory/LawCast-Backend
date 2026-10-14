@@ -1578,6 +1578,12 @@ export async function executeSummaryBackfillPhase(
     if (batch.length < options.summaryBackfillBatchSize) break;
   }
 
+  // Each staging loop walks its status set with a cursor: `skip` advances by
+  // the batch size and a batch shorter than the batch size means the set is
+  // exhausted. The pages come from the summary-state table, so an
+  // `active`-archive drop cannot shorten a page - if a source ever returns a
+  // short page while rows remain, these breaks would abort the scan early
+  // (agent_memories/38-summary-backfill-recovery-wedge/).
   let recoverySkip = 0;
   for (;;) {
     const batch = archiveSvcCompat.getNotSupportedSummaryRecoveryPage
