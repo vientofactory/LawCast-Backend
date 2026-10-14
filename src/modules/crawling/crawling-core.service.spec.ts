@@ -83,10 +83,14 @@ describe('CrawlingCoreService', () => {
     getAllPendingPages: jest.Mock;
     getDetail: jest.Mock;
   };
+  let mockLikmsCrawler: {
+    resolveBillId: jest.Mock;
+  };
   let mockPage: {
     setViewport: jest.Mock;
     goto: jest.Mock;
     waitForNavigation: jest.Mock;
+    waitForNetworkIdle: jest.Mock;
     title: jest.Mock;
     content: jest.Mock;
     url: jest.Mock;
@@ -132,6 +136,7 @@ describe('CrawlingCoreService', () => {
       setViewport: jest.fn().mockResolvedValue(undefined),
       goto: jest.fn().mockResolvedValue({ status: () => 200 }),
       waitForNavigation: jest.fn().mockResolvedValue(null),
+      waitForNetworkIdle: jest.fn().mockResolvedValue(undefined),
       title: jest.fn().mockResolvedValue('Detail Page'),
       content: jest.fn().mockResolvedValue('<html></html>'),
       url: jest.fn().mockReturnValue('https://example.com/detail'),
@@ -158,6 +163,13 @@ describe('CrawlingCoreService', () => {
       getAllPendingPages: jest.fn().mockReturnValue((async function* () {})()),
       getDetail: jest.fn().mockResolvedValue({ proposalReason: 'reason' }),
     };
+
+    mockLikmsCrawler = {
+      resolveBillId: jest.fn().mockResolvedValue(null),
+    };
+    (LikmsCrawler as jest.MockedClass<typeof LikmsCrawler>).mockImplementation(
+      () => mockLikmsCrawler as any,
+    );
 
     (PalCrawl as jest.MockedClass<typeof PalCrawl>).mockImplementation(
       () => mockPalCrawl,
@@ -812,6 +824,73 @@ describe('CrawlingCoreService', () => {
       );
       // Bulk scans must not hydrate per-item proposal reasons (2 extra requests each).
       expect(likmsConfig).not.toHaveProperty('hydrateProposalReason');
+    });
+
+    it('captures likms detail from the 의안정보시스템 page and reads its fields from the adapter', async () => {
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+      mockLikmsCrawler.resolveBillId.mockResolvedValue('PRC_X1');
+      mockLikmsAdapter.getDetail.mockResolvedValue({
+        proposalReason: 'likms 제안이유',
+        billNo: '2221883',
+      });
+      mockPage.content.mockResolvedValue('<html>likms detail</html>');
+      mockPage.url.mockReturnValue(
+        'https://likms.assembly.go.kr/bill/bi/billDetailPage.do?billId=PRC_X1&currMenuNo=2600044',
+      );
+
+      const result = await service.captureNsmDetailFull('2221883');
+
+      // The snapshot is the page that listed the bill, not the NSM portal.
+      expect(mockPage.goto).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'https://likms.assembly.go.kr/bill/bi/billDetailPage.do',
+        ),
+        expect.anything(),
+      );
+      expect(mockPage.goto).toHaveBeenCalledWith(
+        expect.stringContaining('billId=PRC_X1'),
+        expect.anything(),
+      );
+      expect(mockPage.goto).not.toHaveBeenCalledWith(
+        expect.stringContaining('opinion.lawmaking.go.kr'),
+        expect.anything(),
+      );
+      expect(result.responseUrl).toContain('likms.assembly.go.kr');
+      expect(result.html).toBe('<html>likms detail</html>');
+      expect(result.detail).toEqual({
+        proposalReason: 'likms 제안이유',
+        billNo: '2221883',
+      });
+      expect(mockLikmsAdapter.getDetail).toHaveBeenCalledWith('2221883');
+      // NSM-only parsing and its deletion heuristic must not touch a likms page.
+      expect(mockNsmLmStsParser.parseDetail).not.toHaveBeenCalled();
+    });
+
+    it('fails loudly when likms has no detail page for the bill', async () => {
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+      mockLikmsCrawler.resolveBillId.mockResolvedValue(null);
+
+      await expect(service.captureNsmDetailFull('2299999')).rejects.toThrow(
+        'likms has no detail page for bill 2299999',
+      );
+      expect(mockPage.goto).not.toHaveBeenCalled();
+    });
+
+    it('backfills the screenshot from the likms page when that source is active', async () => {
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+      mockLikmsCrawler.resolveBillId.mockResolvedValue('PRC_X1');
+
+      const screenshot = await service.captureNsmDetailScreenshot('2221883');
+
+      expect(mockPage.goto).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'likms.assembly.go.kr/bill/bi/billDetailPage.do',
+        ),
+        expect.anything(),
+      );
+      expect(screenshot).toEqual(Buffer.from('jpeg'));
+      // The NSM-only screenshot getter must not be used for a likms bill.
+      expect(mockNsmLmSts.getDetailScreenshot).not.toHaveBeenCalled();
     });
 
     it('maps adapter items into the same CachedNotice shape as NSM items', () => {
