@@ -35,6 +35,19 @@ export interface SummaryStateBulkUpdateInput {
 }
 
 /**
+ * Write counters for a summary-state bulk write. `skipped` counts the rows
+ * whose persisted verdict already matched the one the caller produced, so no
+ * statement ran for them at all; `changedNoticeNums` names the rows that did
+ * get a new verdict, for callers that mirror the verdict somewhere else (the
+ * recent-notices cache) and can leave the untouched rows alone.
+ */
+export interface SummaryStateWriteStats {
+  changed: number;
+  skipped: number;
+  changedNoticeNums: Set<number>;
+}
+
+/**
  * Returns archived notices that still have an empty proposalReason, covering
  * both origins: PAL rows (contentId present) are recovered from the likms
  * bill database via LikmsCrawler, contentId-less NSM rows fall back to the
@@ -43,6 +56,19 @@ export interface SummaryStateBulkUpdateInput {
  * Includes ended notice periods and preserves their persisted isDone state.
  * Used by the proposalReason backfill cron to periodically re-seed the retry
  * queue even when no newly discovered pending bills arrive.
+ *
+ * **Ordering is attempt history, not notice number.** Page order is
+ * `proposal_reason_retry_count ASC` (never attempted first, so every newly
+ * arrived candidate is served before a row that already failed),
+ * `proposal_reason_retried_at ASC` (oldest attempt first, so rows with equal
+ * counts rotate instead of one fixed head being re-seeded), then `noticeNum ASC`
+ * for a stable page. The previous plain `noticeNum ASC` page had no memory of
+ * earlier attempts, so the lowest notice numbers - in production, non-bill
+ * agenda items (`사직의건`/`결의안`) whose reason exists in no source - were
+ * re-seeded on every tick and, once dropped by the drain for returning nothing,
+ * re-selected again: the 180 rows with a recoverable reason behind them were
+ * never reached
+ * (agent_memories/39-likms-reason-backfill-throughput/).
  */
 export async function getProposalReasonRetryCandidates(
   deps: NoticeArchiveMaintenanceDeps,
@@ -98,7 +124,9 @@ export async function getProposalReasonRetryCandidates(
         sourceDeletedLifecycle: 'source_deleted',
       },
     )
-    .orderBy('na.noticeNum', 'ASC')
+    .orderBy('na.proposalReasonRetryCount', 'ASC')
+    .addOrderBy('na.proposalReasonRetriedAt', 'ASC')
+    .addOrderBy('na.noticeNum', 'ASC')
     .limit(limit)
     .getRawMany<{
       noticeNum: number;
@@ -142,6 +170,73 @@ export async function getArchiveCount(
   deps: NoticeArchiveMaintenanceDeps,
 ): Promise<number> {
   return deps.archiveRepository.count();
+}
+
+/**
+ * Bound notices per `notice_archives` UPDATE when stamping retry attempts.
+ * Matches the list-sighting stamp so every statement stays far below SQLite's
+ * bound-parameter ceiling.
+ */
+const PROPOSAL_REASON_ATTEMPT_STAMP_CHUNK_SIZE = 400;
+
+/**
+ * Records that the proposalReason retry attempted to recover the reason of
+each given notice, by advancing its attempt count and timestamp.
+ *
+ * This is what makes the candidate cursor advance: without it the next
+ * candidate page is the same `noticeNum ASC` head it was before, which in
+ * production meant the same 20 unrecoverable rows were re-seeded every 15
+ * minutes and the recoverable rows behind them were never reached.
+ *
+ * Only the two tracking columns change, so the archive immutability trigger
+ * stays satisfied (they are outside its unchanged-column list, like the
+ * list-sighting stamps). A failure here is logged and swallowed by the caller's
+ * contract: losing one attempt stamp costs a repeated attempt, and must never
+ * abort a drain that may have already archived and summarized other rows.
+ *
+ * @returns Number of rows whose attempt stamp was advanced
+ */
+export async function recordProposalReasonAttempts(
+  deps: NoticeArchiveMaintenanceDeps,
+  noticeNums: Iterable<number>,
+  attemptedAt: Date,
+): Promise<number> {
+  const uniqueNums = Array.from(new Set(noticeNums)).filter(
+    (noticeNum) => Number.isInteger(noticeNum) && noticeNum > 0,
+  );
+
+  if (uniqueNums.length === 0) {
+    return 0;
+  }
+
+  let stampedCount = 0;
+
+  for (
+    let offset = 0;
+    offset < uniqueNums.length;
+    offset += PROPOSAL_REASON_ATTEMPT_STAMP_CHUNK_SIZE
+  ) {
+    const chunk = uniqueNums.slice(
+      offset,
+      offset + PROPOSAL_REASON_ATTEMPT_STAMP_CHUNK_SIZE,
+    );
+
+    const result = await deps.archiveRepository
+      .createQueryBuilder()
+      .update(NoticeArchive)
+      .set({
+        // Expression value: increments in the database, so two overlapping
+        // passages cannot overwrite each other's count with a stale read.
+        proposalReasonRetryCount: () => '"proposal_reason_retry_count" + 1',
+        proposalReasonRetriedAt: attemptedAt,
+      })
+      .where('"noticeNum" IN (:...noticeNums)', { noticeNums: chunk })
+      .execute();
+
+    stampedCount += result?.affected ?? 0;
+  }
+
+  return stampedCount;
 }
 
 export async function getRecentNoticesForCache(
@@ -341,6 +436,23 @@ export async function getSummaryStateByNoticeNums(
   );
 }
 
+/**
+ * Whether the persisted state already carries this exact verdict. Only
+ * `aiSummary` and `aiSummaryStatus` are compared because those are the columns
+ * the bulk upsert's conflict branch writes - `isDone` is insert-only there, so
+ * a state that differs only in `isDone` is not a change for this purpose.
+ */
+function isSameSummaryVerdict(
+  existing: ArchiveSummaryState | undefined,
+  candidate: { aiSummary: string | null; aiSummaryStatus: string },
+): boolean {
+  return (
+    existing !== undefined &&
+    (existing.aiSummary ?? null) === candidate.aiSummary &&
+    existing.aiSummaryStatus === candidate.aiSummaryStatus
+  );
+}
+
 export async function updateSummaryStateByNoticeNum(
   deps: NoticeArchiveMaintenanceDeps,
   noticeNum: number,
@@ -350,6 +462,19 @@ export async function updateSummaryStateByNoticeNum(
   const normalizedSummary = summary?.trim() ? summary : null;
 
   if (!deps.summaryStateRepository) {
+    return;
+  }
+
+  // A caller that re-derives the verdict a row already carries - the backfill's
+  // unrecoverable rows, a proposal retry that still finds no reason - must not
+  // rewrite the row: the write changes nothing but the row image and the WAL.
+  const currentStates = await getSummaryStateByNoticeNums(deps, [noticeNum]);
+  if (
+    isSameSummaryVerdict(currentStates.get(noticeNum), {
+      aiSummary: normalizedSummary,
+      aiSummaryStatus: status,
+    })
+  ) {
     return;
   }
 
@@ -384,6 +509,7 @@ export async function updateSummaryStateByNoticeNum(
 export async function updateSummaryStatesByNoticeNums(
   deps: NoticeArchiveMaintenanceDeps,
   updates: SummaryStateBulkUpdateInput[],
+  stats?: SummaryStateWriteStats,
 ): Promise<Set<number>> {
   if (!deps.summaryStateRepository || updates.length === 0) {
     return new Set();
@@ -401,12 +527,48 @@ export async function updateSummaryStatesByNoticeNums(
     aiSummaryStatus: update.status,
   }));
 
+  // The summary backfill re-derives the same verdict for every row it cannot
+  // summarize - `not_supported` with no reason anywhere - on every pass, which
+  // meant rewriting the same ~315 rows every 15 minutes to store what they
+  // already held. Rows whose persisted verdict already matches are dropped
+  // before the statement is built, so no row image and no WAL frame is
+  // produced for them.
+  //
+  // Consequence for operators: `updated_at` now marks the last verdict
+  // *change*, not the last pass. A pass's scope comes from its staged count and
+  // the apply log's `unchanged=` counter (see `SummaryStateWriteStats`).
+  const currentStates = await getSummaryStateByNoticeNums(
+    deps,
+    values.map((value) => value.noticeNum),
+  );
+  const pendingValues = values.filter(
+    (value) => !isSameSummaryVerdict(currentStates.get(value.noticeNum), value),
+  );
+
+  if (stats) {
+    stats.changed += pendingValues.length;
+    stats.skipped += values.length - pendingValues.length;
+    for (const value of pendingValues) {
+      stats.changedNoticeNums.add(value.noticeNum);
+    }
+  }
+
+  // Every requested verdict is already stored, so the caller's confirmed set is
+  // complete without touching the table.
+  if (pendingValues.length === 0) {
+    return new Set(values.map((value) => value.noticeNum));
+  }
+
+  const pendingNoticeNums = new Set(
+    pendingValues.map((value) => value.noticeNum),
+  );
+
   try {
     await deps.summaryStateRepository
       .createQueryBuilder()
       .insert()
       .into(NoticeArchiveSnapshotState)
-      .values(values)
+      .values(pendingValues)
       // Avoid entity-return mapping on SQLite upsert path where id may not be returned.
       .updateEntity(false)
       // Use physical DB column names for SQLite ON CONFLICT compatibility.
@@ -414,8 +576,9 @@ export async function updateSummaryStatesByNoticeNums(
       // `updated_at = DEFAULT` for the conflicting row on drivers outside the
       // SQLite family, so without this the backfill's bulk write left the
       // column at its insert-time value and a processed row was
-      // indistinguishable from an untouched one (`updated_at` is the only
-      // per-row record of when a summary was written).
+      // indistinguishable from an untouched one. It is only reached for the
+      // rows that do carry a new verdict, since unchanged ones were filtered
+      // out above.
       .orUpdate(
         ['ai_summary', 'ai_summary_status', 'updated_at'],
         ['notice_num'],
@@ -430,6 +593,11 @@ export async function updateSummaryStatesByNoticeNums(
 
     const persistedNoticeNums = new Set<number>();
     for (const update of deduped.values()) {
+      if (!pendingNoticeNums.has(update.noticeNum)) {
+        // Skipped above because the row already holds this verdict.
+        persistedNoticeNums.add(update.noticeNum);
+        continue;
+      }
       try {
         await updateSummaryStateByNoticeNum(
           deps,

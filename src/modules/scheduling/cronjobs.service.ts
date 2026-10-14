@@ -229,30 +229,32 @@ export class CronJobsService {
   }
 
   /**
-   * proposalReason backfill is browser-heavy and should not overlap with
-   * archive sync phases or active crawling background workloads.
+   * The NSM reason drain defers only on archive-sync write-heavy activity.
+   *
+   * It used to also require a fully idle crawl scheduler
+   * (`isSchedulerBusy({ includeBackground: true })`), which starved it
+   * completely: the same tick's summary half - guarded by archive-sync alone -
+   * ran on every one of 15 consecutive ticks while the drain ran on none, since
+   * crawl follow-up work kept the scheduler busy across every :09/:24/:39/:54
+   * window (`agent_memories/39-likms-reason-backfill-throughput/`). The browser
+   * contention that check stood for is now handled where the drain runs:
+   * `CrawlingSchedulerService.handleProposalReasonBackfillCron` waits (bounded)
+   * for a free browser lease and logs a visible deferral when it cannot get one.
+   * Archive-sync phases stay off limits here because they are write-heavy DB
+   * work, not browser work.
    */
-  private shouldSkipProposalReasonBackfillCron(taskName: string): boolean {
+  private shouldSkipNsmReasonDrainCron(taskName: string): boolean {
     const archiveState = this.archiveSyncService.getExecutionState();
     const runningWriteHeavy =
       archiveState.runningWriteHeavyPhases.length > 0
         ? archiveState.runningWriteHeavyPhases.join(', ')
         : 'none';
 
-    if (
-      this.shouldSkipCron(
-        taskName,
-        archiveState.isWriteHeavyPhaseRunning,
-        `archive sync write-heavy phase is currently running (runningWriteHeavyPhases=${runningWriteHeavy})`,
-      )
-    ) {
-      return true;
-    }
-
     return this.shouldSkipCron(
       taskName,
-      this.crawlingService.isSchedulerBusy({ includeBackground: true }),
-      'crawling scheduler is busy',
+      archiveState.isWriteHeavyPhaseRunning,
+      `archive sync write-heavy phase is currently running (runningWriteHeavyPhases=${runningWriteHeavy})`,
+      { visibleInProduction: true },
     );
   }
 
@@ -263,7 +265,7 @@ export class CronJobsService {
    * `runSummaryBackfill` writes single summary rows and calls Ollama; PAL
    * content is fetched over HTTP, so it opens no browser session and does not
    * contend with a crawl for the browser lease. Inheriting
-   * `shouldSkipProposalReasonBackfillCron` starved it in production: every
+   * `shouldSkipNsmReasonDrainCron` starved it in production: every
    * 15-minute tick landed on a crawl or bootstrap window, so this task's
    * `lastRunAt` stayed `null` for a whole container uptime and only the
    * start-up pass ever staged rows. Archive-sync phases and their apply drains
@@ -418,29 +420,37 @@ export class CronJobsService {
     timeZone: CRON_TIMEZONE,
   })
   async handleProposalReasonBackfillDrain(): Promise<void> {
-    // The NSM reason drain drives a browser session, so it keeps yielding to
-    // archive sync and to crawl workloads. The summary backfill only keeps the
-    // archive-sync half of that guard - see `shouldSkipSummaryBackfillCron`.
-    const skipNsmReasonDrain = this.shouldSkipProposalReasonBackfillCron(
+    // The NSM reason drain owns its own browser-window wait, so the cron only
+    // has to keep it off archive-sync write-heavy phases. The summary backfill
+    // keeps the archive-sync half of the old guard too - see
+    // `shouldSkipSummaryBackfillCron`.
+    const skipNsmReasonDrain = this.shouldSkipNsmReasonDrainCron(
       'proposalReason NSM reason drain',
     );
 
     // The tick is recorded even when both parts defer, so the status snapshot
     // shows the schedule is firing (the phase status reports the actual run).
     await this.execute('proposalReason backfill drain', async () => {
-      if (!skipNsmReasonDrain) {
-        await this.crawlingService.handleProposalReasonBackfillCron();
-      }
-
+      // The summary half runs first and never behind the drain: it needs no
+      // browser, while the drain may spend its whole wait budget (minutes) and a
+      // full batch before returning. Ordering them the other way would delay the
+      // summary pass past its own tick, which is the starvation this tick was
+      // just decoupled from (`shouldSkipSummaryBackfillCron`).
       if (
-        this.shouldSkipSummaryBackfillCron(
+        !this.shouldSkipSummaryBackfillCron(
           'summary backfill (proposalReason cron)',
         )
       ) {
+        await this.archiveSyncService.runSummaryBackfill(
+          'proposal-reason-cron',
+        );
+      }
+
+      if (skipNsmReasonDrain) {
         return;
       }
 
-      await this.archiveSyncService.runSummaryBackfill('proposal-reason-cron');
+      await this.crawlingService.handleProposalReasonBackfillCron();
     });
   }
 

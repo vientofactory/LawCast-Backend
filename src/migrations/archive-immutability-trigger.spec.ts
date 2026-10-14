@@ -252,4 +252,67 @@ describe('notice_archives immutability trigger', () => {
     expect(row.screenshot_capture_status).toBe('failed');
     expect(row.screenshot_capture_error).toBe('viewport exceeded limit');
   });
+
+  it('has proposalReason retry tracking columns defaulting to never attempted', async () => {
+    const columns = await dataSource.query(
+      `PRAGMA table_info("notice_archives")`,
+    );
+    const names = columns.map((c: any) => c.name);
+    expect(names).toContain('proposal_reason_retry_count');
+    expect(names).toContain('proposal_reason_retried_at');
+
+    await insertRow();
+
+    const [row] = await dataSource.query(
+      `SELECT "proposal_reason_retry_count", "proposal_reason_retried_at"
+         FROM "notice_archives" WHERE "noticeNum" = ?`,
+      [2203643],
+    );
+    expect(row.proposal_reason_retry_count).toBe(0);
+    expect(row.proposal_reason_retried_at).toBeNull();
+  });
+
+  it('allows advancing the proposalReason retry attempt stamp', async () => {
+    await insertRow();
+
+    // The retry cron stamps every bill it attempted, otherwise the candidate
+    // page keeps re-seeding the same head. Both columns are outside the
+    // unchanged-column list, like the list-sighting stamps.
+    await dataSource.query(
+      `UPDATE "notice_archives"
+         SET "proposal_reason_retry_count" = "proposal_reason_retry_count" + 1,
+             "proposal_reason_retried_at" = ?
+       WHERE "noticeNum" = ?`,
+      ['2026-10-15 00:00:00', 2203643],
+    );
+    await dataSource.query(
+      `UPDATE "notice_archives"
+         SET "proposal_reason_retry_count" = "proposal_reason_retry_count" + 1,
+             "proposal_reason_retried_at" = ?
+       WHERE "noticeNum" = ?`,
+      ['2026-10-15 06:00:00', 2203643],
+    );
+
+    const [row] = await dataSource.query(
+      `SELECT "proposal_reason_retry_count", "proposal_reason_retried_at"
+         FROM "notice_archives" WHERE "noticeNum" = ?`,
+      [2203643],
+    );
+    expect(row.proposal_reason_retry_count).toBe(2);
+    expect(row.proposal_reason_retried_at).toBe('2026-10-15 06:00:00');
+  });
+
+  it('still rejects a retry stamp bundled with mutating an immutable column', async () => {
+    await insertRow();
+
+    await expect(
+      dataSource.query(
+        `UPDATE "notice_archives"
+           SET "proposal_reason_retry_count" = "proposal_reason_retry_count" + 1,
+               "subject" = ?
+         WHERE "noticeNum" = ?`,
+        ['변조된 제목', 2203643],
+      ),
+    ).rejects.toThrow(/immutable after initial snapshot archive/);
+  });
 });

@@ -29,6 +29,7 @@ import { type SummaryBackfillResult } from '../archive-sync.service';
 import { delayMs } from '../../../utils/async-delay.utils';
 import { logAndBridge } from '../../../utils/bridge-log.utils';
 import { AI_SUMMARY_STATUS } from './ai-summary-status.utils';
+import { type SummaryStateWriteStats } from '../../notice/utils/notice-archive-maintenance-support';
 
 const ARCHIVE_SYNC_CONTEXT = 'ArchiveSyncService';
 const archiveSyncLogger = {
@@ -684,6 +685,10 @@ async function runSummaryBackfillApplyWorker(
         status: AISummaryStatus;
       }> = [];
       const batchCacheUpdatesByKey = new Map<string, CachedNotice>();
+      // Filled by the summary-state write so the batch log can separate the
+      // rows that got a new verdict from the ones re-derived to the same value
+      // (the write is skipped for those - see `updateSummaryStatesByNoticeNums`).
+      let batchWriteStats: SummaryStateWriteStats | undefined;
 
       try {
         await withChangeNotificationCollection(deps, async () => {
@@ -744,6 +749,7 @@ async function runSummaryBackfillApplyWorker(
                   summary: string | null;
                   status: AISummaryStatus;
                 }>,
+                stats?: SummaryStateWriteStats,
               ) => Promise<Set<number>>;
               updateSummaryStateByNoticeNum: (
                 noticeNum: number,
@@ -752,6 +758,11 @@ async function runSummaryBackfillApplyWorker(
               ) => Promise<void>;
             };
 
+            const bulkWriteStats: SummaryStateWriteStats = {
+              changed: 0,
+              skipped: 0,
+              changedNoticeNums: new Set<number>(),
+            };
             const persistedNoticeNums =
               svcCompat.updateSummaryStatesByNoticeNums
                 ? await svcCompat.updateSummaryStatesByNoticeNums(
@@ -760,8 +771,15 @@ async function runSummaryBackfillApplyWorker(
                       summary: update.summary,
                       status: update.status,
                     })),
+                    bulkWriteStats,
                   )
                 : new Set<number>();
+            // Only the bulk path reports the split: the degraded per-row
+            // fallback below has no skip counter to report, and claiming
+            // `unchanged` there would misstate what reached the table.
+            batchWriteStats = svcCompat.updateSummaryStatesByNoticeNums
+              ? bulkWriteStats
+              : undefined;
 
             if (!svcCompat.updateSummaryStatesByNoticeNums) {
               for (const update of summaryStateUpdates) {
@@ -775,11 +793,23 @@ async function runSummaryBackfillApplyWorker(
             }
 
             const batchCacheUpdates: CachedNotice[] = [];
+            const changedNoticeNums = batchWriteStats?.changedNoticeNums;
             for (const update of summaryStateUpdates) {
               if (!persistedNoticeNums.has(update.noticeNum)) {
                 continue;
               }
               succeededKeys.add(update.key);
+              // `updateCache` merges into the whole recent-notices list and
+              // writes it back, so a row whose stored verdict is already what
+              // the cache holds has nothing to contribute. Without this the
+              // steady state rewrote that list once per batch - every 15
+              // minutes - to store the values it already had.
+              if (
+                changedNoticeNums &&
+                !changedNoticeNums.has(update.noticeNum)
+              ) {
+                continue;
+              }
               const cacheUpdate = batchCacheUpdatesByKey.get(update.key);
               if (cacheUpdate) {
                 batchCacheUpdates.push(cacheUpdate);
@@ -808,7 +838,11 @@ async function runSummaryBackfillApplyWorker(
 
         LoggerUtils.log(
           'ArchiveSyncService',
-          `Summary backfill apply batch done: requested=${batch.length}, removed=${succeededKeys.size}, failed=${batchKeys.size - succeededKeys.size}, queueRemaining=${remainingQueue.length}`,
+          `Summary backfill apply batch done: requested=${batch.length}, removed=${succeededKeys.size}, failed=${batchKeys.size - succeededKeys.size}, ${
+            batchWriteStats
+              ? `rewritten=${batchWriteStats.changed}, unchanged=${batchWriteStats.skipped}`
+              : 'writeStats=degraded'
+          }, queueRemaining=${remainingQueue.length}`,
         );
 
         if (batchKeys.size > 0 && succeededKeys.size === 0) {

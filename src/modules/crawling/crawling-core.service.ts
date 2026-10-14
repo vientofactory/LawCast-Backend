@@ -237,6 +237,20 @@ export class CrawlingCoreService {
   }
 
   /**
+   * True while a browser session is open anywhere in the process.
+   *
+   * Exposes the lease manager's cheap counter so schedulers can decide whether
+   * to start browser work without paying for `getDebugState()`'s process scan.
+   * Every browser operation funnels through `runWithLease`, so this is the
+   * accurate contention signal for the shared browser resource — unlike
+   * "is any background task registered", which counts non-browser follow-up
+   * work (apply drains, integrity scans) and starves browser backfills.
+   */
+  isBrowserLeaseActive(): boolean {
+    return this.browserLeaseManager.hasActiveLease();
+  }
+
+  /**
    * Builds a pal-crawl client config carrying a real browser identity.
    *
    * One config is built per client, and pal-crawl keeps it for the client's

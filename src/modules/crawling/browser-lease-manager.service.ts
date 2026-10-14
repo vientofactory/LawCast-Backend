@@ -473,6 +473,16 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
     }
   }
 
+  /**
+   * Cheap contention probe: true while any lease is open, without the process
+   * scan `getDebugState()` performs. Callers that only need "is a browser
+   * session live right now" (background schedulers deciding whether to start
+   * browser work) must use this instead of the debug snapshot.
+   */
+  hasActiveLease(): boolean {
+    return this.activeLeases > 0;
+  }
+
   async waitForIdle(timeoutMs = 15_000, pollMs = 200): Promise<void> {
     const startedAt = Date.now();
 

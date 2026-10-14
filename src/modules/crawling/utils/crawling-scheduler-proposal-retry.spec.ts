@@ -154,4 +154,118 @@ describe('CrawlingSchedulerProposalRetry', () => {
     );
     expect(await retry.getQueueLength()).toBe(0);
   });
+
+  /**
+   * The candidate page is ordered by attempt history, so a drain that does not
+   * stamp what it tried leaves the next tick re-seeding the same rows - the
+   * production wedge where 20 unrecoverable bills were retried every 15 minutes
+   * and the 180 recoverable ones behind them were never reached
+   * (agent_memories/39-likms-reason-backfill-throughput/).
+   */
+  const buildRetryHarness = (options: {
+    proposalReasonByNum: Record<number, string | null>;
+    recordAttempts?: jest.Mock;
+  }) => {
+    let storedQueue: unknown = null;
+    const cacheService = {
+      getObject: jest.fn(async () => storedQueue),
+      setObject: jest.fn(async (_key: string, value: unknown) => {
+        storedQueue = value;
+        return true;
+      }),
+      // `setQueue([])` deletes the key instead of storing an empty array, so
+      // the double has to clear its stored copy the way Redis would.
+      deleteKey: jest.fn(async () => {
+        storedQueue = null;
+        return true;
+      }),
+      getRecentNotices: jest.fn(async () => []),
+      updateCache: jest.fn(async () => undefined),
+    };
+    const fetchAndUpdateProposalReason = jest.fn(
+      async (num: number) => options.proposalReasonByNum[num] ?? null,
+    );
+    const updateSummaryStateByNoticeNum = jest.fn(async () => undefined);
+    const summaryByNum: Record<number, string> = { 2220590: '요약' };
+    const retry = new CrawlingSchedulerProposalRetry({
+      cacheService: cacheService as any,
+      archiveOrchestratorService: {
+        fetchAndUpdateProposalReason,
+      } as any,
+      summaryGenerationService: {
+        generateSummaryForNotice: jest.fn(async (notice: { num: number }) => ({
+          aiSummary: summaryByNum[notice.num] ?? null,
+          aiSummaryStatus: 'ready',
+        })),
+        isAiSummaryEnabled: () => true,
+      } as any,
+      notificationOrchestratorService: {
+        sendNotifications: jest.fn(async () => undefined),
+      } as any,
+      noticeArchiveService: {
+        getNsmBillNumberByNoticeNums: jest.fn(
+          async () => new Map<number, string>(),
+        ),
+        getSourceDeletedNoticeNumSet: jest.fn(async () => new Set<number>()),
+        updateSummaryStateByNoticeNum,
+        ...(options.recordAttempts
+          ? { recordProposalReasonAttempts: options.recordAttempts }
+          : {}),
+      } as any,
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
+    });
+    const notice = (num: number) => ({
+      num,
+      subject: `의안 ${num}`,
+      proposerCategory: '의원',
+      committee: '산업통상부',
+      link: `https://example.com/${num}`,
+      contentId: `PRC_${num}`,
+      attachments: { pdfFile: null, hwpFile: null },
+      aiSummary: null,
+      aiSummaryStatus: 'not_requested' as const,
+    });
+
+    return { retry, notice, updateSummaryStateByNoticeNum };
+  };
+
+  it('stamps every attempted bill, including the ones whose reason could not be recovered', async () => {
+    const recordAttempts = jest.fn(async (nums: number[]) => nums.length);
+    const { retry, notice } = buildRetryHarness({
+      proposalReasonByNum: { 2220590: '복구된 제안이유', 2220591: null },
+      recordAttempts,
+    });
+
+    await retry.enqueue(notice(2220590), { billNo: '2220590' });
+    await retry.enqueue(notice(2220591), { billNo: '2220591' });
+    await retry.drain();
+
+    // The unrecoverable bill is dropped from the queue but still counts as an
+    // attempt: its stamp is what moves the next candidate page past it.
+    expect(recordAttempts).toHaveBeenCalledTimes(1);
+    expect(recordAttempts.mock.calls[0][0]).toEqual([2220590, 2220591]);
+    expect(await retry.getQueueLength()).toBe(0);
+  });
+
+  it('keeps the drain result when the attempt stamp cannot be written', async () => {
+    const recordAttempts = jest.fn(async () => {
+      throw new Error('database is locked');
+    });
+    const { retry, notice, updateSummaryStateByNoticeNum } = buildRetryHarness({
+      proposalReasonByNum: { 2220590: '복구된 제안이유' },
+      recordAttempts,
+    });
+
+    await retry.enqueue(notice(2220590), { billNo: '2220590' });
+
+    await expect(retry.drain()).resolves.toBeUndefined();
+
+    // Losing a stamp costs one repeated attempt; it must never discard the
+    // reason and summary this pass already produced.
+    expect(updateSummaryStateByNoticeNum).toHaveBeenCalledWith(
+      2220590,
+      '요약',
+      'ready',
+    );
+  });
 });

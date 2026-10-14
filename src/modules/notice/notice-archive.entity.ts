@@ -212,6 +212,37 @@ export class NoticeArchive {
   })
   nsmListAbsenceProbedAt: Date | null;
 
+  /**
+   * How many times the proposalReason retry cron has attempted to recover this
+   * row's reason (`제안이유`) from the bill sources.
+   *
+   * The retry candidate query used to be a plain `noticeNum ASC` page with no
+   * memory of earlier attempts, so the lowest-numbered rows were re-seeded on
+   * every tick: for rows whose reason exists in no source at all (`사직의건`,
+   * `결의안`) each attempt resolved to nothing and the drain dropped them
+   * again, starving every later candidate forever. Ordering by this count puts
+   * never-attempted rows first, so a newly arrived candidate is served before a
+   * row that has already failed.
+   */
+  @Column({
+    type: 'integer',
+    name: 'proposal_reason_retry_count',
+    default: 0,
+  })
+  proposalReasonRetryCount: number;
+
+  /**
+   * When the proposalReason retry cron last attempted this row. Breaks ties
+   * between rows carrying the same attempt count (oldest attempt first), which
+   * turns the candidate pool into a rotation instead of a fixed head.
+   */
+  @Column({
+    type: 'datetime',
+    name: 'proposal_reason_retried_at',
+    nullable: true,
+  })
+  proposalReasonRetriedAt: Date | null;
+
   @Column({ type: 'blob', name: 'screenshot_blob', nullable: true })
   screenshotBlob: Buffer | null;
 

@@ -239,65 +239,78 @@ export class CrawlingSchedulerProposalRetry {
       noticeWithSummary: CachedNotice;
     }> = [];
 
-    for (let idx = 0; idx < queue.length; idx++) {
-      const item = queue[idx];
+    // Every item this loop reaches was attempted, whether the fetch produced a
+    // reason or not. The stamps are written in a `finally` so an aborted drain
+    // still leaves the progress it made visible to the next candidate page.
+    const attemptedNoticeNums = new Set<number>();
 
-      if (idx > 0) {
-        await delayMs(APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS);
-      }
+    try {
+      for (let idx = 0; idx < queue.length; idx++) {
+        const item = queue[idx];
 
-      const proposalReason =
-        await this.options.archiveOrchestratorService.fetchAndUpdateProposalReason(
-          item.notice.num,
-          item.billNo,
-          item.notice.contentId,
-        );
+        if (idx > 0) {
+          await delayMs(APP_CONSTANTS.ARCHIVE_SYNC.NSM_CRAWLER_DELAY_MS);
+        }
 
-      if (!proposalReason) {
-        // Empty proposalReason cannot be recovered by retry-only queueing.
-        // Drop the item immediately to avoid repeated useless retries.
-        queue.splice(idx, 1);
-        queueDirty = true;
-        this.options.logger.debugDev?.(
-          `proposalReason retry: empty proposalReason for bill ${item.billNo} - dropping from retry queue`,
-        );
-        idx--;
-        continue;
-      }
+        attemptedNoticeNums.add(item.notice.num);
 
-      const enriched: CachedNotice = { ...item.notice, proposalReason };
-
-      let noticeWithSummary: CachedNotice;
-      try {
-        const summaryResult =
-          await this.options.summaryGenerationService.generateSummaryForNotice(
-            enriched,
+        const proposalReason =
+          await this.options.archiveOrchestratorService.fetchAndUpdateProposalReason(
+            item.notice.num,
+            item.billNo,
+            item.notice.contentId,
           );
-        const normalizedStatus = normalizeAttemptedSummaryStatus(
-          summaryResult.aiSummaryStatus,
-          this.options.summaryGenerationService.isAiSummaryEnabled(),
-        );
 
-        noticeWithSummary = {
-          ...enriched,
-          aiSummary: summaryResult.aiSummary,
-          aiSummaryStatus: normalizedStatus,
-        };
-      } catch (error) {
-        this.options.logger.warn(
-          `proposalReason retry: summary generation failed for bill ${item.billNo}: ${(error as Error).message}`,
-        );
-        noticeWithSummary = {
-          ...enriched,
-          aiSummary: null,
-          aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
-        };
+        if (!proposalReason) {
+          // Empty proposalReason cannot be recovered by retry-only queueing.
+          // Drop the item immediately to avoid repeated useless retries. The
+          // attempt stamp above is what keeps it from coming back as the
+          // candidate page's head on the next tick.
+          queue.splice(idx, 1);
+          queueDirty = true;
+          this.options.logger.debugDev?.(
+            `proposalReason retry: empty proposalReason for bill ${item.billNo} - dropping from retry queue`,
+          );
+          idx--;
+          continue;
+        }
+
+        const enriched: CachedNotice = { ...item.notice, proposalReason };
+
+        let noticeWithSummary: CachedNotice;
+        try {
+          const summaryResult =
+            await this.options.summaryGenerationService.generateSummaryForNotice(
+              enriched,
+            );
+          const normalizedStatus = normalizeAttemptedSummaryStatus(
+            summaryResult.aiSummaryStatus,
+            this.options.summaryGenerationService.isAiSummaryEnabled(),
+          );
+
+          noticeWithSummary = {
+            ...enriched,
+            aiSummary: summaryResult.aiSummary,
+            aiSummaryStatus: normalizedStatus,
+          };
+        } catch (error) {
+          this.options.logger.warn(
+            `proposalReason retry: summary generation failed for bill ${item.billNo}: ${(error as Error).message}`,
+          );
+          noticeWithSummary = {
+            ...enriched,
+            aiSummary: null,
+            aiSummaryStatus: AI_SUMMARY_STATUS.UNAVAILABLE,
+          };
+        }
+
+        resolvedCandidates.push({
+          item,
+          noticeWithSummary,
+        });
       }
-
-      resolvedCandidates.push({
-        item,
-        noticeWithSummary,
-      });
+    } finally {
+      await this.recordAttempts(attemptedNoticeNums);
     }
 
     if (resolvedCandidates.length > 0) {
@@ -447,6 +460,50 @@ export class CrawlingSchedulerProposalRetry {
         pending: queue.length,
       },
     });
+  }
+
+  /**
+   * Stamps the attempt count and timestamp of every notice this drain reached.
+   *
+   * The candidate page is ordered by this history, so an unstamped attempt is
+   * invisible to it: the same rows would be re-seeded on the next tick, which is
+   * exactly the production wedge where 20 unrecoverable rows were retried every
+   * 15 minutes and the recoverable rows behind them were never reached
+   * (agent_memories/39-likms-reason-backfill-throughput/).
+   *
+   * Failures are logged and swallowed on purpose: a lost stamp costs one
+   * repeated attempt, while throwing here would discard a drain that already
+   * archived reasons and generated summaries for other rows. The caller that
+   * owns the queue does not depend on the stamp to release items.
+   */
+  private async recordAttempts(noticeNums: Set<number>): Promise<void> {
+    if (noticeNums.size === 0) {
+      return;
+    }
+
+    const svcCompat = this.options.noticeArchiveService as {
+      recordProposalReasonAttempts?: (
+        noticeNums: number[],
+        attemptedAt?: Date,
+      ) => Promise<number>;
+    };
+
+    if (!svcCompat.recordProposalReasonAttempts) {
+      return;
+    }
+
+    try {
+      const stamped = await svcCompat.recordProposalReasonAttempts(
+        Array.from(noticeNums),
+      );
+      this.options.logger.log(
+        `proposalReason retry: recorded ${stamped} attempt(s) for candidate rotation`,
+      );
+    } catch (error) {
+      this.options.logger.warn(
+        `proposalReason retry: failed to record retry attempts for ${noticeNums.size} bill(s): ${(error as Error).message}`,
+      );
+    }
   }
 
   private normalizeBillNo(value: string | null | undefined): string | null {

@@ -200,6 +200,8 @@ describe('NoticeArchiveService', () => {
       sourceDeletedAt: null,
       nsmLastSeenInListAt: null,
       nsmListAbsenceProbedAt: null,
+      proposalReasonRetryCount: 0,
+      proposalReasonRetriedAt: null,
       archiveStartedAt: new Date('2026-04-17T00:00:02.000Z'),
       screenshotBlob: null,
       screenshotFormat: null,
@@ -1220,6 +1222,108 @@ describe('NoticeArchiveService', () => {
         [],
       );
     });
+
+    it('offers contentId rows to the not_supported recovery scan', async () => {
+      const stateRows = [3101, 3102].map((noticeNum) =>
+        buildStateRow(noticeNum),
+      );
+      const summaryStateRepository =
+        createPagingSummaryStateRepository(stateRows);
+      const archivedRows = [
+        // PAL-origin row whose reason only ever arrived in a later revision:
+        // the snapshot column is empty and the chain holds the text. Excluding
+        // it from the scan left it `not_supported` forever.
+        buildRow({
+          noticeNum: 3101,
+          contentId: 'PRC_RECOVERY_3101',
+          proposalReason: '',
+          aiSummaryStatus: 'not_supported',
+        }),
+        buildRow({
+          noticeNum: 3102,
+          contentId: null,
+          proposalReason: '',
+          aiSummaryStatus: 'not_supported',
+        }),
+      ];
+      const repoMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
+          .mockResolvedValue(archivedRows),
+      };
+      const service = new NoticeArchiveService(
+        repoMock as any,
+        summaryStateRepository as any,
+        createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+      const page = await service.getNotSupportedSummaryRecoveryPage(0, 5);
+
+      // The pre-fix scan dropped 3101 for having a contentId, so only the NSM
+      // row came back.
+      expect(page.map((row) => row.num)).toEqual([3101, 3102]);
+    });
+  });
+
+  describe('summary state write stats', () => {
+    const buildService = (
+      summaryStateRepository: ReturnType<
+        typeof createSummaryStateRepositoryMock
+      >,
+    ) =>
+      new NoticeArchiveService(
+        createRepositoryMock() as any,
+        summaryStateRepository as any,
+        createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+    it('forwards the write stats and still confirms a row the write skipped', async () => {
+      const summaryStateRepository = createSummaryStateRepositoryMock();
+      // The stored verdict already matches what the caller produced, so the
+      // bulk statement must not be built at all - the mock deliberately has no
+      // `createQueryBuilder`, so reaching it would throw.
+      summaryStateRepository.find.mockResolvedValue([
+        {
+          noticeNum: 3001,
+          aiSummary: '이미 저장된 요약',
+          aiSummaryStatus: 'ready',
+        },
+      ]);
+      const stats = {
+        changed: 0,
+        skipped: 0,
+        changedNoticeNums: new Set<number>(),
+      };
+
+      const persisted = await buildService(
+        summaryStateRepository,
+      ).updateSummaryStatesByNoticeNums(
+        [
+          {
+            noticeNum: 3001,
+            summary: '이미 저장된 요약',
+            status: 'ready',
+          },
+        ],
+        stats,
+      );
+
+      // The apply worker drops queue keys for the returned numbers, so a
+      // skipped row has to come back as persisted or the pass re-wedges.
+      expect(Array.from(persisted)).toEqual([3001]);
+      expect(stats).toEqual({
+        changed: 0,
+        skipped: 1,
+        changedNoticeNums: new Set<number>(),
+      });
+    });
   });
 
   describe('change notification collection bridge', () => {
@@ -1855,6 +1959,7 @@ describe('NoticeArchiveService', () => {
         where: jest.fn().mockReturnThis(),
         andWhere: jest.fn().mockReturnThis(),
         orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
         limit: jest.fn().mockReturnThis(),
         getRawMany: jest.fn().mockImplementation(async () => [
           {
@@ -1911,6 +2016,21 @@ describe('NoticeArchiveService', () => {
         lifecycleStatusFieldPath: 'lifecycleStatus',
         sourceDeletedLifecycle: 'source_deleted',
       });
+
+      // Page order is attempt history, not notice number: a row that keeps
+      // failing falls behind the rows that have been tried less often, so the
+      // candidate cursor cannot pin on an unrecoverable head.
+      expect(qb.orderBy).toHaveBeenCalledWith(
+        'na.proposalReasonRetryCount',
+        'ASC',
+      );
+      expect(qb.addOrderBy).toHaveBeenNthCalledWith(
+        1,
+        'na.proposalReasonRetriedAt',
+        'ASC',
+      );
+      expect(qb.addOrderBy).toHaveBeenNthCalledWith(2, 'na.noticeNum', 'ASC');
+
       expect(result).toHaveLength(1);
       expect(result[0]).toMatchObject({
         billNo: '2219775',

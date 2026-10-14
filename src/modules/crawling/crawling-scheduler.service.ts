@@ -201,8 +201,68 @@ export class CrawlingSchedulerService implements OnModuleInit {
   }
 
   /**
+   * Names the work that currently owns the browser, or an empty list when the
+   * drain may start.
+   */
+  private collectProposalReasonDrainBlockers(): string[] {
+    const blockers: string[] = [];
+
+    if (this.isProcessing) {
+      blockers.push('pal crawl');
+    }
+
+    if (this.isPendingProcessing) {
+      blockers.push('pending crawl');
+    }
+
+    if (this.crawlingCoreService.isBrowserLeaseActive()) {
+      blockers.push('browser lease');
+    }
+
+    return blockers;
+  }
+
+  /**
+   * Waits (bounded) for a browser window, returning the blockers that were
+   * still holding it when the budget ran out - or an empty list when the drain
+   * may proceed.
+   */
+  private async waitForProposalReasonDrainWindow(): Promise<{
+    blockers: string[];
+    waitedMs: number;
+  }> {
+    const {
+      PROPOSAL_REASON_DRAIN_WAIT_MS,
+      PROPOSAL_REASON_DRAIN_WAIT_POLL_MS,
+    } = APP_CONSTANTS.ARCHIVE_SYNC;
+    // Floor keeps a misconfigured interval from turning the probe into a spin;
+    // a probe is two boolean reads, so even the floor is cheap.
+    const pollMs = Math.max(250, PROPOSAL_REASON_DRAIN_WAIT_POLL_MS);
+    const startedAt = Date.now();
+    const deadline = startedAt + Math.max(0, PROPOSAL_REASON_DRAIN_WAIT_MS);
+
+    for (;;) {
+      const blockers = this.collectProposalReasonDrainBlockers();
+      if (blockers.length === 0 || Date.now() >= deadline) {
+        return { blockers, waitedMs: Date.now() - startedAt };
+      }
+
+      await delayMs(Math.min(pollMs, deadline - Date.now()));
+    }
+  }
+
+  /**
    * Drains the proposalReason retry queue from a dedicated cron trigger.
    * Keeps immutable snapshot policy by relying on append-only repair path.
+   *
+   * The tick no longer yields to *any* registered scheduler work: it waits
+   * (bounded) for the browser the drain actually shares, and gives up visibly
+   * when it cannot get one. The previous "skip while the scheduler has any
+   * background task" contract cost the whole backfill:
+   * `agent_memories/39-likms-reason-backfill-throughput/` measured 0 drains on
+   * 15 consecutive ticks, while the summary half of the same tick - guarded only
+   * by archive-sync - ran on all 15, because background follow-ups kept the
+   * scheduler busy across every :09/:24/:39/:54 window.
    */
   async handleProposalReasonBackfillCron(): Promise<void> {
     if (!this.isInitialized) {
@@ -210,6 +270,34 @@ export class CrawlingSchedulerService implements OnModuleInit {
         'Cache not initialized yet, skipping proposalReason retry drain',
       );
       return;
+    }
+
+    const window = await this.waitForProposalReasonDrainWindow();
+
+    if (window.blockers.length > 0) {
+      // A tick that does no work must say so at production level: the silent
+      // version of this skip is what hid a frozen backlog for hours.
+      logAndBridge({
+        logger: this.logger,
+        method: 'warn',
+        message:
+          `proposalReason retry cron: deferred this tick - ` +
+          `${window.blockers.join(', ')} held the browser for ${window.waitedMs}ms`,
+        context: CrawlingSchedulerService.name,
+        discordBridge: this.discordBridge,
+        bridgeLevel: BridgeLogLevel.DEBUG,
+        metadata: {
+          blockers: window.blockers,
+          waitedMs: window.waitedMs,
+        },
+      });
+      return;
+    }
+
+    if (window.waitedMs > 0) {
+      this.logger.log(
+        `proposalReason retry cron: browser freed after ${window.waitedMs}ms, draining now`,
+      );
     }
 
     const limit = APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_BATCH_SIZE;
