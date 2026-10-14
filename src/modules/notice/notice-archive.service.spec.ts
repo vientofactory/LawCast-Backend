@@ -3483,6 +3483,36 @@ describe('NoticeArchiveService', () => {
       expect(result).toEqual(new Map());
       expect(repositoryMock.find).not.toHaveBeenCalled();
     });
+
+    it('overlays the diffchain head value when the snapshot column is null', async () => {
+      // Production replay: NSM recovery writes proposalDate to the change
+      // event only, so the column stays null while the chain head holds
+      // `2026-09-16`.
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest.fn(async () => [
+          { noticeNum: 2221393, contentProposalDate: null },
+        ]),
+      };
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getLatestFieldValuesForFields.mockResolvedValue(
+        new Map([[2221393, new Map([['proposalDate', '2026-09-16']])]]),
+      );
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        createSummaryStateRepositoryMock() as any,
+        changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+      const result = await service.getContentProposalDateByNoticeNums([
+        2221393,
+      ]);
+
+      expect(result).toEqual(new Map([[2221393, '2026-09-16']]));
+    });
   });
 
   describe('snapshot artifact one-time fill', () => {

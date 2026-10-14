@@ -4451,11 +4451,16 @@ export class NoticeArchiveService {
   }
 
   /**
-   * Returns a map of noticeNum -> stored proposal date (`contentProposalDate`)
-   * for rows that have one. Used by the proposalReason retry notification
-   * gate to tell long-proposed bills apart from genuinely new ones: a bill
-   * the archive discovered only yesterday can still have been proposed
-   * months ago, in which case a recovery ping is noise.
+   * Returns a map of noticeNum -> proposal date for rows that have one.
+   * Used by the proposalReason retry notification gate to tell long-proposed
+   * bills apart from genuinely new ones: a bill the archive discovered only
+   * yesterday can still have been proposed months ago, in which case a
+   * recovery ping is noise.
+   *
+   * The snapshot column comes first, with diffchain head values overlaid on
+   * top: NSM recovery (`updateNsmHtmlAndDetail`) records proposalDate in the
+   * change event only and never touches the archive row, so reading the
+   * column alone goes blind exactly on the bills the gate targets.
    */
   async getContentProposalDateByNoticeNums(
     noticeNums: number[],
@@ -4475,6 +4480,18 @@ export class NoticeArchiveService {
       const proposalDate = row.contentProposalDate?.trim();
       if (proposalDate) {
         map.set(row.noticeNum, proposalDate);
+      }
+    }
+
+    const latestByNoticeNum =
+      await this.changeTrackingService.getLatestFieldValuesForFields(
+        uniqueNums,
+        ['proposalDate'],
+      );
+    for (const [noticeNum, fields] of latestByNoticeNum) {
+      const proposalDate = fields.get('proposalDate')?.trim();
+      if (proposalDate) {
+        map.set(noticeNum, proposalDate);
       }
     }
 
