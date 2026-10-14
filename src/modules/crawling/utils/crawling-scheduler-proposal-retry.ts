@@ -18,6 +18,7 @@ import {
 const {
   NSM_REASON_RETRY_MAX_ATTEMPTS,
   NSM_REASON_RETRY_MAX_AGE_MS,
+  PROPOSAL_REASON_RECOVERY_NOTIFY_MAX_AGE_MS,
   PROPOSAL_REASON_RETRY_QUEUE,
 } = APP_CONSTANTS.ARCHIVE_SYNC;
 
@@ -70,15 +71,19 @@ export class CrawlingSchedulerProposalRetry {
       this.options.logger.warn(
         `proposalReason retry: queue at capacity (${queue.length}) - sending fallback notification for bill ${notice.num}`,
       );
-      void this.options.notificationOrchestratorService
-        .sendNotifications([
-          {
-            ...notice,
-            aiSummary: null,
-            aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
-          },
-        ])
-        .catch(() => undefined);
+      const fallbackNotice = {
+        ...notice,
+        aiSummary: null,
+        aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
+      };
+      const notifiable = await this.filterNotifiableByArchiveAge([
+        fallbackNotice,
+      ]);
+      if (notifiable.length > 0) {
+        void this.options.notificationOrchestratorService
+          .sendNotifications(notifiable)
+          .catch(() => undefined);
+      }
       return;
     }
 
@@ -211,15 +216,18 @@ export class CrawlingSchedulerProposalRetry {
         bridgeMessage: `proposalReason retry: evicting **${evicted.length}** bill(s) - sending notification without summary`,
         metadata: { nums: evicted.map((item) => item.notice.num) },
       });
-      void this.options.notificationOrchestratorService
-        .sendNotifications(
-          evicted.map((item) => ({
-            ...item.notice,
-            aiSummary: null,
-            aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
-          })),
-        )
-        .catch(() => undefined);
+      const evictedNotices = evicted.map((item) => ({
+        ...item.notice,
+        aiSummary: null,
+        aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
+      }));
+      const notifiableEvicted =
+        await this.filterNotifiableByArchiveAge(evictedNotices);
+      if (notifiableEvicted.length > 0) {
+        void this.options.notificationOrchestratorService
+          .sendNotifications(notifiableEvicted)
+          .catch(() => undefined);
+      }
     }
 
     if (queue.length === 0) {
@@ -439,27 +447,90 @@ export class CrawlingSchedulerProposalRetry {
       );
     }
 
-    void this.options.notificationOrchestratorService
-      .sendNotifications(resolved)
-      .catch((error) => {
-        this.options.logger.error(
-          `Notification dispatch after proposalReason retry failed: ${(error as Error).message}`,
-        );
-      });
+    const notifiableResolved =
+      await this.filterNotifiableByArchiveAge(resolved);
+    if (notifiableResolved.length > 0) {
+      void this.options.notificationOrchestratorService
+        .sendNotifications(notifiableResolved)
+        .catch((error) => {
+          this.options.logger.error(
+            `Notification dispatch after proposalReason retry failed: ${(error as Error).message}`,
+          );
+        });
+    }
 
     logAndBridge({
       logger: this.options.logger,
       method: 'log',
-      message: `proposalReason retry: ${resolved.length} resolved, ${queue.length} still pending`,
+      message: `proposalReason retry: ${resolved.length} resolved, ${notifiableResolved.length} notified, ${queue.length} still pending`,
       context: 'CrawlingSchedulerService',
       discordBridge: this.options.discordBridge,
       bridgeLevel: BridgeLogLevel.LOG,
-      bridgeMessage: `proposalReason retry: **${resolved.length}** resolved, **${queue.length}** still pending`,
+      bridgeMessage: `proposalReason retry: **${resolved.length}** resolved, **${notifiableResolved.length}** notified, **${queue.length}** still pending`,
       metadata: {
         resolved: resolved.length,
+        notified: notifiableResolved.length,
         pending: queue.length,
       },
     });
+  }
+
+  /**
+   * Keeps only notices archived recently enough to still deserve a "new"
+   * alert.
+   *
+   * Bills are already notified when first archived (with or without a
+   * reason), so a recovery ping is always a second alert for the same bill.
+   * That duplicate is still useful while the bill is fresh, but a bill
+   * archived past `PROPOSAL_REASON_RECOVERY_NOTIFY_MAX_AGE_MS` is long past
+   * its notice period and the ping only reads as spam. Filtered-out bills
+   * still update the cache and the archive - they just stay silent.
+   *
+   * Unknown archive ages fail open: a lookup miss must never silence a
+   * genuinely new bill.
+   */
+  private async filterNotifiableByArchiveAge(
+    notices: CachedNotice[],
+  ): Promise<CachedNotice[]> {
+    if (notices.length === 0) {
+      return [];
+    }
+
+    let startedAt: Map<number, Date>;
+    try {
+      startedAt =
+        await this.options.noticeArchiveService.getArchiveStartedAtByNoticeNums(
+          notices.map((notice) => notice.num),
+        );
+    } catch (error) {
+      this.options.logger.warn(
+        `proposalReason retry: archive-age lookup failed, notifying ${notices.length} recovered bill(s) anyway: ${(error as Error).message}`,
+      );
+      return notices;
+    }
+
+    const now = Date.now();
+    const staleNums: number[] = [];
+    const fresh = notices.filter((notice) => {
+      const startedMs = startedAt.get(notice.num)?.getTime();
+      if (
+        startedMs === undefined ||
+        Number.isNaN(startedMs) ||
+        now - startedMs <= PROPOSAL_REASON_RECOVERY_NOTIFY_MAX_AGE_MS
+      ) {
+        return true;
+      }
+      staleNums.push(notice.num);
+      return false;
+    });
+
+    if (staleNums.length > 0) {
+      this.options.logger.log(
+        `proposalReason retry: skipping regular notification for ${staleNums.length} stale recovered bill(s): ${staleNums.join(', ')}`,
+      );
+    }
+
+    return fresh;
   }
 
   /**

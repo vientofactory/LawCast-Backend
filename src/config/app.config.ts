@@ -393,6 +393,21 @@ export const APP_CONSTANTS = {
     /** Max age (ms) for items in the proposalReason retry queue before they are evicted. */
     NSM_REASON_RETRY_MAX_AGE_MS: 24 * 60 * 60 * 1000,
     /**
+     * Max archive age (ms) for a proposalReason-recovery bill to still trigger
+     * a regular notification.
+     *
+     * Bills are already notified when first archived (with or without a
+     * reason), so a recovery ping is always a second alert for the same bill.
+     * That duplicate is still useful while the bill is fresh, but a
+     * months-old bill recovered by the backfill is long past its notice
+     * period and only reads as spam. Older recoveries still update the cache
+     * and the archive - they just stay silent.
+     */
+    PROPOSAL_REASON_RECOVERY_NOTIFY_MAX_AGE_MS: parseIntWithDefault(
+      process.env.PROPOSAL_REASON_RECOVERY_NOTIFY_MAX_AGE_MS,
+      7 * 24 * 60 * 60 * 1000,
+    ),
+    /**
      * Max list-absence candidates probed per source-deletion reconciliation
      * pass. The candidate set is "every active NSM archive row the list scan did
      * not return", which is small when the list covers the same population as
