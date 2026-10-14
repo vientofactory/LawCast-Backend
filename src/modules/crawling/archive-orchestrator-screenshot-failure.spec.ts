@@ -161,7 +161,10 @@ describe('ArchiveOrchestratorService inline screenshot failures (real persistenc
   });
 
   it('persists failed status + classified reason when PAL capture throws', async () => {
-    const notice = makeNotice(1001);
+    // A current-Assembly number: the screenshot pools start at
+    // `BACKFILL_MIN_NOTICE_NUM`, so a legacy-range fixture would fall outside
+    // the retry set for a reason unrelated to this test.
+    const notice = makeNotice(2201001);
     mockFetchHtmlPage.mockResolvedValue(makeHtmlResponse(notice.link));
     crawlingCoreService.captureContentScreenshot.mockRejectedValue(
       new Error('Failed to launch browser: no available lease'),
@@ -183,7 +186,7 @@ describe('ArchiveOrchestratorService inline screenshot failures (real persistenc
     // The raw capture error must reach an operator, not just the DB row.
     expect(loggerWarnSpy).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Inline screenshot capture failed for notice 1001',
+        'Inline screenshot capture failed for notice 2201001',
       ),
     );
     expect(loggerWarnSpy).toHaveBeenCalledWith(
@@ -196,7 +199,7 @@ describe('ArchiveOrchestratorService inline screenshot failures (real persistenc
   });
 
   it('persists failed status + size_limit reason when PAL capture returns null', async () => {
-    const notice = makeNotice(1002);
+    const notice = makeNotice(2201002);
     mockFetchHtmlPage.mockResolvedValue(makeHtmlResponse(notice.link));
     crawlingCoreService.captureContentScreenshot.mockResolvedValue(null);
 
@@ -210,13 +213,13 @@ describe('ArchiveOrchestratorService inline screenshot failures (real persistenc
     expect(row.screenshotCaptureError).toContain('size_limit');
     expect(loggerWarnSpy).toHaveBeenCalledWith(
       expect.stringContaining(
-        'Inline screenshot capture failed for notice 1002',
+        'Inline screenshot capture failed for notice 2201002',
       ),
     );
   });
 
   it('stores the blob and leaves the row out of the retry set on success', async () => {
-    const notice = makeNotice(1003);
+    const notice = makeNotice(2201003);
     mockFetchHtmlPage.mockResolvedValue(makeHtmlResponse(notice.link));
     crawlingCoreService.captureContentScreenshot.mockResolvedValue(
       Buffer.from('jpeg-bytes'),
@@ -236,7 +239,7 @@ describe('ArchiveOrchestratorService inline screenshot failures (real persistenc
   });
 
   it('does not overwrite the stored blob when an existing row is re-archived', async () => {
-    const notice = makeNotice(1005);
+    const notice = makeNotice(2201005);
     mockFetchHtmlPage.mockResolvedValue(makeHtmlResponse(notice.link));
     crawlingCoreService.captureContentScreenshot.mockResolvedValue(
       Buffer.from('first-jpeg'),
@@ -281,13 +284,13 @@ describe('ArchiveOrchestratorService inline screenshot failures (real persistenc
   });
 
   it('records the failure for a real browser-lease-layer error', async () => {
-    const notice = makeNotice(1004);
+    const notice = makeNotice(2201004);
     mockFetchHtmlPage.mockResolvedValue(makeHtmlResponse(notice.link));
     // Exact message thrown by BrowserLeaseManagerService.runWithLease when a
     // lease cannot be granted because the manager is shutting down.
     crawlingCoreService.captureContentScreenshot.mockRejectedValue(
       new Error(
-        'captureContentScreenshot(content-1004, fullPage=true): browser lease manager is shutting down',
+        'captureContentScreenshot(content-2201004, fullPage=true): browser lease manager is shutting down',
       ),
     );
 

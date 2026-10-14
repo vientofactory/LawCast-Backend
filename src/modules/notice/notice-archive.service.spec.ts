@@ -3917,6 +3917,35 @@ describe('NoticeArchiveService', () => {
       }
     });
 
+    it('starts both halves at the current Assembly', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([]),
+      };
+
+      await buildService(repositoryMock).getNoticesWithMissingSnapshotArtifacts(
+        10,
+      );
+
+      // An earlier Assembly's bills hold snapshots no live source can serve
+      // again, so a re-capture attempt on them can only fail and log.
+      const floors = repositoryMock.find.mock.calls.map(
+        (call) =>
+          (call[0] as { where: { noticeNum: FindOperator<number> } }).where
+            .noticeNum,
+      );
+      expect(floors).toHaveLength(2);
+      for (const floor of floors) {
+        expect(floor.type).toBe('moreThanOrEqual');
+        expect(floor.value).toBe(
+          APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
+        );
+      }
+    });
+
     it('drops PAL rows without a usable assembly link', async () => {
       const repositoryMock = {
         ...createRepositoryMock(),
@@ -3989,6 +4018,47 @@ describe('NoticeArchiveService', () => {
 
       expect(result).toEqual({ pal: [], nsm: [] });
       expect(repositoryMock.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('screenshot backfill pools', () => {
+    const buildService = (repositoryMock: any) =>
+      new NoticeArchiveService(
+        repositoryMock as any,
+        createSummaryStateRepositoryMock() as any,
+        createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+    it('starts the PAL and list-source screenshot scans at the current Assembly', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([]),
+      };
+      const service = buildService(repositoryMock);
+
+      await service.getNoticesWithMissingScreenshots(50);
+      await service.getNoticesWithMissingNsmScreenshots(50);
+
+      // Neither pool may offer bills from an earlier Assembly: their sources
+      // publish no page, so every capture can only fail and log.
+      const floors = repositoryMock.find.mock.calls.map(
+        (call) =>
+          (call[0] as { where: { noticeNum: FindOperator<number> } }).where
+            .noticeNum,
+      );
+      expect(floors).toHaveLength(2);
+      for (const floor of floors) {
+        expect(floor.type).toBe('moreThanOrEqual');
+        expect(floor.value).toBe(
+          APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
+        );
+      }
     });
   });
 

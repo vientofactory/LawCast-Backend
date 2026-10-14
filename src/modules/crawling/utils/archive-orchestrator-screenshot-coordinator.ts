@@ -9,8 +9,8 @@ import { delayMs } from '../../../utils/async-delay.utils';
 import { logAndBridge } from '../../../utils/bridge-log.utils';
 import { mapConcurrently } from '../../../utils/concurrency.utils';
 import {
-  isNsmCrawlerEnabled,
   isPalCrawlerEnabled,
+  isSnapshotSourceCaptureEnabled,
 } from '../../../utils/crawler-activation.utils';
 import {
   ScreenshotFailureReason,
@@ -89,8 +89,10 @@ export class ArchiveOrchestratorScreenshotCoordinator {
       ]);
 
       // A disabled crawler must not have its snapshot screenshots backfilled.
+      // The list-source half is gated by its own source (see
+      // `isSnapshotSourceCaptureEnabled`), not by the NSM portal flag.
       const palTargets = isPalCrawlerEnabled() ? missing : [];
-      const nsmTargets = isNsmCrawlerEnabled() ? nsmMissing : [];
+      const nsmTargets = isSnapshotSourceCaptureEnabled() ? nsmMissing : [];
 
       if (palTargets.length === 0 && nsmTargets.length === 0) {
         LoggerUtils.debugDev(
@@ -260,7 +262,14 @@ export class ArchiveOrchestratorScreenshotCoordinator {
     forceNsmSpacing = false,
   ): Promise<ScreenshotQueueItem | null> {
     // Drop queued captures for a disabled source instead of opening a browser.
-    if (notice.nsmBillNo ? !isNsmCrawlerEnabled() : !isPalCrawlerEnabled()) {
+    // List-source bills (`nsmBillNo`) follow their own source: with
+    // `CRAWLING_NSM_SOURCE=likms` the screenshot is taken from the likms page
+    // the snapshot came from, so the NSM portal's enable flag has no say here.
+    if (
+      notice.nsmBillNo
+        ? !isSnapshotSourceCaptureEnabled()
+        : !isPalCrawlerEnabled()
+    ) {
       return null;
     }
 

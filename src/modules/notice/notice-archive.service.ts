@@ -3213,6 +3213,12 @@ export class NoticeArchiveService {
    * Returns up to `limit` archived notices that have a contentId but no
    * screenshot yet, ordered oldest-first so early notices are backfilled first.
    * Used by the bootstrap screenshot-backfill pipeline.
+   *
+   * Starts at the current Assembly (`BACKFILL_MIN_NOTICE_NUM`): bills from
+   * earlier Assemblies are historical rows no source publishes a page for, so
+   * a screenshot attempt on them can only fail and log. They are also the
+   * lowest notice numbers, which put them at the head of every oldest-first
+   * page. See the constant for the production numbers.
    */
   async getNoticesWithMissingScreenshots(
     limit: number,
@@ -3220,6 +3226,9 @@ export class NoticeArchiveService {
     const rows = await this.archiveRepository.find({
       select: { noticeNum: true, contentId: true },
       where: {
+        noticeNum: MoreThanOrEqual(
+          APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
+        ),
         screenshotBlob: IsNull(),
         contentId: Not(IsNull()),
         lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
@@ -3271,6 +3280,10 @@ export class NoticeArchiveService {
    * Returns up to `limit` NsmLmSts-sourced archived bills (contentId=null)
    * that are missing a screenshot, ordered oldest-first.
    * Used by the bootstrap screenshot-backfill pipeline.
+   *
+   * Same Assembly floor as {@link getNoticesWithMissingScreenshots}: older
+   * Assemblies have no capturable page, so they only consume captures and
+   * produce failure logs.
    */
   async getNoticesWithMissingNsmScreenshots(
     limit: number,
@@ -3278,6 +3291,9 @@ export class NoticeArchiveService {
     const rows = await this.archiveRepository.find({
       select: { noticeNum: true },
       where: {
+        noticeNum: MoreThanOrEqual(
+          APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
+        ),
         screenshotBlob: IsNull(),
         contentId: IsNull(),
         lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
@@ -3475,7 +3491,9 @@ export class NoticeArchiveService {
    * `nsm` = contentId IS NULL).
    *
    * Newest-first: recent notices are still listed on the source site, so they
-   * are the ones a re-capture can actually repair.
+   * are the ones a re-capture can actually repair. The scan also starts at the
+   * current Assembly (`BACKFILL_MIN_NOTICE_NUM`): an earlier Assembly's rows
+   * hold a snapshot no live source can serve again.
    */
   async getNoticesWithMissingSnapshotArtifacts(limit: number): Promise<{
     pal: Array<{ num: number; assemblyLink: string }>;
@@ -3489,6 +3507,9 @@ export class NoticeArchiveService {
       this.archiveRepository.find({
         select: { noticeNum: true, assemblyLink: true },
         where: {
+          noticeNum: MoreThanOrEqual(
+            APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
+          ),
           sourceHtml: IsNull(),
           contentId: Not(IsNull()),
           lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
@@ -3499,6 +3520,9 @@ export class NoticeArchiveService {
       this.archiveRepository.find({
         select: { noticeNum: true },
         where: {
+          noticeNum: MoreThanOrEqual(
+            APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
+          ),
           sourceHtml: IsNull(),
           contentId: IsNull(),
           lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
