@@ -22,6 +22,33 @@ const {
   PROPOSAL_REASON_RETRY_QUEUE,
 } = APP_CONSTANTS.ARCHIVE_SYNC;
 
+/**
+ * Parses the heterogeneous proposal-date strings stored in the archive
+ * (`contentProposalDate`: ISO `2026-01-16` as well as dotted `2026. 6. 10.`)
+ * into a UTC-midnight timestamp. Returns null when the value is missing or
+ * not recognizably a calendar date, so the caller fails open instead of
+ * muting a bill over an unparsable string.
+ */
+function parseArchivedProposalDate(
+  value: string | null | undefined,
+): number | null {
+  const normalized = value
+    ?.trim()
+    .replace(/\./g, '-')
+    .replace(/\s+/g, '')
+    .replace(/-+$/, '');
+  const match = normalized?.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!match) {
+    return null;
+  }
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return null;
+  }
+  return Date.UTC(Number(match[1]), month - 1, day);
+}
+
 interface ProposalReasonRetryItem {
   notice: CachedNotice;
   billNo: string;
@@ -76,7 +103,7 @@ export class CrawlingSchedulerProposalRetry {
         aiSummary: null,
         aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
       };
-      const notifiable = await this.filterNotifiableByArchiveAge([
+      const notifiable = await this.filterNotifiableRecoveries([
         fallbackNotice,
       ]);
       if (notifiable.length > 0) {
@@ -222,7 +249,7 @@ export class CrawlingSchedulerProposalRetry {
         aiSummaryStatus: AI_SUMMARY_STATUS.NOT_SUPPORTED,
       }));
       const notifiableEvicted =
-        await this.filterNotifiableByArchiveAge(evictedNotices);
+        await this.filterNotifiableRecoveries(evictedNotices);
       if (notifiableEvicted.length > 0) {
         void this.options.notificationOrchestratorService
           .sendNotifications(notifiableEvicted)
@@ -447,8 +474,7 @@ export class CrawlingSchedulerProposalRetry {
       );
     }
 
-    const notifiableResolved =
-      await this.filterNotifiableByArchiveAge(resolved);
+    const notifiableResolved = await this.filterNotifiableRecoveries(resolved);
     if (notifiableResolved.length > 0) {
       void this.options.notificationOrchestratorService
         .sendNotifications(notifiableResolved)
@@ -476,35 +502,40 @@ export class CrawlingSchedulerProposalRetry {
   }
 
   /**
-   * Keeps only notices archived recently enough to still deserve a "new"
-   * alert.
+   * Keeps only recoveries fresh enough to still deserve a "new" alert.
    *
    * Bills are already notified when first archived (with or without a
    * reason), so a recovery ping is always a second alert for the same bill.
-   * That duplicate is still useful while the bill is fresh, but a bill
-   * archived past `PROPOSAL_REASON_RECOVERY_NOTIFY_MAX_AGE_MS` is long past
-   * its notice period and the ping only reads as spam. Filtered-out bills
-   * still update the cache and the archive - they just stay silent.
+   * That duplicate is still useful while the bill is fresh, but a bill past
+   * `PROPOSAL_REASON_RECOVERY_NOTIFY_MAX_AGE_MS` on either clock is long
+   * past its notice period and the ping only reads as spam. Two clocks are
+   * needed because the archive can discover an old bill only yesterday: a
+   * months-old proposal archived hours ago is still stale. Filtered-out
+   * bills still update the cache and the archive - they just stay silent.
    *
-   * Unknown archive ages fail open: a lookup miss must never silence a
-   * genuinely new bill.
+   * Unknown ages fail open: a lookup miss must never silence a genuinely
+   * new bill.
    */
-  private async filterNotifiableByArchiveAge(
+  private async filterNotifiableRecoveries(
     notices: CachedNotice[],
   ): Promise<CachedNotice[]> {
     if (notices.length === 0) {
       return [];
     }
 
+    const nums = notices.map((notice) => notice.num);
     let startedAt: Map<number, Date>;
+    let proposalDateByNum: Map<number, string>;
     try {
-      startedAt =
-        await this.options.noticeArchiveService.getArchiveStartedAtByNoticeNums(
-          notices.map((notice) => notice.num),
-        );
+      [startedAt, proposalDateByNum] = await Promise.all([
+        this.options.noticeArchiveService.getArchiveStartedAtByNoticeNums(nums),
+        this.options.noticeArchiveService.getContentProposalDateByNoticeNums(
+          nums,
+        ),
+      ]);
     } catch (error) {
       this.options.logger.warn(
-        `proposalReason retry: archive-age lookup failed, notifying ${notices.length} recovered bill(s) anyway: ${(error as Error).message}`,
+        `proposalReason retry: recovery-age lookup failed, notifying ${notices.length} recovered bill(s) anyway: ${(error as Error).message}`,
       );
       return notices;
     }
@@ -513,11 +544,17 @@ export class CrawlingSchedulerProposalRetry {
     const staleNums: number[] = [];
     const fresh = notices.filter((notice) => {
       const startedMs = startedAt.get(notice.num)?.getTime();
-      if (
-        startedMs === undefined ||
-        Number.isNaN(startedMs) ||
-        now - startedMs <= PROPOSAL_REASON_RECOVERY_NOTIFY_MAX_AGE_MS
-      ) {
+      const archiveStale =
+        startedMs !== undefined &&
+        !Number.isNaN(startedMs) &&
+        now - startedMs > PROPOSAL_REASON_RECOVERY_NOTIFY_MAX_AGE_MS;
+      const proposedMs = parseArchivedProposalDate(
+        proposalDateByNum.get(notice.num),
+      );
+      const proposalStale =
+        proposedMs !== null &&
+        now - proposedMs > PROPOSAL_REASON_RECOVERY_NOTIFY_MAX_AGE_MS;
+      if (!archiveStale && !proposalStale) {
         return true;
       }
       staleNums.push(notice.num);
