@@ -417,6 +417,27 @@ export const APP_CONSTANTS = {
       MAX_SIZE: 5000,
       TTL_SECONDS: Math.ceil((24 * 60 * 60 * 1000) / 1000) * 2,
     },
+    /**
+     * How long the 15-minute `proposalReason` drain tick waits for a free
+     * browser window before deferring.
+     *
+     * The drain is browser work, so it must not start on top of an open browser
+     * lease or a crawl fast path that is about to take one. Waiting is the right
+     * answer instead of dropping the tick: the drain is a backfill with no
+     * deadline, while a skipped tick costs everything the backlog would have
+     * progressed. Bounded at a third of the tick interval so a tick that never
+     * gets a window still ends well before the next one fires (the next tick
+     * joins this run through the drain's own re-run join when it is still going).
+     */
+    PROPOSAL_REASON_DRAIN_WAIT_MS: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_PROPOSAL_REASON_DRAIN_WAIT_MS,
+      300_000,
+    ),
+    /** Poll interval (ms) while waiting for a free browser window. */
+    PROPOSAL_REASON_DRAIN_WAIT_POLL_MS: parseIntWithDefault(
+      process.env.ARCHIVE_SYNC_PROPOSAL_REASON_DRAIN_WAIT_POLL_MS,
+      10_000,
+    ),
     HTML_BACKFILL_RESULT_ZERO: {
       pal: { processed: 0, failed: 0 },
       nsm: { processed: 0, failed: 0 },

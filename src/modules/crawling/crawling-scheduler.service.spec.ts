@@ -82,6 +82,8 @@ describe('CrawlingSchedulerService', () => {
             crawlAllPages: jest.fn(),
             getAllNsmPages: jest.fn(),
             getAllNsmPendingPages: jest.fn(),
+            // Drives the proposalReason drain's browser-window wait.
+            isBrowserLeaseActive: jest.fn().mockReturnValue(false),
           },
         },
         {
@@ -113,6 +115,14 @@ describe('CrawlingSchedulerService', () => {
             getExistingNoticeNumSet: jest.fn(),
             getArchivedNullContentIdNums: jest.fn(),
             markSourceDeletedByMissingNsmNums: jest.fn().mockResolvedValue(0),
+            getProposalReasonRetryCandidates: jest.fn().mockResolvedValue([]),
+            getSourceDeletedNoticeNumSet: jest
+              .fn()
+              .mockResolvedValue(new Set()),
+            getNsmBillNumberByNoticeNums: jest
+              .fn()
+              .mockResolvedValue(new Map()),
+            recordProposalReasonAttempts: jest.fn().mockResolvedValue(0),
           },
         },
       ],
@@ -1116,6 +1126,130 @@ describe('CrawlingSchedulerService', () => {
         jest.useRealTimers();
         errorSpy.mockRestore();
       }
+    });
+  });
+
+  describe('proposalReason retry drain tick', () => {
+    const drainWaitConfig = APP_CONSTANTS.ARCHIVE_SYNC as {
+      PROPOSAL_REASON_DRAIN_WAIT_MS: number;
+      PROPOSAL_REASON_DRAIN_WAIT_POLL_MS: number;
+    };
+    const originalWaitMs = drainWaitConfig.PROPOSAL_REASON_DRAIN_WAIT_MS;
+    const originalPollMs = drainWaitConfig.PROPOSAL_REASON_DRAIN_WAIT_POLL_MS;
+    let logSpy: jest.SpyInstance;
+    let warnSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      (service as any).isInitialized = true;
+      // Each test states the browser state it needs: a `mockReturnValue` from a
+      // previous test would otherwise survive `clearAllMocks`.
+      (
+        crawlingCoreService.isBrowserLeaseActive as unknown as jest.Mock
+      ).mockReturnValue(false);
+      // The wait loop reads its budget per call, so a test shrinks it to two
+      // poll intervals instead of stubbing the helper it exists to exercise.
+      // The loop below is the production one; only the numbers get smaller.
+      drainWaitConfig.PROPOSAL_REASON_DRAIN_WAIT_POLL_MS = 250;
+      drainWaitConfig.PROPOSAL_REASON_DRAIN_WAIT_MS = 600;
+      logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
+      warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      drainWaitConfig.PROPOSAL_REASON_DRAIN_WAIT_MS = originalWaitMs;
+      drainWaitConfig.PROPOSAL_REASON_DRAIN_WAIT_POLL_MS = originalPollMs;
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    const isBrowserLeaseActive = () =>
+      crawlingCoreService.isBrowserLeaseActive as unknown as jest.Mock;
+
+    const loggedMessages = (spy: jest.SpyInstance): string[] =>
+      spy.mock.calls.map(([message]) => String(message));
+
+    it('waits out a busy browser lease instead of dropping the tick', async () => {
+      isBrowserLeaseActive()
+        .mockReturnValueOnce(true)
+        .mockReturnValueOnce(true);
+
+      await service.handleProposalReasonBackfillCron();
+
+      // The tick survived the busy window: the candidate page was seeded, and
+      // the deferral path was never taken. Dropping the tick here is exactly
+      // what froze the production backlog for 15 consecutive ticks.
+      expect(
+        noticeArchiveService.getProposalReasonRetryCandidates,
+      ).toHaveBeenCalledTimes(1);
+      expect(loggedMessages(warnSpy)).not.toContainEqual(
+        expect.stringContaining('deferred this tick'),
+      );
+      expect(loggedMessages(logSpy)).toContainEqual(
+        expect.stringMatching(/browser freed after \d+ms, draining now/),
+      );
+    });
+
+    it('re-checks the browser across the budget instead of giving up on the first probe', async () => {
+      isBrowserLeaseActive().mockReturnValue(true);
+
+      await service.handleProposalReasonBackfillCron();
+
+      // More than one probe is the difference between waiting and the silent
+      // instant skip this method replaced.
+      expect(isBrowserLeaseActive().mock.calls.length).toBeGreaterThanOrEqual(
+        2,
+      );
+      expect(
+        noticeArchiveService.getProposalReasonRetryCandidates,
+      ).not.toHaveBeenCalled();
+      expect(loggedMessages(warnSpy)).toContainEqual(
+        expect.stringMatching(
+          /proposalReason retry cron: deferred this tick - browser lease held the browser for \d+ms/,
+        ),
+      );
+    });
+
+    it('names the crawl fast path as the blocker when a crawl owns the browser', async () => {
+      (service as any).isProcessing = true;
+
+      try {
+        await service.handleProposalReasonBackfillCron();
+
+        expect(loggedMessages(warnSpy)).toContainEqual(
+          expect.stringContaining(
+            'deferred this tick - pal crawl held the browser',
+          ),
+        );
+        expect(
+          noticeArchiveService.getProposalReasonRetryCandidates,
+        ).not.toHaveBeenCalled();
+      } finally {
+        (service as any).isProcessing = false;
+      }
+    });
+
+    it('starts immediately when nothing holds the browser', async () => {
+      await service.handleProposalReasonBackfillCron();
+
+      expect(loggedMessages(logSpy)).not.toContainEqual(
+        expect.stringContaining('browser freed after'),
+      );
+      expect(loggedMessages(logSpy)).toContainEqual(
+        expect.stringMatching(/proposalReason retry cron: queue before=\d+/),
+      );
+    });
+
+    it('does not wait for a browser before the cache is initialized', async () => {
+      (service as any).isInitialized = false;
+
+      await service.handleProposalReasonBackfillCron();
+
+      expect(isBrowserLeaseActive()).not.toHaveBeenCalled();
+      expect(
+        noticeArchiveService.getProposalReasonRetryCandidates,
+      ).not.toHaveBeenCalled();
     });
   });
 });

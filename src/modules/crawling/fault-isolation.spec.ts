@@ -1188,6 +1188,94 @@ describe('[Fault Isolation] ArchiveSyncService', () => {
     expect(firstGenIndex).toBeGreaterThan(lastFetchIndex);
   });
 
+  /**
+   * Queues one summary-backfill apply task. The phase drains a pre-existing
+   * queue synchronously before it stages, so the assertions after it are
+   * deterministic.
+   */
+  const queueSummaryApplyTask = async (): Promise<void> => {
+    await cacheService.setObject(
+      APP_CONSTANTS.ARCHIVE_SYNC.SUMMARY_BACKFILL_APPLY_QUEUE_KEY,
+      [
+        {
+          key: 'recovery:31',
+          phase: 'summary-backfill',
+          notice: {
+            ...makeCachedNotice(31),
+            aiSummary: '이전 요약',
+            aiSummaryStatus: 'ready',
+          },
+        },
+      ],
+      APP_CONSTANTS.ARCHIVE_SYNC.ASYNC_APPLY_QUEUE_TTL_SECONDS,
+    );
+    noticeArchiveService.getPendingSummaryPageByOffset = jest
+      .fn()
+      .mockResolvedValue([]);
+    noticeArchiveService.getNotSupportedSummaryRecoveryPage = jest
+      .fn()
+      .mockResolvedValue([]);
+    noticeArchiveService.getUnavailableSummaryPage.mockResolvedValue([]);
+    (cacheService.updateCache as jest.Mock).mockClear();
+  };
+
+  it('summary backfill leaves the cache alone when the write changed no verdict', async () => {
+    await queueSummaryApplyTask();
+    summaryGenerationService.generateSummaryForNotice.mockResolvedValue({
+      aiSummary: '이전 요약',
+      aiSummaryStatus: 'ready',
+    });
+    // The re-derived verdict equals the stored one, so the summary-state write
+    // skips the row - and `updateCache` rewrites the whole recent-notices list,
+    // so it must not run either. The double reports the split like the real
+    // write does; `stats` stays optional so the same double works against a
+    // call shape that does not report one.
+    (noticeArchiveService as any).updateSummaryStatesByNoticeNums = jest.fn(
+      async (updates: Array<{ noticeNum: number }>, stats?: any) => {
+        if (stats) {
+          stats.skipped += updates.length;
+        }
+        return new Set(updates.map((update) => update.noticeNum));
+      },
+    );
+
+    await executeSummaryBackfillPhase(
+      (service as any).getExecutorDeps(),
+      (service as any).executorOptions,
+    );
+
+    expect(cacheService.updateCache).not.toHaveBeenCalled();
+  });
+
+  it('summary backfill refreshes the cache for the row whose verdict changed', async () => {
+    await queueSummaryApplyTask();
+    summaryGenerationService.generateSummaryForNotice.mockResolvedValue({
+      aiSummary: '갱신 요약',
+      aiSummaryStatus: 'ready',
+    });
+    (noticeArchiveService as any).updateSummaryStatesByNoticeNums = jest.fn(
+      async (updates: Array<{ noticeNum: number }>, stats?: any) => {
+        if (stats) {
+          stats.changed += updates.length;
+          for (const update of updates) {
+            stats.changedNoticeNums.add(update.noticeNum);
+          }
+        }
+        return new Set(updates.map((update) => update.noticeNum));
+      },
+    );
+
+    await executeSummaryBackfillPhase(
+      (service as any).getExecutorDeps(),
+      (service as any).executorOptions,
+    );
+
+    expect(cacheService.updateCache).toHaveBeenCalledTimes(1);
+    expect(cacheService.updateCache).toHaveBeenCalledWith([
+      expect.objectContaining({ num: 31, aiSummary: '갱신 요약' }),
+    ]);
+  });
+
   it('full-sync partial apply does not immediately replay each item as single-item archive call', async () => {
     crawlingCoreService.getAllPages.mockImplementation(() =>
       makePageGenerator([makeSearchResult([1])]),

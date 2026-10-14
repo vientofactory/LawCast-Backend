@@ -30,6 +30,7 @@ import { AddDiscussionCommentDeletedBy1757289602000 } from './202609080002-add-d
 import { AddDiscussionThreadLock1757289603000 } from './202609080003-add-discussion-thread-lock.migration';
 import { AddScreenshotCaptureStatus1758096001000 } from './202609170001-add-screenshot-capture-status.migration';
 import { AddNsmListAbsenceTracking1760400001000 } from './202610140001-add-nsm-list-absence-tracking.migration';
+import { AddProposalReasonRetryTracking1760486401000 } from './202610150001-add-proposal-reason-retry-tracking.migration';
 
 export const migrations: (new () => MigrationInterface)[] = [
   InitialSchemaMigration1744953900000,
@@ -63,4 +64,5 @@ export const migrations: (new () => MigrationInterface)[] = [
   AddDiscussionThreadLock1757289603000,
   AddScreenshotCaptureStatus1758096001000,
   AddNsmListAbsenceTracking1760400001000,
+  AddProposalReasonRetryTracking1760486401000,
 ];

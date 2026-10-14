@@ -50,10 +50,12 @@ import {
   getProposalReasonRetryCandidates,
   getRecentNoticesForCache,
   getSummaryStateByNoticeNums,
+  recordProposalReasonAttempts,
   runIntegrityScan,
   updateSummaryStateByNoticeNum,
   updateSummaryStatesByNoticeNums,
   type SummaryStateBulkUpdateInput,
+  type SummaryStateWriteStats,
 } from './utils/notice-archive-maintenance-support';
 import { ChangeTrackingService } from '../change-tracking/change-tracking.service';
 import {
@@ -1665,9 +1667,12 @@ export class NoticeArchiveService {
    * `'not_requested'`, ordered by `noticeNum` ascending.
    *
    * When there is no pending row, this also pulls a recovery page from
-   * `'not_supported'` for NSM rows (`contentId IS NULL`) so legacy rows that
-   * were prematurely marked not_supported can re-enter the backfill pipeline
-   * once proposalReason becomes available via change-chain repair.
+   * `'not_supported'` so legacy rows that were prematurely marked not_supported
+   * can re-enter the backfill pipeline once proposalReason becomes available
+   * via change-chain repair. `contentId`-bearing rows are included: the
+   * generator resolves their reason through the live payload, a reason the
+   * caller already resolved, or the chain head, so excluding them here only
+   * made rows whose reason arrived in a later revision unrecoverable.
    *
    * Intended for a **drain loop** - callers should always pass `skip=0`
    * because processed rows transition away from `'not_requested'` and
@@ -1688,7 +1693,6 @@ export class NoticeArchiveService {
       AI_SUMMARY_STATUS.NOT_SUPPORTED,
       0,
       take,
-      (row) => !row.contentId,
     );
   }
 
@@ -1713,8 +1717,17 @@ export class NoticeArchiveService {
   }
 
   /**
-   * Returns one page of NSM recovery candidates (`not_supported` + contentId IS NULL)
-   * for offset-based staging scans.
+   * Returns one page of `not_supported` recovery candidates for offset-based
+   * staging scans, regardless of `contentId`.
+   *
+   * This scan used to skip `contentId`-bearing rows, on the assumption that a
+   * row with a PAL content id would always resolve its reason from the live
+   * payload. That is not true for rows whose `proposalReason` arrived in a
+   * later revision: the archived snapshot column is empty and the live payload
+   * still has no reason, while the chain carries the text. Keeping them out of
+   * the scan left them `not_supported` forever. The generator now resolves a
+   * `contentId` row through the live payload, a caller-resolved reason, or the
+   * chain head, so the recovery scan offers them.
    *
    * Callers advance `skip` by the batch size. The cursor runs over the
    * summary-state rows, so rows whose archive turned `source_deleted`
@@ -1730,7 +1743,6 @@ export class NoticeArchiveService {
       AI_SUMMARY_STATUS.NOT_SUPPORTED,
       skip,
       take,
-      (row) => !row.contentId,
     );
   }
 
@@ -1778,7 +1790,6 @@ export class NoticeArchiveService {
     status: AISummaryStatus,
     skip: number,
     take: number,
-    rawRowFilter?: (row: CachedNotice) => boolean,
   ): Promise<CachedNotice[]> {
     const pageSize = Math.max(take, 1);
     const candidates: CachedNotice[] = [];
@@ -1791,16 +1802,10 @@ export class NoticeArchiveService {
         pageSize,
       );
 
-      if (page.cursorCount > 0) {
-        const filteredRows = rawRowFilter
-          ? page.rows.filter(rawRowFilter)
-          : page.rows;
-
-        if (filteredRows.length > 0) {
-          candidates.push(
-            ...(await this.resolveSummaryBackfillCandidates(filteredRows)),
-          );
-        }
+      if (page.rows.length > 0) {
+        candidates.push(
+          ...(await this.resolveSummaryBackfillCandidates(page.rows)),
+        );
       }
 
       if (candidates.length >= pageSize || page.cursorCount < pageSize) {
@@ -4451,6 +4456,27 @@ export class NoticeArchiveService {
   }
 
   /**
+   * Records which notices the proposalReason retry actually attempted, so the
+   * next candidate page moves past them instead of re-seeding the same head
+   * forever. See {@link getProposalReasonRetryCandidates} for the ordering the
+   * stamps drive, and
+   * `agent_memories/39-likms-reason-backfill-throughput/` for the production
+   * wedge this closes.
+   *
+   * @returns Number of rows whose attempt stamp advanced
+   */
+  async recordProposalReasonAttempts(
+    noticeNums: Iterable<number>,
+    attemptedAt: Date = new Date(),
+  ): Promise<number> {
+    return recordProposalReasonAttempts(
+      this.getMaintenanceDeps(),
+      noticeNums,
+      attemptedAt,
+    );
+  }
+
+  /**
    * Upgrades previously-pending archive records (contentId=NULL) with the
    * pal.assembly.go.kr contentId, updated assembly link, and committee once
    * those bills appear in the \uc785\ubc95\uc608\uace0 system.
@@ -4558,7 +4584,12 @@ export class NoticeArchiveService {
 
   async updateSummaryStatesByNoticeNums(
     updates: SummaryStateBulkUpdateInput[],
+    stats?: SummaryStateWriteStats,
   ): Promise<Set<number>> {
-    return updateSummaryStatesByNoticeNums(this.getMaintenanceDeps(), updates);
+    return updateSummaryStatesByNoticeNums(
+      this.getMaintenanceDeps(),
+      updates,
+      stats,
+    );
   }
 }

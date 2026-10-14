@@ -791,6 +791,77 @@ describe('Diffchain API (e2e)', () => {
     expect(secondPage.map((row) => row.num)).toEqual([9106, 9107]);
   });
 
+  it('recovers a contentId row whose reason arrived in a later revision', async () => {
+    const noticeArchiveService = moduleRef.get(NoticeArchiveService);
+
+    // PAL-origin row: archived with a contentId and an empty snapshot reason,
+    // marked `not_supported` back when no source carried the text. The repair
+    // appends it to the chain afterwards, so the chain is the only place it
+    // lives - exactly the case the recovery scan used to skip for having a
+    // contentId.
+    await noticeArchiveService.upsertNoticeArchive(
+      {
+        num: 9401,
+        subject: '의안 9401 요약 복구 대상',
+        proposerCategory: '의원',
+        committee: '정무위원회',
+        link: 'https://example.test/notices/9401',
+        contentId: 'likms-9401',
+        attachments: { pdfFile: '', hwpFile: '' },
+      },
+      { proposalReason: '' },
+    );
+    await noticeArchiveService.appendLikmsProposalReasonRepair(
+      9401,
+      '나중 리비전에 도착한 제안이유',
+    );
+    // Marked `not_supported` while no source held the text - the state a pass
+    // left behind before the reason landed in the chain.
+    await noticeArchiveService.updateSummaryStateByNoticeNum(
+      9401,
+      null,
+      'not_supported',
+    );
+
+    // A wide page: earlier cases in this file leave `not_supported` rows with
+    // lower notice numbers, and a page stops once it is full.
+    const page = await noticeArchiveService.getNotSupportedSummaryRecoveryPage(
+      0,
+      50,
+    );
+    const candidate = page.find((row) => row.num === 9401);
+
+    // Pre-fix the contentId filter kept this row out of the scan entirely.
+    expect(candidate).toBeDefined();
+
+    const summarizeProposal = jest.fn().mockResolvedValue('복구된 요약');
+    const summaryGenerationService = new SummaryGenerationService(
+      {
+        isEnabled: () => true,
+        summarizeProposal,
+      } as unknown as OllamaClientService,
+      {
+        getContent: jest
+          .fn()
+          .mockResolvedValue({ title: 'LIKMS 9401 상세', proposalReason: '' }),
+      } as unknown as CrawlingCoreService,
+      noticeArchiveService,
+    );
+
+    const result = await summaryGenerationService.generateSummaryForNotice(
+      candidate!,
+    );
+
+    expect(result).toEqual({
+      aiSummary: '복구된 요약',
+      aiSummaryStatus: 'ready',
+    });
+    expect(summarizeProposal).toHaveBeenCalledWith(
+      'LIKMS 9401 상세',
+      '나중 리비전에 도착한 제안이유',
+    );
+  });
+
   it('summarizes a contentId row from the chain head when the live payload has no reason', async () => {
     const noticeArchiveService = moduleRef.get(NoticeArchiveService);
 
