@@ -2597,6 +2597,92 @@ describe('NoticeArchiveService', () => {
       });
     });
 
+    // The PAL HTML fallback selectors only describe the PAL notice page. Its
+    // `<td>` positions hold unrelated text on the NSM/LIKMS portal pages that
+    // LIKMS-sourced rows archive, so the fallback must not parse them.
+    const likmsDetailHtml =
+      '<html><body><table><tbody><tr>' +
+      '<td>2221897</td><td>강승규의원 등 29인</td><td>2026-10-14</td>' +
+      '<td>제안회기 제22대(2024~2028)제439회</td><td>문서</td>' +
+      '</tr></tbody></table></body></html>';
+
+    const buildDetailResponse = async (params: {
+      httpMetadataJson: string;
+      sourceHtml: string;
+    }): Promise<any> => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        findOne: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(
+          buildRow({
+            noticeNum: 2220591,
+            contentId: null,
+            committee: '',
+            proposalReason: '',
+            integrityVerifiedAt: new Date('2026-04-17T00:00:03.000Z'),
+            integrityCheckPassed: true,
+            httpMetadataJson: params.httpMetadataJson,
+            sourceHtml: params.sourceHtml,
+          }),
+        ),
+        query: jest
+          .fn<(...args: any[]) => Promise<any>>()
+          .mockResolvedValue([{ sourceHtmlSize: 512, hasScreenshot: 0 }]),
+      };
+      const service = new NoticeArchiveService(
+        repositoryMock as any,
+        createSummaryStateRepositoryMock() as any,
+        createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+      const detail = await service.getArchivedNoticeDetail(2220591);
+      return detail;
+    };
+
+    it('does not read detail fields out of a non-PAL archived page', async () => {
+      const detail = await buildDetailResponse({
+        httpMetadataJson: JSON.stringify({
+          requestUrl:
+            'https://likms.assembly.go.kr/bill/bi/billDetailPage.do?billId=PRC_X',
+          responseUrl:
+            'https://likms.assembly.go.kr/bill/bi/billDetailPage.do?billId=PRC_X&currMenuNo=2600044',
+        }),
+        sourceHtml: likmsDetailHtml,
+      });
+
+      expect(detail.originalContent).toMatchObject({
+        billNumber: null,
+        proposer: null,
+        proposalDate: null,
+        committee: null,
+        referralDate: null,
+      });
+    });
+
+    it('still reads detail fields out of a PAL archived page', async () => {
+      const palHtml = likmsDetailHtml.replace(
+        '<td>제안회기 제22대(2024~2028)제439회</td><td>문서</td>',
+        '<td>보건복지위원회</td><td>2026-10-15</td>',
+      );
+      const detail = await buildDetailResponse({
+        httpMetadataJson: JSON.stringify({
+          requestUrl:
+            'https://pal.assembly.go.kr/napal/lgsltpa/lgsltpaOngoing/view.do?lgsltPaId=ARC_TEST',
+        }),
+        sourceHtml: palHtml,
+      });
+
+      expect(detail.originalContent).toMatchObject({
+        billNumber: '2221897',
+        proposer: '강승규의원 등 29인',
+        proposalDate: '2026-10-14',
+        committee: '보건복지위원회',
+        referralDate: '2026-10-15',
+      });
+    });
+
     it('matches proposal reasons through the FTS index for every archive search', () => {
       // No opt-in flag: `제안이유` is part of a keyword search, matched via FTS
       // (the LIKE predicates stay for substring matching on the short columns).
