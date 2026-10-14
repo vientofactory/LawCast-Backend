@@ -195,6 +195,21 @@ export function buildNsmDetailUrl(billNo: string): string {
   return `https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/${billNo.trim()}/detailRP`;
 }
 
+/**
+ * The likms (`국회 의안정보시스템`) bill detail page for a resolved `billId`
+ * (`PRC_...`). {@link buildNsmDetailUrl} is the `국민참여입법센터` equivalent.
+ *
+ * Detail capture must open the page of whichever portal the list came from: an
+ * `의안번호` that only likms knows has no NSM detail page, and asking NSM for it
+ * returns its own error template rather than the bill.
+ *
+ * Mirrors pal-crawl's `LikmsCrawler.buildDetailPageUrl` (which is private),
+ * matching how {@link buildNsmDetailUrl} mirrors `NsmLmSts.buildListUrl`.
+ */
+export function buildLikmsBillDetailUrl(billId: string): string {
+  return `https://likms.assembly.go.kr/bill/bi/billDetailPage.do?billId=${billId.trim()}&currMenuNo=2600044`;
+}
+
 @Injectable()
 export class CrawlingCoreService {
   private readonly logger = LoggerUtils.getContextLogger(
@@ -1166,16 +1181,183 @@ export class CrawlingCoreService {
   }
 
   /**
-   * Captures a screenshot of a bill's detail page on the legislation-status
-   * site (NsmLmSts).
-   * Used for pending bills that do not yet have a pal.assembly.go.kr contentId.
+   * Captures a bill's detail page, its screenshot and its parsed fields in one
+   * browser session.
    *
+   * The page follows the **active list source**, so the snapshot always comes
+   * from the portal that listed the bill: `국회 의안정보시스템` (`likms`) with
+   * `CRAWLING_NSM_SOURCE=likms`, `국민참여입법센터` (`NsmLmSts`) otherwise.
+   * Capturing a likms-listed bill through the NSM URL stores the NSM error page
+   * with no `제안이유`, which is why the two paths are separate.
+   *
+   * Used for pending bills that do not yet have a pal.assembly.go.kr contentId.
    * Applies the same JPEG recompression pipeline as `captureContentScreenshot`
    * to keep screenshots within the configured size limit.
    *
    * @param billNo The assembly bill number (e.g. "2200001").
    */
   async captureNsmDetailFull(billNo: string): Promise<{
+    html: string;
+    screenshot: Buffer | null;
+    detail: INsmBillDetail | null;
+    responseUrl: string;
+    statusCode: number;
+  }> {
+    const normalized = billNo.trim();
+    if (!normalized) throw new Error('billNo is required');
+
+    return isLikmsNsmSourceEnabled()
+      ? this.captureLikmsDetailFull(normalized)
+      : this.captureNsmPortalDetailFull(normalized);
+  }
+
+  /**
+   * Captures a likms (`국회 의안정보시스템`) bill detail page.
+   *
+   * The detail page is keyed on likms's own `billId` (`PRC_...`) rather than
+   * the `의안번호` the pipeline carries, so the id is resolved first. Parsed
+   * fields come from the list-source adapter: its `getDetail` reads the
+   * `심사정보` fragment, which is the only place `제안이유 및 주요내용` lives.
+   *
+   * @param billNo The assembly bill number (e.g. "2221891").
+   */
+  private async captureLikmsDetailFull(billNo: string): Promise<{
+    html: string;
+    screenshot: Buffer | null;
+    detail: INsmBillDetail | null;
+    responseUrl: string;
+    statusCode: number;
+  }> {
+    const detailUrl = await this.resolveLikmsDetailUrl(billNo);
+    if (!detailUrl) {
+      throw new Error(`likms has no detail page for bill ${billNo}`);
+    }
+
+    // No Waitingroom and no NSM deletion heuristic here: those belong to the
+    // NSM portal, and its HTML vocabulary does not describe likms pages.
+    const detail = await this.createNsmClient().getDetail(billNo);
+
+    const session = new NsmLmSts({
+      ...this.buildClientConfig(),
+      screenshot: SCREENSHOT_CONFIG,
+    });
+
+    return this.browserLeaseManager.runWithLease(
+      `captureNsmDetailFull(${billNo})`,
+      session,
+      async () => {
+        await session.initBrowser();
+        const browser = session.browser;
+        const page = await browser.newPage();
+
+        try {
+          await page.setViewport({
+            width: APP_CONSTANTS.SCREENSHOT.WIDTH,
+            height: APP_CONSTANTS.SCREENSHOT.HEIGHT,
+          });
+
+          const response = await page.goto(detailUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: APP_CONSTANTS.CRAWLING.WAITINGROOM_GOTO_TIMEOUT_MS,
+          });
+
+          // The `심사정보` panels are filled over AJAX after the shell
+          // loads, so let the network settle before capturing. A timeout is
+          // not fatal: we still store whatever finished rendering.
+          await page
+            .waitForNetworkIdle({ idleTime: 500, timeout: 15000 })
+            .catch(() => undefined);
+
+          const html = await page.content();
+          const responseUrl = page.url();
+          const statusCode = response?.status() ?? 200;
+
+          let screenshot: Buffer | null = null;
+          try {
+            const raw = await page.screenshot({
+              fullPage: true,
+              type: 'jpeg',
+              quality: APP_CONSTANTS.SCREENSHOT.QUALITY,
+            });
+            screenshot = await this.fitScreenshotWithinSizeLimit(
+              Buffer.from(raw),
+              `likms screenshot for bill ${billNo}`,
+            );
+          } catch (err) {
+            this.logger.warn(
+              `likms screenshot capture failed for bill ${billNo}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+
+          return { html, screenshot, detail, responseUrl, statusCode };
+        } finally {
+          await page.close();
+        }
+      },
+    );
+  }
+
+  /**
+   * Resolves the likms bill detail URL for a bill number.
+   *
+   * A `billId` (`PRC_...`) is used as-is; an `의안번호` is resolved through
+   * pal-crawl's likms crawler. Returns null when likms has no such bill.
+   */
+  private async resolveLikmsDetailUrl(billNo: string): Promise<string | null> {
+    const normalized = billNo.trim();
+    if (!normalized) return null;
+
+    if (normalized.startsWith('PRC_')) {
+      return buildLikmsBillDetailUrl(normalized);
+    }
+
+    const { userAgent, customHeaders } = createCrawlerClientHeaders();
+    const crawler = new LikmsCrawler({
+      userAgent,
+      timeout: this.crawlConfig.timeout,
+      retryCount: this.crawlConfig.retryCount,
+      customHeaders,
+    });
+
+    const billId = await crawler.resolveBillId(normalized);
+    return billId ? buildLikmsBillDetailUrl(billId) : null;
+  }
+
+  /**
+   * Shrinks a captured screenshot below the archive size limit by re-encoding
+   * it at successive fallback qualities. Returns null when even the lowest
+   * quality stays above the limit.
+   */
+  private async fitScreenshotWithinSizeLimit(
+    raw: Buffer,
+    label: string,
+  ): Promise<Buffer | null> {
+    const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
+    if (raw.length <= maxBytes) {
+      return raw;
+    }
+
+    for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
+      const recompressed = await sharp(raw).jpeg({ quality }).toBuffer();
+      if (recompressed.length <= maxBytes) {
+        return recompressed;
+      }
+    }
+
+    this.logger.warn(
+      `${label} could not be reduced below ${maxBytes}B - discarding`,
+    );
+    return null;
+  }
+
+  /**
+   * Captures an NSM (`국민참여입법센터`) bill detail page with Waitingroom
+   * bypass and the NSM deletion heuristic. {@link captureNsmDetailFull}
+   * dispatches here when the active source is NSM.
+   */
+  private async captureNsmPortalDetailFull(billNo: string): Promise<{
     html: string;
     screenshot: Buffer | null;
     detail: INsmBillDetail | null;
@@ -1195,7 +1377,6 @@ export class CrawlingCoreService {
       client,
       async () => {
         const detailUrl = buildNsmDetailUrl(normalized);
-        const maxBytes = APP_CONSTANTS.SCREENSHOT.MAX_SIZE_BYTES;
 
         await client.initBrowser();
         const browser = client.browser;
@@ -1260,28 +1441,12 @@ export class CrawlingCoreService {
               quality: APP_CONSTANTS.SCREENSHOT.QUALITY,
             });
 
-            if (raw.length <= maxBytes) {
-              // pal-crawl >= 2.2.0 ships puppeteer 25, whose screenshot() is
-              // typed as Uint8Array — copy into a Buffer for downstream callers.
-              screenshot = Buffer.from(raw);
-            } else {
-              for (const quality of SCREENSHOT_FALLBACK_QUALITIES) {
-                const recompressed = await sharp(raw)
-                  .jpeg({ quality })
-                  .toBuffer();
-                if (recompressed.length <= maxBytes) {
-                  screenshot = recompressed;
-                  break;
-                }
-              }
-              if (!screenshot) {
-                this.logger.warn(
-                  `NSM screenshot for bill ${billNo} could not be reduced below ${
-                    maxBytes
-                  }B - discarding`,
-                );
-              }
-            }
+            // pal-crawl >= 2.2.0 ships puppeteer 25, whose screenshot() is
+            // typed as Uint8Array — copy into a Buffer for downstream callers.
+            screenshot = await this.fitScreenshotWithinSizeLimit(
+              Buffer.from(raw),
+              `NSM screenshot for bill ${billNo}`,
+            );
           } catch (err) {
             this.logger.warn(
               `NSM screenshot capture failed for bill ${billNo}: ${
@@ -1309,6 +1474,10 @@ export class CrawlingCoreService {
     // Disabled NSM crawler: never open a browser to capture NSM snapshots.
     if (!isNsmCrawlerEnabled()) {
       return null;
+    }
+
+    if (isLikmsNsmSourceEnabled()) {
+      return this.captureLikmsDetailScreenshot(billNo);
     }
 
     const client = new NsmLmSts({
@@ -1346,6 +1515,67 @@ export class CrawlingCoreService {
           `NSM screenshot for bill ${billNo} could not be reduced below ${maxBytes}B - discarding`,
         );
         return null;
+      },
+    );
+  }
+
+  /**
+   * Captures a likms (`국회 의안정보시스템`) bill detail page screenshot for
+   * the backfill queue. Mirrors {@link captureNsmDetailScreenshot}'s contract
+   * but opens the likms page, so the stored snapshot belongs to the portal that
+   * listed the bill.
+   */
+  private async captureLikmsDetailScreenshot(
+    billNo: string,
+  ): Promise<Buffer | null> {
+    const detailUrl = await this.resolveLikmsDetailUrl(billNo);
+    if (!detailUrl) {
+      this.logger.warn(
+        `likms has no detail page for bill ${billNo} - skipping screenshot`,
+      );
+      return null;
+    }
+
+    const session = new NsmLmSts({
+      ...this.buildClientConfig(),
+      screenshot: SCREENSHOT_CONFIG,
+    });
+
+    return this.browserLeaseManager.runWithLease(
+      `captureNsmDetailScreenshot(${billNo})`,
+      session,
+      async () => {
+        await session.initBrowser();
+        const browser = session.browser;
+        const page = await browser.newPage();
+
+        try {
+          await page.setViewport({
+            width: APP_CONSTANTS.SCREENSHOT.WIDTH,
+            height: APP_CONSTANTS.SCREENSHOT.HEIGHT,
+          });
+
+          await page.goto(detailUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: APP_CONSTANTS.CRAWLING.WAITINGROOM_GOTO_TIMEOUT_MS,
+          });
+          await page
+            .waitForNetworkIdle({ idleTime: 500, timeout: 15000 })
+            .catch(() => undefined);
+
+          const raw = await page.screenshot({
+            fullPage: true,
+            type: 'jpeg',
+            quality: APP_CONSTANTS.SCREENSHOT.QUALITY,
+          });
+
+          return this.fitScreenshotWithinSizeLimit(
+            Buffer.from(raw),
+            `likms screenshot for bill ${billNo}`,
+          );
+        } finally {
+          await page.close();
+        }
       },
     );
   }
