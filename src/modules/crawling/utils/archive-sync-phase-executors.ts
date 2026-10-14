@@ -1484,16 +1484,23 @@ export async function reconcileIsDonePhase(
     await deps.noticeArchiveService.countNotDoneByNoticeNums(
       collectedNumPages.flat(),
     );
-  const suppressNotifications = pendingFlipCount > IS_DONE_SYNC_NOTIFY_LIMIT;
+  // Rows from earlier Assemblies never appear in the fetched listing, so
+  // their pending flips are counted here and applied below through
+  // `markLegacyNoticesDone`.
+  const legacyPendingCount =
+    await deps.noticeArchiveService.countLegacyNotDoneNotices();
+  const totalPendingFlipCount = pendingFlipCount + legacyPendingCount;
+  const suppressNotifications =
+    totalPendingFlipCount > IS_DONE_SYNC_NOTIFY_LIMIT;
   if (suppressNotifications) {
     logAndBridge({
       logger: archiveSyncLogger,
       method: 'warn',
-      message: `isDone sync bulk flip detected: ${pendingFlipCount} notices pending (limit ${IS_DONE_SYNC_NOTIFY_LIMIT}) - change notifications suppressed for this run, diffchain events still recorded`,
+      message: `isDone sync bulk flip detected: ${totalPendingFlipCount} notices pending (listed ${pendingFlipCount}, legacy ${legacyPendingCount}, limit ${IS_DONE_SYNC_NOTIFY_LIMIT}) - change notifications suppressed for this run, diffchain events still recorded`,
       context: ARCHIVE_SYNC_CONTEXT,
       discordBridge: deps.discordBridge,
       bridgeLevel: BridgeLogLevel.WARN,
-      bridgeMessage: `isDone sync detected **${pendingFlipCount}** bulk flips (limit **${IS_DONE_SYNC_NOTIFY_LIMIT}**) - suppressing change notifications for this run`,
+      bridgeMessage: `isDone sync detected **${totalPendingFlipCount}** bulk flips (limit **${IS_DONE_SYNC_NOTIFY_LIMIT}**) - suppressing change notifications for this run`,
     });
     deps.noticeArchiveService.beginChangeNotificationSuppression();
   }
@@ -1508,6 +1515,15 @@ export async function reconcileIsDonePhase(
         `isDone sync mark page ${i + 1}/${collectedNumPages.length}: fetchedPage=${nums.length}, fetchedAccum=${fetchedDoneCount}, markedAccum=${markedDoneCount}`,
       );
     }
+    // Earlier-Assembly rows finished their notice periods years ago but are
+    // absent from the fetched listing, so they are flipped unconditionally.
+    const legacyMarkedDoneCount =
+      await deps.noticeArchiveService.markLegacyNoticesDone();
+    markedDoneCount += legacyMarkedDoneCount;
+    LoggerUtils.log(
+      'ArchiveSyncService',
+      `isDone sync legacy mark: legacyMarked=${legacyMarkedDoneCount}, markedAccum=${markedDoneCount}`,
+    );
   } finally {
     if (suppressNotifications) {
       deps.noticeArchiveService.endChangeNotificationSuppression();
@@ -1517,10 +1533,10 @@ export async function reconcileIsDonePhase(
   logAndBridge({
     logger: archiveSyncLogger,
     method: 'log',
-    message: `isDone reconciliation done - fetched=${fetchedDoneCount} marked=${markedDoneCount} notificationsSuppressed=${suppressNotifications}`,
+    message: `isDone reconciliation done - fetched=${fetchedDoneCount} marked=${markedDoneCount} (includes legacy flips) notificationsSuppressed=${suppressNotifications}`,
     context: ARCHIVE_SYNC_CONTEXT,
     discordBridge: deps.discordBridge,
-    bridgeMessage: `isDone sync complete - fetched=${fetchedDoneCount} marked=${markedDoneCount}${suppressNotifications ? ' (notifications suppressed)' : ''}`,
+    bridgeMessage: `isDone sync complete - fetched=${fetchedDoneCount} marked=${markedDoneCount} (includes legacy flips)${suppressNotifications ? ' (notifications suppressed)' : ''}`,
   });
 
   return { fetchedDoneCount, markedDoneCount };

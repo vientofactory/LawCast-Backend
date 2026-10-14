@@ -3329,6 +3329,119 @@ describe('NoticeArchiveService', () => {
     });
   });
 
+  describe('legacy isDone handling', () => {
+    const buildLegacyService = (
+      repositoryMock: any,
+      summaryStateRepositoryMock: any,
+      changeTrackingService: any,
+    ) =>
+      new NoticeArchiveService(
+        repositoryMock as any,
+        summaryStateRepositoryMock as any,
+        changeTrackingService as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+    it('countLegacyNotDoneNotices counts active rows below the assembly floor', async () => {
+      const summaryStateRepositoryMock = createSummaryStateRepositoryMock();
+      summaryStateRepositoryMock.count.mockResolvedValue(33);
+      const service = buildLegacyService(
+        createRepositoryMock(),
+        summaryStateRepositoryMock,
+        createChangeTrackingServiceMock(),
+      );
+
+      const count = await service.countLegacyNotDoneNotices();
+
+      expect(count).toBe(33);
+      const where = (
+        (summaryStateRepositoryMock.count as jest.Mock).mock.calls[0][0] as {
+          where: {
+            isDone: boolean;
+            noticeNum?: { type: string; value: unknown };
+          };
+        }
+      ).where;
+      expect(where.isDone).toBe(false);
+      expect(where.noticeNum?.type).toBe('lessThan');
+      expect(where.noticeNum?.value).toBe(
+        APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
+      );
+    });
+
+    it('markLegacyNoticesDone flips legacy rows through the done path with diff events', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest
+          .fn<(...args: any[]) => Promise<NoticeArchive[]>>()
+          .mockResolvedValue([
+            buildRow({
+              noticeNum: 21076,
+              subject: 'legacy bill fixture',
+              proposalReason: 'stale nsm value',
+              isDone: false,
+            }),
+          ]),
+      };
+      const summaryStateRepositoryMock = createSummaryStateRepositoryMock();
+      summaryStateRepositoryMock.find
+        .mockResolvedValueOnce([{ noticeNum: 21076 }])
+        .mockResolvedValueOnce([{ noticeNum: 21076 }])
+        .mockResolvedValueOnce([{ noticeNum: 21076, isDone: false }]);
+      summaryStateRepositoryMock.update.mockResolvedValue({ affected: 1 });
+
+      const changeTrackingService = createChangeTrackingServiceMock();
+      changeTrackingService.getNoticeChangeTimeline.mockResolvedValue([
+        {
+          eventHeight: 2,
+          details: [
+            {
+              fieldPath: 'isDone',
+              afterValue: 'false',
+            },
+          ],
+        },
+      ]);
+      const service = buildLegacyService(
+        repositoryMock,
+        summaryStateRepositoryMock,
+        changeTrackingService,
+      );
+
+      const affected = await service.markLegacyNoticesDone();
+
+      expect(affected).toBe(1);
+      expect(summaryStateRepositoryMock.update).toHaveBeenCalledWith(
+        expect.objectContaining({ isDone: false }),
+        { isDone: true },
+      );
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it('markLegacyNoticesDone touches nothing when no legacy row is still active', async () => {
+      const summaryStateRepositoryMock = createSummaryStateRepositoryMock();
+      summaryStateRepositoryMock.find.mockResolvedValue([]);
+      const changeTrackingService = createChangeTrackingServiceMock();
+      const service = buildLegacyService(
+        createRepositoryMock(),
+        summaryStateRepositoryMock,
+        changeTrackingService,
+      );
+
+      const affected = await service.markLegacyNoticesDone();
+
+      expect(affected).toBe(0);
+      expect(summaryStateRepositoryMock.update).not.toHaveBeenCalled();
+      expect(
+        changeTrackingService.appendChangeEventWithDetails,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
   describe('snapshot artifact one-time fill', () => {
     const createIntegrityStateRepositoryMock = () => ({
       findOne: jest
