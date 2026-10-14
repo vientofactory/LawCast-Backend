@@ -1,3 +1,4 @@
+import { APP_CONSTANTS } from '../../../config/app.config';
 import { CrawlingSchedulerProposalRetry } from './crawling-scheduler-proposal-retry';
 
 describe('CrawlingSchedulerProposalRetry', () => {
@@ -46,6 +47,8 @@ describe('CrawlingSchedulerProposalRetry', () => {
         getNsmBillNumberByNoticeNums: async () =>
           new Map([[notice.num, '2200001']]),
         getSourceDeletedNoticeNumSet: async () => new Set(),
+        getArchiveStartedAtByNoticeNums: async () =>
+          new Map([[notice.num, new Date()]]),
         updateSummaryStateByNoticeNum,
       } as any,
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
@@ -101,6 +104,9 @@ describe('CrawlingSchedulerProposalRetry', () => {
         async () => new Map<number, string>(),
       ),
       getSourceDeletedNoticeNumSet: jest.fn(async () => new Set<number>()),
+      getArchiveStartedAtByNoticeNums: jest.fn(
+        async () => new Map<number, Date>(),
+      ),
       updateSummaryStateByNoticeNum: jest.fn(async () => undefined),
     };
     const retry = new CrawlingSchedulerProposalRetry({
@@ -165,6 +171,7 @@ describe('CrawlingSchedulerProposalRetry', () => {
   const buildRetryHarness = (options: {
     proposalReasonByNum: Record<number, string | null>;
     recordAttempts?: jest.Mock;
+    archiveStartedAtByNum?: Record<number, Date>;
   }) => {
     let storedQueue: unknown = null;
     const cacheService = {
@@ -186,6 +193,7 @@ describe('CrawlingSchedulerProposalRetry', () => {
       async (num: number) => options.proposalReasonByNum[num] ?? null,
     );
     const updateSummaryStateByNoticeNum = jest.fn(async () => undefined);
+    const sendNotifications = jest.fn(async () => undefined);
     const summaryByNum: Record<number, string> = { 2220590: '요약' };
     const retry = new CrawlingSchedulerProposalRetry({
       cacheService: cacheService as any,
@@ -200,13 +208,24 @@ describe('CrawlingSchedulerProposalRetry', () => {
         isAiSummaryEnabled: () => true,
       } as any,
       notificationOrchestratorService: {
-        sendNotifications: jest.fn(async () => undefined),
+        sendNotifications,
       } as any,
       noticeArchiveService: {
         getNsmBillNumberByNoticeNums: jest.fn(
           async () => new Map<number, string>(),
         ),
         getSourceDeletedNoticeNumSet: jest.fn(async () => new Set<number>()),
+        getArchiveStartedAtByNoticeNums: jest.fn(
+          async (nums: number[]) =>
+            new Map(
+              nums
+                .filter((num) => options.archiveStartedAtByNum?.[num])
+                .map((num) => [
+                  num,
+                  options.archiveStartedAtByNum?.[num] as Date,
+                ]),
+            ),
+        ),
         updateSummaryStateByNoticeNum,
         ...(options.recordAttempts
           ? { recordProposalReasonAttempts: options.recordAttempts }
@@ -226,7 +245,13 @@ describe('CrawlingSchedulerProposalRetry', () => {
       aiSummaryStatus: 'not_requested' as const,
     });
 
-    return { retry, notice, updateSummaryStateByNoticeNum };
+    return {
+      retry,
+      notice,
+      updateSummaryStateByNoticeNum,
+      sendNotifications,
+      cacheService,
+    };
   };
 
   it('stamps every attempted bill, including the ones whose reason could not be recovered', async () => {
@@ -267,5 +292,174 @@ describe('CrawlingSchedulerProposalRetry', () => {
       '요약',
       'ready',
     );
+  });
+
+  it('skips the regular notification for a recovery archived past the notify window', async () => {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const { retry, notice, sendNotifications, cacheService } =
+      buildRetryHarness({
+        proposalReasonByNum: { 2220590: '복구된 제안이유' },
+        archiveStartedAtByNum: { 2220590: thirtyDaysAgo },
+      });
+
+    await retry.enqueue(notice(2220590), { billNo: '2220590' });
+    await retry.drain();
+
+    // The recovered data still flows into the cache and the archive; only the
+    // second "new bill" ping stays silent.
+    expect(cacheService.updateCache).toHaveBeenCalled();
+    expect(sendNotifications).not.toHaveBeenCalled();
+    expect(await retry.getQueueLength()).toBe(0);
+  });
+
+  it('still notifies a recovery archived inside the notify window', async () => {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const { retry, notice, sendNotifications } = buildRetryHarness({
+      proposalReasonByNum: { 2220590: '복구된 제안이유' },
+      archiveStartedAtByNum: { 2220590: oneHourAgo },
+    });
+
+    await retry.enqueue(notice(2220590), { billNo: '2220590' });
+    await retry.drain();
+
+    expect(sendNotifications).toHaveBeenCalledTimes(1);
+  });
+
+  it('notifies when the archive age is unknown instead of silently dropping', async () => {
+    const { retry, notice, sendNotifications } = buildRetryHarness({
+      proposalReasonByNum: { 2220590: '복구된 제안이유' },
+    });
+
+    await retry.enqueue(notice(2220590), { billNo: '2220590' });
+    await retry.drain();
+
+    // No archive-age row: fail open so a genuinely new bill is never muted by
+    // a lookup miss.
+    expect(sendNotifications).toHaveBeenCalledTimes(1);
+  });
+
+  it('evicts age-expired queue items without notifying long-archived bills', async () => {
+    const twoDaysAgoIso = new Date(
+      Date.now() - 2 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    let storedQueue: unknown = [
+      {
+        notice: {
+          num: 2220590,
+          subject: '의안 2220590',
+          proposerCategory: '의원',
+          committee: '산업통상부',
+          link: 'https://example.com/2220590',
+          contentId: 'PRC_2220590',
+          attachments: { pdfFile: null, hwpFile: null },
+          aiSummary: null,
+          aiSummaryStatus: 'not_requested' as const,
+        },
+        billNo: '2220590',
+        retryCount: 0,
+        queuedAtIso: twoDaysAgoIso,
+      },
+    ];
+    const cacheService = {
+      getObject: jest.fn(async () => storedQueue),
+      setObject: jest.fn(async (_key: string, value: unknown) => {
+        storedQueue = value;
+        return true;
+      }),
+      deleteKey: jest.fn(async () => {
+        storedQueue = null;
+        return true;
+      }),
+      getRecentNotices: jest.fn(async () => []),
+      updateCache: jest.fn(async () => undefined),
+    };
+    const fetchAndUpdateProposalReason = jest.fn(async () => '이유');
+    const sendNotifications = jest.fn(async () => undefined);
+    const retry = new CrawlingSchedulerProposalRetry({
+      cacheService: cacheService as any,
+      archiveOrchestratorService: {
+        fetchAndUpdateProposalReason,
+      } as any,
+      summaryGenerationService: {} as any,
+      notificationOrchestratorService: { sendNotifications } as any,
+      noticeArchiveService: {
+        getNsmBillNumberByNoticeNums: jest.fn(
+          async () => new Map<number, string>(),
+        ),
+        getSourceDeletedNoticeNumSet: jest.fn(async () => new Set<number>()),
+        getArchiveStartedAtByNoticeNums: jest.fn(
+          async () => new Map([[2220590, thirtyDaysAgo]]),
+        ),
+        updateSummaryStateByNoticeNum: jest.fn(async () => undefined),
+      } as any,
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
+    });
+
+    await retry.drain();
+
+    // Evicted by queue age, so no fetch was attempted; long-archived, so no
+    // fallback ping either.
+    expect(fetchAndUpdateProposalReason).not.toHaveBeenCalled();
+    expect(sendNotifications).not.toHaveBeenCalled();
+    expect(await retry.getQueueLength()).toBe(0);
+  });
+
+  it('skips the at-capacity fallback ping for a long-archived bill', async () => {
+    const { MAX_SIZE } = APP_CONSTANTS.ARCHIVE_SYNC.PROPOSAL_REASON_RETRY_QUEUE;
+    const filler = Array.from({ length: MAX_SIZE }, (_, index) => ({
+      notice: {
+        num: 2300000 + index,
+        subject: `의안 ${2300000 + index}`,
+        proposerCategory: '의원',
+        committee: '산업통상부',
+        link: `https://example.com/${2300000 + index}`,
+        contentId: null,
+        attachments: { pdfFile: null, hwpFile: null },
+        aiSummary: null,
+        aiSummaryStatus: 'not_requested' as const,
+      },
+      billNo: `${2300000 + index}`,
+      retryCount: 0,
+      queuedAtIso: new Date().toISOString(),
+    }));
+    const cacheService = {
+      getObject: jest.fn(async () => filler),
+      setObject: jest.fn(async () => true),
+      deleteKey: jest.fn(async () => true),
+      getRecentNotices: jest.fn(async () => []),
+      updateCache: jest.fn(async () => undefined),
+    };
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const sendNotifications = jest.fn(async () => undefined);
+    const retry = new CrawlingSchedulerProposalRetry({
+      cacheService: cacheService as any,
+      archiveOrchestratorService: {} as any,
+      summaryGenerationService: {} as any,
+      notificationOrchestratorService: { sendNotifications } as any,
+      noticeArchiveService: {
+        getArchiveStartedAtByNoticeNums: jest.fn(
+          async () => new Map([[2220590, thirtyDaysAgo]]),
+        ),
+      } as any,
+      logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
+    });
+
+    await retry.enqueue(
+      {
+        num: 2220590,
+        subject: '의안 2220590',
+        proposerCategory: '의원',
+        committee: '산업통상부',
+        link: 'https://example.com/2220590',
+        contentId: null,
+        attachments: { pdfFile: null, hwpFile: null },
+        aiSummary: null,
+        aiSummaryStatus: 'not_requested' as const,
+      } as any,
+      { billNo: '2220590' },
+    );
+
+    expect(sendNotifications).not.toHaveBeenCalled();
   });
 });
