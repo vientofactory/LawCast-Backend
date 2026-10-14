@@ -273,6 +273,35 @@ export class NoticeArchiveService {
     'contentProposalSession',
   ] as const;
 
+  /**
+   * Chain-head fields the default detail response overlays on top of the
+   * immutable snapshot, beyond the list-item subset applied by
+   * `applyCurrentOverlayFromDiffchain`.
+   *
+   * The revision-aware path (`applyRevisionOverlay`) serves every tracked
+   * field at `?rev=headRev`, but the default response carried only the
+   * list-item subset - so a repair that filled the bill number, proposer,
+   * proposal date or proposal session stayed invisible in the UI while
+   * `revision.resolvedRev` already pointed at the chain head. `isDone` is
+   * deliberately absent: it lives in the summary-state table, mirroring the
+   * excluded field of the revision-aware path.
+   */
+  private readonly detailChainHeadFieldPaths = [
+    'billNumber',
+    'contentBillNumber',
+    'proposer',
+    'contentProposer',
+    'proposalDate',
+    'contentProposalDate',
+    'contentCommittee',
+    'referralDate',
+    'contentReferralDate',
+    'noticePeriod',
+    'contentNoticePeriod',
+    'proposalSession',
+    'contentProposalSession',
+  ] as const;
+
   constructor(
     @InjectRepository(NoticeArchive)
     private readonly archiveRepository: Repository<NoticeArchive>,
@@ -2778,6 +2807,13 @@ export class NoticeArchiveService {
    * `applyCurrentOverlayFromDiffchain`, so a repair that only exists as an
    * appended event (e.g. the proposalReason backfill) is visible to the UI.
    *
+   * The response advertises `revision.resolvedRev = headRev`, so the payload
+   * must actually carry the head revision's values: after the list-item
+   * subset above, every remaining tracked field is read from the chain head
+   * and written through `applyTrackedValue` — the same writer
+   * `applyRevisionOverlay` uses — so the default response matches
+   * `?rev=headRev` instead of silently serving the previous revision.
+   *
    * `isDone` is intentionally untouched: it lives in the summary-state table,
    * mirroring the excluded field of the revision-aware path.
    */
@@ -2810,6 +2846,26 @@ export class NoticeArchiveService {
     detail.originalContent.contentId =
       overlayRow.contentId ?? detail.originalContent.contentId;
     detail.originalContent.proposalReason = overlayRow.proposalReason ?? '';
+
+    const latestByField =
+      await this.changeTrackingService.getLatestFieldValuesForFields(
+        [detail.notice.num],
+        this.detailChainHeadFieldPaths,
+      );
+    const fields = latestByField.get(detail.notice.num);
+    if (!fields) {
+      return;
+    }
+
+    for (const fieldPath of this.detailChainHeadFieldPaths) {
+      // A field with no diffchain record was never changed by a repair, so
+      // the immutable snapshot value stays authoritative for it.
+      if (!fields.has(fieldPath)) {
+        continue;
+      }
+
+      this.applyTrackedValue(detail, fieldPath, fields.get(fieldPath) ?? null);
+    }
   }
 
   private applyRevisionOverlay(
