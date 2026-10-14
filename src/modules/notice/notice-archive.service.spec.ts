@@ -3442,6 +3442,49 @@ describe('NoticeArchiveService', () => {
     });
   });
 
+  describe('content proposal date lookup', () => {
+    const buildDateService = (repositoryMock: any) =>
+      new NoticeArchiveService(
+        repositoryMock as any,
+        createSummaryStateRepositoryMock() as any,
+        createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+    it('returns trimmed proposal dates keyed by notice num', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest.fn(async () => [
+          { noticeNum: 2220590, contentProposalDate: '2026-01-16' },
+          { noticeNum: 2220591, contentProposalDate: '   ' },
+          { noticeNum: 2220592, contentProposalDate: null },
+        ]),
+      };
+      const service = buildDateService(repositoryMock);
+
+      const result = await service.getContentProposalDateByNoticeNums([
+        2220590, 2220591, 2220592,
+      ]);
+
+      expect(result).toEqual(new Map([[2220590, '2026-01-16']]));
+    });
+
+    it('returns an empty map without querying for empty input', async () => {
+      const repositoryMock = {
+        ...createRepositoryMock(),
+        find: jest.fn(async () => []),
+      };
+      const service = buildDateService(repositoryMock);
+
+      const result = await service.getContentProposalDateByNoticeNums([]);
+
+      expect(result).toEqual(new Map());
+      expect(repositoryMock.find).not.toHaveBeenCalled();
+    });
+  });
+
   describe('snapshot artifact one-time fill', () => {
     const createIntegrityStateRepositoryMock = () => ({
       findOne: jest

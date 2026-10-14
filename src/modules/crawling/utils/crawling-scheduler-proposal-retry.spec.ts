@@ -49,6 +49,7 @@ describe('CrawlingSchedulerProposalRetry', () => {
         getSourceDeletedNoticeNumSet: async () => new Set(),
         getArchiveStartedAtByNoticeNums: async () =>
           new Map([[notice.num, new Date()]]),
+        getContentProposalDateByNoticeNums: async () => new Map(),
         updateSummaryStateByNoticeNum,
       } as any,
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
@@ -106,6 +107,9 @@ describe('CrawlingSchedulerProposalRetry', () => {
       getSourceDeletedNoticeNumSet: jest.fn(async () => new Set<number>()),
       getArchiveStartedAtByNoticeNums: jest.fn(
         async () => new Map<number, Date>(),
+      ),
+      getContentProposalDateByNoticeNums: jest.fn(
+        async () => new Map<number, string>(),
       ),
       updateSummaryStateByNoticeNum: jest.fn(async () => undefined),
     };
@@ -172,6 +176,7 @@ describe('CrawlingSchedulerProposalRetry', () => {
     proposalReasonByNum: Record<number, string | null>;
     recordAttempts?: jest.Mock;
     archiveStartedAtByNum?: Record<number, Date>;
+    proposalDateByNum?: Record<number, string>;
   }) => {
     let storedQueue: unknown = null;
     const cacheService = {
@@ -223,6 +228,17 @@ describe('CrawlingSchedulerProposalRetry', () => {
                 .map((num) => [
                   num,
                   options.archiveStartedAtByNum?.[num] as Date,
+                ]),
+            ),
+        ),
+        getContentProposalDateByNoticeNums: jest.fn(
+          async (nums: number[]) =>
+            new Map(
+              nums
+                .filter((num) => options.proposalDateByNum?.[num])
+                .map((num) => [
+                  num,
+                  options.proposalDateByNum?.[num] as string,
                 ]),
             ),
         ),
@@ -391,6 +407,9 @@ describe('CrawlingSchedulerProposalRetry', () => {
         getArchiveStartedAtByNoticeNums: jest.fn(
           async () => new Map([[2220590, thirtyDaysAgo]]),
         ),
+        getContentProposalDateByNoticeNums: jest.fn(
+          async () => new Map<number, string>(),
+        ),
         updateSummaryStateByNoticeNum: jest.fn(async () => undefined),
       } as any,
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
@@ -441,6 +460,9 @@ describe('CrawlingSchedulerProposalRetry', () => {
         getArchiveStartedAtByNoticeNums: jest.fn(
           async () => new Map([[2220590, thirtyDaysAgo]]),
         ),
+        getContentProposalDateByNoticeNums: jest.fn(
+          async () => new Map<number, string>(),
+        ),
       } as any,
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn() },
     });
@@ -459,6 +481,70 @@ describe('CrawlingSchedulerProposalRetry', () => {
       } as any,
       { billNo: '2220590' },
     );
+
+    expect(sendNotifications).not.toHaveBeenCalled();
+  });
+
+  it('skips a recovery proposed long ago even when the archive row is fresh', async () => {
+    // Replay of production bill 2216118: proposed 2026-01-16, first archived
+    // the day before the recovery, so the archive-age clock alone passes it.
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const { retry, notice, sendNotifications, cacheService } =
+      buildRetryHarness({
+        proposalReasonByNum: { 2220590: '복구된 제안이유' },
+        archiveStartedAtByNum: { 2220590: oneHourAgo },
+        proposalDateByNum: { 2220590: '2026-01-16' },
+      });
+
+    await retry.enqueue(notice(2220590), { billNo: '2220590' });
+    await retry.drain();
+
+    expect(cacheService.updateCache).toHaveBeenCalled();
+    expect(sendNotifications).not.toHaveBeenCalled();
+    expect(await retry.getQueueLength()).toBe(0);
+  });
+
+  it('still notifies a recovery proposed inside the notify window', async () => {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const { retry, notice, sendNotifications } = buildRetryHarness({
+      proposalReasonByNum: { 2220590: '복구된 제안이유' },
+      archiveStartedAtByNum: { 2220590: oneHourAgo },
+      proposalDateByNum: { 2220590: todayIso },
+    });
+
+    await retry.enqueue(notice(2220590), { billNo: '2220590' });
+    await retry.drain();
+
+    expect(sendNotifications).toHaveBeenCalledTimes(1);
+  });
+
+  it('notifies when the stored proposal date is not a calendar date', async () => {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const { retry, notice, sendNotifications } = buildRetryHarness({
+      proposalReasonByNum: { 2220590: '복구된 제안이유' },
+      archiveStartedAtByNum: { 2220590: oneHourAgo },
+      proposalDateByNum: { 2220590: '심사 예정' },
+    });
+
+    await retry.enqueue(notice(2220590), { billNo: '2220590' });
+    await retry.drain();
+
+    // Unparsable dates fail open: the archive clock is fresh, so the bill is
+    // notified rather than muted over a malformed string.
+    expect(sendNotifications).toHaveBeenCalledTimes(1);
+  });
+
+  it('parses dotted archive dates such as 2026. 6. 10. as stale', async () => {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const { retry, notice, sendNotifications } = buildRetryHarness({
+      proposalReasonByNum: { 2220590: '복구된 제안이유' },
+      archiveStartedAtByNum: { 2220590: oneHourAgo },
+      proposalDateByNum: { 2220590: '2026. 6. 10.' },
+    });
+
+    await retry.enqueue(notice(2220590), { billNo: '2220590' });
+    await retry.drain();
 
     expect(sendNotifications).not.toHaveBeenCalled();
   });

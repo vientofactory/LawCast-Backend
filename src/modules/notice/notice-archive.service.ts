@@ -4451,6 +4451,37 @@ export class NoticeArchiveService {
   }
 
   /**
+   * Returns a map of noticeNum -> stored proposal date (`contentProposalDate`)
+   * for rows that have one. Used by the proposalReason retry notification
+   * gate to tell long-proposed bills apart from genuinely new ones: a bill
+   * the archive discovered only yesterday can still have been proposed
+   * months ago, in which case a recovery ping is noise.
+   */
+  async getContentProposalDateByNoticeNums(
+    noticeNums: number[],
+  ): Promise<Map<number, string>> {
+    const uniqueNums = Array.from(new Set(noticeNums));
+    if (uniqueNums.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.archiveRepository.find({
+      where: { noticeNum: In(uniqueNums) },
+      select: { noticeNum: true, contentProposalDate: true },
+    });
+
+    const map = new Map<number, string>();
+    for (const row of rows) {
+      const proposalDate = row.contentProposalDate?.trim();
+      if (proposalDate) {
+        map.set(row.noticeNum, proposalDate);
+      }
+    }
+
+    return map;
+  }
+
+  /**
    * Returns the subset of the given notice numbers that exist in the archive
    * with a NULL contentId (i.e. records sourced from NsmLmSts pending sync
    * that have not yet been enriched with a pal.assembly.go.kr contentId).
