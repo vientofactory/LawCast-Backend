@@ -9,7 +9,6 @@ import {
 } from '../notice/notice-archive.service';
 import { computeSha256 as computeSha256Hex } from '../notice/notice-archive.helpers';
 import {
-  buildNsmDetailUrl,
   CrawlingCoreService,
   NsmBillDeletedError,
 } from './crawling-core.service';
@@ -354,7 +353,10 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
               proposer: full.detail?.proposer?.trim() || null,
               proposalDate: full.detail?.proposalDate?.trim() || null,
               httpMetadata: {
-                requestUrl: buildNsmDetailUrl(billNo),
+                // The page the capture really opened (likms with
+                // `CRAWLING_NSM_SOURCE=likms`), so a stored row names the
+                // portal its snapshot and screenshot came from.
+                requestUrl: full.requestUrl,
                 responseUrl: full.responseUrl,
                 fetchedAt: new Date().toISOString(),
                 statusCode: full.statusCode,
@@ -771,7 +773,10 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
               sourceHtml = full.html;
               sourceHtmlSha256 = this.computeSha256(full.html);
               httpMetadata = {
-                requestUrl: notice.link,
+                // The page the capture really opened. `notice.link` is the
+                // list's link to the bill, which does not have to be the page
+                // the snapshot and its screenshot came from.
+                requestUrl: full.requestUrl,
                 responseUrl: full.responseUrl,
                 fetchedAt: new Date().toISOString(),
                 statusCode: full.statusCode,
@@ -1082,7 +1087,7 @@ export class ArchiveOrchestratorService implements OnApplicationShutdown {
         proposalSession,
         httpMetadata: capturedHtml
           ? {
-              requestUrl: buildNsmDetailUrl(normalizedBillNo),
+              requestUrl: full.requestUrl,
               responseUrl: full.responseUrl,
               fetchedAt: new Date().toISOString(),
               statusCode: full.statusCode,

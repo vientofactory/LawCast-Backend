@@ -413,4 +413,117 @@ describe('ArchiveOrchestratorScreenshotCoordinator', () => {
       '페이지 내용이 너무 커서 스크린샷을 저장할 수 없습니다 (size_limit)',
     );
   });
+
+  it('drains a queued list-source screenshot from the likms page even with the NSM portal crawler off', async () => {
+    // The queue item is a list-source bill, so its screenshot follows the
+    // active list source (`likms`), not the `국민참여입법센터` enable flag.
+    process.env.CRAWLING_NSM_SOURCE = 'likms';
+    process.env.CRAWLING_NSM_ENABLED = 'false';
+
+    const queueState: ScreenshotQueueItem[] = [
+      {
+        num: 70,
+        contentId: '',
+        isDone: false,
+        retryCount: 0,
+        nsmBillNo: '2200070',
+      },
+    ];
+    const updateScreenshot = jest.fn().mockResolvedValue(undefined);
+
+    const cacheService = {
+      getObject: jest.fn(async () => queueState),
+      setObject: jest.fn(async (_key: string, value: ScreenshotQueueItem[]) => {
+        queueState.splice(0, queueState.length, ...value);
+        return true;
+      }),
+      deleteKey: jest.fn(async () => {
+        queueState.splice(0, queueState.length);
+        return true;
+      }),
+    };
+
+    const captureNsmDetailScreenshot = jest
+      .fn()
+      .mockResolvedValue(Buffer.from('likms'));
+
+    const coordinator = new ArchiveOrchestratorScreenshotCoordinator({
+      cacheService: cacheService as any,
+      noticeArchiveService: {
+        updateScreenshot,
+        recordScreenshotCaptureFailure: jest.fn(),
+      } as any,
+      crawlingCoreService: {
+        captureContentScreenshot: jest.fn(),
+        captureNsmDetailScreenshot,
+      } as any,
+      logger: { log: jest.fn(), warn: jest.fn() },
+    });
+
+    await (coordinator as any).drainScreenshotQueue();
+
+    expect(captureNsmDetailScreenshot).toHaveBeenCalledWith('2200070');
+    expect(updateScreenshot).toHaveBeenCalledWith(
+      70,
+      Buffer.from('likms'),
+      'jpeg',
+    );
+
+    delete process.env.CRAWLING_NSM_SOURCE;
+    delete process.env.CRAWLING_NSM_ENABLED;
+  });
+
+  it('drops a queued list-source screenshot without opening a browser when the NSM portal source is disabled', async () => {
+    delete process.env.CRAWLING_NSM_SOURCE;
+    process.env.CRAWLING_NSM_ENABLED = 'false';
+
+    const queueState: ScreenshotQueueItem[] = [
+      {
+        num: 80,
+        contentId: '',
+        isDone: false,
+        retryCount: 0,
+        nsmBillNo: '2200080',
+      },
+    ];
+    const updateScreenshot = jest.fn().mockResolvedValue(undefined);
+    const recordScreenshotCaptureFailure = jest
+      .fn()
+      .mockResolvedValue(undefined);
+
+    const cacheService = {
+      getObject: jest.fn(async () => queueState),
+      setObject: jest.fn(async (_key: string, value: ScreenshotQueueItem[]) => {
+        queueState.splice(0, queueState.length, ...value);
+        return true;
+      }),
+      deleteKey: jest.fn(async () => {
+        queueState.splice(0, queueState.length);
+        return true;
+      }),
+    };
+
+    const captureNsmDetailScreenshot = jest.fn();
+
+    const coordinator = new ArchiveOrchestratorScreenshotCoordinator({
+      cacheService: cacheService as any,
+      noticeArchiveService: {
+        updateScreenshot,
+        recordScreenshotCaptureFailure,
+      } as any,
+      crawlingCoreService: {
+        captureContentScreenshot: jest.fn(),
+        captureNsmDetailScreenshot,
+      } as any,
+      logger: { log: jest.fn(), warn: jest.fn() },
+    });
+
+    await (coordinator as any).drainScreenshotQueue();
+
+    expect(captureNsmDetailScreenshot).not.toHaveBeenCalled();
+    expect(updateScreenshot).not.toHaveBeenCalled();
+    expect(recordScreenshotCaptureFailure).not.toHaveBeenCalled();
+
+    delete process.env.CRAWLING_NSM_ENABLED;
+  });
 });

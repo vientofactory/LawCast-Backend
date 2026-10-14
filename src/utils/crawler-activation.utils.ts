@@ -137,6 +137,22 @@ export function isNsmPendingStreamRedundant(): boolean {
   return isLikmsNsmSourceEnabled();
 }
 
+/**
+ * Returns whether the active NSM-shaped source can serve snapshots and
+ * screenshots for the bills it lists.
+ *
+ * The two flags answer different questions. `CRAWLING_NSM_ENABLED` gates the
+ * `국민참여입법센터` portal itself; with `CRAWLING_NSM_SOURCE=likms` the snapshot
+ * and the screenshot are captured from the likms detail page with this
+ * application's own browser session, so they are available even when the NSM
+ * portal is switched off. Callers that decide whether to open a browser for a
+ * list-source bill must use this instead of the NSM enable flag, which would
+ * silently skip every likms screenshot.
+ */
+export function isSnapshotSourceCaptureEnabled(): boolean {
+  return isLikmsNsmSourceEnabled() || isNsmCrawlerEnabled();
+}
+
 /** Returns whether the given crawler source is currently enabled. */
 export function isCrawlerEnabled(source: CrawlerSource): boolean {
   return source === CRAWLER_SOURCE.NSM

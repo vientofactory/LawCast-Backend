@@ -9,6 +9,7 @@ import {
   isNsmCrawlerEnabled,
   isNsmPendingStreamRedundant,
   isPalCrawlerEnabled,
+  isSnapshotSourceCaptureEnabled,
 } from './crawler-activation.utils';
 
 describe('crawler-activation.utils', () => {
@@ -116,6 +117,22 @@ describe('crawler-activation.utils', () => {
 
       process.env.CRAWLING_NSM_SOURCE = 'nsm';
       expect(isLikmsNsmSourceEnabled()).toBe(false);
+    });
+  });
+
+  describe('isSnapshotSourceCaptureEnabled', () => {
+    it('follows the likms source even with the NSM portal crawler disabled', () => {
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+      process.env.CRAWLING_NSM_ENABLED = 'false';
+
+      expect(isSnapshotSourceCaptureEnabled()).toBe(true);
+    });
+
+    it('follows the NSM enable flag when the NSM portal is the source', () => {
+      expect(isSnapshotSourceCaptureEnabled()).toBe(true);
+
+      process.env.CRAWLING_NSM_ENABLED = 'false';
+      expect(isSnapshotSourceCaptureEnabled()).toBe(false);
     });
   });
 

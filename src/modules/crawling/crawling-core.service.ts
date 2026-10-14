@@ -210,6 +210,60 @@ export function buildLikmsBillDetailUrl(billId: string): string {
   return `https://likms.assembly.go.kr/bill/bi/billDetailPage.do?billId=${billId.trim()}&currMenuNo=2600044`;
 }
 
+/**
+ * Page a notice's snapshot and its screenshot must be captured from.
+ *
+ * The screenshot is not a separate sourcing decision: it is the image of the
+ * archived page, so it has to come from exactly the portal the snapshot came
+ * from. Capturing the snapshot through likms and the image through
+ * `국민참여입법센터` stores two different pages for one notice - the NSM portal
+ * answers a likms-listed bill with its own error template, so the stored image
+ * shows `안건정보가 없습니다` instead of the bill.
+ *
+ * With `CRAWLING_NSM_SOURCE=likms` the source is therefore likms and **only**
+ * likms: a bill likms cannot resolve yields `null` (no capture at all) rather
+ * than a fallback to the other portal. The NSM portal applies only when it is
+ * the active list source.
+ */
+export type SnapshotCaptureSource = 'likms' | 'nsm';
+
+export interface SnapshotCaptureTarget {
+  source: SnapshotCaptureSource;
+  /** The page the snapshot and the screenshot are both taken from. */
+  url: string;
+}
+
+/** Portal each snapshot source serves its pages from. */
+const SNAPSHOT_SOURCE_HOST: Record<SnapshotCaptureSource, string> = {
+  likms: 'likms.assembly.go.kr',
+  nsm: 'opinion.lawmaking.go.kr',
+};
+
+/**
+ * Whether the page a capture landed on really belongs to the source's own
+ * portal.
+ *
+ * A browser navigation can end somewhere else than the URL that was opened:
+ * a portal-side redirect, an interstitial, an anti-bot bounce. Storing that
+ * page as the snapshot - and its image as the screenshot - is the defect this
+ * check closes: the likms path once stored `국민참여입법센터`'s 404 shell for
+ * every bill it listed, so the archived "original" and its screenshot belonged
+ * to a portal that never served the bill.
+ */
+export function isSnapshotSourcePageUrl(
+  url: string,
+  source: SnapshotCaptureSource,
+): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    const expected = SNAPSHOT_SOURCE_HOST[source];
+
+    return hostname === expected || hostname.endsWith(`.${expected}`);
+  } catch {
+    return false;
+  }
+}
+
 @Injectable()
 export class CrawlingCoreService {
   private readonly logger = LoggerUtils.getContextLogger(
@@ -1096,7 +1150,14 @@ export class CrawlingCoreService {
     billNo: string,
   ): Promise<INsmBillDetail> {
     const normalized = billNo.trim();
-    const detailUrl = buildNsmDetailUrl(normalized);
+    // The fallback page follows the active source too: opening the NSM URL for
+    // a likms-listed bill would parse the NSM error template as if it were the
+    // bill.
+    const target = await this.resolveSnapshotCaptureTarget(normalized);
+    if (!target) {
+      throw new Error(`likms has no detail page for bill ${normalized}`);
+    }
+    const detailUrl = target.url;
     const parser = new NsmLmStsParser();
 
     const session = new NsmLmSts(this.buildClientConfig());
@@ -1198,11 +1259,12 @@ export class CrawlingCoreService {
    * Captures a bill's detail page, its screenshot and its parsed fields in one
    * browser session.
    *
-   * The page follows the **active list source**, so the snapshot always comes
-   * from the portal that listed the bill: `국회 의안정보시스템` (`likms`) with
-   * `CRAWLING_NSM_SOURCE=likms`, `국민참여입법센터` (`NsmLmSts`) otherwise.
-   * Capturing a likms-listed bill through the NSM URL stores the NSM error page
-   * with no `제안이유`, which is why the two paths are separate.
+   * The page follows the **active list source**, so the snapshot and the
+   * screenshot it returns always come from the portal that listed the bill:
+   * `국회 의안정보시스템` (`likms`) with `CRAWLING_NSM_SOURCE=likms`,
+   * `국민참여입법센터` (`NsmLmSts`) otherwise. Capturing a likms-listed bill
+   * through the NSM URL stores the NSM error page with no `제안이유`, which is
+   * why the two paths are separate and why there is no cross-portal fallback.
    *
    * Used for pending bills that do not yet have a pal.assembly.go.kr contentId.
    * Applies the same JPEG recompression pipeline as `captureContentScreenshot`
@@ -1214,6 +1276,8 @@ export class CrawlingCoreService {
     html: string;
     screenshot: Buffer | null;
     detail: INsmBillDetail | null;
+    /** The page the snapshot and the screenshot were both taken from. */
+    requestUrl: string;
     responseUrl: string;
     statusCode: number;
   }> {
@@ -1239,6 +1303,7 @@ export class CrawlingCoreService {
     html: string;
     screenshot: Buffer | null;
     detail: INsmBillDetail | null;
+    requestUrl: string;
     responseUrl: string;
     statusCode: number;
   }> {
@@ -1286,6 +1351,16 @@ export class CrawlingCoreService {
           const responseUrl = page.url();
           const statusCode = response?.status() ?? 200;
 
+          // The screenshot is the image of the archived page, so the capture
+          // is only valid when it really is the likms detail page. A page that
+          // landed elsewhere is refused here instead of being stored as this
+          // notice's snapshot and screenshot.
+          if (!isSnapshotSourcePageUrl(responseUrl, 'likms')) {
+            throw new Error(
+              `likms capture for bill ${billNo} landed on ${responseUrl} - refusing to store a foreign page`,
+            );
+          }
+
           let screenshot: Buffer | null = null;
           try {
             const raw = await page.screenshot({
@@ -1297,6 +1372,14 @@ export class CrawlingCoreService {
               Buffer.from(raw),
               `likms screenshot for bill ${billNo}`,
             );
+            if (screenshot) {
+              // The captured page is part of the record: an operator verifying
+              // that a snapshot and its screenshot come from the same portal
+              // reads it here instead of opening the stored image.
+              this.logger.log(
+                `likms screenshot captured for bill ${billNo} (${screenshot.length}B from ${detailUrl})`,
+              );
+            }
           } catch (err) {
             this.logger.warn(
               `likms screenshot capture failed for bill ${billNo}: ${
@@ -1305,12 +1388,51 @@ export class CrawlingCoreService {
             );
           }
 
-          return { html, screenshot, detail, responseUrl, statusCode };
+          return {
+            html,
+            screenshot,
+            detail,
+            requestUrl: detailUrl,
+            responseUrl,
+            statusCode,
+          };
         } finally {
           await page.close();
         }
       },
     );
+  }
+
+  /**
+   * Resolves the page a notice's snapshot **and** its screenshot must be taken
+   * from, for the active list source.
+   *
+   * Returns `null` when the active source cannot serve the bill at all: with
+   * `CRAWLING_NSM_SOURCE=likms` a bill likms does not publish yields `null`
+   * instead of an NSM URL, because the NSM portal answers it with its own error
+   * template - storing that as the snapshot (and screenshot) is the defect this
+   * resolver exists to prevent.
+   *
+   * Callers that capture the page themselves should open exactly this URL; the
+   * archive's `httpMetadata.requestUrl` should record it too, so the stored row
+   * describes the portal it really came from.
+   *
+   * @param billNo The assembly bill number (e.g. "2200001") or a `PRC_...` id.
+   */
+  async resolveSnapshotCaptureTarget(
+    billNo: string,
+  ): Promise<SnapshotCaptureTarget | null> {
+    const normalized = billNo.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    if (isLikmsNsmSourceEnabled()) {
+      const detailUrl = await this.resolveLikmsDetailUrl(normalized);
+      return detailUrl ? { source: 'likms', url: detailUrl } : null;
+    }
+
+    return { source: 'nsm', url: buildNsmDetailUrl(normalized) };
   }
 
   /**
@@ -1375,6 +1497,7 @@ export class CrawlingCoreService {
     html: string;
     screenshot: Buffer | null;
     detail: INsmBillDetail | null;
+    requestUrl: string;
     responseUrl: string;
     statusCode: number;
   }> {
@@ -1461,6 +1584,11 @@ export class CrawlingCoreService {
               Buffer.from(raw),
               `NSM screenshot for bill ${billNo}`,
             );
+            if (screenshot) {
+              this.logger.log(
+                `NSM screenshot captured for bill ${billNo} (${screenshot.length}B from ${detailUrl})`,
+              );
+            }
           } catch (err) {
             this.logger.warn(
               `NSM screenshot capture failed for bill ${billNo}: ${
@@ -1469,7 +1597,14 @@ export class CrawlingCoreService {
             );
           }
 
-          return { html, screenshot, detail, responseUrl, statusCode };
+          return {
+            html,
+            screenshot,
+            detail,
+            requestUrl: detailUrl,
+            responseUrl,
+            statusCode,
+          };
         } finally {
           await page.close();
         }
@@ -1485,13 +1620,17 @@ export class CrawlingCoreService {
    * @param billNo The assembly bill number (e.g. "2200001")
    */
   async captureNsmDetailScreenshot(billNo: string): Promise<Buffer | null> {
-    // Disabled NSM crawler: never open a browser to capture NSM snapshots.
-    if (!isNsmCrawlerEnabled()) {
-      return null;
-    }
-
+    // With `CRAWLING_NSM_SOURCE=likms` the image comes from the likms detail
+    // page - the same page the snapshot came from - with our own browser
+    // session, so it does not depend on the NSM crawler being enabled: that
+    // flag gates `국민참여입법센터` collection, not this capture.
     if (isLikmsNsmSourceEnabled()) {
       return this.captureLikmsDetailScreenshot(billNo);
+    }
+
+    // NSM portal source: a disabled crawler must not open a browser for it.
+    if (!isNsmCrawlerEnabled()) {
+      return null;
     }
 
     const client = new NsmLmSts({
@@ -1576,6 +1715,17 @@ export class CrawlingCoreService {
           await page
             .waitForNetworkIdle({ idleTime: 500, timeout: 15000 })
             .catch(() => undefined);
+
+          // Never store an image of a page the bill does not live on: the
+          // likms source is unconditional, so a capture that landed elsewhere
+          // yields no screenshot at all rather than a foreign portal's page.
+          const landedUrl = page.url();
+          if (!isSnapshotSourcePageUrl(landedUrl, 'likms')) {
+            this.logger.warn(
+              `likms screenshot for bill ${billNo} landed on ${landedUrl} - discarding`,
+            );
+            return null;
+          }
 
           const raw = await page.screenshot({
             fullPage: true,

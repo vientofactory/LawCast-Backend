@@ -4,6 +4,7 @@ import {
   CrawlingCoreService,
   NsmBillDeletedError,
   NsmWaitingroomUnresolvedError,
+  isSnapshotSourcePageUrl,
 } from './crawling-core.service';
 import {
   NsmLmSts,
@@ -856,6 +857,10 @@ describe('CrawlingCoreService', () => {
         expect.anything(),
       );
       expect(result.responseUrl).toContain('likms.assembly.go.kr');
+      // The stored row records the page the snapshot and its screenshot came
+      // from, so it never claims the NSM portal served a likms capture.
+      expect(result.requestUrl).toContain('likms.assembly.go.kr');
+      expect(result.requestUrl).toContain('billId=PRC_X1');
       expect(result.html).toBe('<html>likms detail</html>');
       expect(result.detail).toEqual({
         proposalReason: 'likms 제안이유',
@@ -879,6 +884,9 @@ describe('CrawlingCoreService', () => {
     it('backfills the screenshot from the likms page when that source is active', async () => {
       process.env.CRAWLING_NSM_SOURCE = 'likms';
       mockLikmsCrawler.resolveBillId.mockResolvedValue('PRC_X1');
+      mockPage.url.mockReturnValue(
+        'https://likms.assembly.go.kr/bill/bi/billDetailPage.do?billId=PRC_X1&currMenuNo=2600044',
+      );
 
       const screenshot = await service.captureNsmDetailScreenshot('2221883');
 
@@ -891,6 +899,90 @@ describe('CrawlingCoreService', () => {
       expect(screenshot).toEqual(Buffer.from('jpeg'));
       // The NSM-only screenshot getter must not be used for a likms bill.
       expect(mockNsmLmSts.getDetailScreenshot).not.toHaveBeenCalled();
+    });
+
+    it('captures the likms screenshot even when the NSM portal crawler is switched off', async () => {
+      // The two flags answer different questions: CRAWLING_NSM_ENABLED gates
+      // `국민참여입법센터` collection, while the screenshot of a likms-listed bill
+      // comes from the likms page. Gating this capture on the portal flag left
+      // every likms screenshot unqueued.
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+      process.env.CRAWLING_NSM_ENABLED = 'false';
+      mockLikmsCrawler.resolveBillId.mockResolvedValue('PRC_X1');
+      mockPage.url.mockReturnValue(
+        'https://likms.assembly.go.kr/bill/bi/billDetailPage.do?billId=PRC_X1&currMenuNo=2600044',
+      );
+
+      const screenshot = await service.captureNsmDetailScreenshot('2221883');
+
+      expect(screenshot).toEqual(Buffer.from('jpeg'));
+      expect(mockNsmLmSts.getDetailScreenshot).not.toHaveBeenCalled();
+
+      delete process.env.CRAWLING_NSM_ENABLED;
+    });
+
+    it('discards a likms screenshot whose page landed elsewhere instead of storing a foreign portal', async () => {
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+      mockLikmsCrawler.resolveBillId.mockResolvedValue('PRC_X1');
+      // The likms URL was opened, but the browser ended on the NSM portal - the
+      // page that answers a likms-listed bill with its own 404 shell. Its image
+      // must never be stored as this notice's screenshot.
+      mockPage.url.mockReturnValue(
+        'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2221883/detailRP',
+      );
+
+      const screenshot = await service.captureNsmDetailScreenshot('2221883');
+
+      expect(screenshot).toBeNull();
+      expect(mockPage.screenshot).not.toHaveBeenCalled();
+    });
+
+    it('refuses a likms snapshot that landed on another portal', async () => {
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+      mockLikmsCrawler.resolveBillId.mockResolvedValue('PRC_X1');
+      mockLikmsAdapter.getDetail.mockResolvedValue({
+        proposalReason: 'likms 제안이유',
+      });
+      mockPage.content.mockResolvedValue('<html>errorWrap</html>');
+      mockPage.url.mockReturnValue(
+        'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2221883/detailRP',
+      );
+
+      await expect(service.captureNsmDetailFull('2221883')).rejects.toThrow(
+        /landed on https:\/\/opinion\.lawmaking\.go\.kr/,
+      );
+      expect(mockPage.screenshot).not.toHaveBeenCalled();
+    });
+
+    it('resolves the snapshot page from the active source, with no cross-portal fallback', async () => {
+      process.env.CRAWLING_NSM_SOURCE = 'likms';
+      mockLikmsCrawler.resolveBillId.mockResolvedValue('PRC_X9');
+
+      await expect(
+        service.resolveSnapshotCaptureTarget('   '),
+      ).resolves.toBeNull();
+      await expect(
+        service.resolveSnapshotCaptureTarget('2221883'),
+      ).resolves.toEqual({
+        source: 'likms',
+        url: 'https://likms.assembly.go.kr/bill/bi/billDetailPage.do?billId=PRC_X9&currMenuNo=2600044',
+      });
+
+      // A bill likms cannot resolve yields nothing at all: the NSM portal
+      // answers it with its own error template, which must never become the
+      // snapshot or the screenshot of a likms-sourced notice.
+      mockLikmsCrawler.resolveBillId.mockResolvedValue(null);
+      await expect(
+        service.resolveSnapshotCaptureTarget('2299999'),
+      ).resolves.toBeNull();
+
+      delete process.env.CRAWLING_NSM_SOURCE;
+      await expect(
+        service.resolveSnapshotCaptureTarget('2200001'),
+      ).resolves.toEqual({
+        source: 'nsm',
+        url: 'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2200001/detailRP',
+      });
     });
 
     it('maps adapter items into the same CachedNotice shape as NSM items', () => {
@@ -972,5 +1064,42 @@ describe('CrawlingCoreService', () => {
         CrawlingCoreService.isCrawlableNsmBill({ ...baseItem, billNo: '0' }),
       ).toBe(false);
     });
+  });
+});
+
+describe('isSnapshotSourcePageUrl', () => {
+  it('accepts the page host each source owns', () => {
+    expect(
+      isSnapshotSourcePageUrl(
+        'https://likms.assembly.go.kr/bill/bi/billDetailPage.do?billId=PRC_X1',
+        'likms',
+      ),
+    ).toBe(true);
+    expect(
+      isSnapshotSourcePageUrl(
+        'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2200001/detailRP',
+        'nsm',
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects the other portal so a likms capture can never store it', () => {
+    expect(
+      isSnapshotSourcePageUrl(
+        'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2221883/detailRP',
+        'likms',
+      ),
+    ).toBe(false);
+    expect(
+      isSnapshotSourcePageUrl(
+        'https://likms.assembly.go.kr/bill/bi/billDetailPage.do?billId=PRC_X1',
+        'nsm',
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects an empty or unparsable URL', () => {
+    expect(isSnapshotSourcePageUrl('', 'likms')).toBe(false);
+    expect(isSnapshotSourcePageUrl('about:blank', 'likms')).toBe(false);
   });
 });

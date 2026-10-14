@@ -732,6 +732,8 @@ describe('ArchiveOrchestratorService', () => {
           html: '<html>nsm</html>',
           screenshot: Buffer.from('shot'),
           detail: { proposalReason: '사유', session: '제418회' },
+          requestUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2220565/detailRP',
           responseUrl:
             'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2220565/detailRP',
           statusCode: 200,
@@ -764,6 +766,7 @@ describe('ArchiveOrchestratorService', () => {
           html: '   ',
           screenshot: null,
           detail: null,
+          requestUrl: 'https://opinion.lawmaking.go.kr/',
           responseUrl: 'https://opinion.lawmaking.go.kr/',
           statusCode: 200,
         },
@@ -785,6 +788,8 @@ describe('ArchiveOrchestratorService', () => {
           html: '<html>nsm detail</html>',
           screenshot: null,
           detail: { proposalReason: '제안이유' },
+          requestUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2220570/detailRP',
           responseUrl:
             'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2220570/detailRP',
           statusCode: 200,
@@ -846,6 +851,7 @@ describe('ArchiveOrchestratorService', () => {
           html: '<html>nsm</html>',
           screenshot: null,
           detail: { proposalReason: '사유' },
+          requestUrl: 'https://opinion.lawmaking.go.kr/',
           responseUrl: 'https://opinion.lawmaking.go.kr/',
           statusCode: 200,
         },
@@ -951,6 +957,8 @@ describe('ArchiveOrchestratorService', () => {
           html: '<html>nsm detail</html>',
           screenshot: Buffer.from('shot'),
           detail: { proposalReason: '  사유 본문  ', session: '제418회' },
+          requestUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219775/detailRP',
           responseUrl:
             'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219775/detailRP',
           statusCode: 200,
@@ -1050,6 +1058,8 @@ describe('ArchiveOrchestratorService', () => {
           html: '<html>nsm detail</html>',
           screenshot: null,
           detail: { proposalReason: '사유 본문', session: null },
+          requestUrl:
+            'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219782/detailRP',
           responseUrl:
             'https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out/2219782/detailRP',
           statusCode: 200,
