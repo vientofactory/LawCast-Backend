@@ -415,30 +415,35 @@ describe('proposalReason drain observation', () => {
             after_value TEXT
           );
 
-          -- 1001: recoverable and never attempted.
+          -- 21076: a bill from an earlier Assembly. It is active and has no
+          -- reason, but it sits below the backfill floor, so the pool must not
+          -- count it (the drain never seeds it).
           INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId)
-            VALUES (1001, 'active', NULL, 'c1');
-          -- 1002: no recoverable source, attempted once.
-          INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId, proposal_reason_retry_count, proposal_reason_retried_at)
-            VALUES (1002, 'active', '  ', NULL, 1, '2026-10-14 12:20:00');
-          -- 1003: no recoverable source, attempted four times (stuck).
-          INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId, proposal_reason_retry_count, proposal_reason_retried_at)
-            VALUES (1003, 'active', NULL, NULL, 4, '2026-10-14 12:40:00');
-          -- 1004: reason arrived through the chain, so it left the pool.
+            VALUES (21076, 'active', NULL, NULL);
+          -- 2201001: recoverable and never attempted.
           INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId)
-            VALUES (1004, 'active', NULL, 'c2');
-          INSERT INTO notice_change_events (id, notice_num, created_at) VALUES (1, 1004, '2026-10-14 12:45:00');
+            VALUES (2201001, 'active', NULL, 'c1');
+          -- 2201002: no recoverable source, attempted once.
+          INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId, proposal_reason_retry_count, proposal_reason_retried_at)
+            VALUES (2201002, 'active', '  ', NULL, 1, '2026-10-14 12:20:00');
+          -- 2201003: no recoverable source, attempted four times (stuck).
+          INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId, proposal_reason_retry_count, proposal_reason_retried_at)
+            VALUES (2201003, 'active', NULL, NULL, 4, '2026-10-14 12:40:00');
+          -- 2201004: reason arrived through the chain, so it left the pool.
+          INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId)
+            VALUES (2201004, 'active', NULL, 'c2');
+          INSERT INTO notice_change_events (id, notice_num, created_at) VALUES (1, 2201004, '2026-10-14 12:45:00');
           INSERT INTO notice_change_details (id, event_id, field_path, after_value) VALUES (1, 1, 'proposalReason', '사유');
-          -- 1005: the reason is already in the column.
+          -- 2201005: the reason is already in the column.
           INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId)
-            VALUES (1005, 'active', 'already there', 'c3');
-          -- 1006: deleted at the source.
+            VALUES (2201005, 'active', 'already there', 'c3');
+          -- 2201006: deleted at the source.
           INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId)
-            VALUES (1006, 'source_deleted', NULL, 'c4');
-          -- 1007: a source_deleted transition was recorded for it.
+            VALUES (2201006, 'source_deleted', NULL, 'c4');
+          -- 2201007: a source_deleted transition was recorded for it.
           INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId)
-            VALUES (1007, 'active', NULL, 'c5');
-          INSERT INTO notice_change_events (id, notice_num, created_at) VALUES (2, 1007, '2026-10-01 00:00:00');
+            VALUES (2201007, 'active', NULL, 'c5');
+          INSERT INTO notice_change_events (id, notice_num, created_at) VALUES (2, 2201007, '2026-10-01 00:00:00');
           INSERT INTO notice_change_details (id, event_id, field_path, after_value) VALUES (2, 2, 'lifecycleStatus', 'source_deleted');
           `,
           (error) => (error ? reject(error) : resolve()),
@@ -458,8 +463,11 @@ describe('proposalReason drain observation', () => {
         includePoolScan: true,
       });
 
-      // 1004 (recorded arrival), 1005 (reason present), 1006 (deleted),
-      // 1007 (recorded deletion) are all outside the candidate set.
+      // 2201004 (recorded arrival), 2201005 (reason present), 2201006
+      // (deleted) and 2201007 (recorded deletion) are all outside the
+      // candidate set, and so is 21076: it is below the backfill floor, which
+      // is why the pool counts three rows with a fourth reasonless row in the
+      // table.
       expect(facts.poolSummary).toEqual({
         total: 3,
         contentIdNull: 2,
@@ -468,11 +476,11 @@ describe('proposalReason drain observation', () => {
       expect(facts.trackingColumnsPresent).toBe(true);
       expect(facts.coverage).toEqual({ attempted: 2, neverAttempted: 1 });
       expect(facts.stuckRows).toEqual([
-        { noticeNum: 1003, retryCount: 4, contentIdPresent: false },
+        { noticeNum: 2201003, retryCount: 4, contentIdPresent: false },
       ]);
       expect(
         facts.attemptStamps.map((stamp) => stamp.noticeNum).sort(),
-      ).toEqual([1002, 1003]);
+      ).toEqual([2201002, 2201003]);
       expect(
         facts.attemptStamps.filter((stamp) => stamp.contentIdPresent),
       ).toEqual([]);
@@ -533,7 +541,7 @@ describe('proposalReason drain observation', () => {
           );
           CREATE TABLE notice_change_events (id INTEGER PRIMARY KEY, notice_num INTEGER NOT NULL, created_at DATETIME);
           CREATE TABLE notice_change_details (id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, field_path TEXT NOT NULL, after_value TEXT);
-          INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId) VALUES (1, 'active', NULL, NULL);
+          INSERT INTO notice_archives (noticeNum, lifecycle_status, proposalReason, contentId) VALUES (2200001, 'active', NULL, NULL);
           `,
           (error) => (error ? reject(error) : resolve()),
         ),

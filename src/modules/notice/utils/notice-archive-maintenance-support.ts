@@ -19,6 +19,7 @@ import {
   type ArchiveSummaryState,
 } from '../notice-archive.service';
 import { AI_SUMMARY_STATUS } from '../../../modules/crawling/utils/ai-summary-status.utils';
+import { APP_CONSTANTS } from '../../../config/app.config';
 
 export interface NoticeArchiveMaintenanceDeps {
   archiveRepository: Repository<NoticeArchive>;
@@ -69,6 +70,13 @@ export interface SummaryStateWriteStats {
  * re-selected again: the 180 rows with a recoverable reason behind them were
  * never reached
  * (agent_memories/39-likms-reason-backfill-throughput/).
+ *
+ * **Scope is the current Assembly or later.** Rows below
+ * `ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM` belong to an earlier Assembly (the
+ * archive keeps historical bills whose sources publish no detail page), so an
+ * attempt on them can only ever return nothing and log a warning. At 20 rows a
+ * tick they also consumed the whole candidate page. See the constant for the
+ * production numbers.
  */
 export async function getProposalReasonRetryCandidates(
   deps: NoticeArchiveMaintenanceDeps,
@@ -96,6 +104,9 @@ export async function getProposalReasonRetryCandidates(
     ])
     .where('na.lifecycle_status = :status', {
       status: NOTICE_LIFECYCLE_STATUS.ACTIVE,
+    })
+    .andWhere('na.noticeNum >= :minNoticeNum', {
+      minNoticeNum: APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
     })
     .andWhere("(na.proposalReason IS NULL OR TRIM(na.proposalReason) = '')")
     .andWhere(

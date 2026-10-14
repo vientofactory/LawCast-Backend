@@ -11,11 +11,11 @@ import { NoticeArchiveSnapshotState } from './notice-archive-summary-state.entit
  * Runs the proposalReason retry candidate query against a real SQLite schema
  * built by the full migration chain.
  *
- * The candidate page is decided entirely in SQL - the empty-reason predicate,
- * the two change-chain `NOT EXISTS` guards, and the ORDER BY that has to keep
- * the cursor moving. Mocked repositories cannot see any of it, so the
- * behaviour that stops the page from pinning on rows whose reason no source
- * can supply is verified here (see
+ * The candidate page is decided entirely in SQL - the Assembly floor, the
+ * empty-reason predicate, the two change-chain `NOT EXISTS` guards, and the
+ * ORDER BY that has to keep the cursor moving. Mocked repositories cannot see
+ * any of it, so the behaviour that stops the page from pinning on rows whose
+ * reason no source can supply is verified here (see
  * `agent_memories/39-likms-reason-backfill-throughput/`).
  */
 describe('NoticeArchiveService proposalReason retry candidate cursor (real SQLite schema)', () => {
@@ -105,13 +105,14 @@ describe('NoticeArchiveService proposalReason retry candidate cursor (real SQLit
 
   /**
    * The production shape: twenty unrecoverable rows with the lowest notice
-   * numbers sit in front of the rows that do have a recoverable reason.
+   * numbers of the current Assembly sit in front of the rows that do have a
+   * recoverable reason.
    */
   const seedWedgedHead = async (): Promise<{
     head: number[];
     real: number[];
   }> => {
-    const head = Array.from({ length: 20 }, (_, index) => 20490 + index);
+    const head = Array.from({ length: 20 }, (_, index) => 2200100 + index);
     const real = [2219108, 2219875];
 
     for (const noticeNum of head) {
@@ -193,7 +194,7 @@ describe('NoticeArchiveService proposalReason retry candidate cursor (real SQLit
     expect(secondPage.slice(0, real.length)).toEqual(real);
     expect(secondPage.slice(real.length)).toEqual(head.slice(0, 18));
 
-    const stampedRow = await readRetryStamp(20490);
+    const stampedRow = await readRetryStamp(2200100);
     expect(stampedRow.count).toBe(1);
     expect(stampedRow.attemptedAt?.toISOString()).toBe(
       '2026-10-15T00:00:00.000Z',
@@ -201,33 +202,33 @@ describe('NoticeArchiveService proposalReason retry candidate cursor (real SQLit
   });
 
   it('rotates within a page instead of keeping one fixed first entry', async () => {
-    await insertReasonlessNotice({ noticeNum: 20490 });
-    await insertReasonlessNotice({ noticeNum: 20491 });
-    await insertReasonlessNotice({ noticeNum: 20492 });
+    await insertReasonlessNotice({ noticeNum: 2200100 });
+    await insertReasonlessNotice({ noticeNum: 2200101 });
+    await insertReasonlessNotice({ noticeNum: 2200102 });
 
-    expect(await candidateNums(3)).toEqual([20490, 20491, 20492]);
+    expect(await candidateNums(3)).toEqual([2200100, 2200101, 2200102]);
 
     await service.recordProposalReasonAttempts(
-      [20490],
+      [2200100],
       attemptAt('2026-10-15T00:00:01.000Z'),
     );
-    expect(await candidateNums(3)).toEqual([20491, 20492, 20490]);
+    expect(await candidateNums(3)).toEqual([2200101, 2200102, 2200100]);
 
     await service.recordProposalReasonAttempts(
-      [20491],
+      [2200101],
       attemptAt('2026-10-15T00:00:02.000Z'),
     );
     // Equal attempt count breaks by the oldest attempt, so the row attempted
     // first is served first within its bucket.
-    expect(await candidateNums(3)).toEqual([20492, 20490, 20491]);
+    expect(await candidateNums(3)).toEqual([2200102, 2200100, 2200101]);
   });
 
   it('serves a newly arrived candidate before rows that already failed', async () => {
-    await insertReasonlessNotice({ noticeNum: 20490 });
-    await insertReasonlessNotice({ noticeNum: 20491 });
+    await insertReasonlessNotice({ noticeNum: 2200100 });
+    await insertReasonlessNotice({ noticeNum: 2200101 });
 
     await service.recordProposalReasonAttempts(
-      [20490, 20491],
+      [2200100, 2200101],
       attemptAt('2026-10-15T00:00:00.000Z'),
     );
 
@@ -238,22 +239,22 @@ describe('NoticeArchiveService proposalReason retry candidate cursor (real SQLit
       contentId: 'PRC_2221827',
     });
 
-    expect(await candidateNums(5)).toEqual([2221827, 20490, 20491]);
+    expect(await candidateNums(5)).toEqual([2221827, 2200100, 2200101]);
   });
 
   it('counts every attempt and keeps the newest attempt time', async () => {
-    await insertReasonlessNotice({ noticeNum: 20490 });
+    await insertReasonlessNotice({ noticeNum: 2200100 });
 
     await service.recordProposalReasonAttempts(
-      [20490, 20490],
+      [2200100, 2200100],
       attemptAt('2026-10-15T00:00:00.000Z'),
     );
     await service.recordProposalReasonAttempts(
-      [20490],
+      [2200100],
       attemptAt('2026-10-15T01:00:00.000Z'),
     );
 
-    const stamp = await readRetryStamp(20490);
+    const stamp = await readRetryStamp(2200100);
     // Two attempts in one call collapse into one row, then the second call
     // increments again.
     expect(stamp.count).toBe(2);
@@ -261,14 +262,31 @@ describe('NoticeArchiveService proposalReason retry candidate cursor (real SQLit
   });
 
   it('ignores non-row inputs when stamping attempts', async () => {
-    await insertReasonlessNotice({ noticeNum: 20490 });
+    await insertReasonlessNotice({ noticeNum: 2200100 });
 
     const stamped = await service.recordProposalReasonAttempts([
-      0, -1, 20490.5,
+      0, -1, 2200100.5,
     ]);
 
     expect(stamped).toBe(0);
-    expect((await readRetryStamp(20490)).count).toBe(0);
+    expect((await readRetryStamp(2200100)).count).toBe(0);
+  });
+
+  it('never seeds bills from an earlier Assembly, however unrecoverable', async () => {
+    // The archive keeps historical bills from earlier Assemblies. Their sources
+    // publish no detail page, so an attempt on one can only log a warning - and
+    // because their numbers are the lowest in the table they used to head every
+    // page (production: `21076`, its proposal date 1953).
+    for (const noticeNum of [20490, 21076, 50589]) {
+      await insertReasonlessNotice({ noticeNum, contentId: null });
+    }
+
+    await insertReasonlessNotice({
+      noticeNum: 2200076,
+      contentId: `PRC_2200076`,
+    });
+
+    expect(await candidateNums(20)).toEqual([2200076]);
   });
 
   it('still excludes rows whose reason arrived through the change chain', async () => {

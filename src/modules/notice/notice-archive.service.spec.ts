@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { DataSource } from 'typeorm';
+import { DataSource, type FindOperator } from 'typeorm';
+import { APP_CONSTANTS } from '../../config/app.config';
 import { NoticeArchiveService } from './notice-archive.service';
 import { NoticeArchive } from '../notice/notice-archive.entity';
 import { NoticeArchiveSnapshotState } from './notice-archive-summary-state.entity';
@@ -1266,6 +1267,37 @@ describe('NoticeArchiveService', () => {
       // The pre-fix scan dropped 3101 for having a contentId, so only the NSM
       // row came back.
       expect(page.map((row) => row.num)).toEqual([3101, 3102]);
+    });
+
+    it('starts every summary scan at the current Assembly', async () => {
+      const summaryStateRepository = createPagingSummaryStateRepository([]);
+      const service = new NoticeArchiveService(
+        createRepositoryMock() as any,
+        summaryStateRepository as any,
+        createChangeTrackingServiceMock() as any,
+        createDiscordBridgeMock() as any,
+        createIntegrityCheckRepositoryMock() as any,
+        createIntegrityStateRepositoryMock() as any,
+      );
+
+      await service.getNotSupportedSummaryRecoveryPage(0, 5);
+      await service.getPendingSummaryPageByOffset(0, 5);
+
+      // Bills from an earlier Assembly are historical records that no source
+      // can enrich, so the scan must not offer them: they would be re-staged
+      // and re-confirmed on every pass.
+      const floors = summaryStateRepository.find.mock.calls.map(
+        (call) =>
+          (call[0] as { where: { noticeNum: FindOperator<number> } }).where
+            .noticeNum,
+      );
+      expect(floors).toHaveLength(2);
+      for (const floor of floors) {
+        expect(floor.type).toBe('moreThanOrEqual');
+        expect(floor.value).toBe(
+          APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
+        );
+      }
     });
   });
 

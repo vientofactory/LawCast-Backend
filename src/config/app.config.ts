@@ -81,6 +81,22 @@ export interface AppConfig {
 }
 
 // Application Constants
+
+/**
+ * Notice numbers encode the assembly they belong to as `<assembly><5-digit
+ * serial>`, so the 22nd Assembly's bills start at 2200001 and the 21st
+ * Assembly's at 2100001. Bills from earlier Assemblies kept in the archive use
+ * the short legacy numbering instead (`20490`..`50589` in production, reaching
+ * back to 1953), which no assembly of this scheme can produce.
+ */
+const ASSEMBLY_NOTICE_NUM_SCALE = 100_000;
+
+/** Assembly the crawling and backfill scope targets. */
+const CURRENT_ASSEMBLY_NUMBER = parseIntWithDefault(
+  process.env.ARCHIVE_SYNC_CURRENT_ASSEMBLY,
+  22,
+);
+
 export const APP_CONSTANTS = {
   DEFAULT_PORT: 3001,
   LOG: {
@@ -417,6 +433,23 @@ export const APP_CONSTANTS = {
       MAX_SIZE: 5000,
       TTL_SECONDS: Math.ceil((24 * 60 * 60 * 1000) / 1000) * 2,
     },
+    /**
+     * Assembly the backfill pool covers, and the notice-number floor it implies.
+     *
+     * The archive keeps historical bills from earlier Assemblies as immutable
+     * legacy rows. No bill source publishes a detail page for them, so every
+     * `proposalReason` retry and every summary pass resolves to nothing: they
+     * cannot be enriched, only re-attempted. Because their numbers are the
+     * smallest in the table they sat at the head of every candidate page, and
+     * each pass emitted one warning per row (production: 33 such rows, `21076`
+     * among them, ahead of the 20 current-Assembly rows that do have a
+     * recoverable reason). Backfills target the current Assembly and everything
+     * after it; the floor is derived from the assembly number so the next
+     * Assembly only needs `ARCHIVE_SYNC_CURRENT_ASSEMBLY` bumped.
+     */
+    CURRENT_ASSEMBLY: CURRENT_ASSEMBLY_NUMBER,
+    BACKFILL_MIN_NOTICE_NUM:
+      CURRENT_ASSEMBLY_NUMBER * ASSEMBLY_NOTICE_NUM_SCALE,
     /**
      * How long the 15-minute `proposalReason` drain tick waits for a free
      * browser window before deferring.
