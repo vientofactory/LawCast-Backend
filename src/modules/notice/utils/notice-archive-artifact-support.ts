@@ -21,6 +21,7 @@ import {
 import type {
   ArchiveDetailResult,
   ArchiveExportResult,
+  ArchiveHttpMetadata,
 } from '../notice-archive.service';
 
 export class NoticeArchiveArtifactSupport {
@@ -219,8 +220,16 @@ export class NoticeArchiveArtifactSupport {
       row.contentNoticePeriod,
       row.contentProposalSession,
     ].some((value) => !value);
+    // Parse the archived page only when it really is the PAL notice page: the
+    // fallback selectors describe `pal.assembly.go.kr` markup, while NSM
+    // (`opinion.lawmaking.go.kr`) and LIKMS (`likms.assembly.go.kr`) rows
+    // archive their own portal's page, where the same `<td>` positions hold
+    // unrelated text (a LIKMS detail page yielded the committee label
+    // "제안회기 제22대(2024~2028)제439회" and the referral date "문서").
     const fallbackFromHtml = this.extractPalFieldsFromSourceHtml(
-      needsHtmlFallback ? await loadSourceHtml() : null,
+      needsHtmlFallback && this.isPalNoticePage(httpMetadata)
+        ? await loadSourceHtml()
+        : null,
     );
     const sourceHtmlSize = Number(artifactFlags[0]?.sourceHtmlSize ?? 0);
 
@@ -273,6 +282,19 @@ export class NoticeArchiveArtifactSupport {
         captureError: row.screenshotCaptureError ?? null,
       },
     };
+  }
+
+  /**
+   * Whether the archived page came from the PAL (`pal.assembly.go.kr`)
+   * legislative-notice site - the markup `extractPalFieldsFromSourceHtml`
+   * understands. NSM and LIKMS rows archive their own portal's page instead.
+   */
+  private isPalNoticePage(httpMetadata: ArchiveHttpMetadata): boolean {
+    const palPagePattern = /^https?:\/\/pal\.assembly\.go\.kr(\/|$)/i;
+
+    return [httpMetadata.requestUrl, httpMetadata.responseUrl].some(
+      (url) => typeof url === 'string' && palPagePattern.test(url),
+    );
   }
 
   private extractPalFieldsFromSourceHtml(sourceHtml: string | null): {
