@@ -45,6 +45,23 @@ export interface AppConfig {
      * sidecar chunk cap; the public semantic endpoint's MAX_K stays separate.
      */
     hybridMaxNotices: number;
+    /**
+     * No-result gate over the sidecar's per-hit `lexicalEvidence` flag:
+     * `off` keeps pure dense ranking, `shadow` only logs, `enforce` drops
+     * hits without evidence after collection.
+     */
+    lexicalGate: 'off' | 'shadow' | 'enforce';
+    /**
+     * Dense top-1 score that skips the lexical gate (high-confidence
+     * bypass, `SEMANTIC_SEARCH_LEXICAL_BYPASS_SCORE`, default 0.6).
+     */
+    lexicalBypassScore: number;
+    /**
+     * Cross-encoder logit floor for the gate (`SEMANTIC_SEARCH_RERANK_CUTOFF`,
+     * calibrated -1.0 on the 50-query set). Null (unset/blank/invalid) keeps
+     * the gate lexical-only, exactly as before.
+     */
+    rerankCutoff: number | null;
   };
   notion: {
     apiKey: string;
@@ -627,6 +644,26 @@ export default (): AppConfig => ({
       process.env.SEMANTIC_SEARCH_HYBRID_MAX_NOTICES,
       100,
     ),
+    // No-result gate over the sidecar's per-hit `lexicalEvidence` flag:
+    // `off` keeps pure dense ranking, `shadow` logs what the gate would do
+    // without changing responses, `enforce` drops hits without evidence so
+    // unrelated queries answer with explicit empty results. Unknown values
+    // fail safe to `off`.
+    lexicalGate: parseLexicalGate(process.env.SEMANTIC_SEARCH_LEXICAL_GATE),
+    // Dense top-1 score at or above which the lexical gate is skipped:
+    // a high-confidence dense match (e.g. colloquial paraphrases whose
+    // wording shares no surface token) must not be emptied by the gate.
+    // Calibrated on the 111-query set (session 42): 0.60 keeps all 5 noise
+    // queries gated while letting 35/40 labeled through (noise max 0.536).
+    lexicalBypassScore: parseFloatWithDefault(
+      process.env.SEMANTIC_SEARCH_LEXICAL_BYPASS_SCORE,
+      0.6,
+    ),
+    // Cross-encoder logit floor the gate additionally enforces when the
+    // sidecar annotates hits (`rerankScore`): keep <=> (rerank >= cutoff) or
+    // (bypassed and evidence). Blank/missing/invalid disables the rerank
+    // leg (null), so the gate stays lexical-only as before.
+    rerankCutoff: parseRerankCutoff(process.env.SEMANTIC_SEARCH_RERANK_CUTOFF),
   },
   // Notion-backed admin notice board (read-only; CRUD happens in Notion).
   // The feature is enabled only when both apiKey and databaseId are set.
@@ -731,4 +768,37 @@ function parseIntWithDefault(
 ): number {
   const parsed = parseInt(value ?? '', 10);
   return isNaN(parsed) ? fallback : parsed;
+}
+
+/** Parse a float env value; non-numeric input keeps the fallback. */
+function parseFloatWithDefault(
+  value: string | undefined,
+  fallback: number,
+): number {
+  const parsed = parseFloat(value ?? '');
+  return isNaN(parsed) ? fallback : parsed;
+}
+
+/**
+ * Rerank logit floor for semantic search; blank/missing/non-numeric input
+ * disables the rerank leg (null), keeping the gate lexical-only.
+ */
+function parseRerankCutoff(value: string | undefined): number | null {
+  const text = value?.trim() ?? '';
+  if (!text) {
+    return null;
+  }
+  const parsed = parseFloat(text);
+  return isNaN(parsed) ? null : parsed;
+}
+
+/** Lexical-evidence gate mode for semantic search; unknown values are `off`. */
+function parseLexicalGate(
+  value: string | undefined,
+): 'off' | 'shadow' | 'enforce' {
+  const normalized = value?.trim().toLowerCase() ?? '';
+  if (normalized === 'shadow' || normalized === 'enforce') {
+    return normalized;
+  }
+  return 'off';
 }
