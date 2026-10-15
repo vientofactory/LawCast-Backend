@@ -8,7 +8,8 @@ import { AdminNoticesController } from './admin-notices.controller';
 
 describe('AdminNoticesController', () => {
   const createController = () => {
-    const getPublishedNotices = jest.fn<() => Promise<unknown[]>>();
+    const getPublishedNotices =
+      jest.fn<(options?: { includeBodies?: boolean }) => Promise<unknown[]>>();
     const assertAllowed =
       jest.fn<(req: Request, bucket?: string) => Promise<void>>();
     const controller = new AdminNoticesController(
@@ -70,6 +71,10 @@ describe('AdminNoticesController', () => {
 
     expect(assertAllowed).toHaveBeenCalledWith(req);
     expect(getPublishedNotices).toHaveBeenCalledTimes(1);
+    // The cap-1 endpoint never pays the block-conversion cost.
+    expect(getPublishedNotices).toHaveBeenCalledWith({
+      includeBodies: false,
+    });
     // Cap-1 view: content/body never leave the endpoint, even when present.
     expect(response).toEqual({
       success: true,

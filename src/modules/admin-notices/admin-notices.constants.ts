@@ -61,3 +61,15 @@ export const NOTION_BODY_MAX_BLOCK_PAGES = 2;
  * property-based content as their body fallback.
  */
 export const NOTION_BODY_FETCH_MAX_NOTICES = 50;
+
+/**
+ * Wall-clock budget for one refresh sequence (query pages plus body
+ * conversions). The per-request `NOTION_TIMEOUT` bounds each Notion call,
+ * but the sequence runs serially (shared pacing) and is unbounded in
+ * aggregate — up to 10 query pages plus 50 body conversions — so without
+ * this a pathological board holds every cold waiter for minutes. Exceeding
+ * the budget answers 503 fast while the fetch continues in the background
+ * and still warms the cache on success. Overridable via
+ * NOTION_REFRESH_BUDGET_MS (values <= 0 disable the budget).
+ */
+export const ADMIN_NOTICES_REFRESH_BUDGET_MS = 15 * 1000;

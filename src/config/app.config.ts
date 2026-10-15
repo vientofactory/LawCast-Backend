@@ -70,6 +70,7 @@ export interface AppConfig {
     timeout: number;
     cacheTtlMs: number;
     minRequestIntervalMs: number;
+    refreshBudgetMs: number;
   };
   frontend: {
     urls: string[];
@@ -678,6 +679,11 @@ export default (): AppConfig => ({
     minRequestIntervalMs: parseIntWithDefault(
       process.env.NOTION_MIN_REQUEST_INTERVAL_MS,
       340,
+    ),
+    // Aggregate budget for one refresh sequence (query pages + bodies).
+    refreshBudgetMs: parseIntWithDefault(
+      process.env.NOTION_REFRESH_BUDGET_MS,
+      15 * 1000,
     ),
   },
   frontend: {

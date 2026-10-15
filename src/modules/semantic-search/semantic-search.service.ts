@@ -477,9 +477,14 @@ export class SemanticSearchService {
     query: string,
     chunkK: number,
   ): Promise<SemanticSidecarSearchResponse> {
+    // The sidecar's cross-encoder pass costs ~1s of CPU per request, so it
+    // is requested only when this service consumes the logits (rerank leg
+    // enabled via `SEMANTIC_SEARCH_RERANK_CUTOFF`). A sidecar older than the
+    // parameter ignores it and scores as before (fail-open: scores unused
+    // here are simply annotated, never gated on).
     const response = await this.http.get<SemanticSidecarSearchResponse>(
       '/search',
-      { params: { query, k: chunkK } },
+      { params: { query, k: chunkK, rerank: this.rerankCutoff !== null } },
     );
     return response.data;
   }
