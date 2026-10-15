@@ -22,6 +22,9 @@ describe('SemanticSearchService', () => {
   const createService = (
     enabled = true,
     chunkCapRefreshMs = 60_000,
+    lexicalGate: 'off' | 'shadow' | 'enforce' = 'off',
+    lexicalBypassScore = 0.6,
+    rerankCutoff: number | null = null,
   ): SemanticSearchService => {
     mockedAxios.create.mockReturnValue({ get: mockGet } as any);
 
@@ -32,6 +35,10 @@ describe('SemanticSearchService', () => {
         if (key === 'semanticSearch.timeout') return 10000;
         if (key === 'semanticSearch.chunkCapRefreshMs')
           return chunkCapRefreshMs;
+        if (key === 'semanticSearch.lexicalGate') return lexicalGate;
+        if (key === 'semanticSearch.lexicalBypassScore')
+          return lexicalBypassScore;
+        if (key === 'semanticSearch.rerankCutoff') return rerankCutoff;
         return undefined;
       }),
     } as unknown as ConfigService;
@@ -734,5 +741,269 @@ describe('SemanticSearchService', () => {
       ServiceUnavailableException,
     );
     expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  describe('lexical-evidence gate', () => {
+    const gatedChunk = (
+      noticeNum: number,
+      text: string,
+      lexicalEvidence: boolean,
+    ) => ({
+      ...sidecarChunk(noticeNum, text),
+      lexicalEvidence,
+    });
+
+    const gateWindow = () => ({
+      data: {
+        query: '오늘 점심 메뉴',
+        k: 15,
+        model: 'nlpai-lab/KURE-v1',
+        lastUpdateAt: STAMP,
+        results: [
+          gatedChunk(101, '증거 있는 청크', true),
+          gatedChunk(102, '증거 없는 청크', false),
+        ],
+        weakResults: [gatedChunk(103, '약한 증거 없는 청크', false)],
+      },
+    });
+
+    it('leaves responses untouched when the gate is off', async () => {
+      const service = createService(true, 60_000, 'off');
+      mockGet.mockResolvedValue(gateWindow());
+
+      const result = await service.searchSemantic('오늘 점심 메뉴', 5);
+
+      expect(result.results.map((hit) => hit.noticeNum)).toEqual([101, 102]);
+      expect(result.weakResults.map((hit) => hit.noticeNum)).toEqual([103]);
+    });
+
+    it('serves full results but logs in shadow mode', async () => {
+      const service = createService(true, 60_000, 'shadow');
+      mockGet.mockResolvedValue(gateWindow());
+
+      const result = await service.searchSemantic('오늘 점심 메뉴', 5);
+
+      expect(result.mode).toBe('semantic');
+      expect(result.results.map((hit) => hit.noticeNum)).toEqual([101, 102]);
+      expect(result.weakResults.map((hit) => hit.noticeNum)).toEqual([103]);
+    });
+
+    it('drops hits without evidence in enforce mode', async () => {
+      const service = createService(true, 60_000, 'enforce');
+      mockGet.mockResolvedValue(gateWindow());
+
+      const result = await service.searchSemantic('오늘 점심 메뉴', 5);
+
+      expect(result.mode).toBe('semantic');
+      expect(result.fallbackReason).toBeNull();
+      expect(result.results.map((hit) => hit.noticeNum)).toEqual([101]);
+      expect(result.weakResults).toEqual([]);
+      expect(mockSearchNotices).not.toHaveBeenCalled();
+    });
+
+    it('answers explicit empty results without keyword fallback in enforce mode', async () => {
+      const service = createService(true, 60_000, 'enforce');
+      mockGet.mockResolvedValue({
+        data: {
+          query: '오늘 점심 메뉴',
+          k: 15,
+          model: 'nlpai-lab/KURE-v1',
+          lastUpdateAt: STAMP,
+          results: [gatedChunk(102, '증거 없는 청크', false)],
+          weakResults: [gatedChunk(103, '약한 증거 없는 청크', false)],
+        },
+      });
+
+      const result = await service.searchSemantic('오늘 점심 메뉴', 5);
+
+      expect(result.mode).toBe('semantic');
+      expect(result.fallbackReason).toBeNull();
+      expect(result.results).toEqual([]);
+      expect(result.weakResults).toEqual([]);
+      expect(mockSearchNotices).not.toHaveBeenCalled();
+    });
+
+    it('keeps a notice when any of its chunks carries evidence', async () => {
+      const service = createService(true, 60_000, 'enforce');
+      mockGet.mockResolvedValue({
+        data: {
+          query: '질의',
+          k: 15,
+          model: 'nlpai-lab/KURE-v1',
+          lastUpdateAt: STAMP,
+          results: [
+            gatedChunk(101, '증거 없는 대표 청크', false),
+            gatedChunk(101, '증거 있는 두 번째 청크', true),
+          ],
+          weakResults: [],
+        },
+      });
+
+      const result = await service.searchSemantic('질의', 5);
+
+      // The best chunk still decides the content; evidence is OR over all.
+      expect(result.results.map((hit) => hit.noticeNum)).toEqual([101]);
+      expect(result.results[0].excerpt).toBe('증거 없는 대표 청크');
+    });
+
+    it('bypasses the gate on high-confidence dense matches', async () => {
+      const service = createService(true, 60_000, 'enforce');
+      mockGet.mockResolvedValue({
+        data: {
+          query: '공장에서 일하다 다쳤는데',
+          k: 15,
+          model: 'nlpai-lab/KURE-v1',
+          lastUpdateAt: STAMP,
+          // Top hit scores above the 0.6 bypass bar with no surface
+          // evidence: a colloquial paraphrase the gate must not empty.
+          results: [
+            { ...gatedChunk(101, '증거 없는 고득점 청크', false), score: 0.62 },
+            gatedChunk(102, '증거 있는 청크', true),
+          ],
+          weakResults: [],
+        },
+      });
+
+      const result = await service.searchSemantic(
+        '공장에서 일하다 다쳤는데',
+        5,
+      );
+
+      expect(result.results.map((hit) => hit.noticeNum)).toEqual([101, 102]);
+    });
+
+    it('treats chunks from an older sidecar as evidence present', async () => {
+      const service = createService(true, 60_000, 'enforce');
+      mockGet.mockResolvedValue({
+        data: {
+          query: '세입자 보호',
+          k: 15,
+          model: 'nlpai-lab/KURE-v1',
+          lastUpdateAt: STAMP,
+          results: [sidecarChunk(101, '플래그 없는 청크')],
+          weakResults: [],
+        },
+      });
+
+      const result = await service.searchSemantic('세입자 보호', 5);
+
+      expect(result.results.map((hit) => hit.noticeNum)).toEqual([101]);
+    });
+  });
+
+  describe('rerank-cutoff leg', () => {
+    const scoredChunk = (
+      noticeNum: number,
+      text: string,
+      lexicalEvidence: boolean,
+      rerankScore?: number | null,
+    ) => ({
+      ...sidecarChunk(noticeNum, text),
+      lexicalEvidence,
+      ...(rerankScore === undefined ? {} : { rerankScore }),
+    });
+
+    it('keeps high-rerank hits without lexical evidence in enforce mode', async () => {
+      // The `예보법 개정` class: alias-expanded query, zero shared tokens,
+      // rerank confident — the paraphrase class the lexical gate alone
+      // would empty.
+      const service = createService(true, 60_000, 'enforce', 0.6, -1);
+      mockGet.mockResolvedValue({
+        data: {
+          query: '예보법 개정',
+          k: 15,
+          model: 'nlpai-lab/KURE-v1',
+          lastUpdateAt: STAMP,
+          results: [scoredChunk(101, '예금자보호법 청크', false, 3.33)],
+          weakResults: [],
+        },
+      });
+
+      const result = await service.searchSemantic('예보법 개정', 5);
+
+      expect(result.results.map((hit) => hit.noticeNum)).toEqual([101]);
+    });
+
+    it('drops evidence-backed hits with a rejecting rerank in enforce mode', async () => {
+      // The `오늘 점심 메뉴` class: generic tokens fake lexical evidence
+      // while the reranker rejects the window outright.
+      const service = createService(true, 60_000, 'enforce', 0.6, -1);
+      mockGet.mockResolvedValue({
+        data: {
+          query: '오늘 점심 메뉴',
+          k: 15,
+          model: 'nlpai-lab/KURE-v1',
+          lastUpdateAt: STAMP,
+          results: [scoredChunk(101, '추천 청크', true, -4.02)],
+          weakResults: [scoredChunk(102, '메뉴 청크', true, -5.53)],
+        },
+      });
+
+      const result = await service.searchSemantic('오늘 점심 메뉴', 5);
+
+      expect(result.mode).toBe('semantic');
+      expect(result.results).toEqual([]);
+      expect(result.weakResults).toEqual([]);
+    });
+
+    it('keeps bypassed evidence under a rejecting rerank', async () => {
+      const service = createService(true, 60_000, 'enforce', 0.6, -1);
+      mockGet.mockResolvedValue({
+        data: {
+          query: '고득점 질의',
+          k: 15,
+          model: 'nlpai-lab/KURE-v1',
+          lastUpdateAt: STAMP,
+          results: [
+            { ...scoredChunk(101, '고득점 증거 청크', true, -2.5), score: 0.7 },
+          ],
+          weakResults: [],
+        },
+      });
+
+      const result = await service.searchSemantic('고득점 질의', 5);
+
+      expect(result.results.map((hit) => hit.noticeNum)).toEqual([101]);
+    });
+
+    it('falls back to the lexical rule for unscored chunks', async () => {
+      const service = createService(true, 60_000, 'enforce', 0.6, -1);
+      mockGet.mockResolvedValue({
+        data: {
+          query: '질의',
+          k: 15,
+          model: 'nlpai-lab/KURE-v1',
+          lastUpdateAt: STAMP,
+          results: [
+            scoredChunk(101, '증거 있는 미채점 청크', true),
+            scoredChunk(102, '증거 없는 미채점 청크', false),
+          ],
+          weakResults: [],
+        },
+      });
+
+      const result = await service.searchSemantic('질의', 5);
+
+      expect(result.results.map((hit) => hit.noticeNum)).toEqual([101]);
+    });
+
+    it('ignores rerank scores entirely when no cutoff is configured', async () => {
+      const service = createService(true, 60_000, 'enforce');
+      mockGet.mockResolvedValue({
+        data: {
+          query: '오늘 점심 메뉴',
+          k: 15,
+          model: 'nlpai-lab/KURE-v1',
+          lastUpdateAt: STAMP,
+          results: [scoredChunk(101, '추천 청크', true, -4.02)],
+          weakResults: [],
+        },
+      });
+
+      const result = await service.searchSemantic('오늘 점심 메뉴', 5);
+
+      // Null cutoff is today's behavior: evidence alone keeps the hit.
+      expect(result.results.map((hit) => hit.noticeNum)).toEqual([101]);
+    });
   });
 });

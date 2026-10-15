@@ -15,6 +15,7 @@ import {
 import {
   SemanticEngineHealthResponse,
   SemanticSearchResponse,
+  SemanticSearchResultItem,
   SemanticSidecarChunk,
   SemanticSidecarHealthResponse,
   SemanticSidecarSearchResponse,
@@ -50,6 +51,28 @@ export class SemanticSearchService {
    * deploy; a non-positive value forces a re-read on every search.
    */
   private readonly chunkCapRefreshMs: number;
+  /**
+   * No-result gate over the sidecar's per-hit `lexicalEvidence` flag
+   * (`SEMANTIC_SEARCH_LEXICAL_GATE`): `off` keeps pure dense ranking,
+   * `shadow` only logs, `enforce` drops gated hits after the chunk windows
+   * are collected (never inside the widening loop, so the
+   * `corpusExhausted` stop condition keeps working). With `rerankCutoff`
+   * set, the rerank logit joins the decision (see `keepChunk`).
+   */
+  private readonly lexicalGate: 'off' | 'shadow' | 'enforce';
+  /**
+   * Dense top-1 score that skips the gate (`lexicalBypassScore`, default
+   * 0.6): high-confidence matches bypass so colloquial paraphrases without
+   * shared surface tokens are never emptied.
+   */
+  private readonly lexicalBypassScore: number;
+  /**
+   * Cross-encoder logit floor additionally enforced in `shadow`/`enforce`
+   * (`rerankCutoff`, null disables the leg): keep <=> (rerank >= cutoff)
+   * or (bypassed and evidence); unscored chunks fall back to the lexical
+   * rule. Calibrated -1.0: 40/40 labeled kept, 5/5 noise emptied.
+   */
+  private readonly rerankCutoff: number | null;
 
   constructor(
     configService: ConfigService,
@@ -58,6 +81,14 @@ export class SemanticSearchService {
     this.enabled = configService.get<boolean>('semanticSearch.enabled') ?? true;
     this.chunkCapRefreshMs =
       configService.get<number>('semanticSearch.chunkCapRefreshMs') ?? 60_000;
+    this.lexicalGate =
+      configService.get<'off' | 'shadow' | 'enforce'>(
+        'semanticSearch.lexicalGate',
+      ) ?? 'off';
+    this.lexicalBypassScore =
+      configService.get<number>('semanticSearch.lexicalBypassScore') ?? 0.6;
+    this.rerankCutoff =
+      configService.get<number | null>('semanticSearch.rerankCutoff') ?? null;
     this.http = axios.create({
       baseURL: configService.get<string>('semanticSearch.apiUrl'),
       timeout: configService.get<number>('semanticSearch.timeout') ?? 10000,
@@ -96,13 +127,79 @@ export class SemanticSearchService {
     } catch (error) {
       return this.handleFirstWindowFailure(error, query, k);
     }
+    return this.applyLexicalGate(
+      query,
+      k,
+      lastUpdateAt,
+      collected,
+      weakCollected,
+    );
+  }
+
+  /**
+   * No-result gate over accumulated chunk windows. Runs after collection so
+   * widening is unaffected; an emptied answer keeps the semantic shape
+   * (`mode: 'semantic'`, null fallback) and never substitutes keyword hits —
+   * an empty tier is the engine's real answer, same as the sidecar's own
+   * unrelated-hit policy.
+   */
+  private applyLexicalGate(
+    query: string,
+    k: number,
+    lastUpdateAt: string | null,
+    collected: SemanticSidecarChunk[],
+    weakCollected: SemanticSidecarChunk[],
+  ): SemanticSearchResponse {
+    // High-confidence bypass: the best dense score across both tiers sits
+    // above the calibrated bar, so the ranking itself is trusted and the
+    // gate (including its shadow prediction) stays out of the way.
+    const bestScore = Math.max(
+      collected[0]?.score ?? Number.NEGATIVE_INFINITY,
+      weakCollected[0]?.score ?? Number.NEGATIVE_INFINITY,
+    );
+    const bypassed = bestScore >= this.lexicalBypassScore;
+    const clear = this.toNoticeHitsWithEvidence(collected, bypassed);
+    const weak = this.toNoticeHitsWithEvidence(weakCollected, bypassed);
+    if (this.lexicalGate === 'off') {
+      return {
+        query,
+        mode: 'semantic',
+        fallbackReason: null,
+        lastUpdateAt,
+        results: clear.map(({ hit }) => hit).slice(0, k),
+        weakResults: weak.map(({ hit }) => hit).slice(0, k),
+      } satisfies SemanticSearchResponse;
+    }
+    const gatedClear = clear.filter(({ kept }) => kept);
+    const gatedWeak = weak.filter(({ kept }) => kept);
+    if (this.lexicalGate === 'shadow') {
+      this.logger.log(
+        `lexical-gate-shadow clear ${gatedClear.length}/${clear.length} ` +
+          `weak ${gatedWeak.length}/${weak.length} ` +
+          `wouldEmpty=${gatedClear.length === 0 && gatedWeak.length === 0} ` +
+          `bypassed=${bypassed}` +
+          (this.rerankCutoff === null
+            ? ''
+            : ` rerankCutoff=${this.rerankCutoff}`),
+      );
+      return {
+        query,
+        mode: 'semantic',
+        fallbackReason: null,
+        lastUpdateAt,
+        results: clear.map(({ hit }) => hit).slice(0, k),
+        weakResults: weak.map(({ hit }) => hit).slice(0, k),
+      } satisfies SemanticSearchResponse;
+    }
+    const servedClear = bypassed ? clear : gatedClear;
+    const servedWeak = bypassed ? weak : gatedWeak;
     return {
       query,
       mode: 'semantic',
       fallbackReason: null,
       lastUpdateAt,
-      results: this.toNoticeHits(collected).slice(0, k),
-      weakResults: this.toNoticeHits(weakCollected).slice(0, k),
+      results: servedClear.map(({ hit }) => hit).slice(0, k),
+      weakResults: servedWeak.map(({ hit }) => hit).slice(0, k),
     } satisfies SemanticSearchResponse;
   }
 
@@ -392,23 +489,73 @@ export class SemanticSearchService {
    * notice), matching how retrieval quality is measured (notice-level rank).
    */
   private toNoticeHits(chunks: SemanticSidecarChunk[]) {
-    const seen = new Set<number>();
-    const hits: SemanticSearchResponse['results'] = [];
+    return this.toNoticeHitsWithEvidence(chunks).map(({ hit }) => hit);
+  }
+
+  /**
+   * Per-chunk keep decision under the active gate legs. Without a rerank
+   * cutoff this is the pure lexical rule; with one, a scored chunk survives
+   * on its logit (paraphrases with no shared tokens included) while an
+   * unscored chunk (older sidecar, window tail) falls back to the lexical
+   * rule — unknown is never a reject.
+   */
+  private keepChunk(
+    chunk: SemanticSidecarChunk,
+    evidence: boolean,
+    bypassed: boolean,
+  ): boolean {
+    if (this.rerankCutoff === null) {
+      return evidence;
+    }
+    const rerank = chunk.rerankScore;
+    if (typeof rerank !== 'number') {
+      return evidence;
+    }
+    return rerank >= this.rerankCutoff || (bypassed && evidence);
+  }
+
+  /**
+   * Notice-deduplicated hits with one evidence flag per notice (OR over ALL
+   * its chunks in the window; the best chunk decides the content). A sidecar
+   * older than the flag omits it and counts as evidence present (fail-open).
+   * `kept` is the same OR over the per-chunk gate decision, so a notice
+   * survives when any of its chunks does.
+   */
+  private toNoticeHitsWithEvidence(
+    chunks: SemanticSidecarChunk[],
+    bypassed = false,
+  ): Array<{
+    hit: SemanticSearchResultItem;
+    evidence: boolean;
+    kept: boolean;
+  }> {
+    const byNotice = new Map<
+      number,
+      { hit: SemanticSearchResultItem; evidence: boolean; kept: boolean }
+    >();
     for (const chunk of chunks) {
-      if (seen.has(chunk.noticeNum)) {
+      const known = byNotice.get(chunk.noticeNum);
+      const evidence = chunk.lexicalEvidence ?? true;
+      const kept = this.keepChunk(chunk, evidence, bypassed);
+      if (known) {
+        known.evidence = known.evidence || evidence;
+        known.kept = known.kept || kept;
         continue;
       }
-      seen.add(chunk.noticeNum);
-      hits.push({
-        noticeNum: chunk.noticeNum,
-        subject: chunk.subject,
-        committee: chunk.committee,
-        section: chunk.section,
-        score: chunk.score,
-        excerpt: chunk.text,
+      byNotice.set(chunk.noticeNum, {
+        hit: {
+          noticeNum: chunk.noticeNum,
+          subject: chunk.subject,
+          committee: chunk.committee,
+          section: chunk.section,
+          score: chunk.score,
+          excerpt: chunk.text,
+        },
+        evidence,
+        kept,
       });
     }
-    return hits;
+    return [...byNotice.values()];
   }
 
   private describeError(error: unknown): string {

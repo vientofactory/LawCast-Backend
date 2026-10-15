@@ -39,6 +39,19 @@ export interface SemanticSidecarChunk {
   section: string;
   score: number;
   text: string;
+  /**
+   * Whether the query shares a content token with this chunk (sidecar's
+   * `lexicalEvidence` flag). Optional: a sidecar older than the flag omits
+   * it and the service treats unknown as evidence present (fail-open).
+   */
+  lexicalEvidence?: boolean;
+  /**
+   * Cross-encoder relevance logit for this chunk (sidecar's `rerankScore`).
+   * Nullish when the sidecar's scorer is disabled or the chunk fell outside
+   * its scoring window: the service treats unknown as unscored (fail-open)
+   * and never as a reject.
+   */
+  rerankScore?: number | null;
 }
 
 export interface SemanticSidecarSearchResponse {
