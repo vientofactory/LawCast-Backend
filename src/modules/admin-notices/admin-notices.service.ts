@@ -11,6 +11,7 @@ import { NotionToMarkdown } from 'notion-to-md';
 import { LoggerUtils } from '../../utils/logger.utils';
 import {
   ADMIN_NOTICES_CACHE_TTL_MS,
+  ADMIN_NOTICES_REFRESH_BUDGET_MS,
   NOTION_API_VERSION,
   NOTION_BODY_FETCH_MAX_NOTICES,
   NOTION_BODY_MAX_BLOCK_PAGES,
@@ -62,12 +63,25 @@ export class AdminNoticesService {
    * overridable via NOTION_MIN_REQUEST_INTERVAL_MS (notion.minRequestIntervalMs).
    */
   private readonly minRequestIntervalMs: number;
+  /**
+   * Wall-clock budget bounding how long one caller waits for a refresh
+   * sequence, overridable via NOTION_REFRESH_BUDGET_MS
+   * (notion.refreshBudgetMs). The per-request `NOTION_TIMEOUT` bounds each
+   * Notion call, but the sequence is serial and unbounded in aggregate.
+   */
+  private readonly refreshBudgetMs: number;
   /** Earliest timestamp for the next outgoing Notion request (pacing). */
   private nextRequestAt = 0;
   /** While the clock is before this, a 429 pause is honored without re-querying. */
   private rateLimitedUntil = 0;
   /** Single-flight handle: concurrent cache misses share one Notion fetch. */
   private inFlight: Promise<AdminNotice[]> | null = null;
+  /**
+   * Single-flight handle for body-free (light) fetches: concurrent cold
+   * `/top` reads share one query sequence. Never writes the cache, which
+   * only ever holds full items (with bodies).
+   */
+  private lightFlight: Promise<AdminNotice[]> | null = null;
   private disabledLogged = false;
   private cache: { items: AdminNotice[]; fetchedAt: number } | null = null;
 
@@ -81,6 +95,9 @@ export class AdminNoticesService {
     this.minRequestIntervalMs =
       configService.get<number>('notion.minRequestIntervalMs') ??
       NOTION_MIN_REQUEST_INTERVAL_MS;
+    this.refreshBudgetMs =
+      configService.get<number>('notion.refreshBudgetMs') ??
+      ADMIN_NOTICES_REFRESH_BUDGET_MS;
     const baseUrl = (
       configService.get<string>('notion.apiUrl') ?? 'https://api.notion.com'
     ).replace(/\/+$/, '');
@@ -112,11 +129,23 @@ export class AdminNoticesService {
    *   never blocks a page view — the new data appears from the next request
    *   on. A cold cache (no snapshot yet) still has to wait for the first fetch.
    * - Notion error: the snapshot keeps being served, 503 only when none exists
+   * Pass `{ includeBodies: false }` for callers that only need the ranked
+   * list (the `/top` cap-1 endpoints): the cold path then skips the block
+   * conversions entirely — the dominant cost — and never writes the cache
+   * (which only ever holds full items), while a full refresh is kicked off
+   * behind it so the first list/detail view is already warm.
+   * Every cold wait is additionally bounded by the refresh budget: exceeding
+   * it answers 503 fast while the fetch continues in the background and
+   * still warms the cache on success, so one pathological board cannot hold
+   * waiters for minutes.
    * Rate-limit defenses: single-flight (concurrent misses and background
    * refreshes share one fetch), request pacing (~3 req/s budget) and a 429
    * Retry-After pause.
    */
-  async getPublishedNotices(): Promise<AdminNotice[]> {
+  async getPublishedNotices(
+    options: { includeBodies?: boolean } = {},
+  ): Promise<AdminNotice[]> {
+    const includeBodies = options.includeBodies ?? true;
     if (!this.enabled) {
       if (!this.disabledLogged) {
         this.disabledLogged = true;
@@ -145,17 +174,27 @@ export class AdminNoticesService {
       // Stale-while-revalidate: answer from the snapshot now and refresh in
       // the background; failures are logged inside the flight and the stale
       // data keeps being served.
-      this.refresh().catch(() => undefined);
+      this.refreshFull().catch(() => undefined);
       return cached.items;
     }
 
-    // Cold start: there is no snapshot to serve, so this request must wait.
+    // Cold cache: there is no snapshot to serve, so this request must wait
+    // for the fetch — bounded by the refresh budget, never minutes.
     try {
-      return await this.refresh();
+      if (!includeBodies) {
+        const light = await this.waitWithBudget(this.refreshLight());
+        // Warm the cache behind the fast answer for list/detail callers;
+        // its failure is logged inside the flight and swallowed here.
+        this.refreshFull().catch(() => undefined);
+        return light;
+      }
+      return await this.waitWithBudget(this.refreshFull());
     } catch {
       if (this.cache) {
         // A pinned board must not blink out on a transient Notion failure;
         // the stale snapshot is refreshed on the next successful fetch.
+        // (Also covers a refresh that filled the cache while this waiter
+        // gave up on the budget: serve the fresh data instead of a 503.)
         return this.cache.items;
       }
       throw new ServiceUnavailableException(UNAVAILABLE_MESSAGE);
@@ -163,27 +202,25 @@ export class AdminNoticesService {
   }
 
   /**
-   * Single-flight Notion refresh shared by cold-start waiters and background
-   * revalidations: a burst of concurrent triggers causes exactly one query
-   * sequence, not one per visitor. The cache is updated on success; failures
-   * apply the 429 backoff and are logged once per flight, then rethrown for
-   * the caller (background callers swallow it).
+   * Single-flight full Notion refresh shared by cold-start waiters and
+   * background revalidations: a burst of concurrent triggers causes exactly
+   * one query sequence, not one per visitor. The fetch always runs to
+   * completion in the background (callers bound only their own wait with
+   * the refresh budget), so a budget timeout still warms the cache for the
+   * next request. The cache is updated on success; failures apply the 429
+   * backoff and are logged once per flight, then rethrown for the caller
+   * (background callers swallow it).
    */
-  private refresh(): Promise<AdminNotice[]> {
+  private refreshFull(): Promise<AdminNotice[]> {
     if (!this.inFlight) {
-      this.inFlight = this.fetchPublishedNotices()
+      this.inFlight = this.fetchPublishedNotices(true)
         .then((items) => {
           this.cache = { items, fetchedAt: Date.now() };
           return items;
         })
         .catch((error) => {
           this.applyRateLimitBackoff(error);
-          // Logged once per flight so a herd of waiters does not spam logs.
-          this.logger.warn(
-            this.cache
-              ? `notion notice fetch failed; serving last good snapshot: ${this.describeError(error)}`
-              : `notion notice fetch failed: ${this.describeError(error)}`,
-          );
+          this.logFetchFailure(error);
           throw error;
         })
         .finally(() => {
@@ -193,8 +230,79 @@ export class AdminNoticesService {
     return this.inFlight;
   }
 
+  /**
+   * Single-flight body-free refresh for the `/top` cold path: concurrent
+   * cold top reads share one query sequence with no block conversions.
+   * Never writes the cache (see `getPublishedNotices`); failures apply the
+   * 429 backoff and are logged once per flight, then rethrown.
+   */
+  private refreshLight(): Promise<AdminNotice[]> {
+    if (!this.lightFlight) {
+      this.lightFlight = this.fetchPublishedNotices(false)
+        .catch((error) => {
+          this.applyRateLimitBackoff(error);
+          this.logFetchFailure(error);
+          throw error;
+        })
+        .finally(() => {
+          this.lightFlight = null;
+        });
+    }
+    return this.lightFlight;
+  }
+
+  /**
+   * Bounds how long one caller waits for a refresh sequence: the fetch
+   * itself keeps running (single-flight is preserved, no duplicate
+   * sequences), but this waiter answers 503 after the budget instead of
+   * holding the response open for minutes.
+   */
+  private waitWithBudget(
+    operation: Promise<AdminNotice[]>,
+  ): Promise<AdminNotice[]> {
+    if (this.refreshBudgetMs <= 0) {
+      return operation;
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const budget = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new Error(
+              `notion refresh exceeded the ${this.refreshBudgetMs}ms budget; answering 503 while the fetch continues in the background`,
+            ),
+          ),
+        this.refreshBudgetMs,
+      );
+    });
+    return Promise.race([operation, budget]).finally(() => clearTimeout(timer));
+  }
+
+  /** Logged once per flight so a herd of waiters does not spam logs. */
+  private logFetchFailure(error: unknown): void {
+    this.logger.warn(
+      this.cache
+        ? `notion notice fetch failed; serving last good snapshot: ${this.describeError(error)}`
+        : `notion notice fetch failed: ${this.describeError(error)}`,
+    );
+  }
+
+  /**
+   * Fetches the published rows with or without their block bodies. The
+   * `/top` cold path passes `false`: ranking needs only the query rows.
+   */
+  private async fetchPublishedNotices(
+    includeBodies: boolean,
+  ): Promise<AdminNotice[]> {
+    const notices = await this.queryPublishedRows();
+    if (includeBodies) {
+      await this.attachNoticeBodies(notices);
+    }
+    return this.sortByOrder(notices);
+  }
+
   /** Paginates the Notion database query (bounded by NOTION_QUERY_MAX_PAGES). */
-  private async fetchPublishedNotices(): Promise<AdminNotice[]> {
+  private async queryPublishedRows(): Promise<AdminNotice[]> {
     const notices: AdminNotice[] = [];
     let startCursor: string | undefined = undefined;
 
@@ -235,9 +343,7 @@ export class AdminNoticesService {
       }
     }
 
-    await this.attachNoticeBodies(notices);
-
-    return this.sortByOrder(notices);
+    return notices;
   }
 
   /**

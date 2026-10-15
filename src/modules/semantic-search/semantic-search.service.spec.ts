@@ -153,9 +153,36 @@ describe('SemanticSearchService', () => {
     // One oversized chunk window (k * 3) per request; a short sidecar
     // answer means the corpus is exhausted, so no widening is attempted.
     expect(mockGet).toHaveBeenCalledWith('/search', {
-      params: { query: '세입자 보호', k: 15 },
+      params: { query: '세입자 보호', k: 15, rerank: false },
     });
     expect(searchCalls()).toHaveLength(1);
+  });
+
+  it('requests rerank scores only when the rerank leg is enabled', async () => {
+    // Without a cutoff the logits are never consumed, so the backend opts
+    // out of the sidecar's ~1s cross-encoder pass; with one it opts in.
+    const offService = createService(true, 60_000, 'off', 0.6, null);
+    mockGet.mockResolvedValue({
+      data: {
+        query: '질의',
+        k: 15,
+        model: 'nlpai-lab/KURE-v1',
+        lastUpdateAt: STAMP,
+        results: [sidecarChunk(101, '청크')],
+        weakResults: [],
+      },
+    });
+    await offService.searchSemantic('질의', 5);
+    expect(mockGet).toHaveBeenLastCalledWith('/search', {
+      params: { query: '질의', k: 15, rerank: false },
+    });
+
+    jest.clearAllMocks();
+    const onService = createService(true, 60_000, 'off', 0.6, -1);
+    await onService.searchSemantic('질의', 5);
+    expect(mockGet).toHaveBeenLastCalledWith('/search', {
+      params: { query: '질의', k: 15, rerank: true },
+    });
   });
 
   it('keeps weak hits out of results and passes them alongside', async () => {

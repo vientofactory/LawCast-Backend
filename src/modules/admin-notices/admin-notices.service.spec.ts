@@ -51,6 +51,7 @@ describe('AdminNoticesService', () => {
       // Pacing is disabled by default so tests stay fast; the interval is
       // asserted explicitly in its own test below.
       'notion.minRequestIntervalMs': 0,
+      'notion.refreshBudgetMs': 15_000,
       ...overrides,
     };
     const configService = {
@@ -761,5 +762,131 @@ describe('AdminNoticesService', () => {
     await expect(service.getPublishedNotices()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
+  });
+
+  it('answers the cold top path without waiting for block conversions', async () => {
+    const service = createService();
+    mockQuery.mockImplementation(async () =>
+      queryResponse([notionPage('page-1', publishedProps())]),
+    );
+    // Block conversions stall forever at first: a body-waiting
+    // implementation would hang here until the jest timeout.
+    let resolveBlocks!: (value: Response) => void;
+    mockBlocks.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveBlocks = resolve;
+        }),
+    );
+
+    const light = await service.getPublishedNotices({ includeBodies: false });
+
+    expect(light).toHaveLength(1);
+    expect(light[0].id).toBe('page-1');
+    expect(light[0].body).toBe('');
+
+    // The full refresh kicked off behind the fast answer warms the cache
+    // once the stalled blocks resolve (microtasks drain before setImmediate).
+    await new Promise((resolve) => setImmediate(resolve));
+    resolveBlocks(blockChildrenResponse([]));
+    await new Promise((resolve) => setImmediate(resolve));
+    const full = await service.getPublishedNotices();
+    // Light query + background full query, then the warmed cache.
+    expect(mockQuery).toHaveBeenCalledTimes(2);
+    expect(full).toHaveLength(1);
+  });
+
+  it('serves the light path from the fresh cache without re-querying', async () => {
+    const service = createService();
+    mockQuery.mockImplementation(async () =>
+      queryResponse([notionPage('page-1', publishedProps())]),
+    );
+
+    const full = await service.getPublishedNotices();
+    const light = await service.getPublishedNotices({ includeBodies: false });
+
+    expect(light).toBe(full);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('serves stale top picks immediately while the full refresh runs behind', async () => {
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(1_000_000);
+    const service = createService();
+    mockQuery.mockResolvedValueOnce(
+      queryResponse([notionPage('page-1', publishedProps())]),
+    );
+    const first = await service.getPublishedNotices(); // seed the snapshot
+
+    nowSpy.mockReturnValue(1_000_000 + 61_000);
+    mockQuery.mockResolvedValueOnce(
+      queryResponse([
+        notionPage(
+          'page-2',
+          publishedProps({
+            [NOTION_PROPERTY.TITLE]: {
+              type: 'title',
+              title: [{ plain_text: '갱신된 공지' }],
+            },
+          }),
+        ),
+      ]),
+    );
+    const stale = await service.getPublishedNotices({ includeBodies: false });
+
+    expect(stale).toBe(first); // same (old) array reference, no wait
+    expect(mockQuery).toHaveBeenCalledTimes(2); // background full started
+
+    await new Promise((resolve) => setImmediate(resolve));
+    const refreshed = await service.getPublishedNotices({
+      includeBodies: false,
+    });
+
+    expect(refreshed).not.toBe(first);
+    expect(refreshed.map((item) => item.title)).toEqual(['갱신된 공지']);
+    expect(mockQuery).toHaveBeenCalledTimes(2); // cache is fresh again
+  });
+
+  it('backs off light cold reads on 429 without hammering Notion', async () => {
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(1_000_000);
+    const service = createService();
+    mockQuery.mockResolvedValueOnce(rateLimitResponse('2'));
+
+    await expect(
+      service.getPublishedNotices({ includeBodies: false }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+
+    // Inside the pause: fail fast without touching Notion.
+    nowSpy.mockReturnValue(1_000_000 + 1000);
+    await expect(
+      service.getPublishedNotices({ includeBodies: false }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails fast with 503 when a cold refresh exceeds the budget, then warms behind it', async () => {
+    const service = createService({ 'notion.refreshBudgetMs': 100 });
+    // The query stalls: the waiter must answer 503 after ~100ms instead of
+    // holding the response open.
+    let resolveQuery!: (value: Response) => void;
+    mockQuery.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveQuery = resolve;
+        }),
+    );
+
+    await expect(service.getPublishedNotices()).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+
+    // The fetch kept running past the budget: resolving it warms the cache
+    // for the next read (convergence despite the fast failure).
+    resolveQuery(queryResponse([notionPage('page-1', publishedProps())]));
+    await new Promise((resolve) => setImmediate(resolve));
+    await expect(service.getPublishedNotices()).resolves.toHaveLength(1);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 });
