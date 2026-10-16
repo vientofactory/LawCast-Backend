@@ -25,6 +25,7 @@ describe('SemanticSearchService', () => {
     lexicalGate: 'off' | 'shadow' | 'enforce' = 'off',
     lexicalBypassScore = 0.6,
     rerankCutoff: number | null = null,
+    totalTimeoutMs?: number,
   ): SemanticSearchService => {
     mockedAxios.create.mockReturnValue({ get: mockGet } as any);
 
@@ -33,6 +34,7 @@ describe('SemanticSearchService', () => {
         if (key === 'semanticSearch.enabled') return enabled;
         if (key === 'semanticSearch.apiUrl') return 'http://127.0.0.1:8300';
         if (key === 'semanticSearch.timeout') return 10000;
+        if (key === 'semanticSearch.totalTimeoutMs') return totalTimeoutMs;
         if (key === 'semanticSearch.chunkCapRefreshMs')
           return chunkCapRefreshMs;
         if (key === 'semanticSearch.lexicalGate') return lexicalGate;
@@ -152,8 +154,11 @@ describe('SemanticSearchService', () => {
     });
     // One oversized chunk window (k * 3) per request; a short sidecar
     // answer means the corpus is exhausted, so no widening is attempted.
+    // Every window carries its own axios timeout (here the untouched
+    // default: the whole 10s budget is still left on the first pass).
     expect(mockGet).toHaveBeenCalledWith('/search', {
       params: { query: '세입자 보호', k: 15, rerank: false },
+      timeout: 10000,
     });
     expect(searchCalls()).toHaveLength(1);
   });
@@ -175,6 +180,7 @@ describe('SemanticSearchService', () => {
     await offService.searchSemantic('질의', 5);
     expect(mockGet).toHaveBeenLastCalledWith('/search', {
       params: { query: '질의', k: 15, rerank: false },
+      timeout: 10000,
     });
 
     jest.clearAllMocks();
@@ -182,6 +188,7 @@ describe('SemanticSearchService', () => {
     await onService.searchSemantic('질의', 5);
     expect(mockGet).toHaveBeenLastCalledWith('/search', {
       params: { query: '질의', k: 15, rerank: true },
+      timeout: 10000,
     });
   });
 
@@ -493,6 +500,152 @@ describe('SemanticSearchService', () => {
     expect(searchCalls()).toHaveLength(1);
     expect(healthCalls()).toHaveLength(2);
     expect(mockSearchNotices).not.toHaveBeenCalled();
+  });
+
+  describe('total search budget', () => {
+    const BUDGET_START = new Date('2026-10-02T00:00:00Z').getTime();
+
+    const shortWindow = () => ({
+      data: {
+        query: '질의',
+        k: 15,
+        model: 'nlpai-lab/KURE-v1',
+        lastUpdateAt: STAMP,
+        results: chunkWindow([
+          [101, 13],
+          [102, 2],
+        ]),
+        weakResults: [],
+      },
+    });
+
+    const requestTimeouts = (): Array<number | undefined> =>
+      searchCalls().map((call) => (call[1] as { timeout?: number }).timeout);
+
+    it('shrinks each window timeout to the time left in the budget', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(BUDGET_START);
+      try {
+        // SEMANTIC_SEARCH_TOTAL_TIMEOUT = 5s against a 10s per-window
+        // ceiling: the first pass still gets 5000ms, the second only the
+        // 100ms left after the first pass burned 4900ms.
+        const service = createService(true, 60_000, 'off', 0.6, null, 5000);
+        mockGet
+          .mockResolvedValueOnce(healthPayload(200))
+          .mockImplementationOnce(async () => {
+            jest.setSystemTime(BUDGET_START + 4900);
+            return shortWindow();
+          })
+          .mockResolvedValueOnce({
+            data: {
+              query: '질의',
+              k: 30,
+              model: 'nlpai-lab/KURE-v1',
+              lastUpdateAt: STAMP,
+              results: chunkWindow([
+                [101, 13],
+                [102, 2],
+                [103, 5],
+                [104, 5],
+                [105, 5],
+              ]),
+              weakResults: [],
+            },
+          });
+
+        const result = await service.searchSemantic('질의', 5);
+
+        expect(result.mode).toBe('semantic');
+        expect(result.results.map((hit) => hit.noticeNum)).toEqual([
+          101, 102, 103, 104, 105,
+        ]);
+        expect(requestedChunkK()).toEqual([15, 30]);
+        expect(requestTimeouts()).toEqual([5000, 100]);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('returns partial results instead of widening past the budget', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(BUDGET_START);
+      try {
+        const service = createService(true, 60_000, 'off', 0.6, null, 5000);
+        mockGet
+          .mockResolvedValueOnce(healthPayload(200))
+          .mockImplementationOnce(async () => {
+            jest.setSystemTime(BUDGET_START + 5000);
+            return shortWindow();
+          });
+
+        const result = await service.searchSemantic('질의', 5);
+
+        // The first window filled only 2 of the 5 notices, but the budget
+        // is spent: no second window is attempted, and the collected chunks
+        // still serve (no keyword fallback for a widening stop).
+        expect(result.mode).toBe('semantic');
+        expect(result.fallbackReason).toBeNull();
+        expect(result.results.map((hit) => hit.noticeNum)).toEqual([101, 102]);
+        expect(searchCalls()).toHaveLength(1);
+        expect(mockSearchNotices).not.toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('falls back to keyword search when the first window outlives the budget', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(BUDGET_START);
+      try {
+        const service = createService(true, 60_000, 'off', 0.6, null, 5000);
+        mockGet
+          .mockResolvedValueOnce(healthPayload(200))
+          .mockRejectedValueOnce({
+            isAxiosError: true,
+            code: 'ECONNABORTED',
+            message: 'timeout of 5000ms exceeded',
+          });
+        mockSearchNotices.mockResolvedValue({
+          items: [],
+          total: 0,
+          page: 1,
+          limit: 5,
+          totalPages: 1,
+          keyword: '질의',
+          source: 'archive',
+        });
+
+        const result = await service.searchSemantic('질의', 5);
+
+        // Nothing was ever collected, so the budget timeout degrades exactly
+        // like any other first-window failure: keyword fallback, no 4xx.
+        expect(result.mode).toBe('keyword_fallback');
+        expect(requestTimeouts()).toEqual([5000]);
+        expect(mockSearchNotices).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('falls back to the per-window timeout when no total budget is configured', async () => {
+      // The ConfigService mock returns undefined for totalTimeoutMs here,
+      // so the loop budget equals the 10s per-window ceiling.
+      const service = createService();
+      mockGet.mockResolvedValue({
+        data: {
+          query: '질의',
+          k: 15,
+          model: 'nlpai-lab/KURE-v1',
+          lastUpdateAt: STAMP,
+          results: [sidecarChunk(101, '청크')],
+          weakResults: [],
+        },
+      });
+
+      await service.searchSemantic('질의', 5);
+
+      expect(requestTimeouts()).toEqual([10000]);
+    });
   });
 
   // Failure-policy matrix: a failed WIDENING request never discards the

@@ -34,6 +34,18 @@ export class SemanticSearchService {
   private readonly http: AxiosInstance;
   private readonly enabled: boolean;
   /**
+   * Per-window ceiling (ms) for one sidecar `/search` round trip
+   * (`SEMANTIC_SEARCH_TIMEOUT`). Also the axios instance default.
+   */
+  private readonly requestTimeout: number;
+  /**
+   * Aggregate budget (ms) for one search's whole chunk-window loop
+   * (`SEMANTIC_SEARCH_TOTAL_TIMEOUT`, defaults to `requestTimeout`).
+   * Bounds the worst case a slow sidecar can impose: without it each
+   * widening pass could burn a full `requestTimeout` in turn.
+   */
+  private readonly totalTimeoutMs: number;
+  /**
    * Chunk-window cap last reported by the sidecar's `/health` (`maxK`).
    * Starts at the compiled default so the first search behaves exactly like
    * the pre-negotiation code when health is unreachable or too old to report.
@@ -89,9 +101,18 @@ export class SemanticSearchService {
       configService.get<number>('semanticSearch.lexicalBypassScore') ?? 0.6;
     this.rerankCutoff =
       configService.get<number | null>('semanticSearch.rerankCutoff') ?? null;
+    this.requestTimeout =
+      configService.get<number>('semanticSearch.timeout') ?? 10000;
+    const configuredTotal = configService.get<number>(
+      'semanticSearch.totalTimeoutMs',
+    );
+    this.totalTimeoutMs =
+      configuredTotal && configuredTotal > 0
+        ? configuredTotal
+        : this.requestTimeout;
     this.http = axios.create({
       baseURL: configService.get<string>('semanticSearch.apiUrl'),
-      timeout: configService.get<number>('semanticSearch.timeout') ?? 10000,
+      timeout: this.requestTimeout,
     });
   }
 
@@ -383,6 +404,11 @@ export class SemanticSearchService {
    * the chunks collected so far — partial results beat discarding them. The
    * sidecar's `lastUpdateAt` rides along: the last successful window carries
    * the serving generation's index time.
+   *
+   * Budget policy: the whole loop runs against `totalTimeoutMs`. Each pass
+   * shrinks its own axios timeout to the time left, and once the budget is
+   * spent the loop stops — partial results when chunks were collected, a
+   * propagated timeout error (the caller's fallback path) when nothing was.
    */
   private async collectChunkWindows(
     query: string,
@@ -397,10 +423,33 @@ export class SemanticSearchService {
     const weakCollected: SemanticSidecarChunk[] = [];
     let lastUpdateAt: string | null = null;
     let chunkK = Math.min(k * CHUNK_FETCH_INITIAL_FACTOR, cap);
+    const deadline = Date.now() + this.totalTimeoutMs;
     for (;;) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        if (collected.length === 0 && weakCollected.length === 0) {
+          throw new Error(
+            `semantic sidecar total budget exceeded (${this.totalTimeoutMs}ms) ` +
+              'before any chunk was collected',
+          );
+        }
+        this.logger.warn(
+          `semantic sidecar total budget exceeded (${this.totalTimeoutMs}ms); ` +
+            `returning partial results from ${collected.length} collected chunks`,
+        );
+        return {
+          chunks: collected,
+          weakChunks: weakCollected,
+          lastUpdateAt,
+        };
+      }
       let window: SemanticSidecarSearchResponse;
       try {
-        window = await this.fetchChunks(query, chunkK);
+        window = await this.fetchChunks(
+          query,
+          chunkK,
+          Math.min(this.requestTimeout, remainingMs),
+        );
       } catch (error) {
         // Both tiers empty = the first window itself failed, so nothing
         // was ever collected and the failure must propagate.
@@ -476,6 +525,7 @@ export class SemanticSearchService {
   private async fetchChunks(
     query: string,
     chunkK: number,
+    requestTimeout: number,
   ): Promise<SemanticSidecarSearchResponse> {
     // The sidecar's cross-encoder pass costs ~1s of CPU per request, so it
     // is requested only when this service consumes the logits (rerank leg
@@ -484,7 +534,10 @@ export class SemanticSearchService {
     // here are simply annotated, never gated on).
     const response = await this.http.get<SemanticSidecarSearchResponse>(
       '/search',
-      { params: { query, k: chunkK, rerank: this.rerankCutoff !== null } },
+      {
+        params: { query, k: chunkK, rerank: this.rerankCutoff !== null },
+        timeout: requestTimeout,
+      },
     );
     return response.data;
   }

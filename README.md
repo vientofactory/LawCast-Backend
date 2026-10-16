@@ -145,6 +145,7 @@ REDIS_TTL=1800
 SEMANTIC_SEARCH_ENABLED=true
 SEMANTIC_SEARCH_API_URL=http://127.0.0.1:8300
 SEMANTIC_SEARCH_TIMEOUT=10000
+SEMANTIC_SEARCH_TOTAL_TIMEOUT=10000
 SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS=60000
 SEMANTIC_SEARCH_HYBRID_MAX_NOTICES=100
 SEMANTIC_SEARCH_LEXICAL_GATE=off
@@ -275,6 +276,7 @@ WEB_PUSH_SUBJECT=mailto:lawcast@example.com
 SEMANTIC_SEARCH_ENABLED=true
 SEMANTIC_SEARCH_API_URL=http://127.0.0.1:8300
 SEMANTIC_SEARCH_TIMEOUT=10000
+SEMANTIC_SEARCH_TOTAL_TIMEOUT=10000
 SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS=60000
 SEMANTIC_SEARCH_HYBRID_MAX_NOTICES=100
 SEMANTIC_SEARCH_LEXICAL_GATE=off
@@ -282,7 +284,8 @@ SEMANTIC_SEARCH_LEXICAL_GATE=off
 
 - `SEMANTIC_SEARCH_ENABLED=false` 또는 사이드카 미기동: `/api/notices/semantic-search`는 키워드 폴백 응답을, `/api/notices/semantic-search/health`는 `503`을 반환합니다. 검색 화면도 500 대신 키워드 결과와 폴백 안내를 보여줍니다.
 - `SEMANTIC_SEARCH_API_URL`: 사이드카 주소. Compose 환경에서는 `http://semantic-search:8300`입니다.
-- `SEMANTIC_SEARCH_TIMEOUT`: 사이드카 호출 제한 시간(ms).
+- `SEMANTIC_SEARCH_TIMEOUT`: 사이드카 호출 제한 시간(ms). 창별 상한이며 axios 인스턴스 기본값으로도 쓰인다.
+- `SEMANTIC_SEARCH_TOTAL_TIMEOUT`: 한 번의 검색이 청크 창 수집에 쓰는 총 예산(ms, 기본값은 `SEMANTIC_SEARCH_TIMEOUT`). 각 widening 창은 남은 예산만큼만 자신의 타임아웃을 가져가며, 예산 소진 시 수집분 부분 반환(첫 창이면 키워드 폴백)으로 마감한다. 비어 있거나 0 이하·비숫자면 창별 상한으로 폴백한다.
 - `SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS`: 사이드카가 `/health`로 보고하는 청크 상한(`maxK`)을 다시 읽는 주기(ms). 사이드카의 `LAWCAST_SEMANTIC_MAX_K` 변경이 이 주기 안에 반영되며, `0`이면 매 검색마다 재조회합니다.
 - `SEMANTIC_SEARCH_LEXICAL_GATE`: 무관 질의 빈 결과 게이트(`off`/`shadow`/`enforce`, 기본 `off`). `enforce`에서 사이드카의 어휘 증거 플래그가 없는 히트를 수집 뒤에 제거하므로 무관 질의가 명시적 빈 결과로 답합니다. 공고 단위 증거는 창 안 전체 청크의 OR이며, dense top-1이 `SEMANTIC_SEARCH_LEXICAL_BYPASS_SCORE`(기본 0.6) 이상이면 게이트를 건너뜁니다.
 - `SEMANTIC_SEARCH_HYBRID_MAX_NOTICES`: `/notices`의 의미 검색 모드가 한 번에 조회하는 **법률안(후보) 수 상한**. 엔진이 청크 단위로 순위를 매기므로 청크를 넉넉히 받아 법률안 단위로 접은 뒤 이 상한을 적용합니다. 값을 키우면 필터가 빡빡한 질의의 재현율이 올라가고 검색당 조회 비용이 늘어납니다. 사이드카 청크 상한(`SIDE_CAR_MAX_CHUNK_K`) 안에서 동작하며, 의미 검색 엔드포인트의 `k` 상한(`MAX_K`)과는 별개입니다.
