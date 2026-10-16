@@ -340,16 +340,15 @@ describe('SemanticSearchService', () => {
         code: 'ECONNREFUSED',
         message: 'connect ECONNREFUSED 127.0.0.1:8300',
       })
-      .mockResolvedValueOnce(fullWindow(150, 40))
-      .mockResolvedValueOnce(fullWindow(200, 80));
+      .mockResolvedValueOnce(fullWindow(100, 80));
 
     const result = await service.searchSemantic('질의', 50);
 
-    // The health failure degrades to SIDE_CAR_MAX_CHUNK_K: widening still
-    // clamps at 200 and the search keeps serving.
+    // The health failure degrades to SIDE_CAR_MAX_CHUNK_K: the first window
+    // is clamped at 100 and already fills k, so the search keeps serving.
     expect(result.mode).toBe('semantic');
     expect(result.results).toHaveLength(50);
-    expect(requestedChunkK()).toEqual([150, 200]);
+    expect(requestedChunkK()).toEqual([100]);
     expect(healthCalls()).toHaveLength(1);
   });
 
@@ -357,14 +356,13 @@ describe('SemanticSearchService', () => {
     const service = createService();
     mockGet
       .mockResolvedValueOnce(healthPayload()) // no maxK field
-      .mockResolvedValueOnce(fullWindow(150, 40))
-      .mockResolvedValueOnce(fullWindow(200, 80));
+      .mockResolvedValueOnce(fullWindow(100, 80));
 
     await service.searchSemantic('질의', 50);
 
-    // A sidecar predating the field has 200 hardcoded, which is exactly the
-    // compiled default the backend falls back to.
-    expect(requestedChunkK()).toEqual([150, 200]);
+    // A sidecar predating the field has the old 200 hardcoded, but the
+    // backend falls back to its compiled default (100) and clamps there.
+    expect(requestedChunkK()).toEqual([100]);
   });
 
   it('reads the cap once per freshness window instead of once per search', async () => {

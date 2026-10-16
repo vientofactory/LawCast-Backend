@@ -171,8 +171,7 @@ const pyModels = (): Record<string, FieldMap> => {
 
 /**
  * Numeric constants from both Python contract files. The sidecar request
- * bounds live in config.py as env-injected values
- * (`MAX_K = int(os.environ.get('LAWCAST_SEMANTIC_MAX_K', '200'))`), so the
+ * bounds live in config.py as env-injected values  * (`MAX_K = int(os.environ.get('LAWCAST_SEMANTIC_MAX_K', '100'))`), so the
  * second pattern reads the code default — the value the sidecar serves when
  * an operator sets no override, which is what the TS side pins.
  */
