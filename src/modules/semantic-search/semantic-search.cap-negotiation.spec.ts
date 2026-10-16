@@ -209,10 +209,10 @@ describe('semantic sidecar cap negotiation (real HTTP)', () => {
     const result = await service.searchSemantic(QUERY, 50);
 
     // The health failure must not block the search: the compiled default
-    // (200) applies, so the first window asks for 50 * 3 = 150 chunks.
+    // (100) applies, so the first window asks for 100 chunks.
     expect(result.mode).toBe('semantic');
     expect(result.results).toHaveLength(50);
     expect(transcript()).toEqual(['/health:503', '/search:200']);
-    expect(stub.state.log[1].k).toBe(150);
+    expect(stub.state.log[1].k).toBe(100);
   });
 });

@@ -24,7 +24,7 @@ export const MAX_K = 50;
  * constant; keep them equal so an env change on the sidecar needs no backend
  * deploy (the contract spec pins both defaults together).
  */
-export const SIDE_CAR_MAX_CHUNK_K = 200;
+export const SIDE_CAR_MAX_CHUNK_K = 100;
 
 /** First chunk window request: k * factor, clamped to the sidecar cap. */
 export const CHUNK_FETCH_INITIAL_FACTOR = 3;
