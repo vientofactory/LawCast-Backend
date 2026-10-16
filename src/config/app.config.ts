@@ -50,6 +50,14 @@ export interface AppConfig {
      * `off` keeps pure dense ranking, `shadow` only logs, `enforce` drops
      * hits without evidence after collection.
      */
+    /**
+     * Aggregate budget (ms) for one search's whole chunk-window loop
+     * (`SEMANTIC_SEARCH_TOTAL_TIMEOUT`, default = `timeout`). Every
+     * widening pass also shrinks its own axios timeout to the time left,
+     * so a slow sidecar answers partial results (or the keyword fallback)
+     * within this bound instead of stacking per-window timeouts.
+     */
+    totalTimeoutMs: number;
     lexicalGate: 'off' | 'shadow' | 'enforce';
     /**
      * Dense top-1 score that skips the lexical gate (high-confidence
@@ -629,6 +637,10 @@ export default (): AppConfig => ({
     apiUrl:
       process.env.SEMANTIC_SEARCH_API_URL?.trim() || 'http://127.0.0.1:8300',
     timeout: parseInt(process.env.SEMANTIC_SEARCH_TIMEOUT, 10) || 10000,
+    totalTimeoutMs: parseTotalTimeout(
+      process.env.SEMANTIC_SEARCH_TOTAL_TIMEOUT,
+      parseInt(process.env.SEMANTIC_SEARCH_TIMEOUT, 10) || 10000,
+    ),
     // How often the backend re-reads the sidecar's reported chunk cap
     // (`maxK`). Kept out of the code so an operator can tighten the window
     // (or force a re-read every search) without a backend deploy. The
@@ -783,6 +795,22 @@ function parseFloatWithDefault(
 ): number {
   const parsed = parseFloat(value ?? '');
   return isNaN(parsed) ? fallback : parsed;
+}
+
+/**
+ * Aggregate semantic-search budget; blank/missing/non-numeric/non-positive
+ * input falls back to the per-window `timeout`, so the widening loop is
+ * always bounded no matter what the operator exports.
+ */
+function parseTotalTimeout(
+  value: string | undefined,
+  fallback: number,
+): number {
+  const parsed = parseInt(value ?? '', 10);
+  if (isNaN(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
 }
 
 /**
