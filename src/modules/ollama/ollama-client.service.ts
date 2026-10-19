@@ -2,6 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
 import { LoggerUtils } from '../../utils/logger.utils';
+import {
+  AI_SUMMARY_MODEL_NUM_PREDICT,
+  AI_SUMMARY_MODEL_TEMPERATURE,
+  buildAiSummaryPrompt,
+} from './ai-summary-prompt.util';
 
 interface OllamaGenerateResponse {
   // Basic response fields
@@ -70,8 +75,8 @@ export class OllamaClientService {
   private readonly client: AxiosInstance | null;
   private readonly enabled: boolean;
   private readonly model: string;
-  private readonly modelTemperature = 0.2;
-  private readonly modelNumPredict = 220;
+  private readonly modelTemperature = AI_SUMMARY_MODEL_TEMPERATURE;
+  private readonly modelNumPredict = AI_SUMMARY_MODEL_NUM_PREDICT;
   private readonly healthCacheTtlMs = 30000;
 
   private summaryTotal = 0;
@@ -321,23 +326,6 @@ export class OllamaClientService {
     title: string,
     proposalReason: string,
   ): string {
-    const prompt = [
-      '당신은 국회 입법예고 요약 도우미입니다. 아래 규칙을 위반하지 마세요.',
-      '',
-      '[출력 규칙]',
-      '1) 한국어 한 문장만 출력합니다.',
-      '2) 줄바꿈 없이 평문으로만 출력합니다.',
-      '3) "요약:", "설명:", "참고:" 같은 머리말을 금지합니다.',
-      '4) 목록 기호, 마크다운, 따옴표, 코드블록을 금지합니다.',
-      '5) 법률안명은 반복하지 말고 핵심 정책 변화와 영향만 씁니다.',
-      '',
-      '[출력 형식]',
-      '반드시 요약 문장 하나만 출력',
-      '',
-      `법률안명: ${title}`,
-      `제안이유 및 주요내용: ${proposalReason}`,
-    ].join('\n');
-
-    return prompt;
+    return buildAiSummaryPrompt(title, proposalReason);
   }
 }

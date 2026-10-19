@@ -432,7 +432,7 @@ describe('AdminNoticesService', () => {
     expect(mockBlocks).toHaveBeenCalledTimes(1);
   });
 
-  it('orders by 노출 순서 ascending with missing order last', async () => {
+  it('orders by "노출 순서" ascending with missing order last', async () => {
     const service = createService();
     mockQuery.mockImplementation(async () =>
       queryResponse([

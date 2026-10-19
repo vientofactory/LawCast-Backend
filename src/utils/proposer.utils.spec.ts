@@ -96,7 +96,7 @@ describe('proposer.utils', () => {
       ).toEqual(['김용민', '박은정']);
     });
 
-    it('extracts proposer name when subject has trailing (수정) tag', () => {
+    it('extracts proposer name when subject has trailing "(수정)" tag', () => {
       expect(
         extractProposerFromSubject(
           '무결성 보존에 관한 법률안(김철수 의원 등 10인)(수정)',

@@ -33,12 +33,12 @@ describe('isAcceptableQuickKeywordToken', () => {
     expect(isAcceptableQuickKeywordToken('제정')).toBe(false);
   });
 
-  it('returns false for committee names ending in 위원회', () => {
+  it('returns false for committee names ending in "위원회"', () => {
     expect(isAcceptableQuickKeywordToken('환경노동위원회')).toBe(false);
     expect(isAcceptableQuickKeywordToken('특별위원회')).toBe(false);
   });
 
-  it('returns false for tokens containing 의원', () => {
+  it('returns false for tokens containing "의원"', () => {
     expect(isAcceptableQuickKeywordToken('홍길동의원')).toBe(false);
     expect(isAcceptableQuickKeywordToken('의원발의')).toBe(false);
   });
