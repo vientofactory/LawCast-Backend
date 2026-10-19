@@ -30,6 +30,7 @@ import {
   type NsmListScanHealth,
 } from '../crawling/utils/nsm-list-scan-health.util';
 import cronstrue from 'cronstrue/i18n';
+import { getAiSummaryTransparencyInfo } from '../ollama/ai-summary-prompt.util';
 
 /**
  * Maps known cron expressions to interval (ms) for UI timer calculations.
@@ -401,6 +402,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         nsmToPalIndicator:
           '국회입법현황에서 의안으로 등록된 경우, 크롤러가 자동으로 동기화하여 관리합니다.',
       },
+      aiSummary: getAiSummaryTransparencyInfo(),
     } as const;
 
     await this.cacheManager.set(

@@ -276,7 +276,7 @@ describe('CrawlingCoreService', () => {
       ).mockImplementation(() => ({ getProposalReason }) as any);
     });
 
-    it('queries the 국회 의안정보시스템 with the trimmed PAL contentId', async () => {
+    it('queries the "국회 의안정보시스템" with the trimmed PAL contentId', async () => {
       getProposalReason.mockResolvedValue('제안이유 본문');
 
       const result = await service.getProposalReasonViaLikms('  PRC_TEST_1  ');
@@ -827,7 +827,7 @@ describe('CrawlingCoreService', () => {
       expect(likmsConfig).not.toHaveProperty('hydrateProposalReason');
     });
 
-    it('captures likms detail from the 의안정보시스템 page and reads its fields from the adapter', async () => {
+    it('captures likms detail from the "의안정보시스템" page and reads its fields from the adapter', async () => {
       process.env.CRAWLING_NSM_SOURCE = 'likms';
       mockLikmsCrawler.resolveBillId.mockResolvedValue('PRC_X1');
       mockLikmsAdapter.getDetail.mockResolvedValue({
