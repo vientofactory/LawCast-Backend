@@ -401,8 +401,12 @@ export class NotificationService {
         '새로운 입법예고가 감지되었습니다. 아래 정보를 확인하세요.',
       )
       .addField('법률안명', notice.subject, false)
-      .addField('제안자 구분', notice.proposerCategory, true)
-      .addField('소관위원회', notice.committee, true)
+      .addField('의안번호', String(notice.num), true)
+      .addField(
+        '소관위원회',
+        notice.committee?.trim() ? notice.committee : '(미정)',
+        true,
+      )
       .setColor(APP_CONSTANTS.COLORS.DISCORD.PRIMARY)
       .setTimestamp()
       .setFooter('LawCast 알림 서비스', '');
