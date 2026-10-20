@@ -149,8 +149,18 @@ describe('NotificationService', () => {
         false,
       );
       expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '의안번호',
+        '1',
+        true,
+      );
+      expect(mockMessageBuilder.addField).not.toHaveBeenCalledWith(
         '제안자 구분',
-        '정부',
+        expect.anything(),
+        expect.anything(),
+      );
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '소관위원회',
+        '법제사법위원회',
         true,
       );
       expect(mockMessageBuilder.setColor).toHaveBeenCalledWith(0x3b82f6);
@@ -158,6 +168,29 @@ describe('NotificationService', () => {
         '자세히 보기',
         '[입법예고 전문](http://localhost:5173/notices/1)',
         false,
+      );
+    });
+
+    it('should fall back to pending label when committee is empty', async () => {
+      mockDiscordWebhook.send.mockResolvedValue(undefined);
+
+      await service.sendDiscordNotificationBatch(
+        {
+          num: 1,
+          subject: '테스트 법률안',
+          proposerCategory: '정부',
+          committee: '',
+          link: 'https://example.com/notice/1',
+          contentId: null,
+          attachments: { pdfFile: '', hwpFile: '' },
+        },
+        [mockWebhooks[0]],
+      );
+
+      expect(mockMessageBuilder.addField).toHaveBeenCalledWith(
+        '소관위원회',
+        '(미정)',
+        true,
       );
     });
 
