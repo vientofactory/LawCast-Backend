@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { WebhookService } from '../webhook/webhook.service';
 import {
   NotificationService,
@@ -20,6 +20,7 @@ import {
   WebPushNotificationService,
 } from './web-push-notification.service';
 import { WebPushSubscription } from './web-push-subscription.entity';
+import { NotificationDigestBuffer } from './notification-digest-buffer';
 
 interface NotificationJobResult {
   notice: string;
@@ -52,10 +53,22 @@ interface ChangeNotificationJobResult {
 }
 
 @Injectable()
-export class NotificationBatchService {
+export class NotificationBatchService implements OnModuleDestroy {
   private readonly logger = LoggerUtils.getContextLogger(
     NotificationBatchService.name,
   );
+  private readonly noticeDigestBuffer =
+    new NotificationDigestBuffer<CachedNotice>(
+      () => BatchProcessingService.generateId('notification_batch'),
+      (notices, options, batchRunId) =>
+        this.startNotificationBatch(notices, options, batchRunId),
+    );
+  private readonly changeDigestBuffer =
+    new NotificationDigestBuffer<ChangeNotificationPayload>(
+      () => BatchProcessingService.generateId('change_notification_batch'),
+      (payloads, options, batchRunId) =>
+        this.startChangeNotificationBatch(payloads, options, batchRunId),
+    );
 
   constructor(
     private webhookService: WebhookService,
@@ -66,19 +79,40 @@ export class NotificationBatchService {
     private discordBridge: DiscordBridgeService,
   ) {}
 
-  /**
-   * Process a batch of notifications for multiple notices, sending them to all active webhooks.
-   * Implements immediate deactivation of webhooks that fail on the first attempt, and minimizes logging for temporary failures.
-   * @param notices - Array of notices to process notifications for
-   * @param options - Batch processing options such as concurrency and retry settings
-   * @param executeBatch - Function to execute the batch of jobs, allowing for flexible batch processing strategies
-   * @returns An array of results for each notice, including counts of successes, failures, deactivations, and temporary failures
-   */
+  async onModuleDestroy(): Promise<void> {
+    await this.flushPendingNotifications();
+  }
+
+  async flushPendingNotifications(): Promise<void> {
+    await Promise.all([
+      this.noticeDigestBuffer.flush(),
+      this.changeDigestBuffer.flush(),
+    ]);
+  }
+
   async processNotificationBatch(
     notices: CachedNotice[],
     options: BatchProcessingOptions = {},
   ): Promise<string> {
-    const batchRunId = BatchProcessingService.generateId('notification_batch');
+    return this.noticeDigestBuffer.enqueue(notices, options);
+  }
+
+  async processChangeNotificationBatch(
+    payloadOrPayloads: ChangeNotificationPayload | ChangeNotificationPayload[],
+    options: BatchProcessingOptions = {},
+  ): Promise<string> {
+    const payloads = Array.isArray(payloadOrPayloads)
+      ? payloadOrPayloads
+      : [payloadOrPayloads];
+    return this.changeDigestBuffer.enqueue(payloads, options);
+  }
+
+  /** Start delivery and retain its completion promise for graceful shutdown. */
+  private startNotificationBatch(
+    notices: CachedNotice[],
+    options: BatchProcessingOptions,
+    batchRunId: string,
+  ): Promise<void> {
     logAndBridge({
       logger: {
         log: (message: string) =>
@@ -98,7 +132,7 @@ export class NotificationBatchService {
       batchRunId,
     });
 
-    batchPromise
+    const completion = batchPromise
       .then((results) => {
         const successCount = results.filter((r) => r.success).length;
         const failureCount = results.length - successCount;
@@ -186,24 +220,14 @@ export class NotificationBatchService {
       `Notification batch job ${batchRunId} started`,
     );
 
-    return batchRunId;
+    return completion;
   }
 
-  async processChangeNotificationBatch(
-    payloadOrPayloads: ChangeNotificationPayload | ChangeNotificationPayload[],
-    options: BatchProcessingOptions = {},
-  ): Promise<string> {
-    const payloads = Array.isArray(payloadOrPayloads)
-      ? payloadOrPayloads
-      : [payloadOrPayloads];
-
-    if (payloads.length === 0) {
-      return BatchProcessingService.generateId('change_notification_batch');
-    }
-
-    const batchRunId = BatchProcessingService.generateId(
-      'change_notification_batch',
-    );
+  private startChangeNotificationBatch(
+    payloads: ChangeNotificationPayload[],
+    options: BatchProcessingOptions,
+    batchRunId: string,
+  ): Promise<void> {
     logAndBridge({
       logger: {
         log: (message: string) =>
@@ -227,7 +251,7 @@ export class NotificationBatchService {
       batchRunId,
     });
 
-    batchPromise
+    const completion = batchPromise
       .then((results) => {
         const successCount = results.filter((r) => r.success).length;
         const failureCount = results.length - successCount;
@@ -285,7 +309,7 @@ export class NotificationBatchService {
         );
       });
 
-    return batchRunId;
+    return completion;
   }
 
   /**
