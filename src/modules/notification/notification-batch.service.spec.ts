@@ -10,6 +10,7 @@ import { NotificationBatchService } from './notification-batch.service';
 import { type ChangeNotificationPayload } from './notification.service';
 import { NoticeChangeSource } from '../change-tracking/notice-change-source.enum';
 import { CHANGE_EVENT_TYPE } from '../change-tracking/notice-change-event.entity';
+import { type CachedNotice } from '../../types/cache.types';
 import { type WebPushSubscription } from './web-push-subscription.entity';
 
 describe('NotificationBatchService (diffchain change batching)', () => {
@@ -44,6 +45,7 @@ describe('NotificationBatchService (diffchain change batching)', () => {
   let service: NotificationBatchService;
 
   beforeEach(() => {
+    jest.useFakeTimers();
     webhookService = {
       findAll: jest
         .fn<
@@ -225,7 +227,205 @@ describe('NotificationBatchService (diffchain change batching)', () => {
   });
 
   afterEach(() => {
+    jest.clearAllTimers();
+    jest.useRealTimers();
     jest.clearAllMocks();
+  });
+
+  const changes = (start: number, count: number): ChangeNotificationPayload[] =>
+    Array.from({ length: count }, (_, index) => ({
+      noticeNum: start + index,
+      subject: `법률안 ${start + index}`,
+      eventType: CHANGE_EVENT_TYPE.UPDATED,
+      source: NoticeChangeSource.ARCHIVE_UPSERT,
+      changedFields: ['committee'],
+      eventHash: `hash-${start + index}`,
+    }));
+
+  const notices = (start: number, count: number): CachedNotice[] =>
+    Array.from({ length: count }, (_, index) => ({
+      num: start + index,
+      subject: `법률안 ${start + index}`,
+    })) as CachedNotice[];
+
+  it('coalesces adjacent eight and nine event batches for both delivery channels', async () => {
+    const first = changes(100, 8);
+    const second = changes(200, 9);
+    const third = changes(300, 8);
+    const jobId = await service.processChangeNotificationBatch(first);
+    await jest.advanceTimersByTimeAsync(20_000);
+    expect(await service.processChangeNotificationBatch(second)).toBe(jobId);
+    await jest.advanceTimersByTimeAsync(20_000);
+    expect(await service.processChangeNotificationBatch(third)).toBe(jobId);
+    await jest.advanceTimersByTimeAsync(29_999);
+    expect(batchProcessingService.executeBatch).not.toHaveBeenCalled();
+
+    await jest.advanceTimersByTimeAsync(1);
+    expect(batchProcessingService.executeBatch).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordChangeDigestNotificationBatch,
+    ).toHaveBeenCalledWith(
+      [...first, ...second, ...third],
+      expect.any(Array),
+      expect.anything(),
+    );
+    expect(
+      webPushNotificationService.sendChangeDigestBatch,
+    ).toHaveBeenCalledWith([...first, ...second, ...third], expect.any(Array), {
+      ended: false,
+    });
+  });
+
+  it('coalesces new notice batches across producer calls', async () => {
+    const first = notices(100, 8);
+    const second = notices(200, 9);
+    const jobId = await service.processNotificationBatch(first);
+    await jest.advanceTimersByTimeAsync(20_000);
+    expect(await service.processNotificationBatch(second)).toBe(jobId);
+    await jest.advanceTimersByTimeAsync(30_000);
+
+    expect(batchProcessingService.executeBatch).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordNotificationDigestBatch,
+    ).toHaveBeenCalledWith(
+      [...first, ...second],
+      expect.any(Array),
+      expect.anything(),
+    );
+    expect(
+      webPushNotificationService.sendNewNoticeDigestBatch,
+    ).toHaveBeenCalledWith([...first, ...second], expect.any(Array));
+  });
+
+  it('dispatches continuous arrivals after two minutes and starts a fresh window', async () => {
+    const firstJobId = await service.processChangeNotificationBatch(
+      changes(1, 1),
+    );
+    for (let index = 1; index <= 5; index += 1) {
+      await jest.advanceTimersByTimeAsync(20_000);
+      await service.processChangeNotificationBatch(changes(index + 1, 1));
+    }
+    await jest.advanceTimersByTimeAsync(19_999);
+    expect(batchProcessingService.executeBatch).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(batchProcessingService.executeBatch).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordChangeDigestNotificationBatch,
+    ).toHaveBeenCalledWith(
+      expect.arrayContaining(changes(1, 6)),
+      expect.any(Array),
+      expect.anything(),
+    );
+
+    const nextJobId = await service.processChangeNotificationBatch(
+      changes(7, 1),
+    );
+    expect(nextJobId).not.toBe(firstJobId);
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(batchProcessingService.executeBatch).toHaveBeenCalledTimes(2);
+    expect(
+      notificationService.sendDiscordChangeNotificationBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(webPushNotificationService.sendChangeBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps new notices and change events in separate digests', async () => {
+    await service.processNotificationBatch(notices(1, 2));
+    await service.processChangeNotificationBatch(changes(1, 2));
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(
+      notificationService.sendDiscordNotificationDigestBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      notificationService.sendDiscordChangeDigestNotificationBatch,
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let empty batches postpone a pending digest', async () => {
+    await service.processChangeNotificationBatch(changes(1, 2));
+    await jest.advanceTimersByTimeAsync(20_000);
+    await service.processChangeNotificationBatch([]);
+    await service.processNotificationBatch([]);
+    await jest.advanceTimersByTimeAsync(10_000);
+    expect(batchProcessingService.executeBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('drains pending digests on shutdown and cancels their timers', async () => {
+    await service.processNotificationBatch(notices(1, 2));
+    await service.processChangeNotificationBatch(changes(1, 2));
+    await service.onModuleDestroy();
+    expect(batchProcessingService.executeBatch).toHaveBeenCalledTimes(2);
+    expect(
+      notificationService.sendDiscordNotificationDigestBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      webPushNotificationService.sendChangeDigestBatch,
+    ).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+    await jest.advanceTimersByTimeAsync(120_000);
+    expect(batchProcessingService.executeBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for an in-flight digest before completing shutdown', async () => {
+    let finishDelivery: () => void;
+    const delivery = new Promise<void>((resolve) => {
+      finishDelivery = resolve;
+    });
+    webPushNotificationService.sendChangeDigestBatch.mockImplementationOnce(
+      async () => {
+        await delivery;
+        return {
+          targetCount: 1,
+          successCount: 1,
+          failedCount: 0,
+          deactivatedCount: 0,
+        };
+      },
+    );
+    await service.processChangeNotificationBatch(changes(1, 2));
+    await jest.advanceTimersByTimeAsync(30_000);
+    let stopped = false;
+    const shutdown = service.onModuleDestroy().then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    finishDelivery!();
+    await shutdown;
+    expect(stopped).toBe(true);
+    expect(batchProcessingService.updateRecentJobMetadata).toHaveBeenCalled();
+  });
+
+  it('buffers arrivals during delivery for a later digest', async () => {
+    let finishDelivery: () => void;
+    const delivery = new Promise<void>((resolve) => {
+      finishDelivery = resolve;
+    });
+    webPushNotificationService.sendChangeDigestBatch.mockImplementationOnce(
+      async () => {
+        await delivery;
+        return {
+          targetCount: 1,
+          successCount: 1,
+          failedCount: 0,
+          deactivatedCount: 0,
+        };
+      },
+    );
+    const firstJobId = await service.processChangeNotificationBatch(
+      changes(1, 2),
+    );
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(
+      await service.processChangeNotificationBatch(changes(3, 2)),
+    ).not.toBe(firstJobId);
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(
+      notificationService.sendDiscordChangeDigestNotificationBatch,
+    ).toHaveBeenCalledTimes(2);
+    finishDelivery!();
+    await service.flushPendingNotifications();
+    expect(batchProcessingService.executeBatch).toHaveBeenCalledTimes(2);
   });
 
   it('aggregates multiple notices into one digest notification job', async () => {
@@ -652,6 +852,8 @@ describe('NotificationBatchService (diffchain change batching)', () => {
     });
 
     expect(batchRunId).toContain('change_notification_batch');
+    expect(executeSpy).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(30_000);
     expect(executeSpy).toHaveBeenCalledTimes(1);
     expect(executeSpy).toHaveBeenCalledWith(
       payloads,

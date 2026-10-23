@@ -5,6 +5,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { BatchProcessingService } from './modules/shared/batch-processing.service';
+import { NotificationBatchService } from './modules/notification/notification-batch.service';
 import { WebhookValidationUtils } from './utils/webhook-validation.utils';
 import { DiscordBridgeService } from './modules/discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from './modules/discord-bridge/discord-bridge.types';
@@ -168,6 +169,9 @@ async function gracefulShutdown(
         `Crawling scheduler did not become idle before shutdown: ${String(crawlingIdle.reason)}`,
       );
     }
+
+    // Admit buffered digests before the batch service stops accepting work.
+    await app.get(NotificationBatchService).flushPendingNotifications();
 
     // Batch jobs graceful shutdown
     await batchProcessingService.gracefulShutdown();

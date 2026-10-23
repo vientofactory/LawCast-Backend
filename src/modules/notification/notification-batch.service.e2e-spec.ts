@@ -112,12 +112,9 @@ describe('NotificationBatchService E2E', () => {
     };
     await mockNoticeArchiveRepo.save(newNotice);
 
-    // 2. Run batch (fire-and-forget; wait for internal Promise to settle)
+    // 2. Drain the digest buffer without waiting for its real-time deadline.
     await batchService.processNotificationBatch([newNotice]);
-    // processNotificationBatch returns batchRunId immediately; actual dispatch
-    // runs asynchronously in a .then() chain, so microtask flush is needed
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
+    await batchService.flushPendingNotifications();
 
     // 3. Verify notification was sent
     expect(
