@@ -310,4 +310,83 @@ describe('NoticeArchiveService proposalReason retry candidate cursor (real SQLit
 
     expect(await candidateNums(20)).toEqual([]);
   });
+
+  it('scopes historical recovery and deletion guards to the candidate notice', async () => {
+    const eligible = 2219201;
+    const recovered = 2219202;
+    const deleted = 2219203;
+    const unrelated = 2219204;
+    for (const noticeNum of [eligible, recovered, deleted, unrelated]) {
+      await insertReasonlessNotice({ noticeNum });
+    }
+
+    const changes: Array<[number, string, string | null]> = [
+      [eligible, 'proposalReason', null],
+      [eligible, 'proposalReason', '   '],
+      [eligible, 'lifecycleStatus', 'active'],
+      [recovered, 'proposalReason', '복구된 제안이유'],
+      [recovered, 'proposalReason', ''],
+      [deleted, 'lifecycleStatus', 'source_deleted'],
+      [deleted, 'lifecycleStatus', 'active'],
+      [unrelated, 'proposalReason', '다른 법률안의 제안이유'],
+      [unrelated, 'lifecycleStatus', 'source_deleted'],
+    ];
+    const heights = new Map<number, number>();
+    for (const [index, [noticeNum, fieldPath, value]] of changes.entries()) {
+      const height = (heights.get(noticeNum) ?? 0) + 1;
+      heights.set(noticeNum, height);
+      await dataSource.query(
+        `INSERT INTO notice_change_events
+          (notice_num, detected_at, event_type, event_height, event_hash)
+        VALUES (?, ?, 'updated', ?, ?)`,
+        [
+          noticeNum,
+          '2026-10-28 07:39:00',
+          height,
+          String(index + 1).padStart(64, '0'),
+        ],
+      );
+      await dataSource.query(
+        `INSERT INTO notice_change_details
+          (event_id, field_path, change_type, after_value)
+        VALUES ((SELECT MAX(id) FROM notice_change_events), ?, 'modified', ?)`,
+        [fieldPath, value],
+      );
+    }
+
+    // Preserve the historical exclusion contract, including later empty/active values.
+    expect(await candidateNums(20)).toEqual([eligible]);
+    expect(await candidateNums(1)).toEqual([eligible]);
+  });
+
+  it('uses notice and event scoped index searches instead of repeated global detail scans', async () => {
+    await insertReasonlessNotice({ noticeNum: 2219201 });
+    const repository = dataSource.getRepository(NoticeArchive);
+    const builders = jest.spyOn(repository, 'createQueryBuilder');
+    try {
+      expect(await candidateNums(20)).toEqual([2219201]);
+      const [sql, parameters] =
+        builders.mock.results[0].value.getQueryAndParameters();
+      const plan: Array<{ detail: string }> = await dataSource.query(
+        `EXPLAIN QUERY PLAN ${sql}`,
+        parameters,
+      );
+      const eventSearches = plan.filter((row) => /SEARCH e\b/.test(row.detail));
+      const detailSearches = plan.filter((row) =>
+        /SEARCH d\b/.test(row.detail),
+      );
+
+      // Guard the scaling property, without tying the test to an index name or wall clock.
+      expect(eventSearches).toHaveLength(2);
+      expect(
+        eventSearches.every((row) => /notice_num=\?/.test(row.detail)),
+      ).toBe(true);
+      expect(detailSearches).toHaveLength(2);
+      expect(
+        detailSearches.every((row) => /event_id=\?/.test(row.detail)),
+      ).toBe(true);
+    } finally {
+      builders.mockRestore();
+    }
+  });
 });
