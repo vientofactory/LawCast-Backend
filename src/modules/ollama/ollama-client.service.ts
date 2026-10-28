@@ -93,11 +93,20 @@ export class OllamaClientService {
   private lastHealthLatencyMs: number | null = null;
   private availableModelCount: number | null = null;
   private lastHealthError: string | null = null;
+  private readonly healthTimeoutMs: number;
+  private healthCheckInFlight: Promise<void> | null = null;
 
   constructor(private configService: ConfigService) {
     this.enabled = !!this.configService.get<boolean>('ollama.enabled', false);
     const apiUrl = this.configService.get<string>('ollama.apiUrl');
     const timeout = this.configService.get<number>('ollama.timeout', 10000);
+    const healthTimeout = Number(
+      this.configService.get<number>('ollama.healthTimeoutMs', 2000),
+    );
+    this.healthTimeoutMs =
+      Number.isFinite(healthTimeout) && healthTimeout > 0
+        ? healthTimeout
+        : 2000;
 
     this.model = this.configService.get<string>('ollama.model', '');
 
@@ -242,10 +251,24 @@ export class OllamaClientService {
       return;
     }
 
-    const startedAt = Date.now();
-
+    if (this.healthCheckInFlight) return this.healthCheckInFlight;
+    const check = this.performHealthCheck();
+    this.healthCheckInFlight = check;
     try {
-      const response = await this.client.get<OllamaTagsResponse>('/api/tags');
+      await check;
+    } finally {
+      if (this.healthCheckInFlight === check) this.healthCheckInFlight = null;
+    }
+  }
+
+  private async performHealthCheck(): Promise<void> {
+    const startedAt = Date.now();
+    try {
+      // Bound connection stalls as well as response waits without changing generation deadlines.
+      const response = await this.client.get<OllamaTagsResponse>('/api/tags', {
+        timeout: this.healthTimeoutMs,
+        signal: AbortSignal.timeout(this.healthTimeoutMs),
+      });
       this.healthStatus = AIHealthStatus.Healthy;
       this.lastHealthCheckedAt = new Date();
       this.lastHealthLatencyMs = Date.now() - startedAt;

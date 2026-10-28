@@ -19,6 +19,8 @@ export class CacheService implements OnModuleDestroy {
   private readonly CACHE_KEYS = APP_CONSTANTS.CACHE.KEYS;
   private readonly HEALTH_CHECK_TTL_SECONDS = 30;
   private recentNoticesSnapshot: CachedNotice[] | null = null;
+  private recentNoticesLoad: Promise<CachedNotice[]> | null = null;
+  private snapshotGeneration = 0;
 
   constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache) {}
 
@@ -43,27 +45,45 @@ export class CacheService implements OnModuleDestroy {
     limit: number = APP_CONSTANTS.CACHE.DEFAULT_LIMIT,
   ): Promise<CachedNotice[]> {
     try {
-      if (!this.recentNoticesSnapshot) {
-        const cachedNotices = await this.cacheManager.get<CachedNotice[]>(
-          this.CACHE_KEYS.RECENT_NOTICES,
-        );
-        this.recentNoticesSnapshot = Array.isArray(cachedNotices)
-          ? cachedNotices.map((notice) => this.sanitizeNotice(notice))
-          : [];
-      }
+      const snapshot = await this.getRecentNoticesSnapshot();
 
-      if (this.recentNoticesSnapshot.length === 0) {
+      if (snapshot.length === 0) {
         LoggerUtils.logDev(CacheService.name, 'No cached notices found');
         return [];
       }
 
       const actualLimit = Math.min(limit, this.MAX_CACHE_SIZE);
-      return this.recentNoticesSnapshot
+      return snapshot
         .slice(0, actualLimit)
         .map((notice) => this.sanitizeNotice(notice));
     } catch (error) {
       this.logger.error('Error getting cached notices:', error);
       return [];
+    }
+  }
+
+  private async getRecentNoticesSnapshot(): Promise<CachedNotice[]> {
+    if (this.recentNoticesSnapshot !== null) return this.recentNoticesSnapshot;
+    if (this.recentNoticesLoad) return this.recentNoticesLoad;
+
+    const generation = this.snapshotGeneration;
+    const load = this.cacheManager
+      .get<CachedNotice[]>(this.CACHE_KEYS.RECENT_NOTICES)
+      .then((cachedNotices) => {
+        // A read started before an update or clear must not restore stale data.
+        if (generation !== this.snapshotGeneration) {
+          return this.recentNoticesSnapshot ?? [];
+        }
+        this.recentNoticesSnapshot = Array.isArray(cachedNotices)
+          ? cachedNotices.map((notice) => this.sanitizeNotice(notice))
+          : [];
+        return this.recentNoticesSnapshot;
+      });
+    this.recentNoticesLoad = load;
+    try {
+      return await load;
+    } finally {
+      if (this.recentNoticesLoad === load) this.recentNoticesLoad = null;
     }
   }
 
@@ -129,6 +149,8 @@ export class CacheService implements OnModuleDestroy {
         this.cacheManager.set(this.CACHE_KEYS.LAST_UPDATED, new Date(), 0),
       ]);
       this.recentNoticesSnapshot = uniqueNotices;
+      this.snapshotGeneration++;
+      this.recentNoticesLoad = null;
 
       LoggerUtils.debugDev(
         CacheService.name,
@@ -199,10 +221,7 @@ export class CacheService implements OnModuleDestroy {
    */
   async getCacheInfo(): Promise<CacheInfo> {
     try {
-      const cachedNotices =
-        (await this.cacheManager.get<CachedNotice[]>(
-          this.CACHE_KEYS.RECENT_NOTICES,
-        )) || [];
+      const cachedNotices = await this.getRecentNoticesSnapshot();
       const lastUpdated =
         (await this.cacheManager.get<Date | string>(
           this.CACHE_KEYS.LAST_UPDATED,
@@ -236,6 +255,8 @@ export class CacheService implements OnModuleDestroy {
         this.cacheManager.del(this.CACHE_KEYS.QUICK_KEYWORDS),
       ]);
       this.recentNoticesSnapshot = null;
+      this.snapshotGeneration++;
+      this.recentNoticesLoad = null;
       LoggerUtils.logDev(CacheService.name, 'Redis cache cleared');
     } catch (error) {
       this.logger.error('Error clearing Redis cache:', error);

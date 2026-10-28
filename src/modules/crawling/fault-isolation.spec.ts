@@ -516,13 +516,21 @@ describe('[Fault Isolation] ArchiveOrchestratorService', () => {
 
 describe('[Fault Isolation] NotificationBatchService', () => {
   let service: NotificationBatchService;
+  let module: TestingModule;
   let webhookService: jest.Mocked<WebhookService>;
   let notificationService: jest.Mocked<NotificationService>;
 
   const notice = makeCachedNotice(1);
 
+  const disposeModule = async () => {
+    const current = module;
+    module = undefined;
+    await current?.close();
+  };
+
   beforeEach(async () => {
-    const module: TestingModule = await Test.createTestingModule({
+    jest.useFakeTimers();
+    module = await Test.createTestingModule({
       providers: [
         NotificationBatchService,
         {
@@ -606,7 +614,16 @@ describe('[Fault Isolation] NotificationBatchService', () => {
     notificationService = module.get(NotificationService);
   });
 
-  afterEach(() => jest.clearAllMocks());
+  afterEach(async () => {
+    try {
+      // Run lifecycle hooks before restoring mocks so queued digests finish normally.
+      await disposeModule();
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+      jest.clearAllMocks();
+    }
+  });
 
   it('DB failure loading webhooks -> executeNotificationBatch returns [] without throwing', async () => {
     webhookService.findAll.mockRejectedValue(
@@ -636,6 +653,24 @@ describe('[Fault Isolation] NotificationBatchService', () => {
     const batchId = await service.processNotificationBatch([notice]);
     expect(typeof batchId).toBe('string');
     expect(batchId.length).toBeGreaterThan(0);
+    expect(jest.getTimerCount()).toBe(1);
+  });
+
+  it('flushes a queued digest and cancels its timer when the test module closes', async () => {
+    const dispatch = jest
+      .spyOn(service, 'executeNotificationBatch')
+      .mockResolvedValue([]);
+    const batchId = await service.processNotificationBatch([notice]);
+    expect(jest.getTimerCount()).toBe(1);
+
+    await disposeModule();
+
+    expect(dispatch).toHaveBeenCalledWith(
+      [notice],
+      expect.objectContaining({ batchRunId: batchId }),
+    );
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
   });
 });
 

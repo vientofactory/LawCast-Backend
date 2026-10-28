@@ -171,6 +171,7 @@ OLLAMA_CPU_MODE=false
 OLLAMA_API_URL=http://localhost:11434
 OLLAMA_MODEL=gemma3:1b
 OLLAMA_TIMEOUT=10000
+OLLAMA_HEALTH_TIMEOUT_MS=2000
 
 # Archive sync tuning
 ARCHIVE_SYNC_CRAWLER_CONCURRENCY=4
@@ -248,6 +249,11 @@ ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_SIZE=5
 ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS=250
 ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_CONCURRENCY=1
 ```
+
+`OLLAMA_TIMEOUT`은 요약 생성 요청의 제한 시간이며 기존 값을 유지합니다.
+`OLLAMA_HEALTH_TIMEOUT_MS`는 `/api/tags` 건강 확인에만 적용되는 별도 제한 시간입니다.
+기본값은 2,000ms이며 응답이 오지 않거나 조금씩 도착하는 경우에도 요청을 취소합니다.
+동시에 들어온 건강 확인은 진행 중인 요청 하나를 공유하고, 실패 상태도 기존 30초 캐시 정책을 따릅니다.
 
 ### Web Push 설정
 

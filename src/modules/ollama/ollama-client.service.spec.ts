@@ -12,7 +12,10 @@ describe('OllamaClientService', () => {
     >();
   const mockGet =
     jest.fn<
-      (url: string) => Promise<{ data: { models: Array<{ name: string }> } }>
+      (
+        url: string,
+        config?: unknown,
+      ) => Promise<{ data: { models: Array<{ name: string }> } }>
     >();
   const mockedAxios = axios as jest.Mocked<typeof axios>;
 
@@ -20,7 +23,9 @@ describe('OllamaClientService', () => {
   const sampleReason =
     '국가전략기술 범위에 소형모듈원자로를 추가하여 세제 지원을 확대하려는 내용';
 
-  const createService = (): OllamaClientService => {
+  const createService = (
+    overrides: Record<string, unknown> = {},
+  ): OllamaClientService => {
     mockedAxios.create.mockReturnValue({
       post: mockPost,
       get: mockGet,
@@ -28,6 +33,7 @@ describe('OllamaClientService', () => {
 
     const configService = {
       get: jest.fn((key: string, defaultValue?: unknown) => {
+        if (key in overrides) return overrides[key];
         if (key === 'ollama.enabled') return true;
         if (key === 'ollama.apiUrl') return 'http://localhost:11434';
         if (key === 'ollama.timeout') return 10000;
@@ -41,6 +47,7 @@ describe('OllamaClientService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockGet.mockReset().mockResolvedValue({ data: { models: [] } });
   });
 
   it('should build a strict prompt and send deterministic generation options', async () => {
@@ -242,5 +249,67 @@ describe('OllamaClientService', () => {
     expect(metrics.health.status).toBe('unhealthy');
     expect(metrics.health.error).toContain('connection refused');
     expect(metrics.health.lastCheckedAt).toBeTruthy();
+  });
+
+  it('bounds health requests separately while retaining the long generation timeout', async () => {
+    const service = createService({
+      'ollama.timeout': 1800000,
+      'ollama.healthTimeoutMs': 2000,
+    });
+    mockPost.mockResolvedValue({
+      data: { response: '세액공제 확대로 산업 경쟁력을 높입니다.' },
+    });
+    await service.getMetrics();
+    expect(mockedAxios.create).toHaveBeenCalledWith(
+      expect.objectContaining({ timeout: 1800000 }),
+    );
+    expect(mockGet).toHaveBeenCalledWith(
+      '/api/tags',
+      expect.objectContaining({
+        timeout: 2000,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    await service.summarizeProposal(sampleTitle, sampleReason);
+    expect(mockPost.mock.calls[0]).toHaveLength(2);
+  });
+
+  it.each([0, -1, Infinity, NaN])(
+    'uses a finite health deadline for invalid configuration %s',
+    async (timeout) => {
+      const service = createService({ 'ollama.healthTimeoutMs': timeout });
+      await service.getMetrics();
+      expect(mockGet).toHaveBeenCalledWith(
+        '/api/tags',
+        expect.objectContaining({ timeout: 2000 }),
+      );
+    },
+  );
+
+  it('coalesces concurrent health probes and releases the slot after failures', async () => {
+    const service = createService();
+    let reject!: (error: Error) => void;
+    mockGet.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, rejectProbe) => {
+          reject = rejectProbe;
+        }),
+    );
+    const probes = Array.from({ length: 12 }, () =>
+      service.getMetrics({ forceHealthCheck: true }),
+    );
+    expect(mockGet).toHaveBeenCalledTimes(1);
+    reject(new Error('deadline reached'));
+    expect(
+      (await Promise.all(probes)).every(
+        (result) => result.health.status === 'unhealthy',
+      ),
+    ).toBe(true);
+    await service.getMetrics();
+    expect(mockGet).toHaveBeenCalledTimes(1);
+    expect(
+      (await service.getMetrics({ forceHealthCheck: true })).health.status,
+    ).toBe('healthy');
+    expect(mockGet).toHaveBeenCalledTimes(2);
   });
 });
