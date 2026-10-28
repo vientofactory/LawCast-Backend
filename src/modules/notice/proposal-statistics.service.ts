@@ -28,6 +28,11 @@ export interface ProposalStatisticsResult {
 
 @Injectable()
 export class ProposalStatisticsService {
+  private readonly readsInFlight = new Map<
+    string,
+    Promise<ProposalStatisticsResult>
+  >();
+
   private static readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
   constructor(
@@ -44,6 +49,23 @@ export class ProposalStatisticsService {
     query: ProposalStatisticsQuery,
   ): Promise<ProposalStatisticsResult> {
     const cacheKey = this.buildCacheKey(query);
+    const existing = this.readsInFlight.get(cacheKey);
+    if (existing) return existing;
+    const pending = this.readCachedStatistics(query, cacheKey);
+    this.readsInFlight.set(cacheKey, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.readsInFlight.get(cacheKey) === pending) {
+        this.readsInFlight.delete(cacheKey);
+      }
+    }
+  }
+
+  private async readCachedStatistics(
+    query: ProposalStatisticsQuery,
+    cacheKey: string,
+  ): Promise<ProposalStatisticsResult> {
     const cached =
       await this.cacheManager.get<ProposalStatisticsResult>(cacheKey);
     if (cached) return cached;

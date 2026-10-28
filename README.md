@@ -60,6 +60,11 @@
 
 이 방식은 IP를 암호화해 복호화하는 대신 비밀키 기반의 일방향 식별자를 만드는 구조입니다. 따라서 운영자가 비밀키를 안전하게 보관하는 것이 중요합니다. 또한 IP 자체가 네트워크에서 변하면 같은 참여자로 인식되지 않을 수 있으며, 프록시 환경에서는 신뢰할 수 있는 `cf-connecting-ip`, `x-forwarded-for`, `x-real-ip` 설정이 필요합니다.
 
+`GET /api/stats?view=home`은 홈 SSR용 경량 통계를 반환합니다. 응답은
+`archive.count`, `cache.lastUpdated`, `changeTracking.comparableEventTotal`,
+`aiSummaryEnabled`로 제한되며, Ollama health와 웹훅·푸시 운영 집계를 기다리지 않습니다.
+`view`를 생략한 `/api/stats`의 기존 전체 통계 계약은 유지됩니다.
+
 ### 알림
 
 - 신규 입법예고와 주요 변경 사항을 Discord 웹훅으로 전송합니다.
@@ -334,6 +339,11 @@ Base path: `/api`
 | `GET`  | `/notices/changes/summary`        | 비교 가능한 변경 이벤트 통계             |
 | `GET`  | `/notices/:num/screenshot`        | 보관된 법률안 스크린샷                   |
 | `GET`  | `/notices/:num/export`            | 법률안 아카이브 ZIP 내보내기             |
+
+`GET /api/stats?view=home`은 홈 SSR용 경량 통계를 반환합니다. 응답은
+`archive.count`, `cache.lastUpdated`, `changeTracking.comparableEventTotal`,
+`aiSummaryEnabled`로 제한되며, Ollama health와 웹훅·푸시 운영 집계를 기다리지 않습니다.
+`view`를 생략한 `/api/stats`의 기존 전체 통계 계약은 유지됩니다.
 
 ### 알림
 

@@ -61,6 +61,60 @@ describe('notice_archives immutability trigger', () => {
     }
   });
 
+  it('does not execute a snapshot protection program for metadata-only updates', async () => {
+    await insertRow({
+      source_html: 'x'.repeat(512000),
+      screenshot_blob: Buffer.alloc(512000),
+    });
+    const metadataPlan = await dataSource.query(
+      'EXPLAIN UPDATE notice_archives SET nsm_last_seen_in_list_at = ? WHERE noticeNum = ?',
+      ['2026-10-28T12:00:00Z', 2203643],
+    );
+    expect(
+      metadataPlan.some((row: { opcode: string }) => row.opcode === 'Program'),
+    ).toBe(false);
+    await dataSource.query(
+      'UPDATE notice_archives SET nsm_last_seen_in_list_at = ? WHERE noticeNum = ?',
+      ['2026-10-28T12:00:00Z', 2203643],
+    );
+    const [row] = await dataSource.query(
+      'SELECT length(source_html) AS html, length(screenshot_blob) AS screenshot FROM notice_archives',
+    );
+    expect(row).toEqual({ html: 512000, screenshot: 512000 });
+  });
+
+  it.each(['rowid', '_rowid_', 'oid', 'id'])(
+    'still protects the primary key through %s',
+    async (alias) => {
+      await insertRow();
+      await expect(
+        dataSource.query(
+          `UPDATE notice_archives SET "${alias}" = 12345 WHERE noticeNum = 2203643`,
+        ),
+      ).rejects.toThrow('immutable');
+    },
+  );
+
+  it('restores the original guard on migration rollback without weakening protection', async () => {
+    await insertRow();
+    await dataSource.undoLastMigration();
+    const [trigger] = await dataSource.query(
+      "SELECT sql FROM sqlite_master WHERE name = 'trg_notice_archives_prevent_update'",
+    );
+    expect(trigger.sql).toMatch(/BEFORE UPDATE ON/i);
+    await expect(
+      dataSource.query(
+        "UPDATE notice_archives SET subject = 'changed' WHERE noticeNum = 2203643",
+      ),
+    ).rejects.toThrow('immutable');
+    await dataSource.runMigrations();
+    await expect(
+      dataSource.query(
+        "UPDATE notice_archives SET subject = 'changed', proposal_reason_retry_count = 1 WHERE noticeNum = 2203643",
+      ),
+    ).rejects.toThrow('immutable');
+  });
+
   it('allows filling every snapshot artifact column while it is still NULL', async () => {
     await insertRow();
 

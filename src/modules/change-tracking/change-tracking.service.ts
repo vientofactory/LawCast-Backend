@@ -192,6 +192,8 @@ export class ChangeTrackingService {
   );
   private readonly APPEND_EVENT_MAX_RETRIES = 3;
   private readonly BASELINE_EVENT_HEIGHT = 1;
+  private comparableSummaryInFlight: Promise<ComparableChangeSummary> | null =
+    null;
   private readonly LEGACY_GENESIS_SOURCE =
     NoticeChangeSource.BOOTSTRAP_LEGACY_SEED;
   private readonly NOTIFICATION_SUPPRESSED_SOURCE_PREFIXES = [
@@ -1622,26 +1624,38 @@ export class ChangeTrackingService {
   }
 
   async getComparableChangeSummary(): Promise<ComparableChangeSummary> {
-    const comparableEventTotalRaw = await this.changeEventRepository
-      .createQueryBuilder('event')
-      .select('COUNT(*)', 'count')
-      .where('event.event_height > :baselineEventHeight')
-      .setParameter('baselineEventHeight', this.BASELINE_EVENT_HEIGHT)
-      .getRawOne<{ count: number | string }>();
+    if (this.comparableSummaryInFlight) {
+      return { ...(await this.comparableSummaryInFlight) };
+    }
+    const pending = this.readComparableChangeSummary();
+    this.comparableSummaryInFlight = pending;
+    try {
+      return { ...(await pending) };
+    } finally {
+      if (this.comparableSummaryInFlight === pending) {
+        this.comparableSummaryInFlight = null;
+      }
+    }
+  }
 
-    const comparableNoticeCountRaw = await this.changeEventRepository
+  private async readComparableChangeSummary(): Promise<ComparableChangeSummary> {
+    const counts = await this.changeEventRepository
       .createQueryBuilder('event')
-      .select('COUNT(DISTINCT event.notice_num)', 'count')
+      .select('COUNT(*)', 'eventTotal')
+      .addSelect('COUNT(DISTINCT event.notice_num)', 'noticeCount')
       .where('event.event_height > :baselineEventHeight')
       .setParameter('baselineEventHeight', this.BASELINE_EVENT_HEIGHT)
-      .getRawOne<{ count: number | string }>();
+      .getRawOne<{
+        eventTotal: number | string;
+        noticeCount: number | string;
+      }>();
 
     const comparableEventTotal = Number.parseInt(
-      String(comparableEventTotalRaw?.count ?? 0),
+      String(counts?.eventTotal ?? 0),
       10,
     );
     const comparableNoticeCount = Number.parseInt(
-      String(comparableNoticeCountRaw?.count ?? 0),
+      String(counts?.noticeCount ?? 0),
       10,
     );
 

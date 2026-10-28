@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import {
   BadRequestException,
   Injectable,
@@ -228,7 +229,8 @@ export const INTEGRITY_SKIP_REASON_MISSING_SOURCE = 'missing_source_or_hash';
  * Keeps every statement far below SQLite's bound-parameter ceiling while a
  * single cycle still stamps a full list (~16k rows) on a handful of queries.
  */
-const NSM_LIST_SEEN_STAMP_CHUNK_SIZE = 400;
+// Bound each metadata write so frontend reads can use the shared connection.
+const NSM_LIST_SEEN_STAMP_CHUNK_SIZE = 100;
 
 type TrackedArchiveRow = Pick<
   NoticeArchive,
@@ -1401,6 +1403,9 @@ export class NoticeArchiveService {
         { nsmLastSeenInListAt: seenAt },
       );
       stampedCount += result?.affected ?? 0;
+      if (offset + chunk.length < uniqueNums.length) {
+        await yieldToEventLoop();
+      }
     }
 
     return stampedCount;
