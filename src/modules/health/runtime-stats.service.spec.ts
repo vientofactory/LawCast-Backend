@@ -151,6 +151,10 @@ function buildService(params?: {
 
   return {
     service,
+    cacheManager,
+    archiveRepo,
+    changeEventRepo,
+    crawlingService,
     getTransparency: () => service.getTransparencyStats(),
     getStats: () =>
       service.getAggregatedStats(
@@ -165,6 +169,67 @@ function buildService(params?: {
       ),
   };
 }
+
+describe('RuntimeStatsService concurrent transparency cache misses', () => {
+  it('shares the five aggregations across a cold request burst', async () => {
+    const { getTransparency, archiveRepo, changeEventRepo, cacheManager } =
+      buildService();
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () => getTransparency()),
+    );
+    expect(results).toHaveLength(20);
+    expect(archiveRepo.count).toHaveBeenCalledTimes(1);
+    expect(archiveRepo.createQueryBuilder).toHaveBeenCalledTimes(2);
+    expect(changeEventRepo.createQueryBuilder).toHaveBeenCalledTimes(2);
+    expect(cacheManager.set).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases a failed cache read and uses a later cache snapshot', async () => {
+    const { getTransparency, archiveRepo, cacheManager } = buildService();
+    cacheManager.get.mockRejectedValueOnce(new Error('cache offline'));
+    await expect(getTransparency()).rejects.toThrow('cache offline');
+    await getTransparency();
+    cacheManager.get.mockResolvedValueOnce({ current: true });
+    expect(await getTransparency()).toEqual({ current: true });
+    expect(archiveRepo.count).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('RuntimeStatsService frontend read budgets', () => {
+  it('loads the home view without health, webhook or web-push aggregation', async () => {
+    const { service, crawlingService } = buildService();
+    const archive = {
+      getArchiveCount: jest.fn<() => Promise<number>>().mockResolvedValue(123),
+    };
+    const changes = {
+      getComparableChangeSummary: jest
+        .fn<() => Promise<any>>()
+        .mockResolvedValue({
+          comparableEventTotal: 19,
+          comparableNoticeCount: 7,
+        }),
+    };
+    const result = await service.getHomeStats(
+      crawlingService,
+      archive as any,
+      changes as any,
+      true,
+    );
+    expect(result).toEqual({
+      archive: { count: 123 },
+      cache: { lastUpdated: null },
+      changeTracking: { comparableEventTotal: 19 },
+      aiSummaryEnabled: true,
+    });
+    expect(crawlingService.getOllamaMetrics).not.toHaveBeenCalled();
+  });
+
+  it('reuses one metrics result for the full status response', async () => {
+    const { getStats, crawlingService } = buildService();
+    await getStats();
+    expect(crawlingService.getOllamaMetrics).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('RuntimeStatsService crawler activation', () => {
   afterEach(() => {

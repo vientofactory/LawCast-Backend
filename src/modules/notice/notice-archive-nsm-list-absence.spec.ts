@@ -93,6 +93,36 @@ describe('NoticeArchiveService NSM list-absence tracking (real SQLite schema)', 
     );
   };
 
+  it('stamps every batch without regressing newer sightings or modifying snapshots', async () => {
+    const seenAt = new Date('2026-10-28T12:00:00.000Z');
+    const newer = new Date('2026-10-29T12:00:00.000Z');
+    await dataSource.transaction(async () => {
+      for (let noticeNum = 1; noticeNum <= 205; noticeNum++) {
+        await insertNotice({
+          noticeNum,
+          nsmLastSeenInListAt: noticeNum === 205 ? newer : null,
+        });
+      }
+    });
+    const ids = Array.from({ length: 205 }, (_, i) => i + 1);
+    expect(
+      await service.stampNsmListSeen([...ids, 1, 0, -1, NaN], seenAt),
+    ).toBe(204);
+    expect(
+      await service.stampNsmListSeen(ids, new Date('2026-10-27T12:00:00Z')),
+    ).toBe(0);
+    const rows = await dataSource.getRepository(NoticeArchive).find();
+    expect(rows).toHaveLength(205);
+    for (const row of rows) {
+      expect(row.nsmLastSeenInListAt).toEqual(
+        row.noticeNum === 205 ? newer : seenAt,
+      );
+      expect(row.sourceHtml).toBe('<html>snapshot</html>');
+      expect(row.lifecycleStatus).toBe(NOTICE_LIFECYCLE_STATUS.ACTIVE);
+      expect(row.subject).toBe(`테스트 법률안 ${row.noticeNum}`);
+    }
+  });
+
   const readRow = async (noticeNum: number): Promise<NoticeArchive> => {
     const row = await dataSource
       .getRepository(NoticeArchive)

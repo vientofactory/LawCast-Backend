@@ -2,6 +2,7 @@ import type { MigrationInterface } from 'typeorm';
 import { InitialSchemaMigration1744953900000 } from './202604170001-initial-schema.migration';
 import { AddContentMetadataColumns1745001601000 } from './202604180001-add-content-metadata-columns.migration';
 import { AddIsDoneColumn1746316801000 } from './202605030001-add-is-done-column.migration';
+import { OptimizeArchiveMetadataUpdates1793145601000 } from './202610280001-optimize-archive-metadata-updates.migration';
 import { AddScreenshotBlob1748476800000 } from './202605290001-add-screenshot-blob.migration';
 import { RestoreNoticeNumUniqueIndex1748563200000 } from './202605300001-restore-notice-num-unique-index.migration';
 import { AddPerfIndexes1748822400000 } from './202606020001-add-perf-indexes.migration';
@@ -65,4 +66,5 @@ export const migrations: (new () => MigrationInterface)[] = [
   AddScreenshotCaptureStatus1758096001000,
   AddNsmListAbsenceTracking1760400001000,
   AddProposalReasonRetryTracking1760486401000,
+  OptimizeArchiveMetadataUpdates1793145601000,
 ];

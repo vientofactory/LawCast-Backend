@@ -102,6 +102,7 @@ describe('HTTP-Batch Processing Isolation', () => {
     };
 
     const mockHealthCheckService = {
+      getOllamaMetrics: jest.fn(),
       getApiHealthPayload: jest.fn().mockResolvedValue({ status: 'healthy' }),
     };
 
@@ -125,10 +126,21 @@ describe('HTTP-Batch Processing Isolation', () => {
         search: '',
       }),
       getArchivedNoticeDetail: jest.fn().mockResolvedValue(null),
+      getArchivedNoticeDetailWithRevision: jest.fn().mockResolvedValue({
+        detail: { num: 123, subject: 'Test notice' },
+        timeline: [],
+        revision: null,
+      }),
       getArchiveCount: jest.fn().mockResolvedValue(0),
     };
 
     const mockRuntimeStatsService = {
+      getHomeStats: jest.fn().mockResolvedValue({
+        archive: { count: 100 },
+        cache: { lastUpdated: null },
+        changeTracking: { comparableEventTotal: 2 },
+        aiSummaryEnabled: false,
+      }),
       getRuntimeStats: jest.fn().mockResolvedValue({
         uptime: 3600,
         memoryUsage: { rss: 1000000, heapTotal: 500000, heapUsed: 300000 },
@@ -335,6 +347,34 @@ describe('HTTP-Batch Processing Isolation', () => {
     if (module) {
       await module.close();
     }
+  });
+
+  describe('Frontend read dependency isolation', () => {
+    it('dispatches the home view without collecting operational stats', async () => {
+      const stats = module.get(RuntimeStatsService);
+      const health = module.get(CrawlingService);
+      const response = await controller.getStats('home');
+      expect(response.data).toEqual({
+        archive: { count: 100 },
+        cache: { lastUpdated: null },
+        changeTracking: { comparableEventTotal: 2 },
+        aiSummaryEnabled: false,
+      });
+      expect(stats.getHomeStats).toHaveBeenCalledTimes(1);
+      expect(stats.getAggregatedStats).not.toHaveBeenCalled();
+      expect(health.getOllamaMetrics).not.toHaveBeenCalled();
+    });
+
+    it('reads the detail AI flag from configuration without probing Ollama', async () => {
+      const config = module.get(ConfigService);
+      jest.spyOn(config, 'get').mockReturnValue(true);
+      const response = await controller.getNoticeDetail(123);
+      expect(response.data.aiSummaryEnabled).toBe(true);
+      expect(
+        module.get(HealthCheckService).getOllamaMetrics,
+      ).not.toHaveBeenCalled();
+      expect(response.data).toHaveProperty('changesCount', 0);
+    });
   });
 
   describe('Discussion web push authorId derivation', () => {

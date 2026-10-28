@@ -166,6 +166,25 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     }, this.measurementInterval);
   }
 
+  async getHomeStats(
+    crawlingService: CrawlingService,
+    noticeArchiveService: NoticeArchiveService,
+    changeTrackingService: ChangeTrackingService,
+    aiSummaryEnabled: boolean,
+  ) {
+    const [cache, count, changes] = await Promise.all([
+      crawlingService.getCacheInfo(),
+      noticeArchiveService.getArchiveCount(),
+      changeTrackingService.getComparableChangeSummary(),
+    ]);
+    return {
+      archive: { count },
+      cache: { lastUpdated: cache.lastUpdated },
+      changeTracking: { comparableEventTotal: changes.comparableEventTotal },
+      aiSummaryEnabled,
+    };
+  }
+
   async getAggregatedStats(
     params: { nodeEnv?: string },
     webhookService: WebhookService,
@@ -234,7 +253,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
             },
           }
         : ollamaMetrics,
-      aiSummaryEnabled: (await crawlingService.getOllamaMetrics()).enabled,
+      aiSummaryEnabled: ollamaMetrics.enabled,
       nodeRuntime,
       crawlers: this.buildCrawlersStatus(
         crawlingService,
@@ -275,7 +294,21 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
    * Includes source breakdowns, lifecycle counts, change event stats,
    * and crawler schedule information.
    */
+  private transparencyInFlight: Promise<Record<string, unknown>> | null = null;
+
   async getTransparencyStats() {
+    if (this.transparencyInFlight) return this.transparencyInFlight;
+    const pending = this.readCachedTransparencyStats();
+    this.transparencyInFlight = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.transparencyInFlight === pending)
+        this.transparencyInFlight = null;
+    }
+  }
+
+  private async readCachedTransparencyStats() {
     // Return cached result if still fresh to avoid repeated DB aggregations.
     const cached = await this.cacheManager.get<Record<string, unknown>>(
       RuntimeStatsService.TRANSPARENCY_CACHE_KEY,

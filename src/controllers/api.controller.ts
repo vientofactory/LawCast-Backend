@@ -345,8 +345,10 @@ export class ApiController {
 
     return ApiResponseUtils.success({
       ...detail,
-      aiSummaryEnabled: (await this.healthCheckService.getOllamaMetrics())
-        .enabled,
+      aiSummaryEnabled: !!this.configService.get<boolean>(
+        'ollama.enabled',
+        false,
+      ),
       revision,
       ...(includeTimeline === 'true'
         ? {
@@ -504,7 +506,17 @@ export class ApiController {
   }
 
   @Get('stats')
-  async getStats() {
+  async getStats(@Query('view') view?: string) {
+    if (view === 'home') {
+      return ApiResponseUtils.success(
+        await this.runtimeStatsService.getHomeStats(
+          this.crawlingService,
+          this.noticeArchiveService,
+          this.changeTrackingService,
+          !!this.configService.get<boolean>('ollama.enabled', false),
+        ),
+      );
+    }
     const stats = await this.runtimeStatsService.getAggregatedStats(
       { nodeEnv: this.nodeEnv },
       this.webhookService,
