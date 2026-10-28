@@ -109,15 +109,20 @@ export async function getProposalReasonRetryCandidates(
       minNoticeNum: APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
     })
     .andWhere("(na.proposalReason IS NULL OR TRIM(na.proposalReason) = '')")
+    // Correlate events first so SQLite cannot scan every detail for each notice.
     .andWhere(
       `NOT EXISTS (
           SELECT 1
           FROM notice_change_events e
-          INNER JOIN notice_change_details d ON d.event_id = e.id
           WHERE e.notice_num = na.noticeNum
-            AND d.field_path = :proposalReasonFieldPath
-            AND d.after_value IS NOT NULL
-            AND TRIM(d.after_value) != ''
+            AND EXISTS (
+              SELECT 1
+              FROM notice_change_details d
+              WHERE d.event_id = e.id
+                AND d.field_path = :proposalReasonFieldPath
+                AND d.after_value IS NOT NULL
+                AND TRIM(d.after_value) != ''
+            )
         )`,
       { proposalReasonFieldPath: 'proposalReason' },
     )
@@ -125,10 +130,14 @@ export async function getProposalReasonRetryCandidates(
       `NOT EXISTS (
           SELECT 1
           FROM notice_change_events e
-          INNER JOIN notice_change_details d ON d.event_id = e.id
           WHERE e.notice_num = na.noticeNum
-            AND d.field_path = :lifecycleStatusFieldPath
-            AND d.after_value = :sourceDeletedLifecycle
+            AND EXISTS (
+              SELECT 1
+              FROM notice_change_details d
+              WHERE d.event_id = e.id
+                AND d.field_path = :lifecycleStatusFieldPath
+                AND d.after_value = :sourceDeletedLifecycle
+            )
         )`,
       {
         lifecycleStatusFieldPath: 'lifecycleStatus',
