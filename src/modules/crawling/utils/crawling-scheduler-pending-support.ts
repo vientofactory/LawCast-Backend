@@ -637,7 +637,6 @@ export async function processPendingBillsInBackgroundInternal(
       bridgeMessage: `**${noticesWithoutReason.length}** pending bill(s) missing proposalReason`,
       metadata: {
         nums: noticesWithoutReason.map((n) => n.num),
-        immutableSnapshot: true,
       },
     });
 

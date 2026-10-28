@@ -28,6 +28,7 @@ export interface AppConfig {
     apiUrl: string;
     model: string;
     timeout: number;
+    healthTimeoutMs: number;
   };
   semanticSearch: {
     enabled: boolean;
@@ -631,6 +632,10 @@ export default (): AppConfig => ({
     apiUrl: process.env.OLLAMA_API_URL?.trim() || '',
     model: process.env.OLLAMA_MODEL?.trim() || '',
     timeout: parseInt(process.env.OLLAMA_TIMEOUT, 10) || 10000,
+    healthTimeoutMs: parseIntWithDefault(
+      process.env.OLLAMA_HEALTH_TIMEOUT_MS,
+      2000,
+    ),
   },
   semanticSearch: {
     enabled: parseBooleanWithDefault(process.env.SEMANTIC_SEARCH_ENABLED, true),
