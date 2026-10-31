@@ -160,6 +160,12 @@ describe('ApiController archive export', () => {
           provide: ChangeTrackingService,
           useValue: {
             getNoticeChangeTimeline: jest.fn().mockResolvedValue([]),
+            getNoticeChangeTimelinePage: jest.fn().mockResolvedValue({
+              items: [],
+              count: 0,
+              hasMore: false,
+              nextBeforeHeight: null,
+            }),
             getRecentChanges: jest.fn().mockResolvedValue({
               items: [],
               page: 1,

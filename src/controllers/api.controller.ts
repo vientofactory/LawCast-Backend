@@ -368,16 +368,18 @@ export class ApiController {
   async getNoticeChanges(
     @Param('num', ParseIntPipe) num: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('beforeHeight', new ParseIntPipe({ optional: true }))
+    beforeHeight?: number,
   ) {
-    const timeline = await this.changeTrackingService.getNoticeChangeTimeline({
+    const page = await this.changeTrackingService.getNoticeChangeTimelinePage({
       noticeNum: num,
       limit,
+      beforeHeight,
     });
 
     return ApiResponseUtils.success({
       noticeNum: num,
-      items: timeline,
-      count: timeline.length,
+      ...page,
     });
   }
 

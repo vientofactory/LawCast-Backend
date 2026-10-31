@@ -407,7 +407,13 @@ Base path: `/api`
 
 `GET /api/notices/:num/changes`
 
-- `limit`: 응답 개수, 기본값 `20`
+- `limit`: 페이지당 응답 개수, 기본값 `20`, 최대 `100`
+- `beforeHeight`: 이 기록 번호보다 이전인 기록을 조회하는 선택적 커서. `1` 이상의 안전한 정수이며 잘못된 값은 `400`을 반환합니다.
+- 기록 번호(`eventHeight`) 내림차순입니다. 첫 요청에는 커서를 생략하고, 다음 요청에는 응답의 `nextBeforeHeight`를 전달합니다.
+- 기존 `noticeNum`, `items`, `count`는 유지됩니다. `count`는 해당 페이지의 항목 수입니다.
+- `hasMore`와 `nextBeforeHeight`를 추가로 반환합니다. 마지막 페이지에서는 `hasMore: false`, `nextBeforeHeight: null`입니다.
+- 예: `/api/notices/2210001/changes?limit=20&beforeHeight=81`은 기록 `81` 미만의 이전 페이지를 반환합니다. 새 기록이 추가되어도 이미 받은 페이지와 겹치지 않습니다.
+- 읽기 전용이며, 별도의 전체 개수 집계나 전체 이력 로딩 없이 법률안·기록 번호의 기존 복합 인덱스를 사용합니다.
 
 `GET /api/notices/changes`
 
