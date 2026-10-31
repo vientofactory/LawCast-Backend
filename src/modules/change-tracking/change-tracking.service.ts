@@ -1,6 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { type EntityManager, In, Repository } from 'typeorm';
+import { type EntityManager, In, LessThan, Repository } from 'typeorm';
 import {
   CHANGE_EVENT_TYPE,
   NoticeChangeEvent,
@@ -95,6 +95,10 @@ interface DispatchChangeNotificationInput {
 interface ChangeTimelineQuery {
   noticeNum: number;
   limit?: number;
+}
+
+interface ChangeTimelinePageQuery extends ChangeTimelineQuery {
+  beforeHeight?: number;
 }
 
 interface RecentChangesQuery {
@@ -1153,13 +1157,46 @@ export class ChangeTrackingService {
     return this.loadNoticeChangeTimeline(noticeNum);
   }
 
+  async getNoticeChangeTimelinePage(query: ChangeTimelinePageQuery) {
+    if (
+      query.beforeHeight !== undefined &&
+      (!Number.isSafeInteger(query.beforeHeight) || query.beforeHeight < 1)
+    ) {
+      throw new BadRequestException('기록 번호는 1 이상의 정수여야 합니다.');
+    }
+    const limit = Math.min(Math.max(query.limit ?? 20, 1), 100);
+    const page = await this.loadNoticeChangeTimeline(
+      query.noticeNum,
+      limit + 1,
+      query.beforeHeight,
+      true,
+    );
+    const hasMore = page.length > limit;
+    const items = page.slice(0, limit);
+    return {
+      items,
+      count: items.length,
+      hasMore,
+      nextBeforeHeight: hasMore ? items[items.length - 1].eventHeight : null,
+    };
+  }
+
   private async loadNoticeChangeTimeline(
     noticeNum: number,
     limit?: number,
+    beforeHeight?: number,
+    orderByHeight = false,
   ): Promise<ChangeTimelineItem[]> {
     const events = await this.changeEventRepository.find({
-      where: { noticeNum },
-      order: { detectedAt: 'DESC', eventHeight: 'DESC' },
+      where: {
+        noticeNum,
+        ...(beforeHeight === undefined
+          ? {}
+          : { eventHeight: LessThan(beforeHeight) }),
+      },
+      order: orderByHeight
+        ? { eventHeight: 'DESC' }
+        : { detectedAt: 'DESC', eventHeight: 'DESC' },
       ...(limit === undefined ? {} : { take: limit }),
     });
 

@@ -6,6 +6,7 @@
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
+import request from 'supertest';
 import { ConfigService } from '@nestjs/config';
 import { ApiController } from '../controllers/api.controller';
 import { BatchProcessingService } from '../modules/shared/batch-processing.service';
@@ -31,6 +32,54 @@ import { NoticesHybridSearchService } from '../modules/semantic-search/notices-h
 import { IpMaskingUtil } from '../modules/discussions/utils/ip-masking.util';
 
 describe('HTTP-Batch Processing Isolation', () => {
+  it('preserves the timeline response and parses the exclusive cursor over HTTP', async () => {
+    const app = module.createNestApplication();
+    await app.init();
+    try {
+      const timeline = module.get(ChangeTrackingService)
+        .getNoticeChangeTimelinePage as jest.Mock;
+      timeline.mockResolvedValue({
+        items: [],
+        count: 0,
+        hasMore: false,
+        nextBeforeHeight: null,
+      });
+      const response = await request(app.getHttpServer())
+        .get('/api/notices/2210001/changes?limit=7&beforeHeight=81')
+        .expect(200);
+      expect(response.body).toMatchObject({
+        success: true,
+        data: {
+          noticeNum: 2210001,
+          items: [],
+          count: 0,
+          hasMore: false,
+          nextBeforeHeight: null,
+        },
+      });
+      expect(timeline).toHaveBeenCalledWith({
+        noticeNum: 2210001,
+        limit: 7,
+        beforeHeight: 81,
+      });
+      for (const beforeHeight of ['invalid', '1.5', '']) {
+        await request(app.getHttpServer())
+          .get(`/api/notices/2210001/changes?beforeHeight=${beforeHeight}`)
+          .expect(400);
+      }
+      await request(app.getHttpServer())
+        .get('/api/notices/2210001/changes')
+        .expect(200);
+      expect(timeline).toHaveBeenLastCalledWith({
+        noticeNum: 2210001,
+        limit: 20,
+        beforeHeight: undefined,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   let controller: ApiController;
   let batchService: BatchProcessingService;
   let notificationBatchService: NotificationBatchService;
@@ -297,6 +346,12 @@ describe('HTTP-Batch Processing Isolation', () => {
           provide: ChangeTrackingService,
           useValue: {
             getNoticeChangeTimeline: jest.fn().mockResolvedValue([]),
+            getNoticeChangeTimelinePage: jest.fn().mockResolvedValue({
+              items: [],
+              count: 0,
+              hasMore: false,
+              nextBeforeHeight: null,
+            }),
             getRecentChanges: jest.fn().mockResolvedValue({
               items: [],
               page: 1,
