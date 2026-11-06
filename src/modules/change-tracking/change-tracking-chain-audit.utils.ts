@@ -232,23 +232,23 @@ async function verifyAllChains(
       const batch = noticeNums.slice(i, i + BATCH);
       const rows = await deps.archiveRepository.find({
         where: { noticeNum: In(batch) } as any,
-        select: [
-          'noticeNum',
-          'contentId',
-          'subject',
-          'proposerCategory',
-          'committee',
-          'proposalReason',
-          'contentBillNumber',
-          'contentProposer',
-          'contentProposalDate',
-          'contentCommittee',
-          'contentReferralDate',
-          'contentNoticePeriod',
-          'contentProposalSession',
-          'lifecycleStatus',
-          'sourceDeletedAt',
-        ],
+        select: {
+          noticeNum: true,
+          contentId: true,
+          subject: true,
+          proposerCategory: true,
+          committee: true,
+          proposalReason: true,
+          contentBillNumber: true,
+          contentProposer: true,
+          contentProposalDate: true,
+          contentCommittee: true,
+          contentReferralDate: true,
+          contentNoticePeriod: true,
+          contentProposalSession: true,
+          lifecycleStatus: true,
+          sourceDeletedAt: true,
+        },
       });
       for (const row of rows) {
         archiveSnapshotByNum.set(row.noticeNum, buildAuditSeedSnapshot(row));

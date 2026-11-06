@@ -1,0 +1,8 @@
+{
+  "name": "@lawcast/deepmerge-patched",
+  "version": "4.3.2-lawcast.1",
+  "private": true,
+  "main": "index.cjs",
+  "types": "index.d.ts",
+  "license": "MIT"
+}

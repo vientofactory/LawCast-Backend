@@ -13,7 +13,7 @@ describe('Revision history cursor pagination', () => {
 
   beforeEach(async () => {
     dataSource = await new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       synchronize: true,
       entities: [NoticeChangeEvent, NoticeChangeDetail],

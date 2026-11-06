@@ -603,7 +603,7 @@ export class ChangeTrackingService {
       manager.connection?.options?.type ?? manager.dataSource?.options?.type;
     const type = String(rawType ?? '').toLowerCase();
 
-    return type === 'sqlite' || type === 'better-sqlite3' || type === 'sqljs';
+    return type === 'better-sqlite3' || type === 'sqljs';
   }
 
   private async findLatestDuplicateEvent(

@@ -806,7 +806,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
 
   it('executes batched latest-field lookup with SQLite semantics', async () => {
     const dataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
     });
     await dataSource.initialize();

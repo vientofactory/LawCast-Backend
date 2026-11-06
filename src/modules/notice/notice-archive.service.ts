@@ -350,7 +350,7 @@ export class NoticeArchiveService {
       manager.connection?.options?.type ?? manager.dataSource?.options?.type;
     const type = String(rawType ?? '').toLowerCase();
 
-    return type === 'sqlite' || type === 'better-sqlite3' || type === 'sqljs';
+    return type === 'better-sqlite3' || type === 'sqljs';
   }
 
   private normalizeStableId(value: string | null | undefined): string | null {

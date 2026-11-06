@@ -47,7 +47,7 @@ describePerf('SQLite Query Performance (real DB)', () => {
 
   beforeAll(async () => {
     dataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: databasePath,
       synchronize: false,
       migrationsRun: false,

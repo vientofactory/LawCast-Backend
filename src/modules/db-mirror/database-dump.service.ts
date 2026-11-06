@@ -105,7 +105,7 @@ export class DatabaseDumpService {
 
   private async pruneNonLegalTables(dumpPath: string): Promise<string[]> {
     const dumpDataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: dumpPath,
       entities: [],
       synchronize: false,

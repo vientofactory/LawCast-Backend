@@ -81,7 +81,7 @@ describe('ArchiveOrchestratorService inline screenshot failures (real persistenc
 
   beforeAll(async () => {
     dataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [
         NoticeArchive,

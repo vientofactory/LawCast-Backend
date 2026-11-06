@@ -10,7 +10,7 @@ describe('Comparable summary reads on the shared SQLite connection', () => {
 
   beforeEach(async () => {
     db = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [NoticeChangeEvent, NoticeChangeDetail],
       migrations,

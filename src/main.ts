@@ -306,7 +306,7 @@ function logDatabasePath(dataSource: DataSource, loggerContext: string): void {
   const dbType = String(options.type ?? 'unknown');
   const dbPath = typeof options.database === 'string' ? options.database : '';
 
-  if (dbType === 'sqlite') {
+  if (dbType === 'better-sqlite3') {
     LoggerUtils.log(
       loggerContext,
       `SQLite database path: ${dbPath || '(not resolved)'}`,

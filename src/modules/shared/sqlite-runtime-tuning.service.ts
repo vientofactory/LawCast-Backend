@@ -16,7 +16,7 @@ export class SqliteRuntimeTuningService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     const type = String(this.dataSource.options.type ?? '').toLowerCase();
-    if (type !== 'sqlite' && type !== 'better-sqlite3') {
+    if (type !== 'better-sqlite3' && type !== 'better-sqlite3') {
       return;
     }
 

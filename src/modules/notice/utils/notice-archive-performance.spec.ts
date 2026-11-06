@@ -8,7 +8,7 @@ import { NoticeArchiveArtifactSupport } from './notice-archive-artifact-support'
 describe('notice archive performance paths', () => {
   it('uses the covering index for archive timestamp lookup', async () => {
     const dataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [NoticeArchive],
       synchronize: true,

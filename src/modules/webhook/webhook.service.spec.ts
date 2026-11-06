@@ -171,7 +171,7 @@ describe('WebhookService', () => {
         await service.findOne(999);
       } catch (error) {
         expect(error).toBeInstanceOf(HttpException);
-        expect(error.getStatus()).toBe(HttpStatus.NOT_FOUND);
+        expect((error as HttpException).getStatus()).toBe(HttpStatus.NOT_FOUND);
       }
     });
   });

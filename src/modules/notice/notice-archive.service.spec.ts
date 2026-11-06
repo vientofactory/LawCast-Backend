@@ -427,7 +427,7 @@ describe('NoticeArchiveService', () => {
 
   it('uses indexed keyset and anti-join semantics for genesis candidates in SQLite', async () => {
     const dataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [NoticeArchive, NoticeArchiveSnapshotState],
       synchronize: true,
@@ -518,7 +518,7 @@ describe('NoticeArchiveService', () => {
 
   it('selects empty-proposalReason notices for backfill regardless of origin, preserving eligibility guards', async () => {
     const dataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [NoticeArchive, NoticeArchiveSnapshotState],
       synchronize: true,

@@ -8,7 +8,7 @@ export class OptimizeArchiveMetadataUpdates1793145601000 implements MigrationInt
 
   async up(queryRunner: QueryRunner): Promise<void> {
     if (
-      !['sqlite', 'better-sqlite3'].includes(
+      !['better-sqlite3', 'better-sqlite3'].includes(
         queryRunner.connection.options.type,
       )
     ) {
@@ -47,7 +47,7 @@ export class OptimizeArchiveMetadataUpdates1793145601000 implements MigrationInt
 
   async down(queryRunner: QueryRunner): Promise<void> {
     if (
-      !['sqlite', 'better-sqlite3'].includes(
+      !['better-sqlite3', 'better-sqlite3'].includes(
         queryRunner.connection.options.type,
       )
     ) {

@@ -3,7 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CacheModule } from '@nestjs/cache-manager';
-import { createKeyv } from '@keyv/redis';
+import { createRedisCacheStore } from './modules/cache/cache-keyv.util';
 import { ApiController } from './controllers/api.controller';
 import { Webhook } from './modules/webhook/webhook.entity';
 import { ApiProposalStatsController } from './controllers/api-proposal-stats.controller';
@@ -54,18 +54,14 @@ import { AdminNoticesModule } from './modules/admin-notices/admin-notices.module
         const redisUrl = configService.get<string>('redis.url');
         const keyPrefix = configService.get<string>('redis.keyPrefix');
         return {
-          stores: [
-            createKeyv(redisUrl, {
-              namespace: keyPrefix,
-            }),
-          ],
+          stores: [createRedisCacheStore(redisUrl, keyPrefix)],
         };
       },
     }),
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        type: 'sqlite',
+        type: 'better-sqlite3',
         database: configService.get<string>('database.path'),
         entities: [
           Webhook,

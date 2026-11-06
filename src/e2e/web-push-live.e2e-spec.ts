@@ -42,7 +42,7 @@ describe('WebPushNotificationService (live e2e)', () => {
         TypeOrmModule.forRootAsync({
           inject: [ConfigService],
           useFactory: (cfg: ConfigService) => ({
-            type: 'sqlite',
+            type: 'better-sqlite3',
             database: cfg.get<string>('database.path'),
             entities: [WebPushSubscription],
             synchronize: false,
