@@ -45,6 +45,7 @@
     "@nestjs/typeorm": "^12.0.3",
     "@notionhq/client": "^5.31.0",
     "axios": "^1.21.0",
+    "better-sqlite3": "^12.0.0",
     "cache-manager": "^7.2.9",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
@@ -63,10 +64,11 @@
     "sharp": "^0.35.5",
     "sqlite3": "^6.0.1",
     "typeorm": "^1.1.2",
-    "web-push": "^4.0.0",
-    "better-sqlite3": "^12.0.0"
+    "web-push": "^4.0.0"
   },
   "devDependencies": {
+    "@babel/core": "^7.29.13",
+    "@babel/plugin-transform-modules-commonjs": "^7.29.7",
     "@eslint/js": "^10.0.1",
     "@nestjs/cli": "^12.0.12",
     "@nestjs/schematics": "^12.0.13",
@@ -77,6 +79,8 @@
     "@types/supertest": "^7.2.1",
     "@typescript-eslint/eslint-plugin": "^8.72.1",
     "@typescript-eslint/parser": "^8.72.1",
+    "babel-jest": "^30.5.2",
+    "deepmerge": "file:./vendor/deepmerge",
     "eslint": "^10.14.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.7",
@@ -90,8 +94,7 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^6.0.3",
-    "typescript-native": "npm:typescript@^7.0.2",
-    "deepmerge": "file:./vendor/deepmerge"
+    "typescript-native": "npm:typescript@^7.0.2"
   },
   "overrides": {
     "js-yaml": "^5.5.0",
@@ -103,29 +106,6 @@
     "@puppeteer/browsers": "^3.2.2",
     "minimatch": "^11.0.5",
     "deepmerge": "$deepmerge"
-  },
-  "jest": {
-    "moduleFileExtensions": [
-      "js",
-      "json",
-      "ts"
-    ],
-    "rootDir": "src",
-    "testRegex": ".*\\.spec\\.ts$",
-    "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
-    },
-    "transformIgnorePatterns": [
-      "node_modules/(?!(.*/)?(?:@file-kiwi/node|pal-crawl)/)"
-    ],
-    "moduleNameMapper": {
-      "^@file-kiwi/node$": "<rootDir>/test/mocks/file-kiwi-node.mock.ts"
-    },
-    "collectCoverageFrom": [
-      "**/*.(t|j)s"
-    ],
-    "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
   },
   "allowScripts": {
     "@parcel/watcher@2.6.0": true,
