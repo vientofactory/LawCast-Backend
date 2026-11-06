@@ -1231,14 +1231,20 @@ describe('CrawlingSchedulerService', () => {
     });
 
     it('starts immediately when nothing holds the browser', async () => {
-      await service.handleProposalReasonBackfillCron();
+      // The assertion tests contention, not whether execution crosses a wall-clock millisecond.
+      const clock = jest.spyOn(Date, 'now').mockReturnValue(1700000000000);
+      try {
+        await service.handleProposalReasonBackfillCron();
 
-      expect(loggedMessages(logSpy)).not.toContainEqual(
-        expect.stringContaining('browser freed after'),
-      );
-      expect(loggedMessages(logSpy)).toContainEqual(
-        expect.stringMatching(/proposalReason retry cron: queue before=\d+/),
-      );
+        expect(loggedMessages(logSpy)).not.toContainEqual(
+          expect.stringContaining('browser freed after'),
+        );
+        expect(loggedMessages(logSpy)).toContainEqual(
+          expect.stringMatching(/proposalReason retry cron: queue before=\d+/),
+        );
+      } finally {
+        clock.mockRestore();
+      }
     });
 
     it('does not wait for a browser before the cache is initialized', async () => {

@@ -28,7 +28,7 @@ export class AddNsmListAbsenceTracking1760400001000 implements MigrationInterfac
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     const driverType = queryRunner.connection.options.type;
-    if (driverType !== 'sqlite' && driverType !== 'better-sqlite3') {
+    if (driverType !== 'better-sqlite3') {
       return;
     }
 
@@ -45,7 +45,7 @@ export class AddNsmListAbsenceTracking1760400001000 implements MigrationInterfac
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     const driverType = queryRunner.connection.options.type;
-    if (driverType !== 'sqlite' && driverType !== 'better-sqlite3') {
+    if (driverType !== 'better-sqlite3') {
       return;
     }
 

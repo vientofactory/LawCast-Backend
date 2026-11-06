@@ -12,7 +12,7 @@ export class RemoveArchiveLastUpdatedAt1751932801000 implements MigrationInterfa
   public async down(queryRunner: QueryRunner): Promise<void> {
     const driverType = queryRunner.connection.options.type;
 
-    if (driverType === 'sqlite' || driverType === 'better-sqlite3') {
+    if (driverType === 'better-sqlite3') {
       await queryRunner.query(
         `ALTER TABLE "notice_archives" ADD COLUMN "last_updated_at" datetime NOT NULL DEFAULT (datetime('now'))`,
       );

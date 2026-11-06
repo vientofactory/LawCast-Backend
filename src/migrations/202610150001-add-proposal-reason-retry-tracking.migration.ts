@@ -30,7 +30,7 @@ export class AddProposalReasonRetryTracking1760486401000 implements MigrationInt
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     const driverType = queryRunner.connection.options.type;
-    if (driverType !== 'sqlite' && driverType !== 'better-sqlite3') {
+    if (driverType !== 'better-sqlite3') {
       return;
     }
 
@@ -47,7 +47,7 @@ export class AddProposalReasonRetryTracking1760486401000 implements MigrationInt
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     const driverType = queryRunner.connection.options.type;
-    if (driverType !== 'sqlite' && driverType !== 'better-sqlite3') {
+    if (driverType !== 'better-sqlite3') {
       return;
     }
 

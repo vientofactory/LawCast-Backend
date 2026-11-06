@@ -43,7 +43,7 @@ describe('notice_archives immutability trigger', () => {
 
   beforeEach(async () => {
     dataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       synchronize: false,
       migrationsRun: false,

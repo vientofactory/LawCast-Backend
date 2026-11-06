@@ -48,3 +48,6 @@ lerna-debug.log*
 
 *.db-shm
 *.db-wal
+
+# TypeScript incremental compiler metadata
+*.tsbuildinfo

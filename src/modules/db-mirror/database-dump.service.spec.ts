@@ -14,7 +14,7 @@ describe('DatabaseDumpService', () => {
     sourceDbPath = path.join(tempDir, 'source.sqlite');
 
     sourceDataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: sourceDbPath,
       entities: [],
       synchronize: false,
@@ -125,7 +125,7 @@ describe('DatabaseDumpService', () => {
     );
 
     const dumpDataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: artifact.dumpPath,
       entities: [],
       synchronize: false,

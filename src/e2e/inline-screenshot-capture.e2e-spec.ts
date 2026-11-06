@@ -172,7 +172,7 @@ describe('Inline PAL screenshot capture (real browser e2e)', () => {
     setPalDomain(baseUrl);
 
     dataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [
         NoticeArchive,

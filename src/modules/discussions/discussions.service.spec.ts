@@ -122,7 +122,7 @@ describe('DiscussionsService', () => {
           where: expect.objectContaining({
             status: DiscussionThreadStatus.CLOSED,
           }),
-          select: ['id'],
+          select: { id: true },
         }),
       );
     });
@@ -275,7 +275,7 @@ describe('DiscussionsService', () => {
       expect(noticeArchiveRepo.findOne).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { noticeNum: 999999 },
-          select: ['id'],
+          select: { id: true },
         }),
       );
     });

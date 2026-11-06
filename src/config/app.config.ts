@@ -5,7 +5,7 @@ export interface AppConfig {
   port: number;
   nodeEnv: string;
   database: {
-    type: 'sqlite';
+    type: 'better-sqlite3';
     path: string;
   };
   redis: {
@@ -601,7 +601,7 @@ export default (): AppConfig => ({
   port: parseInt(process.env.PORT, 10) || APP_CONSTANTS.DEFAULT_PORT,
   nodeEnv: process.env.NODE_ENV || 'development',
   database: {
-    type: 'sqlite',
+    type: 'better-sqlite3',
     path: resolveDatabasePath(process.env.DATABASE_PATH),
   },
   redis: {

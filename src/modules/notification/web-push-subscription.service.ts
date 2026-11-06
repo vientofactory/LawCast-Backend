@@ -174,9 +174,9 @@ export class WebPushSubscriptionService {
     });
     if (bindings.length === 0) return [];
 
-    const subscriptions = await this.subscriptionRepository.findByIds(
-      bindings.map((binding) => binding.subscriptionId),
-    );
+    const subscriptions = await this.subscriptionRepository.findBy({
+      id: In(bindings.map((binding) => binding.subscriptionId)),
+    });
     const activeById = new Map(
       subscriptions
         .filter((subscription) => subscription.isActive)

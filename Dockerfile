@@ -15,11 +15,12 @@ FROM node:24.22.1-alpine AS base
 
 # Install dependencies only when needed
 FROM base AS deps
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
+COPY vendor ./vendor
 
 # Skip Puppeteer's bundled Chrome download - we use system Chromium at runtime
 ENV PUPPETEER_SKIP_DOWNLOAD=true
@@ -29,10 +30,12 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 # Rebuild the source code only when needed
 FROM base AS builder
+RUN apk add --no-cache python3 make g++
 WORKDIR /app
 
 # Copy package files for full installation
 COPY package*.json ./
+COPY vendor ./vendor
 
 # Skip Puppeteer's bundled Chrome download - not needed at build time
 ENV PUPPETEER_SKIP_DOWNLOAD=true
@@ -81,6 +84,7 @@ RUN addgroup -g 1001 -S nodejs && \
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/vendor ./vendor
 
 # Create data directory for SQLite database
 RUN mkdir -p /app/data && chown -R nestjs:nodejs /app/data

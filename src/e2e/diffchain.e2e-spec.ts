@@ -117,7 +117,7 @@ describe('Diffchain API (e2e)', () => {
     moduleRef = await Test.createTestingModule({
       imports: [
         TypeOrmModule.forRoot({
-          type: 'sqlite',
+          type: 'better-sqlite3',
           database: ':memory:',
           autoLoadEntities: true,
           synchronize: true,

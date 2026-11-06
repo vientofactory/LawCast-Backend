@@ -20,7 +20,7 @@ describe('Web push subscription cleanup data flow (real sqlite)', () => {
     moduleRef = await Test.createTestingModule({
       imports: [
         TypeOrmModule.forRoot({
-          type: 'sqlite',
+          type: 'better-sqlite3',
           database: ':memory:',
           autoLoadEntities: true,
           synchronize: true,

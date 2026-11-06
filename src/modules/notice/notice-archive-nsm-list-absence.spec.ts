@@ -148,7 +148,7 @@ describe('NoticeArchiveService NSM list-absence tracking (real SQLite schema)', 
     process.env.CRAWLING_NSM_DELETION_DETECTION_ENABLED = 'true';
 
     dataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       synchronize: false,
       migrationsRun: false,

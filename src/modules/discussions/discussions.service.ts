@@ -134,7 +134,7 @@ export class DiscussionsService {
         status: DiscussionThreadStatus.CLOSED,
         updatedAt: LessThan(cutoff),
       },
-      select: ['id'],
+      select: { id: true },
     });
     return threads.map((thread) => thread.id);
   }
@@ -259,7 +259,7 @@ export class DiscussionsService {
     const notices = noticeNums.length
       ? await this.noticeArchiveRepository.find({
           where: { noticeNum: In(noticeNums) },
-          select: ['noticeNum', 'subject'],
+          select: { noticeNum: true, subject: true },
         })
       : [];
     const subjectByNoticeNum = new Map(
@@ -321,7 +321,7 @@ export class DiscussionsService {
   ): Promise<ThreadDetailResponse> {
     const noticeExists = await this.noticeArchiveRepository.findOne({
       where: { noticeNum },
-      select: ['id'],
+      select: { id: true },
     });
     if (!noticeExists) {
       throw new BadRequestException(
