@@ -1,493 +1,168 @@
 # LawCast Backend
 
-국회 입법예고(PAL)와 국민참여입법센터(NSM)의 법률안 정보를 수집하는 NestJS API 서버입니다. 검색 가능한 아카이브·변경 이력·요약·알림 기능을 제공합니다.
+국회 법률안 정보를 수집하고 검색·변경 이력·토론·알림 API를 제공하는 NestJS 서버입니다. SQLite에 아카이브와 변경 기록을 저장하고 Redis를 캐시와 작업 큐에 사용합니다. 주요 기술은 NestJS 11, TypeORM, SQLite FTS5, Redis, `pal-crawl`입니다.
 
-## 주요 기능
+## 주요 기능과 구성
 
-### 입법예고 수집 및 아카이브
+- 국회 입법예고(PAL)와 발의·계류 단계 법률안을 정기 수집합니다. NSM 수집 경로는 국민참여입법센터 또는 국회 의안정보시스템(LIKMS)을 선택할 수 있습니다.
+- 원문·HTTP 메타데이터·스크린샷을 아카이브하고 주요 정보의 변경을 append-only 해시 체인으로 기록합니다. 법률안별 변경 이력과 과거 리비전 조회, 무결성 감사, ZIP 내보내기를 지원합니다.
+- 키워드 검색은 제목·제안자·위원회·제안이유를 조회하며 제안이유에는 FTS5를 사용합니다. 의미 검색은 별도 Python 사이드카를 호출합니다.
+- 익명 토론, Discord 웹훅·Web Push 알림, Ollama 요약을 제공합니다. Notion 관리자 공지, Discord 운영 브리지, file.kiwi 미러는 선택 기능입니다.
 
-- [국회 입법예고](https://pal.assembly.go.kr/)와 [국민참여입법센터](https://opinion.lawmaking.go.kr/gcom/nsmLmSts/out)의 신규·진행 중 법률안을 정기 수집합니다.
-- 국민참여입법센터에서 먼저 확인된 법률안이 국회 입법예고에 공개되면 동일 의안으로 연결합니다.
-- 원문, HTTP 메타데이터, 스크린샷을 보존하고 SHA-256으로 무결성을 검증합니다.
-- 누락된 원문·제안 이유·요약 데이터는 정기 작업으로 다시 수집합니다.
-- 입법예고 기간 종료 법률안의 상태를 주기적으로 갱신합니다.
-
-### 조회 및 검색
-
-- 최근 입법예고와 전체 아카이브를 페이지 단위로 조회할 수 있습니다.
-- 의안명, 의안번호, 발의자 정보를 검색할 수 있고, 제안 이유(원문)도 함께 검색합니다. 제안 이유는 FTS5 인덱스로 매칭됩니다.
-- 날짜, 처리 상태, 정렬 순서로 결과를 필터링할 수 있습니다.
-- 의미 검색(시맨틱) 모드로 질의와 뜻이 가까운 법률안을 관련도순으로 조회할 수 있습니다. 엔진을 쓸 수 없으면 키워드 결과로 대체됩니다.
-- 자주 쓰는 검색어를 빠른 검색용 키워드로 제공합니다.
-- Redis 캐시로 최근 목록/검색 응답 성능을 높입니다.
-
-### AI 요약
-
-- Ollama를 연결하면 법률안 내용을 자동 요약합니다.
-- 요약 생성이 실패했거나 아직 생성되지 않은 항목은 자동 재시도합니다.
-- CPU 모드에서는 배치 크기, 처리 간격, 동시 실행 수를 제한할 수 있습니다.
-- Ollama를 설정하지 않아도 수집·검색·아카이브 기능은 정상 동작합니다.
-
-### 변경 이력 및 무결성 감사
-
-- 법률안의 주요 정보가 바뀌면 변경 전후 값과 감지 시점을 기록합니다.
-- 법률안별 변경 타임라인과 특정 리비전 시점의 상세 정보를 조회할 수 있습니다.
-- 소스 삭제나 의안번호 변경도 무효화 이력으로 남깁니다.
-- 변경 이력은 append-only 해시 체인으로 보호되며, 일일/주간 감사로 누락·변조 여부를 점검합니다.
-- 과거 버전에서 생성된 변경 이력도 당시 검증 규칙을 유지합니다.
-
-### 익명 토론 및 참여자 식별
-
-- 법률안별 토론 스레드를 만들고, 스레드 안에서 의견을 등록·수정·삭제할 수 있습니다.
-- 로그인 없이 참여하며, 닉네임과 비밀번호를 입력합니다. 비밀번호는 원문이 아니라 해시와 salt로 저장되어 수정·삭제 권한 확인에만 사용합니다.
-- 서버는 요청의 원본 IP를 이용하지만 원본 IP를 토론 데이터에 저장하지 않습니다.
-- 화면에 표시하는 접속 정보는 별도의 마스킹 값입니다.
-  - IPv4: `123.45.67.89` → `123.45.***.***`
-  - IPv6: 앞부분만 남기고 나머지를 마스킹합니다.
-- 참여자 식별에는 `author_id`를 사용합니다. `author_id`는 다음 입력으로 계산되는 스레드 범위의 HMAC-SHA-256 값입니다.
-  - 정규화한 원본 IP
-  - `thread:{threadId}` 형태의 스레드 scope
-  - 서버 환경 변수 `DISCUSSION_AUTHOR_ID_SECRET`
-- 같은 IP로 같은 스레드에 다시 참여하면 동일한 `author_id`가 생성되어 본인 의견 여부와 인용 알림 대상을 확인할 수 있습니다.
-- scope에 스레드 ID가 포함되므로 서로 다른 스레드에서는 같은 IP라도 다른 `author_id`가 생성됩니다. 이를 통해 토론 참여 기록을 스레드 사이에서 쉽게 연결하지 못하도록 합니다.
-
-#### IP 역산을 어렵게 하는 방식
-
-1. **원본 IP 비저장**: 데이터베이스에는 원본 IP 대신 화면용 마스킹 값과 `author_id`만 저장합니다.
-2. **단방향 HMAC**: `author_id`는 비밀키를 사용하는 HMAC으로 계산합니다. 단순 해시와 달리 비밀키를 모르면 저장된 ID만으로 IP 후보를 검증하기 어렵습니다.
-3. **스레드별 scope**: 같은 IP라도 스레드마다 다른 입력 문자열을 사용하므로, 서로 다른 스레드의 ID를 대조해 동일 참여자를 추적하기 어렵습니다.
-4. **비밀키 외부화**: `DISCUSSION_AUTHOR_ID_SECRET`은 운영 환경 변수로 관리해야 합니다(소스 코드나 데이터베이스에 두지 않습니다). 키가 노출되면 공격자가 후보 IP를 대조할 수 있으므로 키를 로그·응답·백업에 포함하지 않아야 합니다.
-
-이 방식은 IP를 암호화해 복호화하는 대신 비밀키 기반의 일방향 식별자를 만드는 구조입니다. 따라서 운영자가 비밀키를 안전하게 보관하는 것이 중요합니다. 또한 IP 자체가 네트워크에서 변하면 같은 참여자로 인식되지 않을 수 있으며, 프록시 환경에서는 신뢰할 수 있는 `cf-connecting-ip`, `x-forwarded-for`, `x-real-ip` 설정이 필요합니다.
-
-`GET /api/stats?view=home`은 홈 SSR용 경량 통계를 반환합니다. 응답은
-`archive.count`, `cache.lastUpdated`, `changeTracking.comparableEventTotal`,
-`aiSummaryEnabled`로 제한되며, Ollama health와 웹훅·푸시 운영 집계를 기다리지 않습니다.
-`view`를 생략한 `/api/stats`의 기존 전체 통계 계약은 유지됩니다.
-
-### 알림
-
-- 신규 입법예고와 주요 변경 사항을 Discord 웹훅으로 전송합니다.
-- VAPID 기반 Web Push 구독 등록/해지 및 브라우저 알림 전송을 지원합니다.
-- 만료된 Web Push 구독은 자동 비활성화합니다.
-- 웹훅 등록 시 HashGuard 기반 PoW 검증을 사용할 수 있습니다.
-
-### 내보내기 및 운영
-
-- 법률안별 원문, 변경 이력, 무결성 정보, 스크린샷을 ZIP 파일로 내보낼 수 있습니다.
-- 헬스 상태, 배치 진행 상황, 캐시, Redis, 웹훅 통계를 API로 확인할 수 있습니다.
-- 민감 테이블을 제외한 데이터베이스 덤프를 file.kiwi에 정기 백업할 수 있습니다.
-- Discord Debug Bridge에서 상태 조회, 수집 작업 실행 등 운영 명령을 사용할 수 있습니다.
-
-## 기술 스택
-
-- Framework: NestJS 11
-- Language: TypeScript
-- Database: SQLite + TypeORM
-- Cache: Redis (`@keyv/redis`, `@nestjs/cache-manager`)
-- Crawler: `pal-crawl`
-- Scheduler: `@nestjs/schedule`
-- Notification: `discord-webhook-node`, `web-push`
-
-## 설치 및 실행
-
-### 요구사항
-
-- Node.js 24.22.1 (권장, `.node-version` 참조). 지원 범위: 22.23.4 이상인 22.x, 24.22.1 이상인 24.x, 26.12.1 이상인 26.x.
-- npm
-- Redis
-
-### 설치
-
-```bash
-npm install
+```mermaid
+flowchart LR
+    sources["PAL · NSM / LIKMS"] --> crawl["수집·변경 추적"]
+    crawl --> db[("SQLite")]
+    crawl --> notify["Discord · Web Push"]
+    api["NestJS API"] --> db
+    api <--> redis[("Redis")]
+    api --> semantic["의미 검색 사이드카"]
+    api --> ollama["Ollama"]
+    web["프론트엔드"] --> api
 ```
 
-### 실행
+## 설치와 실행
+
+Node.js는 [.node-version](.node-version)의 `24.22.1`을 권장합니다. 지원 범위는 [package.json](package.json)의 `engines`를 따릅니다. npm과 Redis가 필요하며 수집에는 Puppeteer가 실행할 Chromium과 운영체제 라이브러리가 필요합니다. Linux 컨테이너 구성은 [Dockerfile](Dockerfile)을 참고하세요.
+
+아래 명령은 별도 안내가 없으면 `backend/`에서 실행합니다.
 
 ```bash
-# 개발 모드
+cd backend
+npm ci
+cp .env.example .env
+```
+
+`.env`에서 DB·Redis 경로와 사용할 선택 기능을 확인합니다. 로컬 Redis의 기본 포트는 `6379`입니다. 루트 Compose의 Redis에 호스트에서 접속한다면 `REDIS_URL=redis://localhost:6399`로 바꿉니다.
+
+```env
+PORT=3001
+NODE_ENV=development
+DATABASE_PATH=lawcast.db
+REDIS_URL=redis://localhost:6379
+FRONTEND_URL=http://localhost:5173
+CRON_TIMEZONE=Asia/Seoul
+OLLAMA_ENABLED=false
+SEMANTIC_SEARCH_ENABLED=false
+```
+
+Ollama와 의미 검색 엔진을 따로 실행하지 않는 개발 환경은 위처럼 두 기능을 꺼도 됩니다. 토론을 사용할 때는 아래의 참여자 식별용 비밀값도 설정해야 합니다.
+
+```bash
 npm run start:dev
+```
 
-# 디버그 모드
-npm run start:debug
+기본 API 주소는 `http://localhost:3001/api`입니다. 서버는 시작할 때 미적용 마이그레이션을 실행하고 활성화된 크롤러의 수집·예약 작업도 시작합니다. 기존 DB를 사용할 때는 백업과 경로를 먼저 확인하세요.
 
-# 프로덕션 빌드 및 실행
+프로덕션 빌드와 실행은 다음과 같습니다.
+
+```bash
 npm run build
 npm run start:prod
 ```
 
-기본 API 포트는 `3001`이며 `PORT`로 변경할 수 있습니다.
+## 설정
 
-### 테스트
+전체 템플릿은 [.env.example](.env.example), 실제 기본값과 스케줄은 [src/config/app.config.ts](src/config/app.config.ts)에서 확인합니다. `.env`와 템플릿의 값은 코드 기본값과 다를 수 있습니다.
 
-```bash
-npm run test
-npm run test:cov
-npm run test:e2e
-```
+### 기본 연결과 수집
 
-## 환경 변수
+- `DATABASE_PATH`: SQLite 파일 경로. 기본 `lawcast.db`이며 상대 경로는 `backend/` 기준으로 해석합니다.
+- `REDIS_URL`: 기본 `redis://localhost:6379`. `REDIS_KEY_PREFIX`와 `REDIS_TTL`로 네임스페이스와 기본 캐시 수명을 설정합니다.
+- `FRONTEND_URL`: CORS 허용 주소. 여러 주소는 쉼표로 구분하며 기본값은 `http://localhost:5173`입니다.
+- `CRON_TIMEZONE`: 예약 작업 시간대. 기본 `Asia/Seoul`입니다.
+- `CRAWLING_PAL_ENABLED`, `CRAWLING_NSM_ENABLED`: 소스별 수집 여부. 기본은 모두 활성화이며, 둘 다 끄면 시작이 실패합니다.
+- `CRAWLING_NSM_SOURCE`: 기본 `nsm`; `likms`로 설정하면 국회 의안정보시스템을 사용합니다. LIKMS 경로에서는 NSM 포털에 의존하는 소스 삭제 감지가 꺼집니다.
 
-프로젝트 루트 `.env` 파일에서 서버와 선택 기능을 설정합니다.
+### 토론과 알림
 
-```env
-# Server
-PORT=3001
-NODE_ENV=development
-FRONTEND_URL=http://localhost:5173
-CRON_TIMEZONE=Asia/Seoul
+토론에는 `DISCUSSION_AUTHOR_ID_SECRET`이 필요합니다. `DISCUSSION_IP_SALT`도 운영 환경별 값으로 설정하세요. 비밀값은 각각 `openssl rand -hex 32` 등으로 생성해 `.env`에 저장하고 저장소에 올리지 않습니다.
 
-# Database
-DATABASE_PATH=lawcast.db
+토론은 비밀번호 해시로 수정·삭제 권한을 확인합니다. 참여자 식별자는 원본 IP와 스레드 범위의 HMAC으로 만들며 화면에는 마스킹한 접속 정보를 표시합니다. 같은 IP라도 스레드가 달라지면 식별자가 달라집니다. 역방향 프록시는 실제 방문자 IP를 정확히 전달하도록 설정해야 합니다.
 
-# Redis
-REDIS_URL=redis://localhost:6379
-REDIS_KEY_PREFIX=lawcast:
-REDIS_TTL=1800
-
-# Semantic search (sidecar; optional)
-SEMANTIC_SEARCH_ENABLED=true
-SEMANTIC_SEARCH_API_URL=http://127.0.0.1:8300
-SEMANTIC_SEARCH_TIMEOUT=10000
-SEMANTIC_SEARCH_TOTAL_TIMEOUT=10000
-SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS=60000
-SEMANTIC_SEARCH_HYBRID_MAX_NOTICES=100
-SEMANTIC_SEARCH_LEXICAL_GATE=off
-
-# Anonymous discussions
-DISCUSSION_IP_SALT=
-DISCUSSION_AUTHOR_ID_SECRET=
-DISCUSSION_IDLE_CLOSE_HOURS=24
-
-# HashGuard
-HASHGUARD_API_URL=https://hashguard.viento.me
-HASHGUARD_API_KEY=
-
-# Web Push (optional)
-WEB_PUSH_ENABLED=false
-WEB_PUSH_VAPID_PUBLIC_KEY=
-WEB_PUSH_VAPID_PRIVATE_KEY=
-WEB_PUSH_SUBJECT=mailto:lawcast@example.com
-
-# Ollama (optional)
-OLLAMA_ENABLED=false
-OLLAMA_CPU_MODE=false
-OLLAMA_API_URL=http://localhost:11434
-OLLAMA_MODEL=gemma3:1b
-OLLAMA_TIMEOUT=10000
-OLLAMA_HEALTH_TIMEOUT_MS=2000
-
-# Archive sync tuning
-ARCHIVE_SYNC_CRAWLER_CONCURRENCY=4
-ARCHIVE_SYNC_NSM_CRAWLER_CONCURRENCY=3
-ARCHIVE_SYNC_DONE_CRAWLER_CONCURRENCY=3
-ARCHIVE_SYNC_FULL_SYNC_APPLY_BATCH_SIZE=100
-ARCHIVE_SYNC_FULL_SYNC_APPLY_BATCH_DELAY_MS=100
-ARCHIVE_SYNC_PENDING_RECOMPARE_APPLY_BATCH_SIZE=100
-ARCHIVE_SYNC_PENDING_RECOMPARE_APPLY_BATCH_DELAY_MS=150
-ARCHIVE_SYNC_ASYNC_APPLY_QUEUE_TTL_SECONDS=604800
-ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_SIZE=5
-ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS=250
-ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_CONCURRENCY=1
-
-# Crawler sources (each can be disabled independently)
-CRAWLING_PAL_ENABLED=true
-CRAWLING_NSM_ENABLED=true
-# CRAWLING_NSM_DELETION_DETECTION_ENABLED=true
-
-# Database mirror to file.kiwi (optional)
-FILE_MIRROR_ENABLED=false
-FILE_MIRROR_CRON=47 6 * * *
-FILE_MIRROR_API_BASE_URL=https://api.file.kiwi
-FILE_MIRROR_DUMP_DIR=./tmp/db-mirror
-FILE_MIRROR_TITLE_PREFIX=lawcast-db-mirror
-FILE_MIRROR_KEEP_LOCAL_DUMP=false
-FILE_MIRROR_TEST_UPLOAD_ON_STARTUP=false
-FILE_MIRROR_DISCORD_CHANNEL_ID=
-
-# Discord Debug Bridge (optional)
-DISCORD_BRIDGE_ENABLED=false
-DISCORD_BRIDGE_BOT_TOKEN=
-DISCORD_BRIDGE_GUILD_ID=
-DISCORD_BRIDGE_CHANNEL_ID=
-DISCORD_BRIDGE_LOG_CHANNEL_ID=
-DISCORD_BRIDGE_LOG_LEVEL=LOG
-DISCORD_BRIDGE_ADMIN_USER_IDS=
-```
-
-### 크롤러 활성화 설정
-
-LawCast는 두 소스에서 입법예고를 수집합니다.
-
-- PAL: 국회 입법예고(`pal.assembly.go.kr`)
-- NSM: 국민참여입법센터(`opinion.lawmaking.go.kr`, NsmLmSts)
-
-각 소스는 `CRAWLING_PAL_ENABLED`, `CRAWLING_NSM_ENABLED`로 독립적으로 켜고 끌 수 있습니다.
-
-- 미설정/빈 값/알 수 없는 값은 활성(true)으로 처리됩니다(opt-out). 따라서 기존 동작이 그대로 유지됩니다.
-- 두 소스를 모두 `false`로 두면 부트스트랩에서 예외가 발생하고 프로세스가 `process.exit(1)`로 종료됩니다.
-- 비활성화된 소스는 데이터 수집뿐 아니라 스냅샷 저장·변경 추적(diffchain)·소스 삭제 감지·스냅샷 백필 경로에도 진입하지 않습니다.
-- `CRAWLING_NSM_DELETION_DETECTION_ENABLED=false`는 NSM 소스가 켜져 있어도 삭제 감지만 건너뛰는 별도 킬 스위치입니다.
-- 활성화 상태는 부트스트랩 로그(`Crawler activation: PAL=..., NSM=...`)와 프론트 `/status` 화면의 크롤러 카드에 그대로 드러납니다. 비활성 크롤러는 카드 배지와 다음 실행 시각이 `비활성`으로 표시되며, 전체 상태 판정과 `lastError` 표시는 활성화 여부와 무관하게 기존과 동일하게 동작합니다.
-
-```env
-CRAWLING_PAL_ENABLED=true
-CRAWLING_NSM_ENABLED=true
-```
-
-### Ollama 설정
-
-- `OLLAMA_ENABLED=true`: AI 요약을 활성화합니다.
-- `OLLAMA_ENABLED=false`: AI 요약을 비활성화합니다.
-- `OLLAMA_ENABLED` 미설정: `OLLAMA_API_URL`과 `OLLAMA_MODEL`이 모두 있을 때 활성화합니다.
-
-CPU 사용량을 낮추려면 다음처럼 설정합니다.
-
-```env
-OLLAMA_ENABLED=true
-OLLAMA_CPU_MODE=true
-OLLAMA_API_URL=http://localhost:11434
-OLLAMA_MODEL=gemma3:1b
-OLLAMA_TIMEOUT=30000
-ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_SIZE=5
-ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_BATCH_DELAY_MS=250
-ARCHIVE_SYNC_SUMMARY_BACKFILL_CPU_CONCURRENCY=1
-```
-
-`OLLAMA_TIMEOUT`은 요약 생성 요청의 제한 시간이며 기존 값을 유지합니다.
-`OLLAMA_HEALTH_TIMEOUT_MS`는 `/api/tags` 건강 확인에만 적용되는 별도 제한 시간입니다.
-기본값은 2,000ms이며 응답이 오지 않거나 조금씩 도착하는 경우에도 요청을 취소합니다.
-동시에 들어온 건강 확인은 진행 중인 요청 하나를 공유하고, 실패 상태도 기존 30초 캐시 정책을 따릅니다.
-
-### Web Push 설정
-
-1. VAPID 키를 생성합니다.
+브라우저 알림은 `WEB_PUSH_ENABLED=true`와 VAPID 공개키·비밀키가 모두 있어야 활성화됩니다.
 
 ```bash
 npx web-push generate-vapid-keys
 ```
 
-2. 생성된 키를 `.env`에 설정합니다.
+생성한 키를 `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY`에 넣고 `WEB_PUSH_SUBJECT`를 설정합니다. 웹훅 등록의 작업증명 검증은 `HASHGUARD_API_URL`과 `HASHGUARD_API_KEY` 설정을 확인하세요.
 
-```env
-WEB_PUSH_ENABLED=true
-WEB_PUSH_VAPID_PUBLIC_KEY=...
-WEB_PUSH_VAPID_PRIVATE_KEY=...
-WEB_PUSH_SUBJECT=mailto:lawcast@example.com
+### AI 요약과 의미 검색
+
+Ollama 요약은 `OLLAMA_ENABLED=true`, `OLLAMA_API_URL`, `OLLAMA_MODEL`로 설정합니다. `OLLAMA_ENABLED`를 생략하면 URL과 모델이 모두 있을 때 켜집니다. `OLLAMA_TIMEOUT`은 생성 요청, `OLLAMA_HEALTH_TIMEOUT_MS`는 상태 확인 요청의 제한 시간이며 기본값은 각각 `10000`, `2000`밀리초입니다. CPU 처리량 조절은 `OLLAMA_CPU_MODE`와 `ARCHIVE_SYNC_*` 설정을 사용합니다.
+
+의미 검색은 `SEMANTIC_SEARCH_ENABLED`(기본 `true`)와 `SEMANTIC_SEARCH_API_URL`(기본 `http://127.0.0.1:8300`)로 연결합니다. [의미 검색 README](https://github.com/vientofactory/semantic-search/blob/main/README.md)에 인덱스 구축과 사이드카 실행 방법이 있습니다.
+
+- `SEMANTIC_SEARCH_TIMEOUT`: 사이드카 개별 요청 제한 시간. 기본 `10000`밀리초입니다.
+- `SEMANTIC_SEARCH_TOTAL_TIMEOUT`: 검색의 청크 창 수집 전체 예산. 기본값은 개별 요청 제한 시간과 같습니다.
+- `SEMANTIC_SEARCH_HYBRID_MAX_NOTICES`: 아카이브 의미 검색의 공고 후보 상한. 기본 `100`이며 전체 코퍼스를 빠짐없이 조회하는 검색은 아닙니다.
+
+엔진 비활성·연결 실패 등에는 검색을 키워드로 대체합니다. 유효한 의미 검색 결과가 빈 배열인 경우는 그대로 반환하며 사이드카의 잘못된 요청에 대한 4xx 응답도 키워드 결과로 숨기지 않습니다. 엔진 상태 조회 실패는 `503`으로 전달합니다.
+
+### 기타 선택 기능
+
+- `NOTION_API_KEY`, `NOTION_DATABASE_ID`: 관리자 공지 읽기. 공지 작성과 공개 여부 관리는 Notion에서 합니다.
+- `DISCORD_BRIDGE_ENABLED`: Discord 운영 명령과 로그 연동. 봇 토큰·채널·관리자 ID 설정을 함께 확인합니다.
+- `FILE_MIRROR_ENABLED`: 민감 테이블을 제외한 SQLite 미러 업로드. 업로드 주기와 보존 옵션은 템플릿과 설정 코드에서 확인합니다.
+
+## API 사용
+
+기본 경로는 `/api`입니다. 대표적인 읽기 요청은 다음과 같습니다.
+
+```bash
+curl http://localhost:3001/api/health
+curl --get http://localhost:3001/api/notices/archive \
+  --data-urlencode 'search=세입자 보호' \
+  --data-urlencode 'searchMode=keyword' \
+  --data-urlencode 'limit=10'
+curl http://localhost:3001/api/notices/2210001/detail
 ```
 
-`WEB_PUSH_ENABLED=true`이고 공개키/비밀키가 모두 설정되어야 Web Push가 활성화됩니다. 개발 도메인과 운영 도메인은 각각 별도 브라우저 구독이 필요합니다.
+- 입법예고: `GET /api/notices/recent`, `/api/notices/archive`, `/api/notices/search`, `/api/notices/semantic-search`.
+- 상세·기록: `GET /api/notices/:num/detail`, `/api/notices/:num/changes`, `/api/notices/:num/screenshot`, `/api/notices/:num/export`; 전체 변경 목록은 `/api/notices/changes`입니다.
+- 토론: `/api/notices/:num/discussions`, `/api/discussions/threads`, `/api/discussions/threads/:threadId/comments` 등에서 목록·생성·의견 작성 기능을 제공합니다.
+- 알림: `POST /api/webhooks`, `GET /api/push/public-key`, `POST`·`DELETE /api/push/subscriptions`.
+- 운영: `GET /api/health`, `/api/stats`, `/api/batch/status`, `/api/crawling-transparency`, `/api/version`. 홈용 경량 통계는 `/api/stats?view=home`입니다.
+- 관리자 공지: `GET /api/announcements`, `/api/announcements/top`.
 
-### 시맨틱 검색 설정
+아카이브의 `searchMode`는 미지정 시 `keyword`이며 `auto`, `semantic`을 명시하면 의미 검색 경로를 사용합니다. 검색 엔진의 후보 상한과 관련도에 따라 의미 검색 결과가 키워드 검색보다 적을 수 있습니다. 프론트엔드의 검색 기본값과는 구분하세요.
 
-의미 검색은 별도 사이드카(`semantic-search/`, FastAPI + KURE-v1 + FAISS)가 담당하고 백엔드는 그 엔진을 프록시합니다. 사이드카가 떠 있지 않아도 나머지 기능은 정상 동작하며, 의미 검색 요청만 키워드 결과로 대체됩니다.
+법률안별 변경 이력은 `limit`과 `beforeHeight` 커서를 사용합니다. 다음 페이지에는 응답의 `nextBeforeHeight`를 전달하며 `hasMore=false`이면 마지막 페이지입니다.
 
-```env
-SEMANTIC_SEARCH_ENABLED=true
-SEMANTIC_SEARCH_API_URL=http://127.0.0.1:8300
-SEMANTIC_SEARCH_TIMEOUT=10000
-SEMANTIC_SEARCH_TOTAL_TIMEOUT=10000
-SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS=60000
-SEMANTIC_SEARCH_HYBRID_MAX_NOTICES=100
-SEMANTIC_SEARCH_LEXICAL_GATE=off
+조회·쓰기 API에는 요청 제한이 있으며 초과 시 `429`를 반환합니다. 검색어·페이지 크기·필터의 범위는 엔드포인트마다 다릅니다. 전체 경로와 입력 계약은 [API 컨트롤러](src/controllers/api.controller.ts), [의미 검색 컨트롤러](src/modules/semantic-search/semantic-search.controller.ts), [토론 컨트롤러](src/modules/discussions/controllers/discussions.controller.ts)에서 확인합니다.
+
+## 검사와 테스트
+
+```bash
+npm run lint
+npx tsc --noEmit
+npm run build
+npm test
 ```
 
-- `SEMANTIC_SEARCH_ENABLED=false` 또는 사이드카 미기동: `/api/notices/semantic-search`는 키워드 폴백 응답을, `/api/notices/semantic-search/health`는 `503`을 반환합니다. 검색 화면도 500 대신 키워드 결과와 폴백 안내를 보여줍니다.
-- `SEMANTIC_SEARCH_API_URL`: 사이드카 주소. Compose 환경에서는 `http://semantic-search:8300`입니다.
-- `SEMANTIC_SEARCH_TIMEOUT`: 사이드카 호출 제한 시간(ms). 창별 상한이며 axios 인스턴스 기본값으로도 쓰인다.
-- `SEMANTIC_SEARCH_TOTAL_TIMEOUT`: 한 번의 검색이 청크 창 수집에 쓰는 총 예산(ms, 기본값은 `SEMANTIC_SEARCH_TIMEOUT`). 각 widening 창은 남은 예산만큼만 자신의 타임아웃을 가져가며, 예산 소진 시 수집분 부분 반환(첫 창이면 키워드 폴백)으로 마감한다. 비어 있거나 0 이하·비숫자면 창별 상한으로 폴백한다.
-- `SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS`: 사이드카가 `/health`로 보고하는 청크 상한(`maxK`)을 다시 읽는 주기(ms). 사이드카의 `LAWCAST_SEMANTIC_MAX_K` 변경이 이 주기 안에 반영되며, `0`이면 매 검색마다 재조회합니다.
-- `SEMANTIC_SEARCH_LEXICAL_GATE`: 무관 질의 빈 결과 게이트(`off`/`shadow`/`enforce`, 기본 `off`). `enforce`에서 사이드카의 어휘 증거 플래그가 없는 히트를 수집 뒤에 제거하므로 무관 질의가 명시적 빈 결과로 답합니다. 공고 단위 증거는 창 안 전체 청크의 OR이며, dense top-1이 `SEMANTIC_SEARCH_LEXICAL_BYPASS_SCORE`(기본 0.6) 이상이면 게이트를 건너뜁니다.
-- `SEMANTIC_SEARCH_HYBRID_MAX_NOTICES`: `/notices`의 의미 검색 모드가 한 번에 조회하는 **법률안(후보) 수 상한**. 엔진이 청크 단위로 순위를 매기므로 청크를 넉넉히 받아 법률안 단위로 접은 뒤 이 상한을 적용합니다. 값을 키우면 필터가 빡빡한 질의의 재현율이 올라가고 검색당 조회 비용이 늘어납니다. 사이드카 청크 상한(`SIDE_CAR_MAX_CHUNK_K`) 안에서 동작하며, 의미 검색 엔드포인트의 `k` 상한(`MAX_K`)과는 별개입니다.
+`lint`는 ESLint 자동 수정을 포함합니다. 커버리지는 `npm run test:cov`, API E2E는 `npm run test:e2e`로 실행합니다. 저장소 루트에서는 `python3 tools/check-agent-guidelines.py`도 확인합니다.
 
-보드의 검색 방식 컨트롤은 프론트엔드 플래그 `PUBLIC_SEMANTIC_SEARCH_ENABLED`가 함께 켜져야 나타납니다.
+## Docker와 운영
 
-### 데이터베이스 미러 설정
+루트 Compose를 사용하려면 `backend/.env`를 준비한 뒤 저장소 루트에서 실행합니다.
 
-`FILE_MIRROR_ENABLED=true`로 설정하면 지정 스케줄에 맞춰 민감 테이블을 제외한 SQLite 덤프를 file.kiwi에 업로드합니다. 로컬 덤프 보존 여부와 Discord 알림 채널도 추가 설정할 수 있습니다.
-
-## API
-
-Base path: `/api`
-
-### 요청 제한
-
-요청 제한은 Redis 캐시 카운터와 클라이언트 IP의 SHA-256 해시를 이용해 적용합니다. 제한을 초과하면 API는 `429 Too Many Requests`를 반환합니다.
-
-| 대상           | 제한                      | 적용 엔드포인트                                                                                                               |
-| -------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| 비용이 큰 조회 | 60초당 30회               | `GET /notices/archive`, `GET /notices/search`, `GET /notices/semantic-search`, `GET /notices/changes`, `GET /stats/proposals` |
-| 토론 조회      | 엔드포인트별 60초당 300회 | 토론 스레드 및 의견 조회 API                                                                                                  |
-| 토론 쓰기      | 60초당 10회               | 토론 스레드·의견 생성, 수정, 삭제 및 상태 변경 API                                                                            |
-
-목록 API의 `limit`은 최대 100개입니다. `GET /notices/archive`의 `noticeNums`는 최대 100개, 검색어는 최대 120자로 제한됩니다.
-
-### 법률안 및 아카이브
-
-| Method | Path                              | Description                              |
-| ------ | --------------------------------- | ---------------------------------------- |
-| `GET`  | `/notices/recent`                 | 최근 입법예고 목록                       |
-| `GET`  | `/notices/keywords`               | 빠른 검색용 추천 키워드                  |
-| `GET`  | `/notices/archive`                | 아카이브 목록 조회, 필터 및 페이지네이션 |
-| `GET`  | `/notices/search`                 | 법률안 통합 검색                         |
-| `GET`  | `/notices/semantic-search`        | 의미 검색(사이드카 프록시, 키워드 폴백)  |
-| `GET`  | `/notices/semantic-search/health` | 의미 검색 엔진 상태                      |
-| `GET`  | `/notices/:num/detail`            | 법률안 상세 또는 특정 리비전 조회        |
-| `GET`  | `/notices/:num/changes`           | 법률안별 변경 타임라인                   |
-| `GET`  | `/notices/changes`                | 전체 변경 이벤트 목록                    |
-| `GET`  | `/notices/changes/summary`        | 비교 가능한 변경 이벤트 통계             |
-| `GET`  | `/notices/:num/screenshot`        | 보관된 법률안 스크린샷                   |
-| `GET`  | `/notices/:num/export`            | 법률안 아카이브 ZIP 내보내기             |
-
-`GET /api/stats?view=home`은 홈 SSR용 경량 통계를 반환합니다. 응답은
-`archive.count`, `cache.lastUpdated`, `changeTracking.comparableEventTotal`,
-`aiSummaryEnabled`로 제한되며, Ollama health와 웹훅·푸시 운영 집계를 기다리지 않습니다.
-`view`를 생략한 `/api/stats`의 기존 전체 통계 계약은 유지됩니다.
-
-### 알림
-
-| Method   | Path                  | Description                      |
-| -------- | --------------------- | -------------------------------- |
-| `POST`   | `/webhooks`           | Discord 웹훅 등록                |
-| `GET`    | `/push/public-key`    | Web Push 공개키 및 활성화 상태   |
-| `POST`   | `/push/subscriptions` | Web Push 구독 등록 또는 재활성화 |
-| `DELETE` | `/push/subscriptions` | Web Push 구독 해지               |
-
-### 운영 상태
-
-| Method | Path                       | Description               |
-| ------ | -------------------------- | ------------------------- |
-| `GET`  | `/stats`                   | 아카이브, 요약, 캐시 통계 |
-| `GET`  | `/batch/status`            | 배치 작업 상태            |
-| `GET`  | `/health`                  | 서버 헬스 상태            |
-| `GET`  | `/webhooks/stats/detailed` | 웹훅 상세 통계            |
-| `GET`  | `/webhooks/system-health`  | 웹훅 시스템 상태          |
-| `GET`  | `/redis/status`            | Redis 상세 상태           |
-| `GET`  | `/redis/connection`        | Redis 연결 여부           |
-| `GET`  | `/packages`                | 주요 패키지 버전          |
-
-### 주요 쿼리 파라미터
-
-`GET /api/notices/keywords`
-
-- `limit`: 응답 개수, 기본값 `8`
-
-`GET /api/notices/archive`
-
-- `page`: 페이지, 기본값 `1`
-- `limit`: 페이지당 항목 수, 기본값 `10`, 최대 `50`
-- `search`: 검색어. 법률안명·소관위원회·제안자와 제안이유(원문)를 함께 검색한다.
-  제안이유는 FTS5 인덱스(`notice_archives_fts`)로 매칭된다.
-- `startDate`, `endDate`: 날짜 범위
-- `sortOrder`: `asc` 또는 `desc`, 기본값 `desc`
-- `isDone`: 종료 여부 (`true` 또는 `false`)
-- `noticeNums`: 의안번호 목록(쉼표 구분, 최대 100개). 지정하면 `searchMode`와 무관하게 키워드 경로로 처리한다.
-- `searchMode`: `keyword`(기본), `semantic`, `auto`. `semantic`·`auto`는 의미 검색 모드이며, `auto`는 엔진을 쓸 수 있으면 의미 검색, 아니면 키워드로 처리한다. 그 밖의 값이나 미지정은 기존 키워드 경로 그대로다.
-  - 응답은 키워드 경로와 같은 필드에 `searchMode`(요청값), `appliedMode`(`keyword` 또는 `semantic`), `semantic`(엔진 메타데이터: `candidateTotal`, `lastUpdateAt`, `weakResults`, `fallbackReason`)을 더하고, 의미 검색 항목에는 `relevance`(`score`, `section`, `excerpt`, `weak`)가 붙는다.
-  - 결과는 관련도순으로 정렬되며 후보 수는 `SEMANTIC_SEARCH_HYBRID_MAX_NOTICES`로 제한된다. 엔진을 쓸 수 없으면 `semantic.mode`가 `keyword_fallback`인 키워드 결과를 반환한다.
-
-`GET /api/notices/semantic-search`
-
-- `query`: 검색어(필수, 최대 120자)
-- `k`: 법률안 결과 수, 기본값 `5`, 최대 `50`
-
-`GET /api/notices/semantic-search/health`
-
-- 파라미터 없음. 엔진 상태(준비 여부, 색인 청크 수, 마지막 갱신 시각)를 반환하고, 엔진이 응답하지 않으면 `503`을 반환한다.
-
-- `q`: 검색어
-- `page`: 페이지, 기본값 `1`
-- `limit`: 페이지당 항목 수, 기본값 `10`, 최대 `50`
-- `includeDone`: 종료된 법률안 포함 여부, 기본값 `true`
-
-`GET /api/notices/:num/detail`
-
-- `rev`: 조회할 변경 리비전, `1` 이상의 정수
-
-`GET /api/notices/:num/changes`
-
-- `limit`: 페이지당 응답 개수, 기본값 `20`, 최대 `100`
-- `beforeHeight`: 이 기록 번호보다 이전인 기록을 조회하는 선택적 커서. `1` 이상의 안전한 정수이며 잘못된 값은 `400`을 반환합니다.
-- 기록 번호(`eventHeight`) 내림차순입니다. 첫 요청에는 커서를 생략하고, 다음 요청에는 응답의 `nextBeforeHeight`를 전달합니다.
-- 기존 `noticeNum`, `items`, `count`는 유지됩니다. `count`는 해당 페이지의 항목 수입니다.
-- `hasMore`와 `nextBeforeHeight`를 추가로 반환합니다. 마지막 페이지에서는 `hasMore: false`, `nextBeforeHeight: null`입니다.
-- 예: `/api/notices/2210001/changes?limit=20&beforeHeight=81`은 기록 `81` 미만의 이전 페이지를 반환합니다. 새 기록이 추가되어도 이미 받은 페이지와 겹치지 않습니다.
-- 읽기 전용이며, 별도의 전체 개수 집계나 전체 이력 로딩 없이 법률안·기록 번호의 기존 복합 인덱스를 사용합니다.
-
-`GET /api/notices/changes`
-
-- `page`: 페이지, 기본값 `1`
-- `limit`: 페이지당 항목 수, 기본값 `20`
-- `eventType`: `updated` 또는 `invalidated`
-- `excludeLegacyGenesisSource`: 레거시 초기 이벤트 제외 여부
-- `comparableOnly`: 비교 가능한 변경 이벤트만 조회할지 여부
-
-## 아카이브 내보내기
-
-`GET /api/notices/:num/export`는 아래 파일을 ZIP으로 제공합니다.
-
-- `<base>.json`: 법률안 원본 레코드, 무결성 정보, HTTP 메타데이터
-- `<base>.changes.json`: 변경 타임라인과 필드별 변경 내용
-- `<base>.integrity.txt`: 무결성 검증 정보
-- `verify-integrity.sh`: Bash 검증 스크립트
-- `verify-integrity.ps1`: PowerShell 검증 스크립트
-- `screenshot.<format>`: 보관된 스크린샷이 있을 때 포함
-
-`<base>`는 파일명의 앞부분이고 `lawcast-archive-<noticeNum>-<timestamp>` 형식입니다.
-
-## 기본 스케줄
-
-시간대는 `CRON_TIMEZONE`으로 설정하며 기본 운영 기준은 아래와 같습니다.
-
-| Schedule          | Task                               |
-| ----------------- | ---------------------------------- |
-| `2-59/10 * * * *` | PAL 신규 및 변경 법률안 확인       |
-| `6-59/20 * * * *` | NSM 발의 단계 법률안 확인          |
-| `9-59/15 * * * *` | 누락된 제안 이유 재수집            |
-| `11 * * * *`      | 추천 검색어 갱신                   |
-| `13 */6 * * *`    | 법률안 종료 상태 갱신              |
-| `43 3 * * *`      | 아카이브 무결성 재검사             |
-| `7 4 * * *`       | 변경 이력 일일 감사                |
-| `19 4 * * 1`      | 변경 이력 주간 감사                |
-| `1 0 * * *`       | 웹훅 정리                          |
-| `1 2 * * *`       | 웹훅 데이터 최적화                 |
-| `0 * * * *`       | 시스템 상태 점검                   |
-| `31 5 * * 0`      | SQLite 파일 공간 회수              |
-| `47 6 * * *`      | file.kiwi 데이터베이스 미러 업로드 |
-
-동시 실행 시 충돌할 수 있는 수집·동기화·감사 작업은 중복 실행을 자동으로 피합니다.
-
-## Discord Debug Bridge
-
-`DISCORD_BRIDGE_ENABLED=true`일 때 아래 슬래시 명령을 사용할 수 있습니다.
-
-| Command          | Description                      |
-| ---------------- | -------------------------------- |
-| `/status`        | 서비스 상태 조회                 |
-| `/health`        | 헬스 상태 조회                   |
-| `/stats`         | 주요 통계 조회                   |
-| `/cache`         | 캐시 상태 조회                   |
-| `/crawl`         | 수집 작업 실행                   |
-| `/batch-history` | 배치 실행 이력 조회              |
-| `/webhooks`      | 웹훅 상태 조회                   |
-| `/loglevel`      | 로그 레벨 조회 또는 변경         |
-| `/locks`         | 예약 작업 실행 및 대기 상태 조회 |
-
-`DISCORD_BRIDGE_GUILD_ID`를 설정하면 해당 서버에 명령이 즉시 등록됩니다. 설정하지 않으면 전역 명령으로 등록되므로 반영까지 시간이 걸릴 수 있습니다.
-
-## 프로젝트 구조
-
-```text
-src/
-├── config/       # 환경 설정
-├── controllers/  # HTTP API
-├── e2e/          # E2E 테스트
-├── migrations/   # 데이터베이스 마이그레이션
-├── modules/      # 도메인 기능
-├── types/        # 공통 타입
-└── utils/        # 공통 유틸리티
+```bash
+docker compose up -d --build backend
+curl http://127.0.0.1:3001/api/health
 ```
+
+Compose는 백엔드와 함께 Redis·Ollama 의존 서비스를 시작합니다. SQLite는 `lawcast_db` 볼륨의 `/app/data/lawcast.db`에 저장하고, 컨테이너 연결 주소는 `redis:6379`, `ollama:11434`, `semantic-search:8300`으로 덮어씁니다. 백엔드의 호스트 포트는 `127.0.0.1:3001`에만 바인딩됩니다. 의미 검색 서비스는 별도로 준비해야 합니다.
+
+운영 배포는 루트 저장소의 서브모듈 포인터를 갱신하면 CI를 거쳐 실행됩니다. 수집·종료 상태 갱신·무결성 감사 등은 예약 작업이며, 현재 실행 상태는 `/api/batch/status`와 `/api/crawling-transparency`에서 확인합니다. 상세 시간표는 설정 코드가 관리하므로 README에 중복하지 않습니다.
+
+## 코드 구조
+
+- `src/controllers/`: HTTP API.
+- `src/modules/`: 수집·아카이브·캐시·검색·토론·알림 등 도메인 기능.
+- `src/config/`: 환경변수 해석, 기본값과 스케줄.
+- `src/migrations/`: SQLite 스키마 마이그레이션.
+- `src/utils/`: 공통 유틸리티.
 
 ## 라이선스
 
