@@ -19,6 +19,9 @@ describe('NoticesHybridSearchService', () => {
   let getArchiveNoticesByRankedNums: jest.Mock<
     (params: unknown) => Promise<unknown>
   >;
+  let findLegalIdentityCandidates: jest.Mock<
+    (params: unknown) => Promise<unknown>
+  >;
   let getArchiveCount: jest.Mock<() => Promise<number>>;
   let getChangeEventCountsByNoticeNums: jest.Mock<
     (noticeNums: number[]) => Promise<Map<number, number>>
@@ -107,6 +110,9 @@ describe('NoticesHybridSearchService', () => {
     getArchiveNoticesByRankedNums = jest
       .fn<(params: unknown) => Promise<unknown>>()
       .mockResolvedValue({ items: [], total: 0 });
+    findLegalIdentityCandidates = jest
+      .fn<(params: unknown) => Promise<unknown>>()
+      .mockResolvedValue({ noticeNums: [] });
     getArchiveCount = jest.fn<() => Promise<number>>().mockResolvedValue(0);
     getChangeEventCountsByNoticeNums = jest
       .fn<(noticeNums: number[]) => Promise<Map<number, number>>>()
@@ -130,6 +136,7 @@ describe('NoticesHybridSearchService', () => {
       {
         getArchiveNoticesByRankedNums,
         getArchiveCount,
+        findLegalIdentityCandidates,
       } as unknown as NoticeArchiveService,
       {
         getChangeEventCountsByNoticeNums,
@@ -330,5 +337,108 @@ describe('NoticesHybridSearchService', () => {
     expect(getArchivedNotices).toHaveBeenCalled();
     expect(result.appliedMode).toBe('keyword');
     expect(result.semantic?.mode).toBe('keyword_fallback');
+  });
+  it('ranks filtered law identities ahead of dense hits only in auto mode', async () => {
+    searchSemantic.mockResolvedValue(
+      semanticResponse({ results: [hit(2), hit(1)], weakResults: [hit(3)] }),
+    );
+    findLegalIdentityCandidates.mockResolvedValue({ noticeNums: [1, 3] });
+    getArchiveNoticesByRankedNums.mockResolvedValue({
+      items: [archiveItem(1), archiveItem(3), archiveItem(2)],
+      total: 3,
+    });
+    const result = await service.search(
+      baseParams({
+        searchMode: 'auto',
+        search: '형법',
+        proposer: '홍길동',
+        isDone: true,
+      }),
+    );
+    expect(findLegalIdentityCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: '형법',
+        proposer: '홍길동',
+        isDone: true,
+      }),
+    );
+    expect(getArchiveNoticesByRankedNums).toHaveBeenCalledWith(
+      expect.objectContaining({ noticeNums: [1, 3, 2] }),
+    );
+    expect(result.items.map((item) => item.num)).toEqual([1, 3, 2]);
+    expect(result.semantic?.weakResults).toEqual([]);
+    findLegalIdentityCandidates.mockClear();
+    await service.search(
+      baseParams({ searchMode: 'semantic', search: '형법' }),
+    );
+    expect(findLegalIdentityCandidates).not.toHaveBeenCalled();
+    expect(getArchiveNoticesByRankedNums).toHaveBeenLastCalledWith(
+      expect.objectContaining({ noticeNums: [2, 1] }),
+    );
+  });
+
+  it('bypasses inference for a complete identifier and retains archive scope', async () => {
+    getArchiveNoticesByRankedNums.mockResolvedValue({
+      items: [archiveItem(2222564)],
+      total: 1,
+    });
+    const result = await service.search(
+      baseParams({
+        searchMode: 'auto',
+        search: '의안번호: 2222564',
+        isDone: true,
+      }),
+    );
+    expect(searchSemantic).not.toHaveBeenCalled();
+    expect(getArchiveNoticesByRankedNums).toHaveBeenCalledWith(
+      expect.objectContaining({ noticeNums: [2222564], isDone: true }),
+    );
+    expect(result.items.map((item) => item.num)).toEqual([2222564]);
+  });
+
+  it('exposes a correction without replacing the original semantic query', async () => {
+    searchSemantic.mockResolvedValue(semanticResponse());
+    findLegalIdentityCandidates.mockResolvedValue({
+      noticeNums: [],
+      suggestedQuery: '주택임대차보호법',
+    });
+    const result = await service.search(
+      baseParams({ searchMode: 'auto', search: '주택임대차보호볍' }),
+    );
+    expect(searchSemantic).toHaveBeenCalledWith('주택임대차보호볍', 100);
+    expect(result.semantic?.suggestedQuery).toBe('주택임대차보호법');
+    expect(result.items).toEqual([]);
+  });
+
+  it('leaves non-identifier zero results unchanged', async () => {
+    searchSemantic.mockResolvedValue(semanticResponse());
+    const result = await service.search(
+      baseParams({ searchMode: 'auto', search: '제10조' }),
+    );
+    expect(findLegalIdentityCandidates).not.toHaveBeenCalled();
+    expect(result.items).toEqual([]);
+    expect(result.semantic?.suggestedQuery).toBeUndefined();
+  });
+  it('skips the recent cache for an identifier already present in the archive', async () => {
+    getArchiveNoticesByRankedNums.mockResolvedValue({
+      items: [archiveItem(2222564)],
+      total: 1,
+    });
+    await service.search(baseParams({ searchMode: 'auto', search: '2222564' }));
+    expect(getCacheOnlySearchMatches).not.toHaveBeenCalled();
+    expect(searchSemantic).not.toHaveBeenCalled();
+  });
+
+  it('bounds the merged exact and dense candidate window', async () => {
+    const preferred = Array.from({ length: 95 }, (_, i) => i + 1);
+    const dense = Array.from({ length: 25 }, (_, i) => hit(i + 90));
+    findLegalIdentityCandidates.mockResolvedValue({ noticeNums: preferred });
+    searchSemantic.mockResolvedValue(semanticResponse({ results: dense }));
+    await service.search(baseParams({ searchMode: 'auto', search: '형법' }));
+    expect(getArchiveNoticesByRankedNums).toHaveBeenCalledWith(
+      expect.objectContaining({
+        noticeNums: Array.from({ length: 100 }, (_, i) => i + 1),
+      }),
+    );
   });
 });

@@ -228,19 +228,23 @@ export class NoticesQueryService {
   async getCacheOnlySearchMatches(params: {
     search?: string;
     proposer?: string;
+    noticeNum?: number;
   }): Promise<ReturnType<NoticesQueryService['mapCachedNoticeToListItem']>[]> {
     const search = (params.search || '').trim();
     const proposer = (params.proposer || '').trim();
 
-    if (!search && !proposer) {
+    if (!search && !proposer && params.noticeNum === undefined) {
       return [];
     }
 
     const cachedNotices = await this.crawlingService.getRecentNotices(
       APP_CONSTANTS.CACHE.MAX_SIZE,
     );
-    const matched = cachedNotices.filter((notice) =>
-      this.matchesSearchKeyword(notice, search, proposer),
+    const matched = cachedNotices.filter(
+      (notice) =>
+        (params.noticeNum === undefined ||
+          normalizeNoticeNum(notice.num) === params.noticeNum) &&
+        this.matchesSearchKeyword(notice, search, proposer),
     );
 
     const normalizedNums = matched
