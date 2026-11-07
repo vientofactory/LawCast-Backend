@@ -1,3 +1,7 @@
+import {
+  legalLookupPrefix,
+  selectLegalIdentities,
+} from './utils/legal-search-identity.util';
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import {
   BadRequestException,
@@ -2548,6 +2552,47 @@ export class NoticeArchiveService {
     return rows.map((row) => mapArchiveEntityToNoticeItem(row));
   }
 
+  async findLegalIdentityCandidates(params: {
+    query: string;
+    limit: number;
+    proposer?: string;
+    startDate?: Date;
+    endDate?: Date;
+    isDone?: boolean;
+  }): Promise<ReturnType<typeof selectLegalIdentities>> {
+    const prefix = legalLookupPrefix(params.query);
+    if (!prefix) return { noticeNums: [] };
+    const qb = this.archiveRepository
+      .createQueryBuilder('archive')
+      .select('archive.noticeNum', 'noticeNum')
+      .addSelect('archive.subject', 'subject')
+      .where('archive.subject >= :prefix AND archive.subject < :upper', {
+        prefix,
+        upper: String.fromCodePoint(prefix.codePointAt(0)! + 1),
+      })
+      .orderBy('archive.noticeNum', 'DESC');
+    this.applyArchiveSearchFilters(qb, params);
+    this.applyRankedArchiveIsDoneFilter(qb, params.isDone);
+    const rows = await qb.getRawMany<{ noticeNum: number; subject: string }>();
+    return selectLegalIdentities(params.query, rows, params.limit);
+  }
+
+  private applyRankedArchiveIsDoneFilter(
+    qb: SelectQueryBuilder<NoticeArchive>,
+    isDone: boolean | undefined,
+  ): void {
+    if (isDone === undefined || !this.summaryStateRepository) return;
+    qb.andWhere(
+      `EXISTS (
+          SELECT 1
+          FROM notice_archive_snapshot_states summary
+          WHERE summary.notice_num = archive.noticeNum
+            AND summary.is_done = :isDone
+        )`,
+      { isDone: isDone ? 1 : 0 },
+    );
+  }
+
   /**
    * Fetch archive notices for a pre-ranked list of notice numbers, preserving
    * that rank order and applying the same archive filters (date range,
@@ -2579,19 +2624,7 @@ export class NoticeArchiveService {
       rankedNoticeNums: uniqueNums,
     });
 
-    // isDone is derived from the snapshot-state table, mirroring the keyword
-    // path's EXISTS predicate (queryArchiveNoticeNumsByIsDoneFilter).
-    if (params.isDone !== undefined && this.summaryStateRepository) {
-      qb.andWhere(
-        `EXISTS (
-            SELECT 1
-            FROM notice_archive_snapshot_states summary
-            WHERE summary.notice_num = archive.noticeNum
-              AND summary.is_done = :isDone
-          )`,
-        { isDone: params.isDone ? 1 : 0 },
-      );
-    }
+    this.applyRankedArchiveIsDoneFilter(qb, params.isDone);
 
     this.applyArchiveSearchFilters(qb, {
       proposer: params.proposer,

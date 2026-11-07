@@ -10,6 +10,10 @@ import {
   NoticeArchiveService,
   type ArchiveNoticeItem,
 } from '../notice/notice-archive.service';
+import {
+  legalLookupPrefix,
+  parseNoticeNumber,
+} from '../notice/utils/legal-search-identity.util';
 import { SemanticSearchService } from './semantic-search.service';
 import {
   type SemanticSearchResponse,
@@ -53,9 +57,10 @@ export interface BoardSearchSemanticMeta {
   mode: 'semantic' | 'keyword_fallback';
   fallbackReason: string | null;
   lastUpdateAt: string | null;
-  /** Engine-ranked notice count before archive filters were applied. */
+  /** Bounded ranked candidate count before hydration. */
   candidateTotal: number;
   weakResults: SemanticSearchResultItem[];
+  suggestedQuery?: string;
 }
 
 export interface BoardSearchResult {
@@ -93,6 +98,11 @@ export interface BoardSearchParams {
   isDone?: boolean;
   page: number;
   limit: number;
+}
+
+interface LegalCandidates {
+  noticeNums: number[];
+  suggestedQuery?: string;
 }
 
 /** Loose shape accepted from both the archive and the cache mapping. */
@@ -158,6 +168,7 @@ export class NoticesHybridSearchService {
     NoticesHybridSearchService.name,
   );
   private readonly maxNotices: number;
+  private readonly autoExact: boolean;
 
   constructor(
     configService: ConfigService,
@@ -166,6 +177,8 @@ export class NoticesHybridSearchService {
     private readonly noticeArchiveService: NoticeArchiveService,
     private readonly changeTrackingService: ChangeTrackingService,
   ) {
+    this.autoExact =
+      configService.get<boolean>('semanticSearch.autoExact') ?? true;
     this.maxNotices =
       configService.get<number>('semanticSearch.hybridMaxNotices') ?? 100;
   }
@@ -178,12 +191,33 @@ export class NoticesHybridSearchService {
       return this.keywordResult(params, null);
     }
 
-    let semantic: SemanticSearchResponse;
-    try {
-      semantic = await this.semanticSearchService.searchSemantic(
-        search,
-        this.maxNotices,
+    const noticeNumber =
+      this.autoExact && params.searchMode === 'auto'
+        ? parseNoticeNumber(search)
+        : undefined;
+    if (noticeNumber !== undefined) {
+      // A bill identifier has no semantic expansion; hydrate the scoped row only.
+      return this.semanticResult(
+        params,
+        {
+          query: search,
+          mode: 'semantic',
+          fallbackReason: null,
+          lastUpdateAt: null,
+          results: [],
+          weakResults: [],
+        },
+        noticeNumber,
       );
+    }
+
+    let semantic: SemanticSearchResponse;
+    let exact: LegalCandidates;
+    try {
+      [semantic, exact] = await Promise.all([
+        this.semanticSearchService.searchSemantic(search, this.maxNotices),
+        this.legalCandidates(params, search),
+      ]);
     } catch (error) {
       // A rejected request (over-long query etc.) is a client error and must
       // surface; anything else degrades to keyword rather than failing the page.
@@ -212,7 +246,39 @@ export class NoticesHybridSearchService {
       });
     }
 
-    return this.semanticResult(params, semantic);
+    return this.semanticResult(params, semantic, undefined, exact);
+  }
+
+  private async legalCandidates(
+    params: BoardSearchParams,
+    query: string,
+  ): Promise<LegalCandidates> {
+    if (
+      !this.autoExact ||
+      params.searchMode !== 'auto' ||
+      !legalLookupPrefix(query)
+    ) {
+      return { noticeNums: [] };
+    }
+    try {
+      const range = this.noticesQueryService.parseDateRange(
+        params.startDate,
+        params.endDate,
+      );
+      return await this.noticeArchiveService.findLegalIdentityCandidates({
+        query,
+        limit: this.maxNotices,
+        proposer: params.proposer?.trim() || undefined,
+        startDate: range.startDate,
+        endDate: range.endDate,
+        isDone: params.isDone,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `legal identity lookup failed: ${(error as Error)?.message ?? error}`,
+      );
+      return { noticeNums: [] };
+    }
   }
 
   /**
@@ -261,6 +327,8 @@ export class NoticesHybridSearchService {
   private async semanticResult(
     params: BoardSearchParams,
     semantic: SemanticSearchResponse,
+    exactNumber?: number,
+    exact: LegalCandidates = { noticeNums: [] },
   ): Promise<BoardSearchResult> {
     const search = params.search.trim();
     const proposer = (params.proposer || '').trim();
@@ -277,7 +345,14 @@ export class NoticesHybridSearchService {
       Math.max(APP_CONSTANTS.API.PAGINATION.MIN_LIMIT, params.limit),
     );
 
-    const rankedNums = semantic.results.map((hit) => hit.noticeNum);
+    const preferred =
+      exactNumber === undefined ? exact.noticeNums : [exactNumber];
+    const rankedNums = [
+      ...new Set([
+        ...preferred,
+        ...semantic.results.map((hit) => hit.noticeNum),
+      ]),
+    ].slice(0, this.maxNotices);
     const relevanceByNum = new Map(
       semantic.results.map((hit) => [hit.noticeNum, hit] as const),
     );
@@ -316,16 +391,24 @@ export class NoticesHybridSearchService {
     // archive_started_at) or the request is scoped to ended notices.
     const hasDateFilter = Boolean(range.startDate || range.endDate);
     const cacheOnlyItems =
-      hasDateFilter || params.isDone === true
+      hasDateFilter ||
+      params.isDone === true ||
+      (exactNumber !== undefined && rankedItems.length > 0)
         ? []
         : await this.noticesQueryService.getCacheOnlySearchMatches({
-            search,
+            ...(exactNumber === undefined
+              ? { search }
+              : { noticeNum: exactNumber }),
             proposer,
           });
 
     const present = new Set(rankedItems.map((item) => item.num));
     const appendedCacheItems: BoardNoticeItem[] = cacheOnlyItems
-      .filter((item) => !present.has(item.num))
+      .filter(
+        (item) =>
+          !present.has(item.num) &&
+          (exactNumber === undefined || item.num === exactNumber),
+      )
       .map((item) => toBoardItem(item));
 
     const combined = [...rankedItems, ...appendedCacheItems];
@@ -352,7 +435,12 @@ export class NoticesHybridSearchService {
         fallbackReason: null,
         lastUpdateAt: semantic.lastUpdateAt,
         candidateTotal: rankedNums.length,
-        weakResults: semantic.weakResults,
+        weakResults: preferred.length
+          ? semantic.weakResults.filter((hit) => !present.has(hit.noticeNum))
+          : semantic.weakResults,
+        ...(exact.suggestedQuery
+          ? { suggestedQuery: exact.suggestedQuery }
+          : {}),
       },
       stats: {
         cacheCount: cacheOnlyItems.length,

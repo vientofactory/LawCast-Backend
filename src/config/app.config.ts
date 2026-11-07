@@ -46,6 +46,7 @@ export interface AppConfig {
      * sidecar chunk cap; the public semantic endpoint's MAX_K stays separate.
      */
     hybridMaxNotices: number;
+    autoExact: boolean;
     /**
      * No-result gate over the sidecar's per-hit `lexicalEvidence` flag:
      * `off` keeps pure dense ranking, `shadow` only logs, `enforce` drops
@@ -661,6 +662,10 @@ export default (): AppConfig => ({
     hybridMaxNotices: parseIntWithDefault(
       process.env.SEMANTIC_SEARCH_HYBRID_MAX_NOTICES,
       100,
+    ),
+    autoExact: parseBooleanWithDefault(
+      process.env.SEMANTIC_SEARCH_AUTO_EXACT,
+      true,
     ),
     // No-result gate over the sidecar's per-hit `lexicalEvidence` flag:
     // `off` keeps pure dense ranking, `shadow` logs what the gate would do
