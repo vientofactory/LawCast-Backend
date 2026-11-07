@@ -4489,4 +4489,47 @@ describe('NoticeArchiveService', () => {
       expect(appendSpy).toHaveBeenCalledWith(2219100);
     });
   });
+  it('overlays only the visible ranked page and does not fetch unused proposal bodies', async () => {
+    const rows = [3, 1, 2].map((noticeNum) => ({
+      noticeNum,
+      subject: `법률안 ${noticeNum}`,
+      proposerCategory: '의원',
+      committee: '법제사법위원회',
+      assemblyLink: 'https://example.test',
+    }));
+    const builder = {
+      select: jest.fn(),
+      andWhere: jest.fn(),
+      getMany: jest.fn(async () => rows),
+    };
+    builder.select.mockReturnValue(builder);
+    builder.andWhere.mockReturnValue(builder);
+    const overlay = jest.fn(
+      async (_nums: number[], _fields: string[]) =>
+        new Map([[2, new Map([['subject', '개정 법률안']])]]),
+    );
+    const archive = new NoticeArchiveService(
+      { createQueryBuilder: () => builder } as any,
+      undefined,
+      { getLatestFieldValuesForFields: overlay } as any,
+      undefined,
+      undefined,
+      undefined,
+    );
+    const result = await archive.getArchiveNoticesByRankedNums({
+      noticeNums: [3, 2, 1, 2],
+      offset: 1,
+      limit: 1,
+    });
+    expect(result.matchingNoticeNums).toEqual([3, 2, 1]);
+    expect(result.items.map((item) => [item.num, item.subject])).toEqual([
+      [2, '개정 법률안'],
+    ]);
+    expect(overlay).toHaveBeenCalledTimes(1);
+    expect(overlay).toHaveBeenCalledWith(
+      [2],
+      expect.arrayContaining(['subject', 'lifecycleStatus']),
+    );
+    expect(overlay.mock.calls[0][1]).not.toContain('proposalReason');
+  });
 });

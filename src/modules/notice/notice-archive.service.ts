@@ -2360,6 +2360,7 @@ export class NoticeArchiveService {
 
   private async applyCurrentOverlayFromDiffchain(
     rows: Array<NoticeArchive | CachedNotice>,
+    includeProposalReason = true,
   ): Promise<void> {
     if (!this.changeTrackingService || rows.length === 0) {
       return;
@@ -2381,7 +2382,7 @@ export class NoticeArchiveService {
           'proposerCategory',
           'committee',
           'contentId',
-          'proposalReason',
+          ...(includeProposalReason ? ['proposalReason'] : []),
           'lifecycleStatus',
           'sourceDeletedAt',
         ],
@@ -2600,9 +2601,8 @@ export class NoticeArchiveService {
    * this to hydrate engine-ranked notice numbers into card rows without
    * letting `noticeNum` ordering overrule relevance.
    *
-   * The notice-number list is bounded by the caller (semantic candidate cap),
-   * so the whole matching set is fetched and rank-sorted in memory; the caller
-   * paginates the returned items.
+   * The bounded filtered set supplies total and deduplication metadata. Only
+   * the visible slice needs summary state and current diffchain fields.
    */
   async getArchiveNoticesByRankedNums(params: {
     noticeNums: number[];
@@ -2610,13 +2610,15 @@ export class NoticeArchiveService {
     startDate?: Date;
     endDate?: Date;
     isDone?: boolean;
-  }): Promise<{ items: ArchiveNoticeItem[]; total: number }> {
+    offset: number;
+    limit: number;
+  }): Promise<{ items: ArchiveNoticeItem[]; matchingNoticeNums: number[] }> {
     const uniqueNums = Array.from(new Set(params.noticeNums)).filter(
       (num) => Number.isInteger(num) && num > 0,
     );
 
     if (uniqueNums.length === 0) {
-      return { items: [], total: 0 };
+      return { items: [], matchingNoticeNums: [] };
     }
 
     const qb = this.createArchiveNoticeItemQueryBuilder('archive');
@@ -2638,12 +2640,15 @@ export class NoticeArchiveService {
       (a, b) => (rank.get(a.noticeNum) ?? 0) - (rank.get(b.noticeNum) ?? 0),
     );
 
-    if (this.summaryStateRepository && rows.length > 0) {
+    const matchingNoticeNums = rows.map((row) => row.noticeNum);
+    const pageRows = rows.slice(params.offset, params.offset + params.limit);
+
+    if (this.summaryStateRepository && pageRows.length > 0) {
       const summaryStates = await this.getSummaryStateByNoticeNums(
-        rows.map((row) => row.noticeNum),
+        pageRows.map((row) => row.noticeNum),
       );
 
-      for (const row of rows) {
+      for (const row of pageRows) {
         const summaryState = summaryStates.get(row.noticeNum);
         if (!summaryState) continue;
         row.isDone = summaryState.isDone;
@@ -2652,10 +2657,11 @@ export class NoticeArchiveService {
       }
     }
 
-    await this.applyCurrentOverlayFromDiffchain(rows);
+    // Board cards never expose the proposal body. Keep the other live fields.
+    await this.applyCurrentOverlayFromDiffchain(pageRows, false);
 
-    const items = rows.map((row) => mapArchiveEntityToNoticeItem(row));
-    return { items, total: items.length };
+    const items = pageRows.map((row) => mapArchiveEntityToNoticeItem(row));
+    return { items, matchingNoticeNums };
   }
 
   async getArchiveNoticesByNoticeNums(
