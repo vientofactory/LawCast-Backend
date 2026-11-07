@@ -320,9 +320,8 @@ export class NoticesHybridSearchService {
   }
 
   /**
-   * Semantic path: hydrate the engine's ranked notice numbers, apply archive
-   * filters, append cache-only keyword matches, then paginate the combined
-   * relevance-ordered list.
+   * Semantic path: filter ranked notices, then hydrate only the requested
+   * page. Cache-only keyword matches follow the entire ranked archive set.
    */
   private async semanticResult(
     params: BoardSearchParams,
@@ -357,19 +356,23 @@ export class NoticesHybridSearchService {
       semantic.results.map((hit) => [hit.noticeNum, hit] as const),
     );
 
-    const { items: archiveItems } =
+    const start = (safePage - 1) * safeLimit;
+    const { items: archiveItems, matchingNoticeNums } =
       await this.noticeArchiveService.getArchiveNoticesByRankedNums({
         noticeNums: rankedNums,
         proposer: proposer || undefined,
         startDate: range.startDate,
         endDate: range.endDate,
         isDone: params.isDone,
+        offset: start,
+        limit: safeLimit,
       });
 
-    const changeCounts =
-      await this.changeTrackingService.getChangeEventCountsByNoticeNums(
-        archiveItems.map((item) => item.num),
-      );
+    const changeCounts = archiveItems.length
+      ? await this.changeTrackingService.getChangeEventCountsByNoticeNums(
+          archiveItems.map((item) => item.num),
+        )
+      : new Map<number, number>();
 
     const rankedItems: BoardNoticeItem[] = archiveItems.map((item) => {
       const hit = relevanceByNum.get(item.num);
@@ -393,7 +396,7 @@ export class NoticesHybridSearchService {
     const cacheOnlyItems =
       hasDateFilter ||
       params.isDone === true ||
-      (exactNumber !== undefined && rankedItems.length > 0)
+      (exactNumber !== undefined && matchingNoticeNums.length > 0)
         ? []
         : await this.noticesQueryService.getCacheOnlySearchMatches({
             ...(exactNumber === undefined
@@ -402,19 +405,23 @@ export class NoticesHybridSearchService {
             proposer,
           });
 
-    const present = new Set(rankedItems.map((item) => item.num));
-    const appendedCacheItems: BoardNoticeItem[] = cacheOnlyItems
-      .filter(
-        (item) =>
-          !present.has(item.num) &&
-          (exactNumber === undefined || item.num === exactNumber),
-      )
-      .map((item) => toBoardItem(item));
+    const present = new Set(matchingNoticeNums);
+    const appendedCacheItems = cacheOnlyItems.filter(
+      (item) =>
+        !present.has(item.num) &&
+        (exactNumber === undefined || item.num === exactNumber),
+    );
 
-    const combined = [...rankedItems, ...appendedCacheItems];
-    const total = combined.length;
-    const start = (safePage - 1) * safeLimit;
-    const items = combined.slice(start, start + safeLimit);
+    const archiveCount = matchingNoticeNums.length;
+    const total = archiveCount + appendedCacheItems.length;
+    const cacheStart = Math.max(0, start - archiveCount);
+    const cacheEnd = Math.max(0, start + safeLimit - archiveCount);
+    const items = [
+      ...rankedItems,
+      ...appendedCacheItems
+        .slice(cacheStart, cacheEnd)
+        .map((item) => toBoardItem(item)),
+    ];
     const totalArchiveCount = await this.noticeArchiveService.getArchiveCount();
 
     return {
@@ -445,7 +452,7 @@ export class NoticesHybridSearchService {
       stats: {
         cacheCount: cacheOnlyItems.length,
         matchedCacheCount: appendedCacheItems.length,
-        archiveCount: rankedItems.length,
+        archiveCount,
         totalArchiveCount,
         mergedCount: total,
       },

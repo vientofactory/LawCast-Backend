@@ -109,7 +109,7 @@ describe('NoticesHybridSearchService', () => {
       });
     getArchiveNoticesByRankedNums = jest
       .fn<(params: unknown) => Promise<unknown>>()
-      .mockResolvedValue({ items: [], total: 0 });
+      .mockResolvedValue({ items: [], matchingNoticeNums: [] });
     findLegalIdentityCandidates = jest
       .fn<(params: unknown) => Promise<unknown>>()
       .mockResolvedValue({ noticeNums: [] });
@@ -174,7 +174,7 @@ describe('NoticesHybridSearchService', () => {
     );
     getArchiveNoticesByRankedNums.mockResolvedValue({
       items: [archiveItem(3), archiveItem(1)],
-      total: 2,
+      matchingNoticeNums: [3, 1],
     });
     getChangeEventCountsByNoticeNums.mockResolvedValue(new Map([[3, 4]]));
 
@@ -203,7 +203,7 @@ describe('NoticesHybridSearchService', () => {
     // The archive hydration applied the filters and dropped notice 1.
     getArchiveNoticesByRankedNums.mockResolvedValue({
       items: [archiveItem(3)],
-      total: 1,
+      matchingNoticeNums: [3],
     });
 
     const result = await service.search(
@@ -256,7 +256,7 @@ describe('NoticesHybridSearchService', () => {
     searchSemantic.mockResolvedValue(semanticResponse({ results: [hit(3)] }));
     getArchiveNoticesByRankedNums.mockResolvedValue({
       items: [archiveItem(3)],
-      total: 1,
+      matchingNoticeNums: [3],
     });
     getCacheOnlySearchMatches.mockResolvedValue([
       { ...archiveItem(3), isDone: undefined },
@@ -285,7 +285,7 @@ describe('NoticesHybridSearchService', () => {
     searchSemantic.mockResolvedValue(semanticResponse({ results: [hit(3)] }));
     getArchiveNoticesByRankedNums.mockResolvedValue({
       items: [archiveItem(3)],
-      total: 1,
+      matchingNoticeNums: [3],
     });
 
     await service.search(baseParams({ startDate: '2026-01-01' }));
@@ -297,7 +297,7 @@ describe('NoticesHybridSearchService', () => {
     searchSemantic.mockResolvedValue(semanticResponse({ results: [hit(3)] }));
     getArchiveNoticesByRankedNums.mockResolvedValue({
       items: [archiveItem(3)],
-      total: 1,
+      matchingNoticeNums: [3],
     });
 
     await service.search(baseParams({ isDone: true }));
@@ -309,12 +309,16 @@ describe('NoticesHybridSearchService', () => {
     const hits = [5, 4, 3, 2, 1].map((num, idx) => hit(num, 0.9 - idx * 0.05));
     searchSemantic.mockResolvedValue(semanticResponse({ results: hits }));
     getArchiveNoticesByRankedNums.mockResolvedValue({
-      items: [5, 4, 3, 2, 1].map((num) => archiveItem(num)),
-      total: 5,
+      items: [3, 2].map((num) => archiveItem(num)),
+      matchingNoticeNums: [5, 4, 3, 2, 1],
     });
 
     const result = await service.search(baseParams({ page: 2, limit: 2 }));
 
+    expect(getArchiveNoticesByRankedNums).toHaveBeenCalledWith(
+      expect.objectContaining({ offset: 2, limit: 2 }),
+    );
+    expect(getChangeEventCountsByNoticeNums).toHaveBeenCalledWith([3, 2]);
     expect(result.items.map((item) => item.num)).toEqual([3, 2]);
     expect(result.total).toBe(5);
     expect(result.totalPages).toBe(3);
@@ -345,7 +349,7 @@ describe('NoticesHybridSearchService', () => {
     findLegalIdentityCandidates.mockResolvedValue({ noticeNums: [1, 3] });
     getArchiveNoticesByRankedNums.mockResolvedValue({
       items: [archiveItem(1), archiveItem(3), archiveItem(2)],
-      total: 3,
+      matchingNoticeNums: [1, 3, 2],
     });
     const result = await service.search(
       baseParams({
@@ -380,7 +384,7 @@ describe('NoticesHybridSearchService', () => {
   it('bypasses inference for a complete identifier and retains archive scope', async () => {
     getArchiveNoticesByRankedNums.mockResolvedValue({
       items: [archiveItem(2222564)],
-      total: 1,
+      matchingNoticeNums: [2222564],
     });
     const result = await service.search(
       baseParams({
@@ -422,7 +426,7 @@ describe('NoticesHybridSearchService', () => {
   it('skips the recent cache for an identifier already present in the archive', async () => {
     getArchiveNoticesByRankedNums.mockResolvedValue({
       items: [archiveItem(2222564)],
-      total: 1,
+      matchingNoticeNums: [2222564],
     });
     await service.search(baseParams({ searchMode: 'auto', search: '2222564' }));
     expect(getCacheOnlySearchMatches).not.toHaveBeenCalled();
@@ -440,5 +444,73 @@ describe('NoticesHybridSearchService', () => {
         noticeNums: Array.from({ length: 100 }, (_, i) => i + 1),
       }),
     );
+  });
+  it('fills a page across the archive and cache boundary without off-page duplicates', async () => {
+    searchSemantic.mockResolvedValue(
+      semanticResponse({ results: [hit(4), hit(3), hit(2)] }),
+    );
+    getArchiveNoticesByRankedNums.mockResolvedValue({
+      items: [archiveItem(2)],
+      matchingNoticeNums: [4, 3, 2],
+    });
+    getCacheOnlySearchMatches.mockResolvedValue([
+      archiveItem(4),
+      archiveItem(8),
+      archiveItem(7),
+    ]);
+    const result = await service.search(baseParams({ page: 2, limit: 2 }));
+    expect(result.items.map((item) => item.num)).toEqual([2, 8]);
+    expect(result.totalPages).toBe(3);
+    expect(result.stats).toEqual(
+      expect.objectContaining({
+        archiveCount: 3,
+        cacheCount: 3,
+        matchedCacheCount: 2,
+        mergedCount: 5,
+      }),
+    );
+    expect(getChangeEventCountsByNoticeNums).toHaveBeenCalledWith([2]);
+  });
+
+  it('preserves weak tier deduplication and skips change counts on cache-only pages', async () => {
+    searchSemantic.mockResolvedValue(
+      semanticResponse({
+        results: [hit(4)],
+        weakResults: [hit(4, 0.3), hit(2, 0.3)],
+      }),
+    );
+    findLegalIdentityCandidates.mockResolvedValue({ noticeNums: [4] });
+    getArchiveNoticesByRankedNums.mockResolvedValue({
+      items: [],
+      matchingNoticeNums: [4],
+    });
+    getCacheOnlySearchMatches.mockResolvedValue([
+      archiveItem(4),
+      archiveItem(8),
+      archiveItem(7),
+    ]);
+    const result = await service.search(
+      baseParams({ searchMode: 'auto', search: '형법', page: 3, limit: 1 }),
+    );
+    expect(result.items.map((item) => item.num)).toEqual([7]);
+    expect(result.semantic?.weakResults.map((item) => item.noticeNum)).toEqual([
+      2,
+    ]);
+    expect(result.total).toBe(3);
+    expect(getChangeEventCountsByNoticeNums).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the cache for an out-of-range page of an archived exact number', async () => {
+    getArchiveNoticesByRankedNums.mockResolvedValue({
+      items: [],
+      matchingNoticeNums: [2222564],
+    });
+    const result = await service.search(
+      baseParams({ searchMode: 'auto', search: '2222564', page: 2, limit: 1 }),
+    );
+    expect(result.items).toEqual([]);
+    expect(result.total).toBe(1);
+    expect(getCacheOnlySearchMatches).not.toHaveBeenCalled();
+    expect(getChangeEventCountsByNoticeNums).not.toHaveBeenCalled();
   });
 });
