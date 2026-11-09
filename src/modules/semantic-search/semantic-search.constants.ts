@@ -12,7 +12,7 @@
 export const DEFAULT_K = 5;
 
 /** Maximum k accepted from API clients (notice count). */
-export const MAX_K = 50;
+export const MAX_K = 20;
 
 /**
  * Fallback chunk-window cap: the value the sidecar hardcodes when it is too

@@ -409,7 +409,7 @@ describe('NoticesHybridSearchService', () => {
     const result = await service.search(
       baseParams({ searchMode: 'auto', search: '주택임대차보호볍' }),
     );
-    expect(searchSemantic).toHaveBeenCalledWith('주택임대차보호볍', 100);
+    expect(searchSemantic).toHaveBeenCalledWith('주택임대차보호볍', 20);
     expect(result.semantic?.suggestedQuery).toBe('주택임대차보호법');
     expect(result.items).toEqual([]);
   });
@@ -434,14 +434,14 @@ describe('NoticesHybridSearchService', () => {
   });
 
   it('bounds the merged exact and dense candidate window', async () => {
-    const preferred = Array.from({ length: 95 }, (_, i) => i + 1);
-    const dense = Array.from({ length: 25 }, (_, i) => hit(i + 90));
+    const preferred = Array.from({ length: 15 }, (_, i) => i + 1);
+    const dense = Array.from({ length: 25 }, (_, i) => hit(i + 10));
     findLegalIdentityCandidates.mockResolvedValue({ noticeNums: preferred });
     searchSemantic.mockResolvedValue(semanticResponse({ results: dense }));
     await service.search(baseParams({ searchMode: 'auto', search: '형법' }));
     expect(getArchiveNoticesByRankedNums).toHaveBeenCalledWith(
       expect.objectContaining({
-        noticeNums: Array.from({ length: 100 }, (_, i) => i + 1),
+        noticeNums: Array.from({ length: 20 }, (_, i) => i + 1),
       }),
     );
   });

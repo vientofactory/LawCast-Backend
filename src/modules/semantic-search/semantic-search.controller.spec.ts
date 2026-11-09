@@ -40,7 +40,7 @@ describe('SemanticSearchController', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it.each(['0', '51', 'abc', '-3', '3.9', '5.0', '1e2', '+5'])(
+  it.each(['0', '21', '50', 'abc', '-3', '3.9', '5.0', '1e2', '+5'])(
     'rejects invalid k value %s',
     async (kRaw) => {
       const { controller } = createController();
@@ -91,9 +91,9 @@ describe('SemanticSearchController', () => {
       results: [],
     });
 
-    await controller.semanticSearch(req, '질의', '12');
+    await controller.semanticSearch(req, '질의', '20');
 
-    expect(searchSemantic).toHaveBeenCalledWith('질의', 12);
+    expect(searchSemantic).toHaveBeenCalledWith('질의', 20);
   });
 
   it('wraps the engine health payload without stripping fields', async () => {

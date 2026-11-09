@@ -1,5 +1,6 @@
 import path from 'node:path';
 import os from 'node:os';
+import { MAX_K } from '../modules/semantic-search/semantic-search.constants';
 
 export interface AppConfig {
   port: number;
@@ -40,6 +41,7 @@ export interface AppConfig {
      * `LAWCAST_SEMANTIC_MAX_K` reaches the backend within this window.
      */
     chunkCapRefreshMs: number;
+    chunkCapCeiling: number;
     /**
      * Notice-level candidate cap the board's semantic/hybrid search mode
      * resolves per query, before archive filters are applied. Bounded by the
@@ -649,13 +651,18 @@ export default (): AppConfig => ({
       process.env.SEMANTIC_SEARCH_CHUNK_CAP_REFRESH_MS,
       60 * 1000,
     ),
+    // Bound chunk windows even if the sidecar health probe is unavailable.
+    chunkCapCeiling: parseIntWithDefault(
+      process.env.SEMANTIC_SEARCH_CHUNK_CAP_CEILING,
+      0,
+    ),
     // Candidate cap for the board's semantic search mode. The engine ranks
     // chunks; a larger cap widens recall under restrictive archive filters at
     // the cost of more hydration per search. Separate from the public
     // semantic endpoint's MAX_K (semantic-search.constants.ts).
     hybridMaxNotices: parseIntWithDefault(
       process.env.SEMANTIC_SEARCH_HYBRID_MAX_NOTICES,
-      100,
+      MAX_K,
     ),
     autoExact: parseBooleanWithDefault(
       process.env.SEMANTIC_SEARCH_AUTO_EXACT,

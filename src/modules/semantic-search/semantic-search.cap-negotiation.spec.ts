@@ -167,13 +167,14 @@ describe('semantic sidecar cap negotiation (real HTTP)', () => {
     await stub.close();
   });
 
-  const createService = (): SemanticSearchService => {
+  const createService = (ceiling?: number): SemanticSearchService => {
     const configService = {
       get: jest.fn((key: string) => {
         if (key === 'semanticSearch.enabled') return true;
         if (key === 'semanticSearch.apiUrl') return stub.url;
         if (key === 'semanticSearch.timeout') return 5000;
         if (key === 'semanticSearch.chunkCapRefreshMs') return 60000;
+        if (key === 'semanticSearch.chunkCapCeiling') return ceiling;
         return undefined;
       }),
     } as unknown as ConfigService;
@@ -194,6 +195,17 @@ describe('semantic sidecar cap negotiation (real HTTP)', () => {
   /** The whole conversation in order: `path:status` per request. */
   const transcript = (): string[] =>
     stub.state.log.map((entry) => `${entry.path}:${entry.status}`);
+
+  it.each([false, true])(
+    'honors the operator ceiling when healthDown=%s',
+    async (healthDown) => {
+      stub.state.healthDown = healthDown;
+      stub.state.maxK = 100;
+      const result = await createService(20).searchSemantic(QUERY, 20);
+      expect(result.mode).toBe('semantic');
+      expect(stub.state.log[1].k).toBe(20);
+    },
+  );
 
   it('reads the cap first and clamps every window to it', async () => {
     stub.state.maxK = 30;
