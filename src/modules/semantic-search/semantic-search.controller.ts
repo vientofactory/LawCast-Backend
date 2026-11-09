@@ -1,3 +1,4 @@
+import { ApiQuery, ApiTags } from '@nestjs/swagger';
 import {
   BadRequestException,
   Controller,
@@ -19,6 +20,7 @@ import { SemanticSearchService } from './semantic-search.service';
  * purpose: the existing notice search API is untouched and this endpoint can
  * degrade independently (keyword fallback) when the engine is unavailable.
  */
+@ApiTags('의미 검색')
 @Controller('api')
 @UseFilters(ApiReadRateLimitFilter)
 export class SemanticSearchController {
@@ -28,6 +30,12 @@ export class SemanticSearchController {
   ) {}
 
   @Get('notices/semantic-search')
+  @ApiQuery({ name: 'query', required: true, type: String })
+  @ApiQuery({
+    name: 'k',
+    required: false,
+    schema: { type: 'integer', minimum: 1, maximum: MAX_K, default: DEFAULT_K },
+  })
   async semanticSearch(
     @Req() req: Request,
     @Query('query') queryRaw?: string,

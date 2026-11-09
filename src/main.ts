@@ -17,6 +17,13 @@ import {
   assertAtLeastOneCrawlerEnabled,
   getCrawlerActivationState,
 } from './utils/crawler-activation.utils';
+import { PackagesService } from './modules/shared/packages.service';
+import { traceSemanticSearchRequest } from './modules/semantic-search/semantic-search-timing';
+import {
+  isLocalOpenApiEnabled,
+  OPENAPI_HOST,
+  setupOpenApi,
+} from './openapi/openapi';
 
 if (!process.env.TZ) {
   process.env.TZ = 'Asia/Seoul';
@@ -78,8 +85,20 @@ async function bootstrap() {
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
 
+  if (configService.get<string>('nodeEnv') === 'development') {
+    app.use(traceSemanticSearchRequest);
+  }
+
   const port = configService.get<number>('port');
-  await app.listen(port);
+  if (
+    isLocalOpenApiEnabled(process.env.NODE_ENV, process.env.OPENAPI_ENABLED)
+  ) {
+    const packages = app.get(PackagesService);
+    setupOpenApi(app, port, () => packages.getVersion().version);
+    await app.listen(port, OPENAPI_HOST);
+  } else {
+    await app.listen(port);
+  }
 
   LoggerUtils.log(loggerContext, `LawCast Backend is running on port ${port}`);
 }

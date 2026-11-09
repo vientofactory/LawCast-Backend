@@ -1,3 +1,4 @@
+import { ApiTags } from '@nestjs/swagger';
 import { Controller, Get, Req, UseFilters } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiReadRateLimitFilter } from '../../shared/api-read-rate-limit.filter';
@@ -9,6 +10,7 @@ import { AdminNoticesService } from '../admin-notices.service';
  * Admin notice board endpoint. Read-only by design: notices are authored and
  * published exclusively in Notion, so no create/update/delete routes exist.
  */
+@ApiTags('운영 공지')
 @Controller('api')
 @UseFilters(ApiReadRateLimitFilter)
 export class AdminNoticesController {

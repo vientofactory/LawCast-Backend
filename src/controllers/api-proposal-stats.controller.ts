@@ -1,3 +1,4 @@
+import { ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Controller, Get, Query, Req, UseFilters } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiResponseUtils } from '../utils/api-response.utils';
@@ -9,6 +10,7 @@ import { assertValidStatisticsDateRange } from '../utils/request-limits.utils';
 import { ApiReadRateLimitService } from '../modules/shared/api-read-rate-limit.service';
 import { ApiReadRateLimitFilter } from '../modules/shared/api-read-rate-limit.filter';
 
+@ApiTags('발의 통계')
 @Controller('api/stats')
 @UseFilters(ApiReadRateLimitFilter)
 export class ApiProposalStatsController {
@@ -18,6 +20,21 @@ export class ApiProposalStatsController {
   ) {}
 
   @Get('proposals')
+  @ApiQuery({
+    name: 'granularity',
+    required: false,
+    enum: ['daily', 'weekly', 'monthly'],
+  })
+  @ApiQuery({
+    name: 'startDate',
+    required: false,
+    schema: { type: 'string', format: 'date' },
+  })
+  @ApiQuery({
+    name: 'endDate',
+    required: false,
+    schema: { type: 'string', format: 'date' },
+  })
   async getProposalStatistics(
     @Req() req: Request,
     @Query('granularity') granularityRaw?: string,

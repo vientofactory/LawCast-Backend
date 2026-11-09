@@ -66,12 +66,6 @@ export interface AppConfig {
      * bypass, `SEMANTIC_SEARCH_LEXICAL_BYPASS_SCORE`, default 0.6).
      */
     lexicalBypassScore: number;
-    /**
-     * Cross-encoder logit floor for the gate (`SEMANTIC_SEARCH_RERANK_CUTOFF`,
-     * calibrated -1.0 on the 50-query set). Null (unset/blank/invalid) keeps
-     * the gate lexical-only, exactly as before.
-     */
-    rerankCutoff: number | null;
   };
   notion: {
     apiKey: string;
@@ -682,11 +676,6 @@ export default (): AppConfig => ({
       process.env.SEMANTIC_SEARCH_LEXICAL_BYPASS_SCORE,
       0.6,
     ),
-    // Cross-encoder logit floor the gate additionally enforces when the
-    // sidecar annotates hits (`rerankScore`): keep <=> (rerank >= cutoff) or
-    // (bypassed and evidence). Blank/missing/invalid disables the rerank
-    // leg (null), so the gate stays lexical-only as before.
-    rerankCutoff: parseRerankCutoff(process.env.SEMANTIC_SEARCH_RERANK_CUTOFF),
   },
   // Notion-backed admin notice board (read-only; CRUD happens in Notion).
   // The feature is enabled only when both apiKey and databaseId are set.
@@ -821,19 +810,6 @@ function parseTotalTimeout(
     return fallback;
   }
   return parsed;
-}
-
-/**
- * Rerank logit floor for semantic search; blank/missing/non-numeric input
- * disables the rerank leg (null), keeping the gate lexical-only.
- */
-function parseRerankCutoff(value: string | undefined): number | null {
-  const text = value?.trim() ?? '';
-  if (!text) {
-    return null;
-  }
-  const parsed = parseFloat(text);
-  return isNaN(parsed) ? null : parsed;
 }
 
 /** Lexical-evidence gate mode for semantic search; unknown values are `off`. */

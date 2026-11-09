@@ -1,4 +1,10 @@
 import {
+  ApiNotFoundResponse,
+  ApiOkResponse,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
+import {
   Controller,
   Delete,
   Get,
@@ -62,6 +68,7 @@ import {
   parsePositiveInteger,
 } from '../utils/query-parsing.utils';
 
+@ApiTags('LawCast')
 @Controller('api')
 @UseFilters(ApiReadRateLimitFilter)
 export class ApiController {
@@ -109,6 +116,7 @@ export class ApiController {
   }
 
   @Get('push/subscriptions/discussions/:threadId/status')
+  @ApiQuery({ name: 'endpoint', required: false, type: String })
   async getDiscussionWebPushStatus(
     @Param('threadId', ParseIntPipe) threadId: number,
     @Query('endpoint') endpoint: string,
@@ -132,6 +140,7 @@ export class ApiController {
   }
 
   @Get('push/subscriptions/notice-status')
+  @ApiQuery({ name: 'endpoint', required: false, type: String })
   async getNoticeWebPushStatus(@Query('endpoint') endpoint: string) {
     return ApiResponseUtils.success({
       enabled: endpoint
@@ -201,6 +210,11 @@ export class ApiController {
   }
 
   @Get('notices/keywords')
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    schema: { type: 'integer', default: 8 },
+  })
   async getQuickKeywordSuggestions(
     @Query('limit', new DefaultValuePipe(8), ParseIntPipe) limit: number,
   ) {
@@ -210,6 +224,36 @@ export class ApiController {
   }
 
   @Get('notices/archive')
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    schema: { type: 'integer', default: 1 },
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    schema: { type: 'integer', default: 20 },
+  })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'proposer', required: false, type: String })
+  @ApiQuery({
+    name: 'startDate',
+    required: false,
+    schema: { type: 'string', format: 'date' },
+  })
+  @ApiQuery({
+    name: 'endDate',
+    required: false,
+    schema: { type: 'string', format: 'date' },
+  })
+  @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'] })
+  @ApiQuery({ name: 'isDone', required: false, type: Boolean })
+  @ApiQuery({ name: 'noticeNums', required: false, type: String })
+  @ApiQuery({
+    name: 'searchMode',
+    required: false,
+    enum: ['keyword', 'semantic', 'auto'],
+  })
   async getArchivedNotices(
     @Req() req: Request,
     @Query(
@@ -283,6 +327,19 @@ export class ApiController {
   }
 
   @Get('notices/search')
+  @ApiQuery({ name: 'q', required: false, type: String })
+  @ApiQuery({ name: 'proposer', required: false, type: String })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    schema: { type: 'integer', default: 1 },
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    schema: { type: 'integer', default: 20 },
+  })
+  @ApiQuery({ name: 'includeDone', required: false, type: Boolean })
   async searchNotices(
     @Req() req: Request,
     @Query('q') q: string,
@@ -331,6 +388,8 @@ export class ApiController {
   }
 
   @Get('notices/:num/detail')
+  @ApiQuery({ name: 'rev', required: false, schema: { type: 'integer' } })
+  @ApiQuery({ name: 'includeTimeline', required: false, type: Boolean })
   async getNoticeDetail(
     @Param('num', ParseIntPipe) num: number,
     @Query('rev') revRaw?: string,
@@ -365,6 +424,16 @@ export class ApiController {
   }
 
   @Get('notices/:num/changes')
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    schema: { type: 'integer', default: 20 },
+  })
+  @ApiQuery({
+    name: 'beforeHeight',
+    required: false,
+    schema: { type: 'integer' },
+  })
   async getNoticeChanges(
     @Param('num', ParseIntPipe) num: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
@@ -384,6 +453,41 @@ export class ApiController {
   }
 
   @Get('notices/changes')
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    schema: { type: 'integer', default: 1 },
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    schema: { type: 'integer', default: 20 },
+  })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'noticeNum', required: false, schema: { type: 'integer' } })
+  @ApiQuery({ name: 'eventType', required: false, type: String })
+  @ApiQuery({ name: 'sortOrder', required: false, enum: ['asc', 'desc'] })
+  @ApiQuery({
+    name: 'excludeLegacyGenesisSource',
+    required: false,
+    type: Boolean,
+  })
+  @ApiQuery({ name: 'excludeIsDoneEvents', required: false, type: Boolean })
+  @ApiQuery({ name: 'comparableOnly', required: false, type: Boolean })
+  @ApiQuery({
+    name: 'fromEventId',
+    required: false,
+    schema: { type: 'integer' },
+  })
+  @ApiQuery({ name: 'toEventId', required: false, schema: { type: 'integer' } })
+  @ApiQuery({ name: 'fromDetectedAt', required: false, type: String })
+  @ApiQuery({ name: 'toDetectedAt', required: false, type: String })
+  @ApiQuery({
+    name: 'anchorEventId',
+    required: false,
+    schema: { type: 'integer' },
+  })
+  @ApiQuery({ name: 'cursor', required: false, type: String })
   async getRecentNoticeChanges(
     @Req() req: Request,
     @Query(
@@ -466,6 +570,13 @@ export class ApiController {
   }
 
   @Get('notices/:num/screenshot')
+  @ApiOkResponse({
+    content: {
+      'image/png': { schema: { type: 'string', format: 'binary' } },
+      'image/jpeg': { schema: { type: 'string', format: 'binary' } },
+    },
+  })
+  @ApiNotFoundResponse()
   async getNoticeScreenshot(
     @Param('num', ParseIntPipe) num: number,
     @Res({ passthrough: true }) res: Response,
@@ -487,6 +598,12 @@ export class ApiController {
   }
 
   @Get('notices/:num/export')
+  @ApiOkResponse({
+    content: {
+      'application/zip': { schema: { type: 'string', format: 'binary' } },
+    },
+  })
+  @ApiNotFoundResponse()
   async exportNoticeArchive(
     @Param('num', ParseIntPipe) num: number,
     @Res({ passthrough: true }) res: Response,
@@ -508,6 +625,7 @@ export class ApiController {
   }
 
   @Get('stats')
+  @ApiQuery({ name: 'view', required: false, type: String })
   async getStats(@Query('view') view?: string) {
     if (view === 'home') {
       return ApiResponseUtils.success(
@@ -607,6 +725,26 @@ export class ApiController {
   }
 
   @Get('version')
+  @ApiOkResponse({
+    schema: {
+      type: 'object',
+      required: ['success', 'data'],
+      properties: {
+        success: { type: 'boolean', example: true },
+        data: {
+          type: 'object',
+          required: ['version', 'buildEnv'],
+          properties: {
+            version: { type: 'string' },
+            buildEnv: {
+              type: 'string',
+              enum: ['env', 'package.json', 'fallback'],
+            },
+          },
+        },
+      },
+    },
+  })
   getVersion() {
     return ApiResponseUtils.success(this.packagesService.getVersion());
   }

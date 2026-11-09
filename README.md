@@ -61,6 +61,42 @@ npm run build
 npm run start:prod
 ```
 
+### Swagger와 Bruno 로컬 테스트
+
+로컬 Redis를 실행한 뒤 아래 명령을 실행합니다. 기존 `.env` 대신 별도 SQLite 파일
+(`.local-openapi/runtime/lawcast.db`)과 Redis 키 접두사를 사용합니다. 국회 계류안 수집은
+동작하지만 Discord, Web Push, Ollama, 의미 검색은 기본으로 꺼져 있습니다.
+
+```bash
+npm run start:openapi
+```
+
+- Swagger UI: [http://127.0.0.1:3091/docs](http://127.0.0.1:3091/docs)
+- OpenAPI JSON: [http://127.0.0.1:3091/openapi.json](http://127.0.0.1:3091/openapi.json)
+- Bruno에서 **Import collection → URL**을 선택하고 OpenAPI JSON 주소를 입력합니다.
+  **Check for Spec Updates**를 켜면 가져온 컬렉션에서 명세 변경을 확인할 수 있습니다.
+  가져온 뒤 환경을 **로컬 개발 서버**로 선택하고 `GET /api/version`, `GET /api/health`,
+  `GET /api/notices/archive`를 보내 연결을 확인합니다.
+
+일반 개발 서버에 문서만 추가하려면 `OPENAPI_ENABLED=true npm run start:dev`를 사용합니다.
+문서는 `NODE_ENV=development`이면서 `OPENAPI_ENABLED=true`일 때만 열리며, 이때
+서버는 `127.0.0.1`에서만 요청을 받습니다. 문서의 서버 주소는 실행 포트를 따릅니다.
+환경에 따라 테스트용 법안 번호나 요청 본문을 채워야 합니다. 웹훅 등록 및 구독은 기존
+작업증명 검증을, 토론 수정·삭제는 기존 비밀번호 검증을 그대로 사용합니다.
+
+### 의미 검색 지연 시간 확인
+
+백엔드를 `npm run start:dev`로 실행하고 `SEMANTIC_SEARCH_ENABLED=true`와
+`SEMANTIC_SEARCH_API_URL`을 설정합니다. 프런트엔드도 `npm run dev`로 실행하고
+`PUBLIC_SEMANTIC_SEARCH_ENABLED=true`, `API_BASE_URL=http://localhost:3001/api`를 지정한 뒤 의미 검색을 실행합니다.
+
+- 화면의 **Search Timing**에서 SvelteKit의 응답 본문 처리까지 걸린 시간, 백엔드의 응답 헤더 전송까지 걸린 시간, 사이드카 호출별 왕복 및 단계별 시간을 확인합니다. 브라우저 렌더링은 포함하지 않습니다.
+- 개발 백엔드는 유효한 UUID의 `x-lawcast-search-trace`를 받은 검색 요청에만 `x-lawcast-search-timing` 응답 헤더(JSON, 캐시 금지)를 보냅니다. `traceId`, `backendMs`, `sidecarCalls`(최대 12건), `omittedCalls`를 반환합니다. 각 호출에는 백엔드 요청 시작 기준의 `startMs`, 경로, 상태, 왕복 시간과 가능한 경우 청크 수 및 `denseMs`, `annotateMs`, `totalMs`가 포함됩니다. 단위는 모두 밀리초입니다.
+- 지원되는 사이드카의 `denseStages`(질의 임베딩, FAISS 조회·정렬, 관련도 분류)도 전달합니다. 4 KiB 헤더 한도에 맞추기 위해 일부 호출이 생략될 수 있으며, 생략 수는 `omittedCalls`에 기록됩니다.
+- 백엔드 터미널에서는 같은 `traceId`로 응답 종료까지의 백엔드 시간과 전체 호출 내역을 확인할 수 있습니다. 구버전 사이드카나 실패한 호출에는 단계별 시간이 없을 수 있습니다.
+
+전용 의미 검색과 공고 목록의 자동·의미 검색을 추적합니다. 각 시간은 서로 중첩되므로 합산하지 않습니다. 공개 API 응답 형식은 그대로입니다.
+
 ## 설정
 
 전체 템플릿은 [.env.example](.env.example), 실제 기본값과 스케줄은 [src/config/app.config.ts](src/config/app.config.ts)에서 확인합니다. `.env`와 템플릿의 값은 코드 기본값과 다를 수 있습니다.

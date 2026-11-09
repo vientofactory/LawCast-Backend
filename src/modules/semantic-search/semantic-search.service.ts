@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { NoticeSearchService } from '../crawling/notice-search.service';
 import { LoggerUtils } from '../../utils/logger.utils';
+import { measureSemanticSidecarCall } from './semantic-search-timing';
 import {
   CHUNK_FETCH_GROWTH,
   CHUNK_FETCH_INITIAL_FACTOR,
@@ -68,8 +69,7 @@ export class SemanticSearchService {
    * (`SEMANTIC_SEARCH_LEXICAL_GATE`): `off` keeps pure dense ranking,
    * `shadow` only logs, `enforce` drops gated hits after the chunk windows
    * are collected (never inside the widening loop, so the
-   * `corpusExhausted` stop condition keeps working). With `rerankCutoff`
-   * set, the rerank logit joins the decision (see `keepChunk`).
+   * `corpusExhausted` stop condition keeps working).
    */
   private readonly lexicalGate: 'off' | 'shadow' | 'enforce';
   /**
@@ -78,14 +78,6 @@ export class SemanticSearchService {
    * shared surface tokens are never emptied.
    */
   private readonly lexicalBypassScore: number;
-  /**
-   * Cross-encoder logit floor additionally enforced in `shadow`/`enforce`
-   * (`rerankCutoff`, null disables the leg): keep <=> (rerank >= cutoff)
-   * or (bypassed and evidence); unscored chunks fall back to the lexical
-   * rule. Calibrated -1.0: 40/40 labeled kept, 5/5 noise emptied.
-   */
-  private readonly rerankCutoff: number | null;
-
   constructor(
     configService: ConfigService,
     private readonly noticeSearchService: NoticeSearchService,
@@ -99,8 +91,6 @@ export class SemanticSearchService {
       ) ?? 'off';
     this.lexicalBypassScore =
       configService.get<number>('semanticSearch.lexicalBypassScore') ?? 0.6;
-    this.rerankCutoff =
-      configService.get<number | null>('semanticSearch.rerankCutoff') ?? null;
     this.requestTimeout =
       configService.get<number>('semanticSearch.timeout') ?? 10000;
     const configuredTotal = configService.get<number>(
@@ -139,14 +129,30 @@ export class SemanticSearchService {
     let collected: SemanticSidecarChunk[];
     let weakCollected: SemanticSidecarChunk[];
     let lastUpdateAt: string | null;
+    let calibrated: boolean;
     try {
       ({
         chunks: collected,
         weakChunks: weakCollected,
         lastUpdateAt,
+        calibrated,
       } = await this.collectChunks(query, k));
     } catch (error) {
       return this.handleFirstWindowFailure(error, query, k);
+    }
+    if (calibrated) {
+      const strong = this.toNoticeHits(collected);
+      const strongIds = new Set(strong.map((hit) => hit.noticeNum));
+      return {
+        query,
+        mode: 'semantic',
+        fallbackReason: null,
+        lastUpdateAt,
+        results: strong.slice(0, k),
+        weakResults: this.toNoticeHits(weakCollected)
+          .filter((hit) => !strongIds.has(hit.noticeNum))
+          .slice(0, k),
+      } satisfies SemanticSearchResponse;
     }
     return this.applyLexicalGate(
       query,
@@ -179,8 +185,8 @@ export class SemanticSearchService {
       weakCollected[0]?.score ?? Number.NEGATIVE_INFINITY,
     );
     const bypassed = bestScore >= this.lexicalBypassScore;
-    const clear = this.toNoticeHitsWithEvidence(collected, bypassed);
-    const weak = this.toNoticeHitsWithEvidence(weakCollected, bypassed);
+    const clear = this.toNoticeHitsWithEvidence(collected);
+    const weak = this.toNoticeHitsWithEvidence(weakCollected);
     if (this.lexicalGate === 'off') {
       return {
         query,
@@ -191,17 +197,14 @@ export class SemanticSearchService {
         weakResults: weak.map(({ hit }) => hit).slice(0, k),
       } satisfies SemanticSearchResponse;
     }
-    const gatedClear = clear.filter(({ kept }) => kept);
-    const gatedWeak = weak.filter(({ kept }) => kept);
+    const gatedClear = clear.filter(({ evidence }) => evidence);
+    const gatedWeak = weak.filter(({ evidence }) => evidence);
     if (this.lexicalGate === 'shadow') {
       this.logger.log(
         `lexical-gate-shadow clear ${gatedClear.length}/${clear.length} ` +
           `weak ${gatedWeak.length}/${weak.length} ` +
           `wouldEmpty=${gatedClear.length === 0 && gatedWeak.length === 0} ` +
-          `bypassed=${bypassed}` +
-          (this.rerankCutoff === null
-            ? ''
-            : ` rerankCutoff=${this.rerankCutoff}`),
+          `bypassed=${bypassed}`,
       );
       return {
         query,
@@ -350,8 +353,9 @@ export class SemanticSearchService {
     }
     this.chunkCapReadAt = now;
     try {
-      const response =
-        await this.http.get<SemanticSidecarHealthResponse>('/health');
+      const response = await measureSemanticSidecarCall('/health', () =>
+        this.http.get<SemanticSidecarHealthResponse>('/health'),
+      );
       this.adoptChunkCap(response.data);
     } catch (error) {
       this.logger.warn(
@@ -418,19 +422,22 @@ export class SemanticSearchService {
     chunks: SemanticSidecarChunk[];
     weakChunks: SemanticSidecarChunk[];
     lastUpdateAt: string | null;
+    calibrated: boolean;
   }> {
     const collected: SemanticSidecarChunk[] = [];
     const weakCollected: SemanticSidecarChunk[] = [];
     let lastUpdateAt: string | null = null;
+    let calibrated = false;
+    let hasWindow = false;
     let chunkK = Math.min(k * CHUNK_FETCH_INITIAL_FACTOR, cap);
     const deadline = Date.now() + this.totalTimeoutMs;
     for (;;) {
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) {
-        if (collected.length === 0 && weakCollected.length === 0) {
+        if (!hasWindow) {
           throw new Error(
             `semantic sidecar total budget exceeded (${this.totalTimeoutMs}ms) ` +
-              'before any chunk was collected',
+              'before any window completed',
           );
         }
         this.logger.warn(
@@ -441,6 +448,7 @@ export class SemanticSearchService {
           chunks: collected,
           weakChunks: weakCollected,
           lastUpdateAt,
+          calibrated,
         };
       }
       let window: SemanticSidecarSearchResponse;
@@ -451,9 +459,8 @@ export class SemanticSearchService {
           Math.min(this.requestTimeout, remainingMs),
         );
       } catch (error) {
-        // Both tiers empty = the first window itself failed, so nothing
-        // was ever collected and the failure must propagate.
-        if (collected.length === 0 && weakCollected.length === 0) {
+        // An empty but successful filtered window is still a semantic answer.
+        if (!hasWindow) {
           throw error;
         }
         this.logger.warn(
@@ -464,8 +471,20 @@ export class SemanticSearchService {
           chunks: collected,
           weakChunks: weakCollected,
           lastUpdateAt,
+          calibrated,
         };
       }
+      const nextCalibrated = window.candidateCount != null;
+      if (
+        hasWindow &&
+        (calibrated !== nextCalibrated || lastUpdateAt !== window.lastUpdateAt)
+      ) {
+        // Do not mix results from different index generations during widening.
+        collected.length = 0;
+        weakCollected.length = 0;
+      }
+      calibrated = nextCalibrated;
+      hasWindow = true;
       collected.push(...window.results);
       // `weakResults` is contract-required, but the sidecar and this backend
       // deploy as separate containers: tolerate an older sidecar that
@@ -475,12 +494,14 @@ export class SemanticSearchService {
       lastUpdateAt = window.lastUpdateAt;
       const hits = this.toNoticeHits(collected);
       const corpusExhausted =
-        window.results.length + windowWeak.length < chunkK;
+        (window.candidateCount ?? window.results.length + windowWeak.length) <
+        chunkK;
       if (hits.length >= k || corpusExhausted || chunkK >= cap) {
         return {
           chunks: collected,
           weakChunks: weakCollected,
           lastUpdateAt,
+          calibrated,
         };
       }
       chunkK = Math.min(chunkK * CHUNK_FETCH_GROWTH, cap);
@@ -527,17 +548,14 @@ export class SemanticSearchService {
     chunkK: number,
     requestTimeout: number,
   ): Promise<SemanticSidecarSearchResponse> {
-    // The sidecar's cross-encoder pass costs ~1s of CPU per request, so it
-    // is requested only when this service consumes the logits (rerank leg
-    // enabled via `SEMANTIC_SEARCH_RERANK_CUTOFF`). A sidecar older than the
-    // parameter ignores it and scores as before (fail-open: scores unused
-    // here are simply annotated, never gated on).
-    const response = await this.http.get<SemanticSidecarSearchResponse>(
+    const response = await measureSemanticSidecarCall(
       '/search',
-      {
-        params: { query, k: chunkK, rerank: this.rerankCutoff !== null },
-        timeout: requestTimeout,
-      },
+      () =>
+        this.http.get<SemanticSidecarSearchResponse>('/search', {
+          params: { query, k: chunkK },
+          timeout: requestTimeout,
+        }),
+      chunkK,
     );
     return response.data;
   }
@@ -551,53 +569,23 @@ export class SemanticSearchService {
   }
 
   /**
-   * Per-chunk keep decision under the active gate legs. Without a rerank
-   * cutoff this is the pure lexical rule; with one, a scored chunk survives
-   * on its logit (paraphrases with no shared tokens included) while an
-   * unscored chunk (older sidecar, window tail) falls back to the lexical
-   * rule — unknown is never a reject.
-   */
-  private keepChunk(
-    chunk: SemanticSidecarChunk,
-    evidence: boolean,
-    bypassed: boolean,
-  ): boolean {
-    if (this.rerankCutoff === null) {
-      return evidence;
-    }
-    const rerank = chunk.rerankScore;
-    if (typeof rerank !== 'number') {
-      return evidence;
-    }
-    return rerank >= this.rerankCutoff || (bypassed && evidence);
-  }
-
-  /**
    * Notice-deduplicated hits with one evidence flag per notice (OR over ALL
    * its chunks in the window; the best chunk decides the content). A sidecar
    * older than the flag omits it and counts as evidence present (fail-open).
-   * `kept` is the same OR over the per-chunk gate decision, so a notice
-   * survives when any of its chunks does.
    */
-  private toNoticeHitsWithEvidence(
-    chunks: SemanticSidecarChunk[],
-    bypassed = false,
-  ): Array<{
+  private toNoticeHitsWithEvidence(chunks: SemanticSidecarChunk[]): Array<{
     hit: SemanticSearchResultItem;
     evidence: boolean;
-    kept: boolean;
   }> {
     const byNotice = new Map<
       number,
-      { hit: SemanticSearchResultItem; evidence: boolean; kept: boolean }
+      { hit: SemanticSearchResultItem; evidence: boolean }
     >();
     for (const chunk of chunks) {
       const known = byNotice.get(chunk.noticeNum);
       const evidence = chunk.lexicalEvidence ?? true;
-      const kept = this.keepChunk(chunk, evidence, bypassed);
       if (known) {
         known.evidence = known.evidence || evidence;
-        known.kept = known.kept || kept;
         continue;
       }
       byNotice.set(chunk.noticeNum, {
@@ -610,7 +598,6 @@ export class SemanticSearchService {
           excerpt: chunk.text,
         },
         evidence,
-        kept,
       });
     }
     return [...byNotice.values()];
