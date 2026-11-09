@@ -1,6 +1,6 @@
 {
   "name": "lawcast-backend",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "",
   "author": "vientorepublic",
   "private": true,
@@ -13,6 +13,7 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "start": "NODE_ENV=production nest start",
     "start:dev": "NODE_ENV=development nest start --watch",
+    "start:openapi": "sh scripts/start-local-openapi.sh",
     "start:debug": "NODE_ENV=development nest start --debug --watch",
     "start:prod": "NODE_ENV=production node dist/main",
     "lint": "eslint \"{src,apps,libs}/**/*.ts\" --fix",
@@ -42,6 +43,7 @@
     "@nestjs/core": "^12.4.0",
     "@nestjs/platform-express": "^12.4.0",
     "@nestjs/schedule": "^12.0.3",
+    "@nestjs/swagger": "^12.1.1",
     "@nestjs/typeorm": "^12.0.3",
     "@notionhq/client": "^5.31.0",
     "axios": "^1.21.0",

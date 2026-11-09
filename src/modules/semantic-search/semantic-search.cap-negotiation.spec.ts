@@ -23,11 +23,33 @@ import {
   jest,
 } from '@jest/globals';
 import { ConfigService } from '@nestjs/config';
+import express from 'express';
+import { LoggerUtils } from '../../utils/logger.utils';
 import { NoticeSearchService } from '../crawling/notice-search.service';
 import { SemanticSearchService } from './semantic-search.service';
+import { traceSemanticSearchRequest } from './semantic-search-timing';
 
 const STAMP = '2026-10-02T12:00:00+00:00';
 const QUERY = '임대차 계약에서 세입자 보호';
+const TIMINGS = {
+  denseMs: 2,
+  annotateMs: 1,
+  totalMs: 3,
+  // Keep realistic clock precision when exercising the header byte budget.
+  denseStages: {
+    embedding: { startMs: 0.10000000000000002, durationMs: 0.9000000000000001 },
+    embeddingStages: {
+      tokenization: { startMs: 0.01, durationMs: 0.1 },
+      model: { startMs: 0.11, durationMs: 0.6 },
+      cpuConversion: { startMs: 0.71, durationMs: 0.1 },
+    },
+    faiss: { startMs: 1.1000000000000003, durationMs: 0.4000000000000001 },
+    classification: {
+      startMs: 1.5000000000000004,
+      durationMs: 0.25000000000000006,
+    },
+  },
+};
 
 interface StubLogEntry {
   path: string;
@@ -37,7 +59,12 @@ interface StubLogEntry {
 
 interface StubSidecar {
   url: string;
-  state: { maxK: number; healthDown: boolean; log: StubLogEntry[] };
+  state: {
+    maxK: number;
+    healthDown: boolean;
+    includeTimings: boolean;
+    log: StubLogEntry[];
+  };
   close: () => Promise<void>;
 }
 
@@ -54,7 +81,12 @@ const noticeWindow = (k: number) =>
   }));
 
 const startStubSidecar = async (): Promise<StubSidecar> => {
-  const state = { maxK: 200, healthDown: false, log: [] as StubLogEntry[] };
+  const state = {
+    maxK: 200,
+    healthDown: false,
+    includeTimings: false,
+    log: [] as StubLogEntry[],
+  };
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     const rawK = url.searchParams.get('k');
@@ -99,6 +131,9 @@ const startStubSidecar = async (): Promise<StubSidecar> => {
         lastUpdateAt: STAMP,
         results: noticeWindow(k),
         weakResults: [],
+        ...(state.includeTimings && {
+          timings: TIMINGS,
+        }),
       });
       return;
     }
@@ -214,5 +249,135 @@ describe('semantic sidecar cap negotiation (real HTTP)', () => {
     expect(result.results).toHaveLength(50);
     expect(transcript()).toEqual(['/health:503', '/search:200']);
     expect(stub.state.log[1].k).toBe(100);
+  });
+
+  it('returns correlated timing headers without altering the public response', async () => {
+    const service = createService();
+    await service.searchSemantic(QUERY, 50);
+    stub.state.maxK = 30;
+    stub.state.includeTimings = true;
+
+    const traceId = '9143e6bf-bb78-48f3-bc53-e229fa542de5';
+    const log = jest.spyOn(LoggerUtils, 'log').mockImplementation(() => {});
+    const app = express();
+    app.use(traceSemanticSearchRequest);
+    app.get('/api/notices/semantic-search', async (req, res) => {
+      if (req.query.limit === 'true') {
+        res.status(429).json({ statusCode: 429 });
+        return;
+      }
+      if (req.query.many === 'true') {
+        for (let i = 0; i < 13; i++) await service.searchSemantic(QUERY, 1);
+        res.json({ ok: true });
+        return;
+      }
+      res.json(await service.searchSemantic(QUERY, 50));
+    });
+    const server = createServer(app);
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve),
+    );
+    try {
+      const { port } = server.address() as AddressInfo;
+      const url = `http://127.0.0.1:${port}/api/notices/semantic-search`;
+      const response = await globalThis.fetch(url, {
+        headers: { 'x-lawcast-search-trace': traceId },
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).not.toHaveProperty('timings');
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      const header = JSON.parse(
+        response.headers.get('x-lawcast-search-timing'),
+      );
+      expect(header).toMatchObject({
+        traceId,
+        backendMs: expect.any(Number),
+        omittedCalls: 0,
+      });
+      expect(log).toHaveBeenCalledWith(
+        'SemanticSearchTiming',
+        expect.objectContaining({
+          traceId,
+          status: 200,
+          backendMs: expect.any(Number),
+          sidecarCalls: [
+            expect.objectContaining({
+              path: '/search',
+              chunkK: 150,
+              status: 422,
+              outcome: 'error',
+              startMs: expect.any(Number),
+              roundTripMs: expect.any(Number),
+            }),
+            expect.objectContaining({ path: '/health', status: 200 }),
+            expect.objectContaining({
+              path: '/search',
+              chunkK: 30,
+              status: 200,
+              outcome: 'ok',
+              startMs: expect.any(Number),
+              roundTripMs: expect.any(Number),
+              timings: TIMINGS,
+            }),
+          ],
+        }),
+      );
+      expect(header.sidecarCalls).toEqual(log.mock.calls[0][1].sidecarCalls);
+      for (const [index, call] of header.sidecarCalls.entries()) {
+        expect(call.startMs).toBeGreaterThanOrEqual(0);
+        expect(call.startMs + call.roundTripMs).toBeLessThanOrEqual(
+          header.backendMs + 0.02,
+        );
+        if (index > 0) {
+          const previous = header.sidecarCalls[index - 1];
+          expect(call.startMs + 0.02).toBeGreaterThanOrEqual(
+            previous.startMs + previous.roundTripMs,
+          );
+        }
+      }
+
+      const many = await globalThis.fetch(`${url}?many=true`, {
+        headers: { 'x-lawcast-search-trace': traceId },
+      });
+      expect(await many.json()).toEqual({ ok: true });
+      const encoded = many.headers.get('x-lawcast-search-timing')!;
+      const bounded = JSON.parse(encoded);
+      expect(Buffer.byteLength(encoded)).toBeLessThanOrEqual(4096);
+      expect(bounded.sidecarCalls.length).toBeLessThanOrEqual(12);
+      expect(bounded.sidecarCalls.length + bounded.omittedCalls).toBe(13);
+      expect(bounded.sidecarCalls[0].timings).toEqual(TIMINGS);
+
+      stub.state.includeTimings = false;
+      log.mockClear();
+      const untraced = await globalThis.fetch(url);
+      expect(untraced.headers.has('x-lawcast-search-timing')).toBe(false);
+      await untraced.json();
+      expect(log.mock.calls[0][1]).toMatchObject({
+        sidecarCalls: [expect.objectContaining({ outcome: 'ok', status: 200 })],
+      });
+      expect(log.mock.calls[0][1].sidecarCalls[0]).not.toHaveProperty(
+        'timings',
+      );
+
+      const limited = await globalThis.fetch(`${url}?limit=true`, {
+        headers: { 'x-lawcast-search-trace': traceId },
+      });
+      expect(limited.status).toBe(429);
+      expect(await limited.json()).toEqual({ statusCode: 429 });
+      expect(
+        JSON.parse(limited.headers.get('x-lawcast-search-timing')),
+      ).toEqual({
+        traceId,
+        backendMs: expect.any(Number),
+        sidecarCalls: [],
+        omittedCalls: 0,
+      });
+    } finally {
+      log.mockRestore();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      });
+    }
   });
 });

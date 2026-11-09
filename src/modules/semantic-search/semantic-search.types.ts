@@ -45,13 +45,38 @@ export interface SemanticSidecarChunk {
    * it and the service treats unknown as evidence present (fail-open).
    */
   lexicalEvidence?: boolean;
-  /**
-   * Cross-encoder relevance logit for this chunk (sidecar's `rerankScore`).
-   * Nullish when the sidecar's scorer is disabled or the chunk fell outside
-   * its scoring window: the service treats unknown as unscored (fail-open)
-   * and never as a reject.
-   */
-  rerankScore?: number | null;
+}
+
+export interface SemanticDensePhase {
+  startMs: number;
+  durationMs: number;
+}
+
+export interface SemanticEmbeddingPhase {
+  startMs: number;
+  durationMs: number;
+}
+
+export interface SemanticEmbeddingStages {
+  tokenization: SemanticEmbeddingPhase;
+  model: SemanticEmbeddingPhase;
+  cpuConversion: SemanticEmbeddingPhase;
+}
+
+export interface SemanticDenseStages {
+  embedding: SemanticDensePhase;
+  faiss: SemanticDensePhase;
+  classification: SemanticDensePhase;
+  /** Offsets relative to the start of query embedding. */
+  embeddingStages?: SemanticEmbeddingStages | null;
+}
+
+export interface SemanticSidecarTimings {
+  denseMs: number;
+  annotateMs: number;
+  totalMs: number;
+  /** Offsets relative to Dense; absent on older engines and null when skipped. */
+  denseStages?: SemanticDenseStages | null;
 }
 
 export interface SemanticSidecarSearchResponse {
@@ -59,9 +84,13 @@ export interface SemanticSidecarSearchResponse {
   k: number;
   model: string | null;
   lastUpdateAt: string | null;
+  /** Candidates above the absolute floor, before evidence filtering; null on legacy windows. */
+  candidateCount?: number | null;
   results: SemanticSidecarChunk[];
-  /** Weak-band hits (MIN_SIMILARITY <= score < CLEAR_SIMILARITY). */
+  /** Hits with weaker relevance, exposed separately from the main results. */
   weakResults: SemanticSidecarChunk[];
+  /** Milliseconds per window; absent on older sidecars. */
+  timings?: SemanticSidecarTimings;
 }
 
 /**

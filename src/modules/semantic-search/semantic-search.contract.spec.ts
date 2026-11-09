@@ -65,6 +65,16 @@ const CONTRACT_TYPE_ALIASES: Record<string, string> = {
   SearchHit: 'hit',
   SemanticSidecarSearchResponse: 'response',
   SearchResponse: 'response',
+  SemanticSidecarTimings: 'timings',
+  SearchTimings: 'timings',
+  DensePhaseTiming: 'densePhase',
+  EmbeddingPhaseTiming: 'embeddingPhase',
+  SemanticEmbeddingPhase: 'embeddingPhase',
+  EmbeddingStagesTiming: 'embeddingStages',
+  SemanticEmbeddingStages: 'embeddingStages',
+  SemanticDensePhase: 'densePhase',
+  DenseStagesTiming: 'denseStages',
+  SemanticDenseStages: 'denseStages',
 };
 
 const canonicalType = (typeText: string): string => {
@@ -93,7 +103,7 @@ const parseTsSource = (filePath: string): ts.SourceFile =>
   );
 
 /**
- * Parse one interface declaration from the TS contract file. Only the two
+ * Parse one interface declaration from the TS contract file. Only the
  * wire interfaces are pinned; backend-owned response types are out of scope
  * (they never cross the sidecar boundary).
  */
@@ -210,13 +220,35 @@ const pyHealthKeys = (): string[] => {
 };
 
 describe('semantic sidecar cross-language contract', () => {
-  it('pins SearchHit (Python) to SemanticSidecarChunk (TS) field-by-field', () => {
-    expect(pyModels().SearchHit).toEqual(tsInterface('SemanticSidecarChunk'));
-  });
+  it('pins the active search wire contract during the rolling release', () => {
+    const models = pyModels();
+    const hit = tsInterface('SemanticSidecarChunk');
+    const response = tsInterface('SemanticSidecarSearchResponse');
+    if (Object.hasOwn(models.SearchHit, 'rerankScore')) {
+      // The previous sidecar is still serving when the backend deploys first.
+      const {
+        candidateCount: _candidateCount,
+        timings: _timings,
+        ...legacy
+      } = response;
+      expect(models.SearchHit).toEqual({ ...hit, rerankScore: 'null|number' });
+      expect(models.SearchResponse).toEqual(legacy);
+      expect(models.SearchTimings).toBeUndefined();
+      return;
+    }
 
-  it('pins SearchResponse (Python) to SemanticSidecarSearchResponse (TS) field-by-field', () => {
-    expect(pyModels().SearchResponse).toEqual(
-      tsInterface('SemanticSidecarSearchResponse'),
+    expect(models.SearchHit).toEqual(hit);
+    expect(models.SearchResponse).toEqual(response);
+    expect(models.SearchTimings).toEqual(tsInterface('SemanticSidecarTimings'));
+    expect(models.DensePhaseTiming).toEqual(tsInterface('SemanticDensePhase'));
+    expect(models.EmbeddingPhaseTiming).toEqual(
+      tsInterface('SemanticEmbeddingPhase'),
+    );
+    expect(models.EmbeddingStagesTiming).toEqual(
+      tsInterface('SemanticEmbeddingStages'),
+    );
+    expect(models.DenseStagesTiming).toEqual(
+      tsInterface('SemanticDenseStages'),
     );
   });
 

@@ -51,3 +51,6 @@ lerna-debug.log*
 
 # TypeScript incremental compiler metadata
 *.tsbuildinfo
+
+# Local Swagger and Bruno workspace
+/.local-openapi/

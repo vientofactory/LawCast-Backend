@@ -1,3 +1,4 @@
+import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsString, IsUrl, MaxLength } from 'class-validator';
 
 export class RemoveWebPushSubscriptionDto {
@@ -8,5 +9,11 @@ export class RemoveWebPushSubscriptionDto {
     { message: 'Please enter a valid HTTPS endpoint URL' },
   )
   @MaxLength(4000, { message: 'Endpoint is too long' })
+  @ApiProperty({
+    maxLength: 4000,
+    minLength: 1,
+    format: 'uri',
+    pattern: '^https://',
+  })
   endpoint: string;
 }

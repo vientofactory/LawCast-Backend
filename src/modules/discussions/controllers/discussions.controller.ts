@@ -1,3 +1,4 @@
+import { ApiQuery, ApiTags } from '@nestjs/swagger';
 import {
   Body,
   Controller,
@@ -24,6 +25,7 @@ import { IpMaskingUtil } from '../utils/ip-masking.util';
 import { DiscussionsRateLimitService } from '../discussions-rate-limit.service';
 import { DiscussionsRateLimitFilter } from './discussions-rate-limit.filter';
 
+@ApiTags('토론')
 @Controller('api')
 @UseFilters(DiscussionsRateLimitFilter)
 export class DiscussionsController {
@@ -36,6 +38,16 @@ export class DiscussionsController {
    * Lists discussion threads for one legislative notice.
    */
   @Get('notices/:num/discussions')
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    schema: { type: 'integer', default: 1 },
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    schema: { type: 'integer', default: 20 },
+  })
   async getNoticeThreads(
     @Param('num', ParseIntPipe) noticeNum: number,
     @Req() req: Request,
@@ -58,6 +70,17 @@ export class DiscussionsController {
    * Lists discussion threads across all legislative notices.
    */
   @Get('discussions/threads')
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    schema: { type: 'integer', default: 1 },
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    schema: { type: 'integer', default: 20 },
+  })
+  @ApiQuery({ name: 'status', required: false, enum: DiscussionThreadStatus })
   async getAllThreads(
     @Req() req: Request,
     @Query('page') page?: string,
@@ -107,6 +130,12 @@ export class DiscussionsController {
    * Returns one thread's detail with its full comment list.
    */
   @Get('discussions/threads/:threadId')
+  @ApiQuery({ name: 'cursor', required: false, schema: { type: 'integer' } })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    schema: { type: 'integer', default: 20 },
+  })
   async getThreadDetail(
     @Param('threadId', ParseIntPipe) threadId: number,
     @Query('cursor') cursorParam: string | undefined,
