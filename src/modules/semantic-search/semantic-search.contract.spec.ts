@@ -258,6 +258,7 @@ describe('semantic sidecar cross-language contract', () => {
     // MAX_K defaults live in config.py (env-injectable); the pin compares
     // those code defaults, so `expect(...).toBeDefined()` catches a parse
     // miss as a failure rather than a silent undefined pass.
+    expect(tsConstants().MAX_K).toBe(20);
     expect(pyConstants().MAX_K).toBeDefined();
     expect(pyConstants().MAX_K).toBe(tsConstants().SIDE_CAR_MAX_CHUNK_K);
   });

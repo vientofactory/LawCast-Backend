@@ -1,3 +1,4 @@
+import { MAX_K } from './semantic-search.constants';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { APP_CONSTANTS } from '../../config/app.config';
@@ -179,8 +180,13 @@ export class NoticesHybridSearchService {
   ) {
     this.autoExact =
       configService.get<boolean>('semanticSearch.autoExact') ?? true;
-    this.maxNotices =
-      configService.get<number>('semanticSearch.hybridMaxNotices') ?? 100;
+    this.maxNotices = Math.min(
+      Math.max(
+        1,
+        configService.get<number>('semanticSearch.hybridMaxNotices') ?? MAX_K,
+      ),
+      MAX_K,
+    );
   }
 
   async search(params: BoardSearchParams): Promise<BoardSearchResult> {

@@ -51,7 +51,8 @@ export class SemanticSearchService {
    * Starts at the compiled default so the first search behaves exactly like
    * the pre-negotiation code when health is unreachable or too old to report.
    */
-  private chunkCap = SIDE_CAR_MAX_CHUNK_K;
+  private chunkCap: number;
+  private readonly chunkCapCeiling: number;
   /** Date.now() of the last cap read; stamped even when the read fails. */
   private chunkCapReadAt = 0;
   /**
@@ -89,6 +90,10 @@ export class SemanticSearchService {
       configService.get<'off' | 'shadow' | 'enforce'>(
         'semanticSearch.lexicalGate',
       ) ?? 'off';
+    const ceiling = configService.get<number>('semanticSearch.chunkCapCeiling');
+    this.chunkCapCeiling =
+      ceiling !== undefined && ceiling > 0 ? ceiling : Number.POSITIVE_INFINITY;
+    this.chunkCap = Math.min(SIDE_CAR_MAX_CHUNK_K, this.chunkCapCeiling);
     this.lexicalBypassScore =
       configService.get<number>('semanticSearch.lexicalBypassScore') ?? 0.6;
     this.requestTimeout =
@@ -379,7 +384,7 @@ export class SemanticSearchService {
       Number.isInteger(reported) &&
       reported >= 1
     ) {
-      this.chunkCap = reported;
+      this.chunkCap = Math.min(reported, this.chunkCapCeiling);
     }
   }
 

@@ -76,12 +76,13 @@ export class SemanticSearchController {
    * unchanged.
    */
   private parseK(raw?: string): number {
+    const invalid = () =>
+      new BadRequestException(`k는 1에서 ${MAX_K} 사이의 정수여야 합니다.`);
+    if (raw !== undefined && typeof raw !== 'string') throw invalid();
     const trimmed = (raw ?? '').trim();
     if (trimmed === '') {
       return DEFAULT_K;
     }
-    const invalid = () =>
-      new BadRequestException(`k는 1에서 ${MAX_K} 사이의 정수여야 합니다.`);
     if (!/^[0-9]+$/.test(trimmed)) {
       throw invalid();
     }
