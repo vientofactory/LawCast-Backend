@@ -1,13 +1,21 @@
 import {
   BadRequestException,
   Injectable,
+  type OnModuleDestroy,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { NoticeSearchService } from '../crawling/notice-search.service';
 import { LoggerUtils } from '../../utils/logger.utils';
-import { measureSemanticSidecarCall } from './semantic-search-timing';
+import {
+  measureSemanticSidecarCall,
+  semanticSidecarErrorStatus,
+  TRACE_HEADER,
+  SEARCH_ATTEMPT_HEADER,
+  type SidecarTrace,
+} from './semantic-search-timing';
+import { SemanticSearchGrpcClient } from './semantic-search-grpc.client';
 import {
   CHUNK_FETCH_GROWTH,
   CHUNK_FETCH_INITIAL_FACTOR,
@@ -28,11 +36,12 @@ const FALLBACK_REASON_DISABLED =
   '의미 검색 기능이 비활성화되어 있어 키워드 검색 결과를 반환합니다.';
 
 @Injectable()
-export class SemanticSearchService {
+export class SemanticSearchService implements OnModuleDestroy {
   private readonly logger = LoggerUtils.getContextLogger(
     SemanticSearchService.name,
   );
-  private readonly http: AxiosInstance;
+  private readonly http?: AxiosInstance;
+  private readonly grpc?: SemanticSearchGrpcClient;
   private readonly enabled: boolean;
   /**
    * Per-window ceiling (ms) for one sidecar `/search` round trip
@@ -105,10 +114,19 @@ export class SemanticSearchService {
       configuredTotal && configuredTotal > 0
         ? configuredTotal
         : this.requestTimeout;
-    this.http = axios.create({
-      baseURL: configService.get<string>('semanticSearch.apiUrl'),
-      timeout: this.requestTimeout,
-    });
+    const grpcTarget = configService.get<string>('semanticSearch.grpcTarget');
+    if (this.enabled && grpcTarget) {
+      this.grpc = new SemanticSearchGrpcClient(grpcTarget);
+    } else {
+      this.http = axios.create({
+        baseURL: configService.get<string>('semanticSearch.apiUrl'),
+        timeout: this.requestTimeout,
+      });
+    }
+  }
+
+  onModuleDestroy() {
+    this.grpc?.close();
   }
 
   /**
@@ -242,25 +260,18 @@ export class SemanticSearchService {
     query: string,
     k: number,
   ): Promise<SemanticSearchResponse> {
-    if (axios.isAxiosError(error)) {
-      const status: number | undefined = error.response?.status;
-      if (status && status >= 400 && status < 500) {
-        this.logger.warn(
-          `semantic sidecar rejected the request (status ${status}): ${error.message}`,
-        );
-        throw new BadRequestException(
-          '의미 검색 요청이 거부되었습니다. 요청 형식을 확인해 주세요.',
-        );
-      }
+    const status = semanticSidecarErrorStatus(error);
+    if (status && status >= 400 && status < 500) {
       this.logger.warn(
-        `semantic sidecar unavailable (${status ?? this.describeError(error)}); ` +
-          'falling back to keyword search',
+        `semantic sidecar rejected the request (status ${status}): ${this.describeError(error)}`,
       );
-    } else {
-      this.logger.warn(
-        `semantic search failed (${this.describeError(error)}); falling back to keyword search`,
+      throw new BadRequestException(
+        '의미 검색 요청이 거부되었습니다. 요청 형식을 확인해 주세요.',
       );
     }
+    this.logger.warn(
+      `semantic sidecar unavailable (${status ?? this.describeError(error)}); falling back to keyword search`,
+    );
     return this.keywordFallback(query, k, FALLBACK_REASON_UNAVAILABLE);
   }
 
@@ -358,8 +369,10 @@ export class SemanticSearchService {
     }
     this.chunkCapReadAt = now;
     try {
-      const response = await measureSemanticSidecarCall('/health', () =>
-        this.http.get<SemanticSidecarHealthResponse>('/health'),
+      const response = await measureSemanticSidecarCall(
+        '/health',
+        (trace) => this.readSidecarHealth(trace),
+        this.grpc ? 'grpc' : 'http',
       );
       this.adoptChunkCap(response.data);
     } catch (error) {
@@ -390,7 +403,7 @@ export class SemanticSearchService {
 
   /** A 422 from `/search`: query or k outside the sidecar's accepted bounds. */
   private isChunkWindowRejected(error: unknown): boolean {
-    return axios.isAxiosError(error) && error.response?.status === 422;
+    return semanticSidecarErrorStatus(error) === 422;
   }
 
   /**
@@ -528,8 +541,7 @@ export class SemanticSearchService {
       );
     }
     try {
-      const response =
-        await this.http.get<SemanticSidecarHealthResponse>('/health');
+      const response = await this.readSidecarHealth();
       // A health read is also a fresh cap read: the frontend status poll
       // keeps the chunk cap warm for free. Only the UI subset below is
       // returned — `maxK` stays internal to this service.
@@ -548,6 +560,24 @@ export class SemanticSearchService {
     }
   }
 
+  private sidecarHeaders(trace?: SidecarTrace) {
+    return trace
+      ? {
+          [TRACE_HEADER]: trace.traceId,
+          [SEARCH_ATTEMPT_HEADER]: String(trace.attempt),
+        }
+      : undefined;
+  }
+
+  private readSidecarHealth(trace?: SidecarTrace) {
+    return this.grpc
+      ? this.grpc.health(this.requestTimeout, trace)
+      : this.http!.get<SemanticSidecarHealthResponse>(
+          '/health',
+          ...(trace ? [{ headers: this.sidecarHeaders(trace) }] : []),
+        );
+  }
+
   private async fetchChunks(
     query: string,
     chunkK: number,
@@ -555,11 +585,15 @@ export class SemanticSearchService {
   ): Promise<SemanticSidecarSearchResponse> {
     const response = await measureSemanticSidecarCall(
       '/search',
-      () =>
-        this.http.get<SemanticSidecarSearchResponse>('/search', {
-          params: { query, k: chunkK },
-          timeout: requestTimeout,
-        }),
+      (trace) =>
+        this.grpc
+          ? this.grpc.search(query, chunkK, requestTimeout, trace)
+          : this.http!.get<SemanticSidecarSearchResponse>('/search', {
+              params: { query, k: chunkK },
+              timeout: requestTimeout,
+              ...(trace && { headers: this.sidecarHeaders(trace) }),
+            }),
+      this.grpc ? 'grpc' : 'http',
       chunkK,
     );
     return response.data;

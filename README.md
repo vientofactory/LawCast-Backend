@@ -140,6 +140,7 @@ Ollama 요약은 `OLLAMA_ENABLED=true`, `OLLAMA_API_URL`, `OLLAMA_MODEL`로 설�
 
 - `NOTION_API_KEY`, `NOTION_DATABASE_ID`: 관리자 공지 읽기. 공지 작성과 공개 여부 관리는 Notion에서 합니다.
 - `DISCORD_BRIDGE_ENABLED`: Discord 운영 명령과 로그 연동. 봇 토큰·채널·관리자 ID 설정을 함께 확인합니다.
+- `FILE_MIRROR_DUMP_TIMEOUT_MS`: SQLite 덤프 자식 프로세스 실행 제한(ms). 기본값은 30분이며 업로드 시간은 포함하지 않습니다.
 - `FILE_MIRROR_ENABLED`: 민감 테이블을 제외한 SQLite 미러 업로드. 업로드 주기와 보존 옵션은 템플릿과 설정 코드에서 확인합니다.
 
 ## API 사용

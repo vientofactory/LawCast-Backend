@@ -3,6 +3,11 @@
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
-    "deleteOutDir": true
+    "deleteOutDir": true,
+    "assets": [
+      "modules/db-mirror/database-dump-child.cjs",
+      "modules/semantic-search/semantic_search.proto"
+    ],
+    "watchAssets": true
   }
 }

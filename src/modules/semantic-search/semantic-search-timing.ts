@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import axios, { type AxiosResponse } from 'axios';
+import axios from 'axios';
+import { SemanticGrpcError } from './semantic-search-grpc.client';
 import type { RequestHandler } from 'express';
 import { LoggerUtils } from '../../utils/logger.utils';
 import type {
@@ -10,8 +11,18 @@ import type {
   SemanticSidecarTimings,
 } from './semantic-search.types';
 
+export const SEARCH_ATTEMPT_HEADER = 'x-lawcast-search-attempt';
+export type SidecarTransport = 'http' | 'grpc';
+
+export interface SidecarTrace {
+  traceId: string;
+  attempt: number;
+}
+
 interface SidecarCall {
   path: '/health' | '/search';
+  transport: SidecarTransport;
+  grpcCode?: number;
   chunkK?: number;
   startMs: number;
   roundTripMs?: number;
@@ -20,7 +31,7 @@ interface SidecarCall {
   timings?: SemanticSidecarTimings;
 }
 
-const TRACE_HEADER = 'x-lawcast-search-trace';
+export const TRACE_HEADER = 'x-lawcast-search-trace';
 const TIMING_HEADER = 'x-lawcast-search-timing';
 const MAX_HEADER_CALLS = 12;
 const MAX_HEADER_BYTES = 4096;
@@ -32,6 +43,7 @@ const EMBEDDING_STAGE_KEYS = [
 const DENSE_STAGE_KEYS = ['embedding', 'faiss', 'classification'] as const;
 const TRACE_ID = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i;
 const searchTrace = new AsyncLocalStorage<{
+  traceId: string;
   started: number;
   sidecarCalls: SidecarCall[];
 }>();
@@ -140,37 +152,53 @@ export const traceSemanticSearchRequest: RequestHandler = (req, res, next) => {
       sidecarCalls,
     });
   });
-  searchTrace.run({ started, sidecarCalls }, next);
+  searchTrace.run({ traceId, started, sidecarCalls }, next);
 };
+
+export function semanticSidecarErrorStatus(error: unknown): number | undefined {
+  if (error instanceof SemanticGrpcError) return error.sidecarStatus;
+  if (axios.isAxiosError(error)) return error.response?.status;
+}
 
 export function measureSemanticSidecarCall<T>(
   path: SidecarCall['path'],
-  send: () => Promise<AxiosResponse<T>>,
+  send: (correlation?: SidecarTrace) => Promise<{ status?: number; data: T }>,
+  transport: SidecarTransport,
   chunkK?: number,
-): Promise<AxiosResponse<T>> {
+): Promise<{ status?: number; data: T }> {
   const trace = searchTrace.getStore();
   if (!trace) return send();
 
   const started = performance.now();
   const call: SidecarCall = {
     path,
+    transport,
     chunkK,
     startMs: Number((started - trace.started).toFixed(2)),
     outcome: 'pending',
   };
   trace.sidecarCalls.push(call);
-  return send()
+  return send({ traceId: trace.traceId, attempt: trace.sidecarCalls.length })
     .then((response) => {
-      call.status = response.status;
+      if (transport === 'grpc') call.grpcCode = 0;
+      else call.status = response.status;
       call.outcome = 'ok';
       if (path === '/search') {
-        const { denseMs, annotateMs, totalMs, denseStages } =
+        const {
+          denseMs,
+          annotateMs,
+          totalMs,
+          denseStages,
+          admissionMs,
+          rankWaitMs,
+        } =
           (response.data as { timings?: SemanticSidecarTimings })?.timings ??
           {};
         if (
           isDuration(denseMs) &&
           isDuration(annotateMs) &&
-          isDuration(totalMs)
+          isDuration(totalMs) &&
+          denseMs + annotateMs <= totalMs + 1e-6
         ) {
           const stages = readDenseStages(denseStages, denseMs);
           call.timings = {
@@ -178,6 +206,10 @@ export function measureSemanticSidecarCall<T>(
             annotateMs,
             totalMs,
             ...(stages && { denseStages: stages }),
+            ...(isDuration(admissionMs) &&
+              admissionMs <= denseMs && { admissionMs }),
+            ...(isDuration(rankWaitMs) &&
+              rankWaitMs <= denseMs && { rankWaitMs }),
           };
         }
       }
@@ -185,7 +217,11 @@ export function measureSemanticSidecarCall<T>(
     })
     .catch((error: unknown) => {
       call.outcome = 'error';
-      if (axios.isAxiosError(error)) call.status = error.response?.status;
+      if (transport === 'grpc') {
+        if (error instanceof SemanticGrpcError) call.grpcCode = error.grpcCode;
+      } else if (axios.isAxiosError(error)) {
+        call.status = error.response?.status;
+      }
       throw error;
     })
     .finally(() => {

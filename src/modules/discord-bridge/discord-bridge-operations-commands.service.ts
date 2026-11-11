@@ -684,17 +684,28 @@ export class DiscordBridgeOperationsCommandsService {
       strict: false,
     });
 
+    const reportFailure = (error: unknown) =>
+      interaction
+        .editReply(
+          `❌ Database mirror upload failed: ${error instanceof Error ? error.message : String(error)}`,
+        )
+        .catch(() => {});
+
     try {
-      dbMirrorService.runMirrorJob({ force: true });
+      const outcome = dbMirrorService.runMirrorJob({ force: true }).then(
+        () => ({ ok: true }) as const,
+        (error: unknown) => ({ ok: false, error }) as const,
+      );
       await interaction
         .editReply('✅ Database mirror upload triggered successfully.')
         .catch(() => {});
-    } catch (error) {
-      await interaction
-        .editReply(
-          `❌ Database mirror upload failed: ${(error as Error).message}`,
-        )
+      void outcome
+        .then((result) => {
+          if (result.ok === false) return reportFailure(result.error);
+        })
         .catch(() => {});
+    } catch (error) {
+      await reportFailure(error);
     }
   }
 }

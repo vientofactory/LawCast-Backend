@@ -252,6 +252,13 @@ describe('semantic sidecar cross-language contract', () => {
     );
   });
 
+  it('ships the same protobuf schema in both submodules', () => {
+    const name = 'semantic_search.proto';
+    expect(readContractSource(path.join(__dirname, name))).toBe(
+      readContractSource(path.join(path.dirname(PY_APP_PATH), name)),
+    );
+  });
+
   it('pins the sidecar chunk-window cap (MAX_K) to SIDE_CAR_MAX_CHUNK_K', () => {
     // DEFAULT_K is deliberately not pinned: the sidecar default counts
     // chunks while the API default counts notices — different semantics.

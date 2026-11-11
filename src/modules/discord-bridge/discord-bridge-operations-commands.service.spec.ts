@@ -636,7 +636,9 @@ describe('DiscordBridgeOperationsCommandsService', () => {
 
   describe('mirror-upload command', () => {
     it('defers ephemerally and triggers the mirror job', async () => {
-      const dbMirrorService = { runMirrorJob: jest.fn() };
+      const dbMirrorService = {
+        runMirrorJob: jest.fn().mockResolvedValue(undefined),
+      };
       const service = createService(jest.fn().mockReturnValue(dbMirrorService));
       const interaction = createInteraction('mirror-upload');
 
@@ -650,6 +652,25 @@ describe('DiscordBridgeOperationsCommandsService', () => {
       });
       expect(interaction.editReply).toHaveBeenCalledWith(
         '✅ Database mirror upload triggered successfully.',
+      );
+    });
+
+    it('reports a rejected background mirror after acknowledging it', async () => {
+      const dbMirrorService = {
+        runMirrorJob: jest.fn().mockRejectedValue(new Error('dump timed out')),
+      };
+      const service = createService(jest.fn().mockReturnValue(dbMirrorService));
+      const interaction = createInteraction('mirror-upload');
+
+      await service.execute(interaction, ctx);
+      await Promise.resolve();
+      expect(interaction.editReply).toHaveBeenNthCalledWith(
+        1,
+        '✅ Database mirror upload triggered successfully.',
+      );
+      expect(interaction.editReply).toHaveBeenNthCalledWith(
+        2,
+        '❌ Database mirror upload failed: dump timed out',
       );
     });
 

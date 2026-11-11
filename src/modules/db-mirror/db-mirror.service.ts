@@ -6,6 +6,7 @@ import { logAndBridge } from '../../utils/bridge-log.utils';
 import { DatabaseDumpService } from './database-dump.service';
 import { FileKiwiClientService } from './file-kiwi-client.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
+import { measureMirrorPhase } from './mirror-phase-metrics';
 
 @Injectable()
 export class DbMirrorService {
@@ -18,7 +19,7 @@ export class DbMirrorService {
     private readonly fileKiwiClientService: FileKiwiClientService,
   ) {}
 
-  async onModuleInit(): Promise<void> {
+  onModuleInit(): void {
     const testUploadOnStartup =
       this.configService.get<boolean>(
         'fileMirror.testUploadOnStartup',
@@ -38,7 +39,11 @@ export class DbMirrorService {
       discordBridge: this.resolveDiscordBridge(),
     });
 
-    await this.runMirrorJob();
+    // A mirror failure must not prevent the API from starting.
+    void this.runMirrorJob().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Startup database mirror job failed: ${message}`);
+    });
   }
 
   async runMirrorJob(options?: { force?: boolean }): Promise<void> {
@@ -96,10 +101,13 @@ export class DbMirrorService {
         throw error;
       }
 
-      const upload = await this.fileKiwiClientService.uploadFile({
-        filePath: dump.dumpPath,
-        title: `${titlePrefix}-${dump.dumpFileName}`,
-      });
+      const { dumpPath, dumpFileName } = dump;
+      const upload = await measureMirrorPhase(dumpFileName, 'upload', () =>
+        this.fileKiwiClientService.uploadFile({
+          filePath: dumpPath,
+          title: `${titlePrefix}-${dumpFileName}`,
+        }),
+      );
 
       logAndBridge({
         method: 'log',
