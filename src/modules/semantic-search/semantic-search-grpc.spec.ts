@@ -10,6 +10,7 @@ import {
 import { loadSync } from '@grpc/proto-loader';
 import type { ConfigService } from '@nestjs/config';
 import type { NoticeSearchService } from '../crawling/notice-search.service';
+import { NoticesHybridSearchService } from './notices-hybrid-search.service';
 import { SemanticSearchService } from './semantic-search.service';
 import {
   SEARCH_ATTEMPT_HEADER,
@@ -56,7 +57,9 @@ describe('semantic search over a real gRPC channel', () => {
       httpServer.close();
     }
   };
-  let failure: 'invalid' | 'unavailable' | 'stall' | null;
+  let keywordSearch: jest.Mock;
+  let withWeakTail: boolean;
+  let failure: 'invalid' | 'unavailable' | 'stall' | 'health' | null;
   const query = '세입자 보호';
 
   beforeEach(async () => {
@@ -64,6 +67,8 @@ describe('semantic search over a real gRPC channel', () => {
     requests = [];
     correlations = [];
     failure = null;
+    withWeakTail = false;
+    keywordSearch = jest.fn().mockResolvedValue({ items: [] });
     server = new Server();
     server.addService(definition, {
       GetHealth: ({ metadata }, reply) => {
@@ -72,6 +77,13 @@ describe('semantic search over a real gRPC channel', () => {
           attempt: metadata.get(SEARCH_ATTEMPT_HEADER)[0],
         });
         requests.push('health');
+        if (failure === 'health') {
+          reply({
+            code: status.UNAVAILABLE,
+            message: 'health temporarily unavailable',
+          });
+          return;
+        }
         reply(null, { status: 'ready', indexedChunks: 1, maxK });
       },
       Search: ({ request, metadata }, reply) => {
@@ -103,6 +115,15 @@ describe('semantic search over a real gRPC channel', () => {
             admissionMs: 0.25,
             rankWaitMs: 0,
           },
+          weakResults: withWeakTail
+            ? [2, 3].map((noticeNum) => ({
+                chunkId: `${noticeNum}-1`,
+                noticeNum,
+                subject: '관련 법률안',
+                score: 0.3,
+                text: query,
+              }))
+            : [],
           results: [
             {
               chunkId: '1-1',
@@ -132,7 +153,7 @@ describe('semantic search over a real gRPC channel', () => {
         get: (key: keyof typeof config) => config[key],
       } as ConfigService,
       {
-        searchNotices: async () => ({ items: [] }),
+        searchNotices: keywordSearch,
       } as unknown as NoticeSearchService,
     );
   });
@@ -140,6 +161,123 @@ describe('semantic search over a real gRPC channel', () => {
   afterEach(() => {
     service?.onModuleDestroy();
     server?.forceShutdown();
+  });
+
+  it('preserves keyword rows when the gRPC engine is unavailable', async () => {
+    failure = 'unavailable';
+    keywordSearch.mockResolvedValueOnce({
+      items: [{ num: 99, subject: '키워드 결과', committee: '법제사법위원회' }],
+    });
+    const response = await service.searchSemantic(query, 2);
+    expect(response).toMatchObject({
+      mode: 'keyword_fallback',
+      results: [{ noticeNum: 99, score: null }],
+      weakResults: [],
+    });
+    expect(keywordSearch).toHaveBeenCalledWith({
+      keyword: query,
+      page: 1,
+      limit: 2,
+      includeDone: true,
+    });
+  });
+
+  it('keeps search available when only the gRPC health probe fails', async () => {
+    failure = 'health';
+    await expect(service.getEngineHealth()).rejects.toMatchObject({
+      status: 503,
+    });
+    const response = await service.searchSemantic(query, 1);
+    expect(response.mode).toBe('semantic');
+    expect(response.results.map((hit) => hit.noticeNum)).toEqual([1]);
+    expect(keywordSearch).not.toHaveBeenCalled();
+  });
+
+  it('returns keyword rows after the native gRPC connection is lost', async () => {
+    server.forceShutdown();
+    keywordSearch.mockResolvedValueOnce({
+      items: [{ num: 99, subject: '키워드 결과', committee: '법제사법위원회' }],
+    });
+    await expect(service.searchSemantic(query, 2)).resolves.toMatchObject({
+      mode: 'keyword_fallback',
+      results: [{ noticeNum: 99 }],
+      weakResults: [],
+    });
+  });
+
+  it('preserves an appendable weak tier separately from top results over gRPC', async () => {
+    withWeakTail = true;
+    const response = await service.searchSemantic(query, 2);
+    expect(response.mode).toBe('semantic');
+    expect(response.results.map((hit) => hit.noticeNum)).toEqual([1]);
+    expect(response.weakResults.map((hit) => hit.noticeNum)).toEqual([2, 3]);
+    expect(keywordSearch).not.toHaveBeenCalled();
+  });
+
+  it('appends only cache-only keyword rows after gRPC ranked results across pages', async () => {
+    const archiveRow = (num: number) => ({
+      num,
+      subject: '임대차보호법',
+      committee: '법제사법위원회',
+      proposerCategory: '의원',
+      link: '',
+      attachments: { pdfFile: '', hwpFile: '' },
+    });
+    const keywordQuery = jest.fn();
+    const queryService = {
+      parseDateRange: () => ({ startDateRaw: '', endDateRaw: '' }),
+      getCacheOnlySearchMatches: jest
+        .fn()
+        .mockResolvedValue([archiveRow(1), archiveRow(99)]),
+      getArchivedNotices: keywordQuery,
+    };
+    const archiveService = {
+      getArchiveNoticesByRankedNums: jest.fn(
+        async ({ offset }: { offset: number }) => ({
+          items: offset === 0 ? [archiveRow(1)] : [],
+          matchingNoticeNums: [1],
+        }),
+      ),
+      getArchiveCount: jest.fn().mockResolvedValue(50),
+    };
+    const changes = {
+      getChangeEventCountsByNoticeNums: jest.fn().mockResolvedValue(new Map()),
+    };
+    const hybrid = new NoticesHybridSearchService(
+      { get: () => undefined } as unknown as ConfigService,
+      service,
+      queryService as unknown as ConstructorParameters<
+        typeof NoticesHybridSearchService
+      >[2],
+      archiveService as unknown as ConstructorParameters<
+        typeof NoticesHybridSearchService
+      >[3],
+      changes as unknown as ConstructorParameters<
+        typeof NoticesHybridSearchService
+      >[4],
+    );
+    const params = {
+      searchMode: 'semantic' as const,
+      search: query,
+      page: 1,
+      limit: 1,
+    };
+    const first = await hybrid.search(params);
+    const second = await hybrid.search({ ...params, page: 2 });
+    expect(first.items.map((item) => item.num)).toEqual([1]);
+    expect(first.items[0].relevance).toBeDefined();
+    expect(second.items.map((item) => item.num)).toEqual([99]);
+    expect(second.items[0].relevance).toBeUndefined();
+    expect(second).toMatchObject({
+      total: 2,
+      totalPages: 2,
+      appliedMode: 'semantic',
+    });
+    expect(keywordQuery).not.toHaveBeenCalled();
+    expect(queryService.getCacheOnlySearchMatches).toHaveBeenCalledWith({
+      search: query,
+      proposer: '',
+    });
   });
 
   it('normalizes null stamps and empty tiers and refreshes a stale cap once', async () => {
