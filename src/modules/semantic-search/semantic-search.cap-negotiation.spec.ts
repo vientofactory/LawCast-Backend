@@ -315,6 +315,7 @@ describe('semantic sidecar cap negotiation (real HTTP)', () => {
           sidecarCalls: [
             expect.objectContaining({
               path: '/search',
+              transport: 'http',
               chunkK: 150,
               status: 422,
               outcome: 'error',

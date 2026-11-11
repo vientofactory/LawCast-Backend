@@ -74,6 +74,8 @@ export interface SemanticDenseStages {
 export interface SemanticSidecarTimings {
   denseMs: number;
   annotateMs: number;
+  admissionMs?: number | null;
+  rankWaitMs?: number | null;
   totalMs: number;
   /** Offsets relative to Dense; absent on older engines and null when skipped. */
   denseStages?: SemanticDenseStages | null;

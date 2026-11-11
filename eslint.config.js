@@ -10,6 +10,13 @@ module.exports = [
   },
   js.configs.recommended,
   {
+    files: ['src/modules/db-mirror/database-dump-child.cjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { process: 'readonly' },
+    },
+  },
+  {
     files: ['**/*.ts', '**/*.tsx'],
     languageOptions: {
       parser: tsParser,

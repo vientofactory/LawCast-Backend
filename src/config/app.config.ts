@@ -34,6 +34,7 @@ export interface AppConfig {
   semanticSearch: {
     enabled: boolean;
     apiUrl: string;
+    grpcTarget: string;
     timeout: number;
     /**
      * Freshness window (ms) for the sidecar chunk-window cap read from
@@ -638,6 +639,7 @@ export default (): AppConfig => ({
     enabled: parseBooleanWithDefault(process.env.SEMANTIC_SEARCH_ENABLED, true),
     apiUrl:
       process.env.SEMANTIC_SEARCH_API_URL?.trim() || 'http://127.0.0.1:8300',
+    grpcTarget: process.env.SEMANTIC_SEARCH_GRPC_TARGET?.trim() || '',
     timeout: parseInt(process.env.SEMANTIC_SEARCH_TIMEOUT, 10) || 10000,
     totalTimeoutMs: parseTotalTimeout(
       process.env.SEMANTIC_SEARCH_TOTAL_TIMEOUT,
