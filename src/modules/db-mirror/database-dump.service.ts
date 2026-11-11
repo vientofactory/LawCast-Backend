@@ -8,6 +8,7 @@ import { LoggerUtils } from '../../utils/logger.utils';
 import { logAndBridge } from '../../utils/bridge-log.utils';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { logMirrorMetric, measureMirrorPhase } from './mirror-phase-metrics';
+import { resolveChildEntrypoint } from '../../utils/child-process-entrypoint.util';
 import { superviseDumpChild } from './dump-child-supervisor';
 
 const DEFAULT_DUMP_TIMEOUT_MS = 30 * 60 * 1000;
@@ -168,7 +169,7 @@ export class DatabaseDumpService implements OnModuleDestroy {
         ? Math.min(MAX_TIMER_MS, requestedTimeout)
         : DEFAULT_DUMP_TIMEOUT_MS;
     return superviseDumpChild({
-      entrypoint: path.join(__dirname, 'database-dump-child.cjs'),
+      entrypoint: resolveChildEntrypoint(__dirname, 'database-dump-child'),
       sourcePath,
       dumpPath,
       dumpFileName,

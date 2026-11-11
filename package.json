@@ -1,6 +1,6 @@
 {
   "name": "lawcast-backend",
-  "version": "3.1.2",
+  "version": "3.1.3",
   "description": "",
   "author": "vientorepublic",
   "private": true,
@@ -9,17 +9,14 @@
   },
   "license": "MIT",
   "scripts": {
-    "build": "npm run check:dump-child && npm run check:native && nest build",
-    "format": "prettier --write \"src/**/*.ts\" && npm run format:dump-child",
-    "format:dump-child": "prettier --write src/modules/db-mirror/database-dump-child.cjs",
+    "build": "npm run check && nest build",
+    "format": "prettier --write \"src/**/*.ts\"",
     "start": "NODE_ENV=production nest start",
     "start:dev": "NODE_ENV=development nest start --watch",
     "start:openapi": "sh scripts/start-local-openapi.sh",
     "start:debug": "NODE_ENV=development nest start --debug --watch",
     "start:prod": "NODE_ENV=production node dist/main",
-    "lint": "eslint \"{src,apps,libs}/**/*.ts\" --fix && npm run lint:dump-child",
-    "lint:dump-child": "eslint src/modules/db-mirror/database-dump-child.cjs && prettier --check src/modules/db-mirror/database-dump-child.cjs",
-    "check:dump-child": "tsc -p tsconfig.dump-child.json",
+    "lint": "eslint \"{src,apps,libs}/**/*.ts\" --fix",
     "test": "npm run test:vendor && NODE_OPTIONS=--experimental-vm-modules jest --runInBand",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
@@ -27,7 +24,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "check:native": "node node_modules/typescript-native/bin/tsc --noEmit",
     "test:vendor": "node --test vendor/deepmerge/security.test.cjs",
-    "test:redis-migration": "node scripts/verify-redis-migration.cjs"
+    "test:redis-migration": "node scripts/verify-redis-migration.cjs",
+    "check": "tsc --noEmit && npm run check:native"
   },
   "repository": {
     "type": "git",

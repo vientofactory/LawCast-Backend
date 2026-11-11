@@ -1,3 +1,4 @@
+import { runScheduledChainAuditInternal } from './change-tracking-chain-audit.utils';
 import {
   describe,
   expect,
@@ -18,6 +19,24 @@ import {
   DEFAULT_TRACKED_FIELDS,
   getTrackedFieldsForCanonVersion,
 } from './change-tracking-diff.utils';
+
+function auditFixture(
+  service: ChangeTrackingService,
+  scope: 'daily' | 'weekly',
+) {
+  const fixture = service as any;
+  return runScheduledChainAuditInternal(
+    {
+      changeEventRepository: fixture.changeEventRepository,
+      changeDetailRepository: fixture.changeDetailRepository,
+      archiveRepository: fixture.noticeArchiveRepository,
+      baselineEventHeight: 1,
+      logger: { log() {}, error() {} },
+      buildDiffEvent: (input) => service.buildDiffEvent(input),
+    },
+    scope,
+  );
+}
 
 describe('ChangeTrackingService (diffchain batching)', () => {
   const createService = () => {
@@ -1197,7 +1216,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       undefined as any,
     );
 
-    const report = await service.runScheduledChainAudit('daily');
+    const report = await auditFixture(service, 'daily');
 
     expect(report.failureCount).toBe(0);
     expect(report.noticeCount).toBe(1);
@@ -1284,7 +1303,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       undefined as any,
     );
 
-    const report = await service.runScheduledChainAudit('daily');
+    const report = await auditFixture(service, 'daily');
 
     expect(report.failureCount).toBe(0);
     expect(report.noticeCount).toBe(1);
@@ -1405,7 +1424,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       undefined as any,
     );
 
-    const report = await service.runScheduledChainAudit('daily');
+    const report = await auditFixture(service, 'daily');
 
     expect(report.failureCount).toBe(0);
     expect(report.noticeCount).toBe(1);
@@ -1526,7 +1545,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       undefined as any,
     );
 
-    const report = await service.runScheduledChainAudit('daily');
+    const report = await auditFixture(service, 'daily');
 
     expect(report.failureCount).toBe(0);
   });
@@ -1685,7 +1704,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       undefined as any,
     );
 
-    const report = await service.runScheduledChainAudit('daily');
+    const report = await auditFixture(service, 'daily');
 
     expect(report.failureCount).toBe(1);
     expect(report.failures[0]?.code).toBe('event_hash_mismatch');
@@ -1809,7 +1828,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       undefined as any,
     );
 
-    const report = await service.runScheduledChainAudit('daily');
+    const report = await auditFixture(service, 'daily');
 
     expect(report.failureCount).toBe(0);
   });
@@ -1893,7 +1912,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       undefined as any,
     );
 
-    const report = await service.runScheduledChainAudit('daily');
+    const report = await auditFixture(service, 'daily');
 
     expect(report.failureCount).toBe(0);
   });
@@ -2027,7 +2046,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       undefined as any,
     );
 
-    const report = await service.runScheduledChainAudit('daily');
+    const report = await auditFixture(service, 'daily');
 
     expect(report.failureCount).toBe(0);
     expect(report.eventCount).toBe(2);
@@ -2082,7 +2101,7 @@ describe('ChangeTrackingService (diffchain batching)', () => {
       undefined as any,
     );
 
-    const report = await service.runScheduledChainAudit('daily');
+    const report = await auditFixture(service, 'daily');
 
     // The audit must query the archive repository to seed the initial state
     expect(archiveRepository.find).toHaveBeenCalled();

@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { runScheduledChainAuditInternal } from '../modules/change-tracking/change-tracking-chain-audit.utils';
 import { createHash } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
@@ -56,7 +60,26 @@ type SeedDetail = {
   afterValue?: string | null;
 };
 
+function auditFixture(
+  service: ChangeTrackingService,
+  scope: 'daily' | 'weekly',
+) {
+  const fixture = service as any;
+  return runScheduledChainAuditInternal(
+    {
+      changeEventRepository: fixture.changeEventRepository,
+      changeDetailRepository: fixture.changeDetailRepository,
+      archiveRepository: fixture.noticeArchiveRepository,
+      baselineEventHeight: 1,
+      logger: { log() {}, error() {} },
+      buildDiffEvent: (input) => service.buildDiffEvent(input),
+    },
+    scope,
+  );
+}
+
 describe('Diffchain API (e2e)', () => {
+  let fixtureDirectory: string;
   let app: INestApplication;
   let moduleRef: TestingModule;
   let dataSource: DataSource;
@@ -114,11 +137,14 @@ describe('Diffchain API (e2e)', () => {
   };
 
   beforeAll(async () => {
+    fixtureDirectory = await mkdtemp(
+      path.join(tmpdir(), 'lawcast-diffchain-e2e-'),
+    );
     moduleRef = await Test.createTestingModule({
       imports: [
         TypeOrmModule.forRoot({
           type: 'better-sqlite3',
-          database: ':memory:',
+          database: path.join(fixtureDirectory, 'fixture.sqlite'),
           autoLoadEntities: true,
           synchronize: true,
           dropSchema: true,
@@ -267,6 +293,8 @@ describe('Diffchain API (e2e)', () => {
   afterAll(async () => {
     await app?.close();
     await moduleRef?.close();
+    if (fixtureDirectory)
+      await rm(fixtureDirectory, { recursive: true, force: true });
   });
 
   it('returns the notice change timeline with detail rows in descending revision order', async () => {
@@ -438,7 +466,7 @@ describe('Diffchain API (e2e)', () => {
       undefined as any,
     );
 
-    const report = await service.runScheduledChainAudit('daily');
+    const report = await auditFixture(service, 'daily');
 
     expect(report.failureCount).toBe(0);
     const noticeReport = report.failures.find(

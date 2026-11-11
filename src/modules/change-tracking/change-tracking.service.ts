@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { type EntityManager, In, LessThan, Repository } from 'typeorm';
 import {
@@ -10,18 +14,8 @@ import {
   NoticeChangeDetail,
   type ChangeDetailType,
 } from './notice-change-detail.entity';
-import {
-  NoticeArchive,
-  NOTICE_LIFECYCLE_STATUS,
-} from '../notice/notice-archive.entity';
-import {
-  canonicalStringify,
-  computeDiff,
-  CURRENT_CANON_VERSION,
-  getTrackedFieldsForCanonVersion,
-  sha256Hex,
-  type DiffComputationResult,
-} from './change-tracking-diff.utils';
+import { NoticeArchive } from '../notice/notice-archive.entity';
+import { CURRENT_CANON_VERSION } from './change-tracking-diff.utils';
 import {
   NoticeChangeSource,
   NoticeChangeSourcePrefix,
@@ -31,7 +25,16 @@ import { NotificationBatchService } from '../notification/notification-batch.ser
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { BridgeLogLevel } from '../discord-bridge/discord-bridge.types';
 import { LoggerUtils } from '../../utils/logger.utils';
-import { runScheduledChainAuditInternal } from './change-tracking-chain-audit.utils';
+import path from 'node:path';
+import { resolveChildEntrypoint } from '../../utils/child-process-entrypoint.util';
+import {
+  buildDiffEvent,
+  type BuildDiffEventInput,
+  type BuildDiffEventOutput,
+} from './change-tracking-event-builder';
+import { superviseChainAuditChild } from './chain-audit-child-supervisor';
+import { readChainAuditLimits } from './chain-audit-limits';
+import { logChainAuditResult } from './change-tracking-chain-audit.utils';
 import { delayMs } from '../../utils/async-delay.utils';
 import { logAndBridge } from '../../utils/bridge-log.utils';
 import { isUniqueConstraintConflictError } from '../../utils/db-error.utils';
@@ -61,28 +64,6 @@ interface ChangeDetailInput {
   afterValue?: string | null;
   beforeHash?: string | null;
   afterHash?: string | null;
-}
-
-interface BuildDiffEventInput {
-  noticeNum: number;
-  beforeSnapshot: Record<string, unknown> | null;
-  afterSnapshot: Record<string, unknown>;
-  detectedAt?: Date;
-  source?: NoticeChangeSource | null;
-  trackedFields?: readonly string[];
-  hashAlgo?: string;
-  canonVersion?: number;
-  preferredEventType?: ChangeEventType;
-}
-
-interface BuildDiffEventOutput {
-  shouldAppend: boolean;
-  eventType: ChangeEventType;
-  diff: DiffComputationResult;
-  eventHash: string;
-  detectedAt: Date;
-  hashAlgo: string;
-  canonVersion: number;
 }
 
 interface DispatchChangeNotificationInput {
@@ -186,11 +167,17 @@ export interface ChangeChainAuditReport {
   eventCount: number;
   failureCount: number;
   checkpointRootHash: string;
+  // Full failure count is retained; scheduled child reports sample at most 100 details.
   failures: ChainVerificationIssue[];
 }
 
 @Injectable()
-export class ChangeTrackingService {
+export class ChangeTrackingService implements OnModuleDestroy {
+  private activeAudit?: {
+    controller: AbortController;
+    work: Promise<ChangeChainAuditReport>;
+  };
+  private auditShuttingDown = false;
   private readonly logger = LoggerUtils.getContextLogger(
     ChangeTrackingService.name,
   );
@@ -816,77 +803,7 @@ export class ChangeTrackingService {
    * Computes normalized field-level diffs and builds deterministic event hash.
    */
   buildDiffEvent(input: BuildDiffEventInput): BuildDiffEventOutput {
-    const hashAlgo = input.hashAlgo ?? 'sha256';
-    const canonVersion = input.canonVersion ?? CURRENT_CANON_VERSION;
-    const detectedAt = input.detectedAt ?? new Date();
-
-    const diff = computeDiff(
-      input.beforeSnapshot,
-      input.afterSnapshot,
-      input.trackedFields ?? getTrackedFieldsForCanonVersion(canonVersion),
-      canonVersion,
-    );
-
-    const eventType = this.resolveEventType(input);
-
-    // For non-created events, append only when tracked fields changed.
-    const shouldAppend =
-      eventType === CHANGE_EVENT_TYPE.CREATED || diff.changed;
-
-    const hashPayload = canonicalStringify({
-      noticeNum: input.noticeNum,
-      detectedAt: detectedAt.toISOString(),
-      eventType,
-      source: input.source ?? null,
-      hashAlgo,
-      canonVersion,
-      before: diff.normalizedBefore,
-      after: diff.normalizedAfter,
-      details: diff.details,
-    });
-
-    const eventHash = sha256Hex(hashPayload);
-
-    return {
-      shouldAppend,
-      eventType,
-      diff,
-      eventHash,
-      detectedAt,
-      hashAlgo,
-      canonVersion,
-    };
-  }
-
-  private resolveEventType(input: BuildDiffEventInput): ChangeEventType {
-    if (input.beforeSnapshot === null) {
-      return CHANGE_EVENT_TYPE.CREATED;
-    }
-
-    if (input.preferredEventType) {
-      return input.preferredEventType;
-    }
-
-    const lifecycleStatus =
-      typeof input.afterSnapshot.lifecycleStatus === 'string'
-        ? input.afterSnapshot.lifecycleStatus.trim().toLowerCase()
-        : '';
-    const sourceDeletedAt = input.afterSnapshot.sourceDeletedAt;
-    const hasSourceDeletedAt =
-      sourceDeletedAt !== null &&
-      sourceDeletedAt !== undefined &&
-      String(sourceDeletedAt).trim().length > 0;
-
-    if (
-      lifecycleStatus === NOTICE_LIFECYCLE_STATUS.SOURCE_DELETED ||
-      lifecycleStatus === NOTICE_LIFECYCLE_STATUS.RENUMBERED ||
-      lifecycleStatus === 'invalidated' ||
-      hasSourceDeletedAt
-    ) {
-      return CHANGE_EVENT_TYPE.INVALIDATED;
-    }
-
-    return CHANGE_EVENT_TYPE.UPDATED;
+    return buildDiffEvent(input);
   }
 
   /**
@@ -1711,18 +1628,42 @@ export class ChangeTrackingService {
   async runScheduledChainAudit(
     scope: 'daily' | 'weekly',
   ): Promise<ChangeChainAuditReport> {
-    return runScheduledChainAuditInternal(
-      {
-        changeEventRepository: this.changeEventRepository,
-        changeDetailRepository: this.changeDetailRepository,
-        archiveRepository: this.noticeArchiveRepository,
-        baselineEventHeight: this.BASELINE_EVENT_HEIGHT,
-        logger: this.logger,
-        buildDiffEvent: (input) => this.buildDiffEvent(input),
-        discordBridge: this.discordBridge,
-      },
+    if (this.auditShuttingDown)
+      throw new Error('Chain audit service is shutting down');
+    if (this.activeAudit) throw new Error('Chain audit is already running');
+    const database =
+      this.changeEventRepository.manager.connection.options.database;
+    if (typeof database !== 'string' || !database || database === ':memory:') {
+      throw new Error('Chain audit requires a file-backed SQLite database');
+    }
+    const controller = new AbortController();
+    const work = superviseChainAuditChild({
+      entrypoint: resolveChildEntrypoint(__dirname, 'chain-audit-child'),
+      database: path.resolve(database),
       scope,
-    );
+      limits: readChainAuditLimits(process.env),
+      signal: controller.signal,
+    })
+      .then((report) => {
+        logChainAuditResult(
+          { logger: this.logger, discordBridge: this.discordBridge },
+          report,
+        );
+        return report;
+      })
+      .finally(() => {
+        this.activeAudit = undefined;
+      });
+    this.activeAudit = { controller, work };
+    return work;
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    this.auditShuttingDown = true;
+    const active = this.activeAudit;
+    if (!active) return;
+    active.controller.abort();
+    await Promise.allSettled([active.work]);
   }
 
   private parseDiffSummary(
