@@ -1,3 +1,4 @@
+import { isolatedChildOptions } from '../../utils/child-process-entrypoint.util';
 import { fork } from 'node:child_process';
 import type { MirrorMetricFields } from './mirror-phase-metrics';
 
@@ -111,15 +112,7 @@ export async function superviseDumpChild(
         String(options.busyTimeoutMs),
       ],
       {
-        // Keep operator-controlled temp paths, but do not inherit credentials or NODE_OPTIONS.
-        env: {
-          TZ: process.env.TZ,
-          TMPDIR: process.env.TMPDIR,
-          TMP: process.env.TMP,
-          TEMP: process.env.TEMP,
-          SQLITE_TMPDIR: process.env.SQLITE_TMPDIR,
-        },
-        execArgv: ['--max-old-space-size=128'],
+        ...isolatedChildOptions(options.entrypoint, 128),
         stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
       },
     );

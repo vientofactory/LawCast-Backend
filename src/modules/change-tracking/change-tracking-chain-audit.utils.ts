@@ -31,6 +31,7 @@ interface ChainVerificationReport {
   eventCount: number;
   latestEventHash: string | null;
   issues: ChainVerificationIssue[];
+  issueCount: number;
 }
 
 interface BuildDiffEventOutput {
@@ -61,6 +62,9 @@ export interface ChangeTrackingChainAuditDeps {
   changeDetailRepository: Repository<NoticeChangeDetail>;
   archiveRepository?: Repository<NoticeArchive>;
   baselineEventHeight: number;
+  batchSize?: number;
+  maxFailureDetails?: number;
+  pace?: () => Promise<void>;
   logger: { log(message: string): void; error(message: string): void };
   buildDiffEvent(input: BuildDiffEventInput): BuildDiffEventOutput;
   discordBridge?: DiscordBridgeService;
@@ -89,11 +93,20 @@ export async function runScheduledChainAuditInternal(
     scope,
     noticeCount: reports.length,
     eventCount: reports.reduce((sum, report) => sum + report.eventCount, 0),
-    failureCount: failures.length,
+    failureCount: reports.reduce((sum, report) => sum + report.issueCount, 0),
     checkpointRootHash,
     failures,
   };
 
+  logChainAuditResult(deps, result);
+  return result;
+}
+
+export function logChainAuditResult(
+  deps: Pick<ChangeTrackingChainAuditDeps, 'logger' | 'discordBridge'>,
+  result: ChangeChainAuditReport,
+): void {
+  const { scope, checkpointRootHash, failures } = result;
   const summaryMessage =
     `Change-chain ${scope} audit completed: ` +
     `${result.noticeCount} notice(s), ${result.eventCount} event(s), ` +
@@ -129,8 +142,6 @@ export async function runScheduledChainAuditInternal(
       },
     });
   }
-
-  return result;
 }
 
 function isLegacyCanonicalHashCompatible(
@@ -222,14 +233,16 @@ async function verifyAllChains(
 
   const noticeNums = rawNoticeNums.map((r) => Number(r.noticeNum));
 
-  // Pre-fetch archive rows to seed initial state for each chain.
+  // Fetch only one bounded batch of archive seeds at a time.
   // The write path (buildDiffBaselineSnapshot) starts from the DB row,
   // so the audit must do the same to reproduce stored hashes.
-  const archiveSnapshotByNum = new Map<number, Record<string, unknown>>();
-  if (deps.archiveRepository && noticeNums.length > 0) {
-    const BATCH = 500;
-    for (let i = 0; i < noticeNums.length; i += BATCH) {
-      const batch = noticeNums.slice(i, i + BATCH);
+  const reports: ChainVerificationReport[] = [];
+  let retainedFailures = 0;
+  const batchSize = deps.batchSize ?? 50;
+  for (let i = 0; i < noticeNums.length; i += batchSize) {
+    const batch = noticeNums.slice(i, i + batchSize);
+    const archiveSnapshotByNum = new Map<number, Record<string, unknown>>();
+    if (deps.archiveRepository) {
       const rows = await deps.archiveRepository.find({
         where: { noticeNum: In(batch) } as any,
         select: {
@@ -254,13 +267,18 @@ async function verifyAllChains(
         archiveSnapshotByNum.set(row.noticeNum, buildAuditSeedSnapshot(row));
       }
     }
-  }
-
-  const reports: ChainVerificationReport[] = [];
-  for (const noticeNum of noticeNums) {
-    const seedSnapshot = archiveSnapshotByNum.get(noticeNum) ?? null;
-    const result = await verifyNoticeChain(deps, noticeNum, seedSnapshot);
-    reports.push(result);
+    for (const noticeNum of batch) {
+      const seedSnapshot = archiveSnapshotByNum.get(noticeNum) ?? null;
+      const result = await verifyNoticeChain(deps, noticeNum, seedSnapshot);
+      const remaining = Math.max(
+        0,
+        (deps.maxFailureDetails ?? Infinity) - retainedFailures,
+      );
+      result.issues = result.issues.slice(0, remaining);
+      retainedFailures += result.issues.length;
+      reports.push(result);
+      await deps.pace?.();
+    }
   }
 
   return reports;
@@ -276,12 +294,17 @@ async function verifyNoticeChain(
     order: { eventHeight: 'ASC', id: 'ASC' },
   });
   const eventIds = events.map((event) => event.id);
-  const details = eventIds.length
-    ? await deps.changeDetailRepository.find({
-        where: { eventId: In(eventIds) },
+  const details: NoticeChangeDetail[] = [];
+  // Stay below SQLite's bind parameter limit even for unusually long chains.
+  for (let i = 0; i < eventIds.length; i += 500) {
+    details.push(
+      ...(await deps.changeDetailRepository.find({
+        where: { eventId: In(eventIds.slice(i, i + 500)) },
         order: { id: 'ASC' },
-      })
-    : [];
+      })),
+    );
+    await deps.pace?.();
+  }
 
   const detailsByEventId = new Map<number, NoticeChangeDetail[]>();
   for (const detail of details) {
@@ -291,6 +314,12 @@ async function verifyNoticeChain(
   }
 
   const issues: ChainVerificationIssue[] = [];
+  let issueCount = 0;
+  const recordIssue = (issue: ChainVerificationIssue) => {
+    issueCount++;
+    if (issues.length < (deps.maxFailureDetails ?? Infinity))
+      issues.push(issue);
+  };
   // A chain whose v1 archive:upsert events carry contentId details was written
   // during the window where contentId was already tracked but the canonVersion
   // column did not exist yet. Such events were diffed with DEFAULT_TRACKED_FIELDS
@@ -372,7 +401,7 @@ async function verifyNoticeChain(
     });
 
     if (event.eventHeight !== index + 1) {
-      issues.push({
+      recordIssue({
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
@@ -395,7 +424,7 @@ async function verifyNoticeChain(
       (event.prevEventHash ?? null) !== expectedPrevHash &&
       !isLegacyCompatible
     ) {
-      issues.push({
+      recordIssue({
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
@@ -405,7 +434,7 @@ async function verifyNoticeChain(
     }
 
     if (event.eventHash !== rebuilt.eventHash && !isLegacyCompatible) {
-      issues.push({
+      recordIssue({
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
@@ -416,7 +445,7 @@ async function verifyNoticeChain(
     }
 
     if (event.eventType !== rebuilt.eventType) {
-      issues.push({
+      recordIssue({
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
@@ -426,7 +455,7 @@ async function verifyNoticeChain(
     }
 
     if (event.changedFieldCount !== rebuilt.diff.changedFieldCount) {
-      issues.push({
+      recordIssue({
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
@@ -436,7 +465,7 @@ async function verifyNoticeChain(
     }
 
     if ((event.diffSummaryJson ?? null) !== rebuilt.diff.diffSummaryJson) {
-      issues.push({
+      recordIssue({
         noticeNum,
         eventId: event.id,
         eventHeight: event.eventHeight,
@@ -453,7 +482,7 @@ async function verifyNoticeChain(
         detail.afterValue === null ? null : sha256Hex(detail.afterValue);
 
       if ((detail.beforeHash ?? null) !== expectedBeforeHash) {
-        issues.push({
+        recordIssue({
           noticeNum,
           eventId: event.id,
           eventHeight: event.eventHeight,
@@ -463,7 +492,7 @@ async function verifyNoticeChain(
       }
 
       if ((detail.afterHash ?? null) !== expectedAfterHash) {
-        issues.push({
+        recordIssue({
           noticeNum,
           eventId: event.id,
           eventHeight: event.eventHeight,
@@ -475,6 +504,7 @@ async function verifyNoticeChain(
 
     currentState = nextState;
     previousHash = event.eventHash;
+    if (index % 25 === 24) await deps.pace?.();
   }
 
   return {
@@ -482,6 +512,7 @@ async function verifyNoticeChain(
     eventCount: events.length,
     latestEventHash: previousHash,
     issues,
+    issueCount,
   };
 }
 
@@ -550,7 +581,7 @@ function computeCheckpointRootHash(reports: ChainVerificationReport[]): string {
         noticeNum: report.noticeNum,
         eventCount: report.eventCount,
         latestEventHash: report.latestEventHash,
-        issueCount: report.issues.length,
+        issueCount: report.issueCount,
       })),
     ),
   );

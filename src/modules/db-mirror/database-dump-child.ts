@@ -1,12 +1,23 @@
-const { performance } = require('node:perf_hooks');
+import { performance } from 'node:perf_hooks';
+import Database from 'better-sqlite3';
+import { type MirrorMetricFields } from './mirror-phase-metrics';
 
-/** @typedef {{name: string, sql: string | null}} SchemaRow */
-const Database = require('better-sqlite3');
+interface SchemaRow {
+  name: string;
+  sql: string | null;
+}
+
+type DumpChildResult =
+  | { type: 'result'; retainedTables: string[] }
+  | { type: 'failure'; message: string; code?: string };
+type DumpChildMessage =
+  DumpChildResult | ({ type: 'metric' } & MirrorMetricFields);
 
 if (!process.send || !process.disconnect) {
   throw new Error('Database dump child requires an IPC channel');
 }
-const send = process.send.bind(process);
+const send: (message: DumpChildMessage, callback?: () => void) => boolean =
+  process.send.bind(process);
 const disconnect = process.disconnect.bind(process);
 
 const legalTables = new Set([
@@ -21,13 +32,7 @@ const shadowSuffixes = new Set(['data', 'idx', 'docsize', 'config', 'content']);
 const [sourcePath, dumpPath, dumpFileName, busyTimeoutMs] =
   process.argv.slice(2);
 
-/**
- * @template T
- * @param {'copy' | 'prune' | 'recompact'} phase
- * @param {() => T} work
- * @returns {T}
- */
-function measure(phase, work) {
+function measure<T>(phase: 'copy' | 'prune' | 'recompact', work: () => T): T {
   const context = {
     dumpFileName,
     phase,
@@ -37,7 +42,7 @@ function measure(phase, work) {
   send({ type: 'metric', event: 'db_mirror_phase_start', ...context });
   const rssBeforeBytes = process.memoryUsage.rss();
   const start = performance.now();
-  let status = 'error';
+  let status: 'ok' | 'error' = 'error';
   try {
     const result = work();
     status = 'ok';
@@ -56,24 +61,21 @@ function measure(phase, work) {
   }
 }
 
-/** @param {import("better-sqlite3")} db */
-function prune(db) {
+function prune(db: Database): string[] {
   db.pragma('foreign_keys = OFF');
-  const rows = /** @type {SchemaRow[]} */ (
-    db
-      .prepare(
-        "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-      )
-      .all()
-  );
+  const rows = db
+    .prepare(
+      "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .all() as SchemaRow[];
   const virtual = new Set(
     rows
       .filter(({ sql }) => /CREATE\s+VIRTUAL\s+TABLE/i.test(sql ?? ''))
       .map(({ name }) => name),
   );
-  /** @param {string} name */
-  const drop = (name) =>
+  const drop = (name: string): void => {
     db.exec(`DROP TABLE IF EXISTS "${name.replace(/"/g, '""')}"`);
+  };
   for (const name of virtual) {
     if (!legalTables.has(name)) drop(name);
   }
@@ -93,7 +95,7 @@ function prune(db) {
   return rows.map(({ name }) => name).filter((name) => legalTables.has(name));
 }
 
-function createDump() {
+function createDump(): string[] {
   measure('copy', () => {
     const source = new Database(sourcePath, {
       readonly: true,
@@ -119,10 +121,10 @@ function createDump() {
   }
 }
 
-let result;
+let result: DumpChildResult;
 try {
   result = { type: 'result', retainedTables: createDump() };
-} catch (error) {
+} catch (error: unknown) {
   process.exitCode = 1;
   result = {
     type: 'failure',
