@@ -59,6 +59,7 @@ describe('semantic search over a real gRPC channel', () => {
   };
   let keywordSearch: jest.Mock;
   let withWeakTail: boolean;
+  let overlappingWeak: boolean;
   let failure: 'invalid' | 'unavailable' | 'stall' | 'health' | null;
   const query = '세입자 보호';
 
@@ -68,6 +69,7 @@ describe('semantic search over a real gRPC channel', () => {
     correlations = [];
     failure = null;
     withWeakTail = false;
+    overlappingWeak = false;
     keywordSearch = jest.fn().mockResolvedValue({ items: [] });
     server = new Server();
     server.addService(definition, {
@@ -116,7 +118,7 @@ describe('semantic search over a real gRPC channel', () => {
             rankWaitMs: 0,
           },
           weakResults: withWeakTail
-            ? [2, 3].map((noticeNum) => ({
+            ? [...(overlappingWeak ? [1] : []), 2, 3].map((noticeNum) => ({
                 chunkId: `${noticeNum}-1`,
                 noticeNum,
                 subject: '관련 법률안',
@@ -212,6 +214,14 @@ describe('semantic search over a real gRPC channel', () => {
     expect(response.results.map((hit) => hit.noticeNum)).toEqual([1]);
     expect(response.weakResults.map((hit) => hit.noticeNum)).toEqual([2, 3]);
     expect(keywordSearch).not.toHaveBeenCalled();
+  });
+
+  it('keeps top results out of the weak tail on a real cosine gRPC response', async () => {
+    withWeakTail = true;
+    overlappingWeak = true;
+    const response = await service.searchSemantic(query, 2);
+    expect(response.results.map((hit) => hit.noticeNum)).toEqual([1]);
+    expect(response.weakResults.map((hit) => hit.noticeNum)).toEqual([2, 3]);
   });
 
   it('appends only cache-only keyword rows after gRPC ranked results across pages', async () => {

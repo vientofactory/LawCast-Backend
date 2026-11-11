@@ -210,15 +210,24 @@ export class SemanticSearchService implements OnModuleDestroy {
     const bypassed = bestScore >= this.lexicalBypassScore;
     const clear = this.toNoticeHitsWithEvidence(collected);
     const weak = this.toNoticeHitsWithEvidence(weakCollected);
-    if (this.lexicalGate === 'off') {
+    // Chunk tiers can contain different chunks from the same notice. Remove
+    // clear-notice duplicates before limiting the weak band so it stays full.
+    const response = (servedClear: typeof clear, servedWeak: typeof weak) => {
+      const strongIds = new Set(servedClear.map(({ hit }) => hit.noticeNum));
       return {
         query,
-        mode: 'semantic',
+        mode: 'semantic' as const,
         fallbackReason: null,
         lastUpdateAt,
-        results: clear.map(({ hit }) => hit).slice(0, k),
-        weakResults: weak.map(({ hit }) => hit).slice(0, k),
+        results: servedClear.map(({ hit }) => hit).slice(0, k),
+        weakResults: servedWeak
+          .filter(({ hit }) => !strongIds.has(hit.noticeNum))
+          .map(({ hit }) => hit)
+          .slice(0, k),
       } satisfies SemanticSearchResponse;
+    };
+    if (this.lexicalGate === 'off') {
+      return response(clear, weak);
     }
     const gatedClear = clear.filter(({ evidence }) => evidence);
     const gatedWeak = weak.filter(({ evidence }) => evidence);
@@ -229,25 +238,11 @@ export class SemanticSearchService implements OnModuleDestroy {
           `wouldEmpty=${gatedClear.length === 0 && gatedWeak.length === 0} ` +
           `bypassed=${bypassed}`,
       );
-      return {
-        query,
-        mode: 'semantic',
-        fallbackReason: null,
-        lastUpdateAt,
-        results: clear.map(({ hit }) => hit).slice(0, k),
-        weakResults: weak.map(({ hit }) => hit).slice(0, k),
-      } satisfies SemanticSearchResponse;
+      return response(clear, weak);
     }
     const servedClear = bypassed ? clear : gatedClear;
     const servedWeak = bypassed ? weak : gatedWeak;
-    return {
-      query,
-      mode: 'semantic',
-      fallbackReason: null,
-      lastUpdateAt,
-      results: servedClear.map(({ hit }) => hit).slice(0, k),
-      weakResults: servedWeak.map(({ hit }) => hit).slice(0, k),
-    } satisfies SemanticSearchResponse;
+    return response(servedClear, servedWeak);
   }
 
   /**

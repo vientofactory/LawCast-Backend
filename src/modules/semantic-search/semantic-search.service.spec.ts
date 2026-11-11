@@ -182,6 +182,63 @@ describe('SemanticSearchService', () => {
     expect(mockSearchNotices).not.toHaveBeenCalled();
   });
 
+  it.each(['off', 'shadow', 'enforce'] as const)(
+    'deduplicates the weak notice band before its limit with gate %s',
+    async (gate) => {
+      const service = createService(true, 60_000, gate);
+      mockGet.mockResolvedValue({
+        data: {
+          query: '세입자 보호',
+          k: 6,
+          lastUpdateAt: STAMP,
+          results: [
+            { ...sidecarChunk(101, '명확한 청크'), lexicalEvidence: true },
+          ],
+          weakResults: [101, 102, 103].map((num) => ({
+            ...sidecarChunk(num, '별도 약한 청크'),
+            chunkId: `${num}-weak`,
+            score: 0.3,
+            lexicalEvidence: true,
+          })),
+        },
+      });
+      const result = await service.searchSemantic('세입자 보호', 2);
+      expect(result.results.map((hit) => hit.noticeNum)).toEqual([101]);
+      expect(result.weakResults.map((hit) => hit.noticeNum)).toEqual([
+        102, 103,
+      ]);
+      expect(mockSearchNotices).not.toHaveBeenCalled();
+    },
+  );
+
+  it('retains weak evidence when the matching clear notice was rejected by the gate', async () => {
+    const service = createService(true, 60_000, 'enforce');
+    mockGet.mockResolvedValue({
+      data: {
+        query: '세입자 보호',
+        k: 6,
+        lastUpdateAt: STAMP,
+        results: [
+          {
+            ...sidecarChunk(101, '증거 없는 명확한 청크'),
+            lexicalEvidence: false,
+          },
+        ],
+        weakResults: [
+          {
+            ...sidecarChunk(101, '증거 있는 약한 청크'),
+            chunkId: '101-weak',
+            score: 0.3,
+            lexicalEvidence: true,
+          },
+        ],
+      },
+    });
+    const result = await service.searchSemantic('세입자 보호', 2);
+    expect(result.results).toEqual([]);
+    expect(result.weakResults.map((hit) => hit.noticeNum)).toEqual([101]);
+  });
+
   it('keeps weak hits when the clear tier is empty (no keyword fallback)', async () => {
     const service = createService();
     mockGet.mockResolvedValue({
