@@ -627,6 +627,11 @@ export class ApiController {
   @Get('stats')
   @ApiQuery({ name: 'view', required: false, type: String })
   async getStats(@Query('view') view?: string) {
+    if (view === 'runtime') {
+      return ApiResponseUtils.success({
+        nodeRuntime: this.runtimeStatsService.getNodeRuntimeStats(),
+      });
+    }
     if (view === 'home') {
       return ApiResponseUtils.success(
         await this.runtimeStatsService.getHomeStats(
