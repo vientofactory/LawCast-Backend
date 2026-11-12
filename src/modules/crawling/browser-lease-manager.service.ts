@@ -1,4 +1,8 @@
 import { Injectable, OnApplicationShutdown } from '@nestjs/common';
+import {
+  readLinuxProcessSnapshot,
+  type ProcessSnapshotRow,
+} from './process-snapshot.util';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { APP_CONSTANTS } from '../../config/app.config';
@@ -10,13 +14,6 @@ const ZOMBIE_LOG_THROTTLE_MS = 60_000;
 
 interface BrowserSessionLike {
   closeBrowser(): Promise<void>;
-}
-
-interface ProcessSnapshotRow {
-  pid: number;
-  ppid: number;
-  stat: string;
-  command: string;
 }
 
 type ExecFileAsync = (
@@ -192,23 +189,9 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
 
   private async collectProcessTree(rootPid: number): Promise<number[]> {
     try {
-      const { stdout } = (await getExecFileAsync()('ps', [
-        '-A',
-        '-o',
-        'pid=,ppid=',
-      ])) as { stdout: string };
+      const snapshot = await this.readProcessSnapshot();
       const childrenByParent = new Map<number, number[]>();
-
-      for (const rawLine of stdout.split('\n')) {
-        const line = rawLine.trim();
-        if (!line) continue;
-
-        const [pidText, ppidText] = line.split(/\s+/, 2);
-        const pid = Number(pidText);
-        const ppid = Number(ppidText);
-
-        if (!Number.isFinite(pid) || !Number.isFinite(ppid)) continue;
-
+      for (const { pid, ppid } of snapshot) {
         const children = childrenByParent.get(ppid) ?? [];
         children.push(pid);
         childrenByParent.set(ppid, children);
@@ -239,6 +222,14 @@ export class BrowserLeaseManagerService implements OnApplicationShutdown {
   }
 
   private async readProcessSnapshot(): Promise<ProcessSnapshotRow[]> {
+    if (process.platform === 'linux') {
+      try {
+        const snapshot = await readLinuxProcessSnapshot();
+        if (snapshot.some((row) => row.pid === process.pid)) return snapshot;
+      } catch {
+        // Retain the portable fallback if procfs is not mounted or readable.
+      }
+    }
     try {
       const { stdout } = (await getExecFileAsync()('ps', [
         '-A',

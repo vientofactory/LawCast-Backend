@@ -160,7 +160,7 @@ curl http://localhost:3001/api/notices/2210001/detail
 - 상세·기록: `GET /api/notices/:num/detail`, `/api/notices/:num/changes`, `/api/notices/:num/screenshot`, `/api/notices/:num/export`; 전체 변경 목록은 `/api/notices/changes`입니다.
 - 토론: `/api/notices/:num/discussions`, `/api/discussions/threads`, `/api/discussions/threads/:threadId/comments` 등에서 목록·생성·의견 작성 기능을 제공합니다.
 - 알림: `POST /api/webhooks`, `GET /api/push/public-key`, `POST`·`DELETE /api/push/subscriptions`.
-- 운영: `GET /api/health`, `/api/stats`, `/api/batch/status`, `/api/crawling-transparency`, `/api/version`. 홈용 경량 통계는 `/api/stats?view=home`입니다.
+- 운영: `GET /api/health`, `/api/stats`, `/api/batch/status`, `/api/crawling-transparency`, `/api/version`. 홈용 경량 통계는 `/api/stats?view=home`입니다. 이벤트 루프·메모리만 관측할 때는 `/api/stats?view=runtime`을 사용하면 DB·Redis·Ollama 통계 집계를 기다리지 않습니다. 전체/홈 통계가 1초를 넘기면 `stats_read_pending`/`stats_read_finished` 로그가 동일한 `traceId`와 하위 호출별 시간을 기록합니다. 이 시간은 병렬 작업이 겹칠 수 있는 경과 시간이며 독점 CPU 시간이나 순수 SQL 실행 시간이 아닙니다.
 - 관리자 공지: `GET /api/announcements`, `/api/announcements/top`.
 
 아카이브의 `searchMode`는 미지정 시 `keyword`이며 `auto`, `semantic`을 명시하면 의미 검색 경로를 사용합니다. 검색 엔진의 후보 상한과 관련도에 따라 의미 검색 결과가 키워드 검색보다 적을 수 있습니다. 프론트엔드의 검색 기본값과는 구분하세요.

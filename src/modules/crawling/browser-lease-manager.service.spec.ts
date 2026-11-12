@@ -351,3 +351,18 @@ describe('BrowserLeaseManagerService', () => {
     });
   });
 });
+
+describe('BrowserLeaseManagerService process-tree snapshots', () => {
+  it('uses the same snapshot reader for force-cleanup tree traversal', async () => {
+    const service = new BrowserLeaseManagerService();
+    const spy = jest
+      .spyOn(service as any, 'readProcessSnapshot')
+      .mockResolvedValue([
+        { pid: 40, ppid: 7, stat: 'S', command: 'chromium' },
+        { pid: 41, ppid: 40, stat: 'S', command: 'chrome' },
+        { pid: 99, ppid: 8, stat: 'S', command: 'unrelated' },
+      ]);
+    expect(await (service as any).collectProcessTree(40)).toEqual([40, 41]);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});

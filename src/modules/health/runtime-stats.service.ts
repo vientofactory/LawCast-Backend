@@ -29,7 +29,9 @@ import {
   readNsmListScanHealth,
   type NsmListScanHealth,
 } from '../crawling/utils/nsm-list-scan-health.util';
-import cronstrue from 'cronstrue/i18n';
+import { Logger } from '@nestjs/common';
+import { describeCron } from './cron-display.util';
+import { StatsReadTrace } from './stats-read-trace';
 import { getAiSummaryTransparencyInfo } from '../ollama/ai-summary-prompt.util';
 
 /**
@@ -53,15 +55,7 @@ function resolveCronDisplay(expr: string): {
   intervalMs: number;
   description: string;
 } {
-  let description: string;
-  try {
-    description = cronstrue.toString(expr, {
-      locale: 'ko',
-      use24HourTimeFormat: true,
-    });
-  } catch {
-    description = expr;
-  }
+  const description = describeCron(expr);
 
   return {
     intervalMs: CRON_INTERVAL_MAP[expr] ?? 0,
@@ -119,6 +113,7 @@ function resolveNsmSourceInfo(): {
 
 @Injectable()
 export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(RuntimeStatsService.name);
   private eventLoopStats: any = null;
   private intervalId: NodeJS.Timeout | null = null;
   private readonly measurementInterval = 2000;
@@ -172,17 +167,23 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     changeTrackingService: ChangeTrackingService,
     aiSummaryEnabled: boolean,
   ) {
-    const [cache, count, changes] = await Promise.all([
-      crawlingService.getCacheInfo(),
-      noticeArchiveService.getArchiveCount(),
-      changeTrackingService.getComparableChangeSummary(),
-    ]);
-    return {
-      archive: { count },
-      cache: { lastUpdated: cache.lastUpdated },
-      changeTracking: { comparableEventTotal: changes.comparableEventTotal },
-      aiSummaryEnabled,
-    };
+    return this.traceRead('home', async (trace) => {
+      const [cache, count, changes] = await Promise.all([
+        trace.measure('cache', () => crawlingService.getCacheInfo()),
+        trace.measure('archiveCount', () =>
+          noticeArchiveService.getArchiveCount(),
+        ),
+        trace.measure('changeSummary', () =>
+          changeTrackingService.getComparableChangeSummary(),
+        ),
+      ]);
+      return {
+        archive: { count },
+        cache: { lastUpdated: cache.lastUpdated },
+        changeTracking: { comparableEventTotal: changes.comparableEventTotal },
+        aiSummaryEnabled,
+      };
+    });
   }
 
   async getAggregatedStats(
@@ -195,73 +196,102 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     webPushSubscriptionService: WebPushSubscriptionService,
     cronJobsService: CronJobsService,
   ) {
-    const nodeEnv = params.nodeEnv;
-    if (!webhookService || !crawlingService || !noticeArchiveService) {
-      throw new Error('All service dependencies must be provided');
-    }
-    const [
-      webhookStats,
-      cacheInfo,
-      archiveCount,
-      ollamaMetrics,
-      comparableChangeSummary,
-      webPushStats,
-    ] = await Promise.all([
-      webhookService.getDetailedStatsForApi({ nodeEnv }),
-      crawlingService.getCacheInfo(),
-      noticeArchiveService.getArchiveCount(),
-      crawlingService.getOllamaMetrics(),
-      changeTrackingService.getComparableChangeSummary(),
-      webPushSubscriptionService.getStatsForApi(),
-    ]);
-    const nodeRuntime = this.getNodeRuntimeStats();
-    const isProduction = nodeEnv === 'production';
-    return {
-      webhooks: webhookStats,
-      cache: isProduction
-        ? {
-            size: cacheInfo.size,
-            lastUpdated: cacheInfo.lastUpdated,
-            maxSize: cacheInfo.maxSize,
-            isInitialized: cacheInfo.isInitialized,
-          }
-        : cacheInfo,
-      archive: {
-        count: archiveCount,
-        isDoneSync: archiveSyncService.getIsDoneSyncStatus(),
-        legacyGenesisSeed: archiveSyncService.getLegacyGenesisSeedStatus(),
+    return this.traceRead(
+      'full',
+      async (trace) => {
+        const nodeEnv = params.nodeEnv;
+        if (!webhookService || !crawlingService || !noticeArchiveService) {
+          throw new Error('All service dependencies must be provided');
+        }
+        const [
+          webhookStats,
+          cacheInfo,
+          archiveCount,
+          ollamaMetrics,
+          comparableChangeSummary,
+          webPushStats,
+        ] = await Promise.all([
+          trace.measure('webhooks', () =>
+            webhookService.getDetailedStatsForApi({ nodeEnv }),
+          ),
+          trace.measure('cache', () => crawlingService.getCacheInfo()),
+          trace.measure('archiveCount', () =>
+            noticeArchiveService.getArchiveCount(),
+          ),
+          trace.measure('ollama', () => crawlingService.getOllamaMetrics()),
+          trace.measure('changeSummary', () =>
+            changeTrackingService.getComparableChangeSummary(),
+          ),
+          trace.measure('webPush', () =>
+            webPushSubscriptionService.getStatsForApi(),
+          ),
+        ]);
+        const nodeRuntime = this.getNodeRuntimeStats();
+        const isProduction = nodeEnv === 'production';
+        const nsmHealth = await trace.measure('nsmHealth', () =>
+          this.readNsmListScanHealth(),
+        );
+        const crawlers = await trace.measure('crawlerPresentation', () =>
+          this.buildCrawlersStatus(
+            crawlingService,
+            archiveSyncService,
+            cronJobsService,
+            nsmHealth,
+          ),
+        );
+        return {
+          webhooks: webhookStats,
+          cache: isProduction
+            ? {
+                size: cacheInfo.size,
+                lastUpdated: cacheInfo.lastUpdated,
+                maxSize: cacheInfo.maxSize,
+                isInitialized: cacheInfo.isInitialized,
+              }
+            : cacheInfo,
+          archive: {
+            count: archiveCount,
+            isDoneSync: archiveSyncService.getIsDoneSyncStatus(),
+            legacyGenesisSeed: archiveSyncService.getLegacyGenesisSeedStatus(),
+          },
+          webPush: webPushStats,
+          changeTracking: comparableChangeSummary,
+          ollama: isProduction
+            ? {
+                enabled: ollamaMetrics.enabled,
+                configured: ollamaMetrics.configured,
+                model: ollamaMetrics.model,
+                summary: {
+                  total: ollamaMetrics.summary.total,
+                  success: ollamaMetrics.summary.success,
+                  failed: ollamaMetrics.summary.failed,
+                  skipped: ollamaMetrics.summary.skipped,
+                  successRate: ollamaMetrics.summary.successRate,
+                },
+                health: {
+                  status: ollamaMetrics.health.status,
+                  lastCheckedAt: ollamaMetrics.health.lastCheckedAt,
+                  lastLatencyMs: ollamaMetrics.health.lastLatencyMs,
+                  availableModelCount: ollamaMetrics.health.availableModelCount,
+                },
+              }
+            : ollamaMetrics,
+          aiSummaryEnabled: ollamaMetrics.enabled,
+          nodeRuntime,
+          crawlers,
+        };
       },
-      webPush: webPushStats,
-      changeTracking: comparableChangeSummary,
-      ollama: isProduction
-        ? {
-            enabled: ollamaMetrics.enabled,
-            configured: ollamaMetrics.configured,
-            model: ollamaMetrics.model,
-            summary: {
-              total: ollamaMetrics.summary.total,
-              success: ollamaMetrics.summary.success,
-              failed: ollamaMetrics.summary.failed,
-              skipped: ollamaMetrics.summary.skipped,
-              successRate: ollamaMetrics.summary.successRate,
-            },
-            health: {
-              status: ollamaMetrics.health.status,
-              lastCheckedAt: ollamaMetrics.health.lastCheckedAt,
-              lastLatencyMs: ollamaMetrics.health.lastLatencyMs,
-              availableModelCount: ollamaMetrics.health.availableModelCount,
-            },
-          }
-        : ollamaMetrics,
-      aiSummaryEnabled: ollamaMetrics.enabled,
-      nodeRuntime,
-      crawlers: this.buildCrawlersStatus(
-        crawlingService,
-        archiveSyncService,
-        cronJobsService,
-        await this.readNsmListScanHealth(),
-      ),
-    };
+      () => {
+        const scheduler = crawlingService.getSchedulerExecutionState();
+        const archive = archiveSyncService.getExecutionState();
+        return {
+          palRunning: scheduler.isProcessing,
+          nsmRunning: scheduler.isPendingProcessing,
+          archivePhases: archive.runningPhases,
+          loopWindowMaxMs: this.eventLoopStats?.max ?? null,
+        };
+      },
+    );
   }
 
   /**
@@ -279,6 +309,24 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
       });
     } catch {
       return null;
+    }
+  }
+
+  private async traceRead<T>(
+    view: 'full' | 'home',
+    work: (trace: StatsReadTrace) => Promise<T>,
+    context?: () => Record<string, unknown>,
+  ): Promise<T> {
+    const trace = new StatsReadTrace(view, (row) =>
+      this.logger.warn(JSON.stringify({ ...row, background: context?.() })),
+    );
+    try {
+      const value = await work(trace);
+      trace.finish();
+      return value;
+    } catch (error) {
+      trace.finish(true);
+      throw error;
     }
   }
 

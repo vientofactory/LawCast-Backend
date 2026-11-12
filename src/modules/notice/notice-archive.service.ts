@@ -1876,6 +1876,7 @@ export class NoticeArchiveService {
       }
 
       cursor += pageSize;
+      await yieldToEventLoop();
     }
 
     return candidates.slice(0, pageSize);
@@ -1958,13 +1959,15 @@ export class NoticeArchiveService {
       return { cursorCount: 0, rows: [] };
     }
 
+    // A lifecycle predicate makes SQLite scan all active archives for a tiny ID page.
+    // Hydrate by the unique notice-number index, then preserve the same active-only join.
     const archives = await this.archiveRepository.find({
       where: {
         noticeNum: In(noticeNums),
-        lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
       },
       select: {
         noticeNum: true,
+        lifecycleStatus: true,
         subject: true,
         proposerCategory: true,
         committee: true,
@@ -1977,7 +1980,12 @@ export class NoticeArchiveService {
     });
 
     const archiveByNoticeNum = new Map(
-      archives.map((archive) => [archive.noticeNum, archive] as const),
+      archives
+        .filter(
+          (archive) =>
+            archive.lifecycleStatus === NOTICE_LIFECYCLE_STATUS.ACTIVE,
+        )
+        .map((archive) => [archive.noticeNum, archive] as const),
     );
 
     const rows = summaryRows

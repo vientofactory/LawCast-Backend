@@ -928,7 +928,14 @@ describe('NoticeArchiveService', () => {
       });
       const findMock = jest
         .fn<(options: Record<string, unknown>) => Promise<NoticeArchive[]>>()
-        .mockResolvedValueOnce([notSupportedRow]);
+        .mockResolvedValueOnce([
+          notSupportedRow,
+          buildRow({
+            noticeNum: 1302,
+            lifecycleStatus: 'source_deleted',
+            proposalReason: 'Deleted fixture',
+          }),
+        ]);
       const repoMock = { ...createRepositoryMock(), find: findMock };
       const changeTrackingService = createChangeTrackingServiceMock();
       changeTrackingService.getLatestFieldValues.mockResolvedValue(
@@ -938,6 +945,11 @@ describe('NoticeArchiveService', () => {
       summaryStateRepository.find
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([
+          {
+            noticeNum: 1302,
+            aiSummary: null,
+            aiSummaryStatus: 'not_supported',
+          },
           {
             noticeNum: 1301,
             aiSummary: null,
@@ -971,8 +983,10 @@ describe('NoticeArchiveService', () => {
         >,
       ).toMatchObject({
         noticeNum: expect.anything(),
-        lifecycleStatus: expect.anything(),
       });
+      expect((findMock.mock.calls[0][0] as any).select.lifecycleStatus).toBe(
+        true,
+      );
       expect(changeTrackingService.getLatestFieldValues).toHaveBeenCalledWith(
         [1301],
         'proposalReason',

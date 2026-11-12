@@ -184,6 +184,9 @@ describe('HTTP-Batch Processing Isolation', () => {
     };
 
     const mockRuntimeStatsService = {
+      getNodeRuntimeStats: jest
+        .fn()
+        .mockReturnValue({ eventLoopDelay: null, memory: { rss: 1000 } }),
       getHomeStats: jest.fn().mockResolvedValue({
         archive: { count: 100 },
         cache: { lastUpdated: null },
@@ -405,6 +408,26 @@ describe('HTTP-Batch Processing Isolation', () => {
   });
 
   describe('Frontend read dependency isolation', () => {
+    it('serves runtime telemetry over HTTP without any statistics dependency', async () => {
+      const app = module.createNestApplication();
+      await app.init();
+      try {
+        const stats = module.get(RuntimeStatsService);
+        const crawl = module.get(CrawlingService);
+        const response = await request(app.getHttpServer())
+          .get('/api/stats?view=runtime')
+          .expect(200);
+        expect(response.body.data).toEqual({
+          nodeRuntime: { eventLoopDelay: null, memory: { rss: 1000 } },
+        });
+        expect(stats.getAggregatedStats).not.toHaveBeenCalled();
+        expect(stats.getHomeStats).not.toHaveBeenCalled();
+        expect(crawl.getOllamaMetrics).not.toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    });
+
     it('dispatches the home view without collecting operational stats', async () => {
       const stats = module.get(RuntimeStatsService);
       const health = module.get(CrawlingService);
