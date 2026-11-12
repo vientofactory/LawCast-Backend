@@ -123,6 +123,32 @@ describe('NoticeArchiveService NSM list-absence tracking (real SQLite schema)', 
     }
   });
 
+  it('limits synchronous sighting writes and lets timers run between batches', async () => {
+    const repository = dataSource.getRepository(NoticeArchive);
+    const update = jest.spyOn(repository, 'update');
+    const ids = Array.from({ length: 16 }, (_, index) => index + 1);
+    for (const noticeNum of ids) await insertNotice({ noticeNum });
+    let writesAtTimer = -1;
+    const timer = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        writesAtTimer = update.mock.calls.length;
+        resolve();
+      }, 0);
+    });
+
+    expect(await service.stampNsmListSeen(ids, new Date())).toBe(16);
+    await timer;
+    expect(update.mock.calls).toHaveLength(4);
+    for (const [criteria] of update.mock.calls) {
+      expect(
+        (criteria as unknown as { noticeNum: { value: number[] } }).noticeNum
+          .value.length,
+      ).toBeLessThanOrEqual(5);
+    }
+    expect(writesAtTimer).toBeGreaterThan(0);
+    expect(writesAtTimer).toBeLessThan(4);
+  });
+
   const readRow = async (noticeNum: number): Promise<NoticeArchive> => {
     const row = await dataSource
       .getRepository(NoticeArchive)
