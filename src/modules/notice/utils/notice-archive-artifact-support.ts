@@ -457,6 +457,10 @@ export class NoticeArchiveArtifactSupport {
     failed: number;
     skipped: number;
   }> {
+    // The synchronous SQLite driver resolves through microtasks. A full scan
+    // must yield explicitly; await alone can starve HTTP for the entire pass.
+    // HTML reads also need a small page, independently of the write cadence.
+    const pageSize = Math.max(1, Math.min(10, Math.trunc(batchSize) || 10));
     let lastSeenId = 0;
     let scanned = 0;
     let passed = 0;
@@ -516,7 +520,7 @@ export class NoticeArchiveArtifactSupport {
           integrityVerifiedAt: true,
         },
         order: { id: 'ASC' },
-        take: batchSize,
+        take: pageSize,
       });
 
       if (rows.length === 0) break;
@@ -626,10 +630,11 @@ export class NoticeArchiveArtifactSupport {
             ),
           );
         }
+        if (scanned % 5 === 0) await delayMs(1);
       }
 
       lastSeenId = rows[rows.length - 1].id;
-      if (rows.length < batchSize) break;
+      if (rows.length < pageSize) break;
     }
 
     return { scanned, passed, failed, skipped };
