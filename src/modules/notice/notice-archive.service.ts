@@ -2,7 +2,10 @@ import {
   legalLookupPrefix,
   selectLegalIdentities,
 } from './utils/legal-search-identity.util';
-import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
+import {
+  setImmediate as yieldToEventLoop,
+  setTimeout as yieldAfterMetadataWrite,
+} from 'node:timers/promises';
 import {
   BadRequestException,
   Injectable,
@@ -229,12 +232,12 @@ export interface SnapshotArtifactFillResult {
 export const INTEGRITY_SKIP_REASON_MISSING_SOURCE = 'missing_source_or_hash';
 
 /**
- * Bound notices per `notice_archives` UPDATE when stamping list sightings.
- * Keeps every statement far below SQLite's bound-parameter ceiling while a
- * single cycle still stamps a full list (~16k rows) on a handful of queries.
+ * Metadata shares SQLite row pages with large HTML and screenshot payloads.
+ * A 100-row write blocked the production main thread for hundreds of ms,
+ * despite the ID index seek. Keep each write small and give timers/poll a
+ * turn before continuing; a Promise or immediate-only chain is not a budget.
  */
-// Bound each metadata write so frontend reads can use the shared connection.
-const NSM_LIST_SEEN_STAMP_CHUNK_SIZE = 100;
+const NSM_LIST_SEEN_STAMP_CHUNK_SIZE = 5;
 
 type TrackedArchiveRow = Pick<
   NoticeArchive,
@@ -1408,7 +1411,7 @@ export class NoticeArchiveService {
       );
       stampedCount += result?.affected ?? 0;
       if (offset + chunk.length < uniqueNums.length) {
-        await yieldToEventLoop();
+        await yieldAfterMetadataWrite(1);
       }
     }
 
