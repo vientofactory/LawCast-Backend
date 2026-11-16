@@ -41,6 +41,7 @@ export class WebPushRegistrationService {
       const isProofValid = await this.hashguardService.verifyProof(
         createDto.proof,
         clientIp,
+        'webpush-subscription',
       );
 
       if (!isProofValid) {

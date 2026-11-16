@@ -20,21 +20,30 @@ export class HashguardService {
     this.client = new HashGuardClient({ baseUrl, headers });
   }
 
-  async verifyProof(proof: string, _remoteIp?: string): Promise<boolean> {
-    if (!proof) {
+  async verifyProof(
+    proof: string,
+    remoteIp: string,
+    expectedContext: string,
+  ): Promise<boolean> {
+    if (!proof || !remoteIp || !expectedContext) {
       return false;
     }
 
     try {
-      const result = await this.client.introspectToken(proof);
+      const result = await this.client.introspectToken(proof, true, {
+        expectedContext,
+        expectedSubject: remoteIp,
+      });
 
-      LoggerUtils.debugDev(
-        HashguardService.name,
-        `PoW verification result:`,
-        result,
+      LoggerUtils.debugDev(HashguardService.name, `PoW verification result:`, {
+        valid: result.valid,
+      });
+
+      return (
+        result.valid === true &&
+        result.context === expectedContext &&
+        result.subject === remoteIp
       );
-
-      return result.valid;
     } catch {
       return false;
     }

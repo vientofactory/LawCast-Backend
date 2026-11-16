@@ -5,6 +5,7 @@ import { CreateWebhookDto } from '../webhook/dto/create-webhook.dto';
 import { HashguardService } from '../shared/hashguard.service';
 import { WebhookValidationUtils } from '../../utils/webhook-validation.utils';
 import { ApiResponseUtils, ErrorContext } from '../../utils/api-response.utils';
+import { IpMaskingUtil } from '../discussions/utils/ip-masking.util';
 import { NotificationService } from './notification.service';
 
 @Injectable()
@@ -19,10 +20,11 @@ export class WebhookRegistrationService {
     try {
       WebhookValidationUtils.validateDiscordWebhookUrl(createWebhookDto.url);
 
-      const clientIp = WebhookValidationUtils.extractClientIp(req);
+      const clientIp = IpMaskingUtil.requireClientIp(req);
       const isProofValid = await this.hashguardService.verifyProof(
         createWebhookDto.proof,
         clientIp,
+        'webhook-registration',
       );
 
       if (!isProofValid) {

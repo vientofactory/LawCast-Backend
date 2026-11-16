@@ -69,8 +69,12 @@ describe('WebPushRegistrationService', () => {
   });
 
   it('derives the discussion authorId from the proxy-forwarded client IP, not the raw socket IP', async () => {
-    const { service, webPushSubscriptionService, discussionThreadRepository } =
-      createService({ webPushEnabled: true });
+    const {
+      service,
+      hashguardService,
+      webPushSubscriptionService,
+      discussionThreadRepository,
+    } = createService({ webPushEnabled: true });
     (discussionThreadRepository.findOne as jest.Mock).mockResolvedValue({
       id: 42,
     });
@@ -91,6 +95,12 @@ describe('WebPushRegistrationService', () => {
         headers: { 'cf-connecting-ip': realClientIp },
         ip: '10.0.0.5', // reverse proxy's socket IP, must not be used
       } as any,
+    );
+
+    expect(hashguardService.verifyProof).toHaveBeenCalledWith(
+      'proof',
+      realClientIp,
+      'webpush-subscription',
     );
 
     const expectedAuthorId = IpMaskingUtil.authorIdFromIp(

@@ -9,6 +9,16 @@ import {
 
 export class CreateThreadDto {
   @IsString()
+  @IsNotEmpty({ message: '보안 검증이 필요합니다.' })
+  @MaxLength(4096)
+  @ApiProperty({
+    description: 'Single-use Hashguard assertion',
+    maxLength: 4096,
+    writeOnly: true,
+  })
+  proof: string;
+
+  @IsString()
   @IsNotEmpty({ message: '토론 제목을 입력해주세요.' })
   @MinLength(2, { message: '토론 제목은 최소 2자 이상이어야 합니다.' })
   @MaxLength(150, { message: '토론 제목은 최대 150자까지 가능합니다.' })

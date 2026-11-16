@@ -13,6 +13,7 @@ import {
   UseFilters,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { HashguardService } from '../../shared/hashguard.service';
 import { DiscussionsService } from '../discussions.service';
 import { DiscussionThreadStatus } from '../entities/discussion-thread.entity';
 import { CreateThreadDto } from '../dto/create-thread.dto';
@@ -32,6 +33,7 @@ export class DiscussionsController {
   constructor(
     private readonly discussionsService: DiscussionsService,
     private readonly rateLimitService: DiscussionsRateLimitService,
+    private readonly hashguardService: HashguardService,
   ) {}
 
   /**
@@ -115,6 +117,15 @@ export class DiscussionsController {
   ) {
     await this.rateLimitService.assertAllowed(req, 'write');
     const clientIp = IpMaskingUtil.requireClientIp(req);
+    if (
+      !(await this.hashguardService.verifyProof(
+        dto.proof,
+        clientIp,
+        'discussion-thread',
+      ))
+    ) {
+      throw ApiResponseUtils.createPoWFailedException();
+    }
     const data = await this.discussionsService.createThread(
       noticeNum,
       dto,
@@ -164,6 +175,15 @@ export class DiscussionsController {
   ) {
     await this.rateLimitService.assertAllowed(req, 'write');
     const clientIp = IpMaskingUtil.requireClientIp(req);
+    if (
+      !(await this.hashguardService.verifyProof(
+        dto.proof,
+        clientIp,
+        'discussion-comment',
+      ))
+    ) {
+      throw ApiResponseUtils.createPoWFailedException();
+    }
     const data = await this.discussionsService.addComment(
       threadId,
       dto,

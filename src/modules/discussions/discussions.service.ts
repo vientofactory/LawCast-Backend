@@ -316,7 +316,7 @@ export class DiscussionsService {
    */
   async createThread(
     noticeNum: number,
-    dto: CreateThreadDto,
+    dto: Omit<CreateThreadDto, 'proof'>,
     rawIp: string,
   ): Promise<ThreadDetailResponse> {
     const noticeExists = await this.noticeArchiveRepository.findOne({
@@ -386,7 +386,7 @@ export class DiscussionsService {
    */
   async addComment(
     threadId: number,
-    dto: CreateCommentDto,
+    dto: Omit<CreateCommentDto, 'proof'>,
     rawIp: string,
   ): Promise<SanitizedComment> {
     const authorNickname = dto.authorNickname?.trim() || '익명';
