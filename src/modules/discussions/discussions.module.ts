@@ -1,3 +1,4 @@
+import { SharedModule } from '../shared/shared.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DiscussionThread } from './entities/discussion-thread.entity';
@@ -18,6 +19,7 @@ import { DiscussionNotificationService } from './discussion-notification.service
       NoticeArchive,
     ]),
     CacheInfraModule,
+    SharedModule,
     NotificationModule,
   ],
   controllers: [DiscussionsController],

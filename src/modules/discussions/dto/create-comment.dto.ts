@@ -9,6 +9,16 @@ import {
 
 export class CreateCommentDto {
   @IsString()
+  @IsNotEmpty({ message: '보안 검증이 필요합니다.' })
+  @MaxLength(4096)
+  @ApiProperty({
+    description: 'Single-use Hashguard assertion',
+    maxLength: 4096,
+    writeOnly: true,
+  })
+  proof: string;
+
+  @IsString()
   @IsOptional()
   @MaxLength(30, { message: '닉네임은 최대 30자까지 가능합니다.' })
   @ApiPropertyOptional({ maxLength: 30 })

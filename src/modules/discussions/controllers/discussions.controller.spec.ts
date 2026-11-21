@@ -1,3 +1,4 @@
+import { HashguardService } from '../../shared/hashguard.service';
 import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DiscussionsController } from './discussions.controller';
@@ -9,6 +10,7 @@ import type { Request } from 'express';
 describe('DiscussionsController', () => {
   let controller: DiscussionsController;
   let service: Partial<Record<keyof DiscussionsService, jest.Mock>>;
+  let hashguardService: { verifyProof: jest.Mock };
   let rateLimitService: { assertAllowed: jest.Mock };
 
   beforeEach(async () => {
@@ -23,16 +25,62 @@ describe('DiscussionsController', () => {
       updateThreadStatus: jest.fn(),
     };
     rateLimitService = { assertAllowed: jest.fn() };
+    hashguardService = { verifyProof: jest.fn().mockResolvedValue(true) };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [DiscussionsController],
       providers: [
+        { provide: HashguardService, useValue: hashguardService },
         { provide: DiscussionsService, useValue: service },
         { provide: DiscussionsRateLimitService, useValue: rateLimitService },
       ],
     }).compile();
 
     controller = module.get<DiscussionsController>(DiscussionsController);
+  });
+
+  describe('Hashguard enforcement', () => {
+    it.each(['thread', 'comment'])(
+      'rejects invalid %s assertions before storage',
+      async (kind) => {
+        hashguardService.verifyProof.mockResolvedValue(false);
+        const req = {
+          headers: { 'x-lawcast-client-ip': '203.0.113.10' },
+        } as unknown as Request;
+        const dto = {
+          title: 'Thread',
+          content: 'Content',
+          password: 'pass',
+          proof: 'invalid',
+        };
+        const action =
+          kind === 'thread'
+            ? controller.createNoticeThread(1, dto, req)
+            : controller.addComment(1, dto, req);
+        await expect(action).rejects.toMatchObject({ status: 400 });
+        expect(hashguardService.verifyProof).toHaveBeenCalledWith(
+          'invalid',
+          '203.0.113.10',
+          kind === 'thread' ? 'discussion-thread' : 'discussion-comment',
+        );
+        expect(service.createThread).not.toHaveBeenCalled();
+        expect(service.addComment).not.toHaveBeenCalled();
+      },
+    );
+
+    it('checks the write limit before consuming a token', async () => {
+      rateLimitService.assertAllowed.mockRejectedValue(
+        new BadRequestException(),
+      );
+      await expect(
+        controller.addComment(
+          1,
+          { password: 'pass', content: 'Content', proof: 'proof' },
+          {} as Request,
+        ),
+      ).rejects.toBeDefined();
+      expect(hashguardService.verifyProof).not.toHaveBeenCalled();
+    });
   });
 
   describe('getNoticeThreads', () => {
@@ -98,6 +146,7 @@ describe('DiscussionsController', () => {
         headers: { 'cf-connecting-ip': '211.234.1.2' },
       } as unknown as Request;
       const dto = {
+        proof: 'proof',
         title: '토론 주제',
         password: 'password123',
         content: '내용입니다.',
@@ -115,6 +164,7 @@ describe('DiscussionsController', () => {
 
     it('should reject the request when the client IP cannot be extracted', async () => {
       const dto = {
+        proof: 'proof',
         title: '토론 주제',
         password: 'password123',
         content: '내용입니다.',
@@ -136,7 +186,11 @@ describe('DiscussionsController', () => {
       const mockReq = {
         headers: { 'x-forwarded-for': '123.45.67.89' },
       } as unknown as Request;
-      const dto = { password: 'password123', content: '답글입니다.' };
+      const dto = {
+        proof: 'proof',
+        password: 'password123',
+        content: '답글입니다.',
+      };
 
       const res = await controller.addComment(1, dto, mockReq);
       expect(res.success).toBe(true);
@@ -145,7 +199,11 @@ describe('DiscussionsController', () => {
     });
 
     it('should reject the request when the client IP cannot be extracted', async () => {
-      const dto = { password: 'password123', content: '답글입니다.' };
+      const dto = {
+        proof: 'proof',
+        password: 'password123',
+        content: '답글입니다.',
+      };
 
       await expect(
         controller.addComment(1, dto, {
@@ -160,7 +218,7 @@ describe('DiscussionsController', () => {
     it('should call service.updateComment', async () => {
       const mockComment = { id: 1, content: '수정됨' };
       (service.updateComment as jest.Mock).mockResolvedValue(mockComment);
-      const dto = { password: 'pass', content: '수정됨' };
+      const dto = { proof: 'proof', password: 'pass', content: '수정됨' };
 
       const res = await controller.updateComment(1, dto, {} as Request);
       expect(res.success).toBe(true);
@@ -176,7 +234,7 @@ describe('DiscussionsController', () => {
         content: '작성자에 의해 삭제된 의견입니다.',
       };
       (service.deleteComment as jest.Mock).mockResolvedValue(mockDeleted);
-      const dto = { password: 'pass' };
+      const dto = { proof: 'proof', password: 'pass' };
 
       const res = await controller.deleteComment(1, dto, {} as Request);
       expect(res.success).toBe(true);
@@ -211,7 +269,7 @@ describe('DiscussionsController', () => {
 
       await controller.createNoticeThread(
         2200001,
-        { title: 't', password: 'p', content: 'c' },
+        { proof: 'proof', title: 't', password: 'p', content: 'c' },
         mockReq,
       );
       expect(rateLimitService.assertAllowed).toHaveBeenCalledWith(
@@ -226,7 +284,11 @@ describe('DiscussionsController', () => {
         headers: { 'cf-connecting-ip': '1.2.3.4' },
       } as unknown as Request;
 
-      await controller.addComment(1, { password: 'p', content: 'c' }, mockReq);
+      await controller.addComment(
+        1,
+        { proof: 'proof', password: 'p', content: 'c' },
+        mockReq,
+      );
       expect(rateLimitService.assertAllowed).toHaveBeenCalledWith(
         expect.anything(),
         'write',
@@ -316,7 +378,7 @@ describe('DiscussionsController', () => {
       await expect(
         controller.createNoticeThread(
           999999,
-          { title: 't', password: 'p', content: 'c' },
+          { proof: 'proof', title: 't', password: 'p', content: 'c' },
           mockReq,
         ),
       ).rejects.toThrow(BadRequestException);

@@ -133,7 +133,8 @@ describe('WebhookRegistrationService', () => {
 
       expect(hashguardService.verifyProof).toHaveBeenCalledWith(
         'proof',
-        '10.0.0.5',
+        '203.0.113.10',
+        'webhook-registration',
       );
     });
 

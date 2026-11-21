@@ -108,10 +108,20 @@ describe('local OpenAPI', () => {
       removeComment.requestBody.content['application/json'].schema,
     ).toEqual({ $ref: '#/components/schemas/DeleteCommentDto' });
     expect(body.components.schemas.CreateThreadDto.required).toEqual([
+      'proof',
       'title',
       'password',
       'content',
     ]);
+    expect(body.components.schemas.CreateCommentDto.required).toContain(
+      'proof',
+    );
+    expect(
+      body.components.schemas.CreateThreadDto.properties.proof.writeOnly,
+    ).toBe(true);
+    expect(
+      body.components.schemas.CreateCommentDto.properties.proof.maxLength,
+    ).toBe(4096);
     expect(
       body.components.schemas.CreateWebhookDto.properties.proof.writeOnly,
     ).toBe(true);

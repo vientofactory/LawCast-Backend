@@ -1,6 +1,6 @@
 {
   "name": "lawcast-backend",
-  "version": "3.2.2",
+  "version": "3.2.3",
   "description": "",
   "author": "vientorepublic",
   "private": true,
@@ -58,7 +58,7 @@
     "cronstrue": "^3.38.0",
     "discord-webhook-node": "^1.1.8",
     "discord.js": "^14.28.1",
-    "hashguard-client": "^1.5.2",
+    "hashguard-client": "2.0.1",
     "jszip": "^3.10.2",
     "keyv": "^6.1.0",
     "node-cache": "^5.1.2",
