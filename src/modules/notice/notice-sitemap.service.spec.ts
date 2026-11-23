@@ -22,7 +22,10 @@ function setup() {
 }
 
 describe('Notice sitemap snapshot', () => {
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
 
   it('serves 100 cold readers from one metadata-only query without a visitor quota', async () => {
     const { service, repository, cache } = setup();
@@ -60,22 +63,22 @@ describe('Notice sitemap snapshot', () => {
 
   it('retains a complete stale snapshot after refresh failure and retries after a cooldown', async () => {
     const { service, repository } = setup();
-    let now = Date.now();
-    jest.spyOn(Date, 'now').mockImplementation(() => now);
+    jest.useFakeTimers({ now: new Date('2026-11-24T00:00:00Z') });
     const original = await service.getSnapshot();
-    now += 3600001;
+    jest.setSystemTime(Date.now() + 3600001);
     repository.find.mockRejectedValue(new Error('database unavailable'));
     expect(await service.getSnapshot()).toEqual(original);
     expect(await service.getSnapshot()).toEqual(original);
     expect(repository.find).toHaveBeenCalledTimes(2);
-    now += 24 * 3600000;
+    jest.setSystemTime(Date.now() + 24 * 3600000);
     await expect(service.getSnapshot()).rejects.toMatchObject({ status: 503 });
   });
 
   it('does not publish invalid or partial data over the last good snapshot', async () => {
     const { service, repository } = setup();
+    jest.useFakeTimers({ now: new Date('2026-11-24T00:00:00Z') });
     const original = await service.getSnapshot();
-    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 3600001);
+    jest.setSystemTime(Date.now() + 3600001);
     repository.find.mockResolvedValue([{ noticeNum: -1 }]);
     expect(await service.getSnapshot()).toEqual(original);
   });
