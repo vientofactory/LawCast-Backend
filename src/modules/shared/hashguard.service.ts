@@ -6,6 +6,7 @@ import { LoggerUtils } from '../../utils/logger.utils';
 @Injectable()
 export class HashguardService {
   private client: HashGuardClient;
+  private readonly isProduction: boolean;
 
   constructor(private readonly configService: ConfigService) {
     const baseUrl = this.configService.get<string>(
@@ -18,6 +19,8 @@ export class HashguardService {
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
     this.client = new HashGuardClient({ baseUrl, headers });
+    this.isProduction =
+      this.configService.get<string>('nodeEnv') === 'production';
   }
 
   async verifyProof(
@@ -29,30 +32,35 @@ export class HashguardService {
       return false;
     }
 
+    // A loopback peer is local-only: the proof token was bound to the browser's
+    // public IP at assessment time, so the subject constraint is skipped for it
+    // while context, single-use and expiry checks still apply. Gated to
+    // non-production so a spoofed loopback header can never disable it in prod.
+    const bindSubject =
+      this.isProduction || !this.isUntrustedSubjectIp(remoteIp);
+    const constraints: { expectedContext: string; expectedSubject?: string } = {
+      expectedContext,
+      ...(bindSubject ? { expectedSubject: remoteIp } : {}),
+    };
+
     try {
-      const result = await this.client.introspectToken(proof, true, {
-        expectedContext,
-        expectedSubject: remoteIp,
-      });
+      const result = await this.client.introspectToken(
+        proof,
+        true,
+        constraints,
+      );
 
       const passed =
         result.valid === true &&
         result.context === expectedContext &&
-        result.subject === remoteIp;
+        (bindSubject ? result.subject === remoteIp : true);
 
-      // Diagnostic (production-visible): a rejected PoW proof is a security-gate
-      // event. The previous `LoggerUtils.debugDev` is dev-only, so production
-      // rejections were silent and the subject/context/expiry cause could not be
-      // observed. Emit a `warn` on every rejection with the full comparison so the
-      // exact mismatch (subject vs expectedSubject, context vs expectedContext,
-      // expiry, or server error) is visible in production logs.
-      // The proof token itself is intentionally NOT logged: it is single-use and
-      // replayable.
       if (!passed) {
         LoggerUtils.warn(HashguardService.name, 'PoW verification rejected:', {
           valid: result.valid,
           subject: result.subject,
           expectedSubject: remoteIp,
+          bindSubject,
           context: result.context,
           expectedContext,
           error: result.error ?? null,
@@ -63,15 +71,21 @@ export class HashguardService {
 
       return passed;
     } catch (error) {
-      // Diagnostic (production-visible): an introspection transport/auth error
-      // (e.g. HTTP 401, network failure) is otherwise swallowed silently. Capture
-      // it so the failing path is observable in production.
       LoggerUtils.warn(HashguardService.name, 'PoW introspection failed:', {
         expectedSubject: remoteIp,
+        bindSubject,
         expectedContext,
         error: error instanceof Error ? error.message : String(error),
       });
       return false;
     }
+  }
+
+  /** True for loopback peers, whose IP is not a trustworthy subject to bind. */
+  private isUntrustedSubjectIp(ip: string): boolean {
+    const normalized = ip.startsWith('::ffff:')
+      ? ip.slice('::ffff:'.length)
+      : ip;
+    return normalized === '::1' || normalized.startsWith('127.');
   }
 }
