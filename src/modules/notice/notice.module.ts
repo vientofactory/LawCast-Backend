@@ -1,3 +1,5 @@
+import { NoticeSitemapController } from './notice-sitemap.controller';
+import { NoticeSitemapService } from './notice-sitemap.service';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { NoticeArchive } from './notice-archive.entity';
@@ -18,7 +20,12 @@ import { ChangeTrackingModule } from '../change-tracking/change-tracking.module'
     ]),
     ChangeTrackingModule,
   ],
-  providers: [NoticeArchiveService, ProposalStatisticsService],
+  controllers: [NoticeSitemapController],
+  providers: [
+    NoticeArchiveService,
+    ProposalStatisticsService,
+    NoticeSitemapService,
+  ],
   exports: [NoticeArchiveService, ProposalStatisticsService],
 })
 export class NoticeModule {}
