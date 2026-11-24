@@ -28,4 +28,43 @@ describe('DbMirrorService startup isolation', () => {
       'Startup database mirror job failed: dump timed out',
     );
   });
+  it('rejects a second job through upload and releases admission after failure', async () => {
+    let fail!: (error: Error) => void;
+    const upload = jest.fn(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    const removeDumpFile = jest.fn();
+    const service = new DbMirrorService(
+      { get: jest.fn() } as never,
+      {
+        get: jest.fn((key: string) =>
+          key === 'fileMirror.enabled' ? true : undefined,
+        ),
+      } as never,
+      {
+        createSanitizedDump: jest.fn().mockResolvedValue({
+          dumpPath: '/tmp/test.sqlite',
+          dumpFileName: 'test.sqlite',
+        }),
+        removeDumpFile,
+      } as never,
+      { uploadFile: upload } as never,
+    );
+    const first = service.runMirrorJob();
+    const assertion = expect(first).rejects.toThrow('network failed');
+    await nextTurn();
+    await expect(service.runMirrorJob({ force: true })).rejects.toThrow(
+      'already running',
+    );
+    expect(upload).toHaveBeenCalledTimes(1);
+    fail(new Error('network failed'));
+    await assertion;
+    expect(removeDumpFile).toHaveBeenCalledTimes(1);
+    upload.mockRejectedValueOnce(new Error('retry failed'));
+    await expect(service.runMirrorJob()).rejects.toThrow('retry failed');
+    expect(upload).toHaveBeenCalledTimes(2);
+  });
 });

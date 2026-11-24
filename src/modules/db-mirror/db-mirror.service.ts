@@ -12,6 +12,8 @@ import { measureMirrorPhase } from './mirror-phase-metrics';
 export class DbMirrorService {
   private readonly logger = LoggerUtils.getContextLogger(DbMirrorService.name);
 
+  private running = false;
+
   constructor(
     private readonly moduleRef: ModuleRef,
     private readonly configService: ConfigService,
@@ -47,6 +49,16 @@ export class DbMirrorService {
   }
 
   async runMirrorJob(options?: { force?: boolean }): Promise<void> {
+    if (this.running) throw new Error('Database mirror is already running');
+    this.running = true;
+    try {
+      await this.performMirrorJob(options);
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async performMirrorJob(options?: { force?: boolean }): Promise<void> {
     const force = options?.force ?? false;
     const enabled =
       this.configService.get<boolean>('fileMirror.enabled', false) ?? false;

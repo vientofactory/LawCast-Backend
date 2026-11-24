@@ -6,14 +6,22 @@ declare module 'better-sqlite3' {
     timeout?: number;
   }
 
+  type SqliteValue = string | number | bigint | Buffer | null;
+
   interface Statement {
-    all(): unknown[];
-    run(...params: string[]): unknown;
+    all(...params: SqliteValue[]): unknown[];
+    get(...params: SqliteValue[]): unknown;
+    run(...params: SqliteValue[]): unknown;
+    iterate(...params: SqliteValue[]): IterableIterator<unknown>;
+    raw(toggle?: boolean): this;
+    pluck(toggle?: boolean): this;
+    safeIntegers(toggle?: boolean): this;
   }
 
   class Database {
     constructor(path: string, options?: DatabaseOptions);
-    pragma(sql: string): unknown;
+    pragma(sql: string, options?: { simple?: boolean }): unknown;
+    transaction<T>(work: () => T): () => T;
     prepare(sql: string): Statement;
     exec(sql: string): this;
     close(): this;

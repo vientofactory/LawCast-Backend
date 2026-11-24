@@ -2,6 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { DataSource } from 'typeorm';
+import Database from 'better-sqlite3';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { DatabaseDumpService } from './database-dump.service';
 
@@ -153,6 +154,131 @@ describe('DatabaseDumpService', () => {
     }
   });
 
+  it('preserves BLOBs, large integers, sequences, indexes and immutable triggers while excluding private data', async () => {
+    await sourceDataSource.query(
+      'ALTER TABLE notice_archives ADD COLUMN screenshot_blob BLOB',
+    );
+    await sourceDataSource.query('CREATE TABLE private_tokens (token TEXT)');
+    await sourceDataSource.query(
+      "INSERT INTO private_tokens VALUES ('private-sentinel')",
+    );
+    await sourceDataSource.query(
+      "INSERT INTO notice_archives (id, noticeNum, subject, committee, screenshot_blob) VALUES (9007199254740993, 1002, 'Large', 'Committee', ?)",
+      [Buffer.from([0, 255, 1, 128])],
+    );
+    await sourceDataSource.query(
+      "UPDATE sqlite_sequence SET seq = 9007199254740999 WHERE name = 'notice_archives'",
+    );
+    await sourceDataSource.query(
+      'CREATE UNIQUE INDEX archive_num_test ON notice_archives (noticeNum)',
+    );
+    await sourceDataSource.query(
+      `CREATE TRIGGER immutable_test BEFORE DELETE ON notice_archives BEGIN SELECT RAISE(ABORT, 'immutable'); END`,
+    );
+    const artifact = await createService(
+      path.join(tempDir, 'dump'),
+    ).createSanitizedDump();
+    const copy = new Database(artifact.dumpPath, { readonly: true });
+    try {
+      const row = copy
+        .prepare(
+          'SELECT id, screenshot_blob FROM notice_archives WHERE noticeNum = 1002',
+        )
+        .safeIntegers()
+        .get() as { id: bigint; screenshot_blob: Buffer };
+      expect(row.id).toBe(9007199254740993n);
+      expect(row.screenshot_blob).toEqual(Buffer.from([0, 255, 1, 128]));
+      expect(
+        copy
+          .prepare(
+            "SELECT seq FROM sqlite_sequence WHERE name = 'notice_archives'",
+          )
+          .safeIntegers()
+          .pluck()
+          .get(),
+      ).toBe(9007199254740999n);
+      expect(
+        copy
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE name IN ('archive_num_test', 'immutable_test') ORDER BY name",
+          )
+          .all(),
+      ).toHaveLength(2);
+      expect(
+        copy
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE name LIKE 'private%' OR name LIKE 'notice_archives_fts%'",
+          )
+          .all(),
+      ).toEqual([]);
+      expect(
+        (await fs.readFile(artifact.dumpPath)).includes(
+          Buffer.from('private-sentinel'),
+        ),
+      ).toBe(false);
+      expect(copy.pragma('foreign_key_check')).toEqual([]);
+    } finally {
+      copy.close();
+    }
+    const writable = new Database(artifact.dumpPath);
+    try {
+      expect(() => writable.exec('DELETE FROM notice_archives')).toThrow(
+        'immutable',
+      );
+    } finally {
+      writable.close();
+    }
+  });
+
+  it('pins every table to one WAL snapshot while a writer commits during copying', async () => {
+    await sourceDataSource.query('PRAGMA journal_mode = WAL');
+    await sourceDataSource.query(
+      'INSERT INTO notice_archive_snapshot_states (notice_num, is_done) VALUES (1001, 0)',
+    );
+    const writer = new Database(sourceDbPath);
+    let committed = false;
+    const log = jest
+      .spyOn(LoggerUtils, 'log')
+      .mockImplementation((context, message) => {
+        if (
+          context === 'DatabaseMirrorMetrics' &&
+          String(message).includes('event=db_mirror_phase_start') &&
+          String(message).includes('phase=copy |')
+        ) {
+          writer.exec(
+            "BEGIN IMMEDIATE; UPDATE notice_archives SET subject = 'Changed'; UPDATE notice_archive_snapshot_states SET is_done = 1; COMMIT",
+          );
+          committed = true;
+        }
+      });
+    try {
+      const artifact = await createService(
+        path.join(tempDir, 'dump'),
+      ).createSanitizedDump();
+      expect(committed).toBe(true);
+      const copy = new Database(artifact.dumpPath, { readonly: true });
+      try {
+        expect(
+          copy.prepare('SELECT subject FROM notice_archives').pluck().get(),
+        ).toBe('테스트 의안');
+        expect(
+          copy
+            .prepare('SELECT is_done FROM notice_archive_snapshot_states')
+            .pluck()
+            .get(),
+        ).toBe(0);
+        expect(
+          writer.prepare('SELECT subject FROM notice_archives').pluck().get(),
+        ).toBe('Changed');
+      } finally {
+        copy.close();
+      }
+    } finally {
+      log.mockRestore();
+      writer.close();
+    }
+  });
+
   it('formats parent and child phase logs as readable key-value fields', async () => {
     const log = jest.spyOn(LoggerUtils, 'log').mockImplementation(() => {});
     try {
@@ -170,7 +296,7 @@ describe('DatabaseDumpService', () => {
         /phase=dump_wait \| executionContext=backend-main \| status=ok .*eventLoopMaxDelayMs=\d+ ms$/,
       );
       expect(lines[1]).toContain(
-        `event=db_mirror_phase_start | dumpFileName=${artifact.dumpFileName} | phase=copy | executionContext=dump-child | pid=`,
+        `event=db_mirror_phase_start | dumpFileName=${artifact.dumpFileName} | phase=schema | executionContext=dump-child | pid=`,
       );
       expect(lines[2]).toMatch(
         /status=ok \| durationMs=\d+ ms \| rssBeforeBytes=\d+ \(\d+\.\d MiB\) \| rssAfterBytes=\d+ \(\d+\.\d MiB\) \| processRssHighWaterBytes=\d+ \(\d+\.\d MiB\)$/,

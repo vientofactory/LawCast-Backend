@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { LoggerUtils } from '../../utils/logger.utils';
 
-type MirrorPhase = 'copy' | 'prune' | 'recompact' | 'upload' | 'dump_wait';
+type MirrorPhase = 'schema' | 'copy' | 'indexes' | 'upload' | 'dump_wait';
 
 const SAMPLE_INTERVAL_MS = 50;
 export type MirrorMetricFields = Record<string, string | number>;
