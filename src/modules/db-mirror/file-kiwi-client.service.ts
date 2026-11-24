@@ -140,6 +140,18 @@ export class FileKiwiClientService {
   }): Promise<void> {
     const { fileMeta } = params;
 
+    if (
+      !Number.isSafeInteger(fileMeta.chunkSize) ||
+      fileMeta.chunkSize <= 0 ||
+      !Number.isSafeInteger(fileMeta.chunks) ||
+      fileMeta.chunks !==
+        Math.max(1, Math.ceil(params.fileSize / fileMeta.chunkSize))
+    ) {
+      throw new Error('Invalid file.kiwi chunk dimensions');
+    }
+    const plainBuffer = Buffer.alloc(
+      Math.min(fileMeta.chunkSize, params.fileSize),
+    );
     const fileHandle = await fs.open(params.filePath, 'r');
     try {
       const uploadOrder = this.buildChunkOrder(fileMeta.chunks);
@@ -149,8 +161,18 @@ export class FileKiwiClientService {
         const end = Math.min(start + fileMeta.chunkSize, params.fileSize);
         const length = end - start;
 
-        const plainChunk = Buffer.alloc(length);
-        await fileHandle.read(plainChunk, 0, length, start);
+        const plainChunk = plainBuffer.subarray(0, length);
+        let offset = 0;
+        while (offset < length) {
+          const { bytesRead } = await fileHandle.read(
+            plainChunk,
+            offset,
+            length - offset,
+            start + offset,
+          );
+          if (bytesRead === 0) throw new Error('Unexpected end of mirror file');
+          offset += bytesRead;
+        }
 
         const encryptedChunk = await params.encryptChunk(
           plainChunk,
@@ -171,7 +193,11 @@ export class FileKiwiClientService {
 
         await this.uploadChunk({
           uploadUrl,
-          encryptedChunk: Buffer.from(encryptedChunk),
+          encryptedChunk: Buffer.from(
+            encryptedChunk.buffer,
+            encryptedChunk.byteOffset,
+            encryptedChunk.byteLength,
+          ),
           headers: fileMeta.uploadUrls.headers,
           chunkIndex,
         });
@@ -222,6 +248,8 @@ export class FileKiwiClientService {
           ],
         },
         {
+          timeout: 60_000,
+          signal: AbortSignal.timeout(60_000),
           headers: {
             'Content-Type': 'application/json',
           },
@@ -256,6 +284,8 @@ export class FileKiwiClientService {
   }): Promise<void> {
     try {
       await axios.put(params.uploadUrl, params.encryptedChunk, {
+        timeout: 120_000,
+        signal: AbortSignal.timeout(120_000),
         headers: {
           'Content-Length': String(params.encryptedChunk.length),
           ...params.headers,
@@ -276,6 +306,8 @@ export class FileKiwiClientService {
   ): Promise<FileKiwiV2UploadStatus> {
     try {
       const response = await axios.get<FileKiwiV2UploadStatus>(statusUrl, {
+        timeout: 60_000,
+        signal: AbortSignal.timeout(60_000),
         params: {
           uploadAuth,
         },

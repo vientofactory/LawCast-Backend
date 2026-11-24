@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { LoggerUtils } from '../../utils/logger.utils';
 import { logAndBridge } from '../../utils/bridge-log.utils';
 import { DatabaseDumpService } from './database-dump.service';
-import { FileKiwiClientService } from './file-kiwi-client.service';
+import { FileKiwiUploadWorkerService } from './file-kiwi-upload-worker.service';
 import { DiscordBridgeService } from '../discord-bridge/discord-bridge.service';
 import { measureMirrorPhase } from './mirror-phase-metrics';
 
@@ -18,7 +18,7 @@ export class DbMirrorService {
     private readonly moduleRef: ModuleRef,
     private readonly configService: ConfigService,
     private readonly databaseDumpService: DatabaseDumpService,
-    private readonly fileKiwiClientService: FileKiwiClientService,
+    private readonly fileKiwiClientService: FileKiwiUploadWorkerService,
   ) {}
 
   onModuleInit(): void {
