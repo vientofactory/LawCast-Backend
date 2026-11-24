@@ -15,7 +15,7 @@ type DumpChildOptions = {
 
 const MAX_METRICS = 6;
 const MAX_RETAINED_TABLES = 6;
-const PHASES = new Set(['copy', 'prune', 'recompact']);
+const PHASES = new Set(['schema', 'copy', 'indexes']);
 
 function childError(code: string, message: string): Error {
   return Object.assign(new Error(message), { code });
