@@ -33,6 +33,8 @@ import { AddScreenshotCaptureStatus1758096001000 } from './202609170001-add-scre
 import { AddNsmListAbsenceTracking1760400001000 } from './202610140001-add-nsm-list-absence-tracking.migration';
 import { AddProposalReasonRetryTracking1760486401000 } from './202610150001-add-proposal-reason-retry-tracking.migration';
 
+import { OptimizeArchiveMaintenanceIndexes1795651201000 } from './202611260001-optimize-archive-maintenance-indexes.migration';
+
 export const migrations: (new () => MigrationInterface)[] = [
   InitialSchemaMigration1744953900000,
   AddContentMetadataColumns1745001601000,
@@ -67,4 +69,5 @@ export const migrations: (new () => MigrationInterface)[] = [
   AddNsmListAbsenceTracking1760400001000,
   AddProposalReasonRetryTracking1760486401000,
   OptimizeArchiveMetadataUpdates1793145601000,
+  OptimizeArchiveMaintenanceIndexes1795651201000,
 ];

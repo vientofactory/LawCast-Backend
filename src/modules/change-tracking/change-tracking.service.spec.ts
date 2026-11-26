@@ -693,23 +693,12 @@ describe('ChangeTrackingService (diffchain batching)', () => {
   it('returns null when the latest field record clears proposalReason even if an older record was non-empty', async () => {
     const rowQueue = [{ afterValue: '과거 제안이유' }, { afterValue: null }];
 
-    const qb = {
-      innerJoin: jest.fn().mockReturnThis(),
-      select: jest.fn().mockReturnThis(),
-      where: jest.fn().mockReturnThis(),
-      andWhere: jest.fn().mockReturnThis(),
-      orderBy: jest.fn().mockReturnThis(),
-      addOrderBy: jest.fn().mockReturnThis(),
-      limit: jest.fn().mockReturnThis(),
-      getRawOne: jest
-        .fn<(...args: any[]) => Promise<{ afterValue: string | null }>>()
-        .mockImplementation(async () => rowQueue.shift() ?? null),
-    };
+    const query = jest.fn().mockImplementation(async () => [rowQueue.shift()]);
 
     const service = new ChangeTrackingService(
       {} as any,
       {
-        createQueryBuilder: jest.fn().mockReturnValue(qb),
+        manager: { query },
       } as any,
       undefined as any,
       undefined as any,

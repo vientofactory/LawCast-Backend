@@ -108,7 +108,7 @@ export async function getProposalReasonRetryCandidates(
     .andWhere('na.noticeNum >= :minNoticeNum', {
       minNoticeNum: APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
     })
-    .andWhere("(na.proposalReason IS NULL OR TRIM(na.proposalReason) = '')")
+    .andWhere("COALESCE(TRIM(na.proposalReason), '') = ''")
     // Correlate events first so SQLite cannot scan every detail for each notice.
     .andWhere(
       `NOT EXISTS (

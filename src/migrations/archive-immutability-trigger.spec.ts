@@ -97,7 +97,15 @@ describe('notice_archives immutability trigger', () => {
 
   it('restores the original guard on migration rollback without weakening protection', async () => {
     await insertRow();
-    await dataSource.undoLastMigration();
+    // Roll back to this guard's migration, not whichever migration is newest.
+    const applied: Array<{ name: string }> = await dataSource.query(
+      'SELECT name FROM migrations ORDER BY timestamp DESC',
+    );
+    for (const migration of applied) {
+      await dataSource.undoLastMigration();
+      if (migration.name === 'OptimizeArchiveMetadataUpdates1793145601000')
+        break;
+    }
     const [trigger] = await dataSource.query(
       "SELECT sql FROM sqlite_master WHERE name = 'trg_notice_archives_prevent_update'",
     );
