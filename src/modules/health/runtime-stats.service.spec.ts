@@ -41,20 +41,11 @@ function createQueryBuilderStub(
   return qb;
 }
 
-/**
- * The subset of the transparency payload these tests assert on.
- * `getTransparencyStats()` widens its cached branch to `Record<string, unknown>`,
- * so the test narrows the parts it inspects instead of reaching for `any`.
- */
-type TransparencyPayload = {
-  noticeSources: Array<{ id: string; name: string; url: string }>;
-  schedules: Array<{ id: string; name: string }>;
-  transferFlow: { description: string };
-};
-
 function buildService(params?: {
   palPhaseFailed?: boolean;
   isProcessing?: boolean;
+  isPendingProcessing?: boolean;
+  pendingPhaseFailed?: boolean;
   nsmListScanHealth?: unknown;
 }) {
   const cacheManager = {
@@ -101,7 +92,7 @@ function buildService(params?: {
       .fn<(...args: any[]) => any>()
       .mockReturnValue({
         isProcessing: params?.isProcessing ?? false,
-        isPendingProcessing: false,
+        isPendingProcessing: params?.isPendingProcessing ?? false,
         lastPalCronRunAt: null,
         lastNsmPendingCronRunAt: null,
       }),
@@ -119,16 +110,28 @@ function buildService(params?: {
     getExecutionState: jest.fn<(...args: any[]) => any>().mockReturnValue({
       isAnyPhaseRunning: false,
       runningPhases: [],
-      phases: params?.palPhaseFailed
-        ? [
-            {
-              name: 'full sync',
-              status: 'failed',
-              lastRunAt: '2026-01-01T00:00:00.000Z',
-              lastError: 'previous failure',
-            },
-          ]
-        : [],
+      phases: [
+        ...(params?.palPhaseFailed
+          ? [
+              {
+                name: 'full sync',
+                status: 'failed',
+                lastRunAt: '2026-01-01T00:00:00.000Z',
+                lastError: 'previous failure',
+              },
+            ]
+          : []),
+        ...(params?.pendingPhaseFailed
+          ? [
+              {
+                name: 'pending sync',
+                status: 'failed',
+                lastRunAt: '2026-01-02T00:00:00.000Z',
+                lastError: 'previous pending failure',
+              },
+            ]
+          : []),
+      ],
       asyncApply: null,
     }),
   } as any;
@@ -155,10 +158,12 @@ function buildService(params?: {
     archiveRepo,
     changeEventRepo,
     crawlingService,
+    archiveSyncService,
+    cronJobsService,
     getTransparency: () => service.getTransparencyStats(),
-    getStats: () =>
+    getStats: (nodeEnv = 'production') =>
       service.getAggregatedStats(
-        { nodeEnv: 'production' },
+        { nodeEnv },
         webhookService,
         crawlingService,
         noticeArchiveService,
@@ -228,6 +233,196 @@ describe('RuntimeStatsService frontend read budgets', () => {
     const { getStats, crawlingService } = buildService();
     await getStats();
     expect(crawlingService.getOllamaMetrics).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('RuntimeStatsService response preservation', () => {
+  it('preserves transparency counts, unknown sources, schedule order and cache TTL', async () => {
+    const { getTransparency, archiveRepo, changeEventRepo, cacheManager } =
+      buildService();
+    archiveRepo.count.mockResolvedValue(5);
+    archiveRepo.createQueryBuilder.mockReturnValue(
+      createQueryBuilderStub(
+        [
+          { status: 'active', count: '4' },
+          { status: 'source_deleted', count: '1' },
+        ],
+        2,
+      ),
+    );
+    changeEventRepo.createQueryBuilder
+      .mockReturnValueOnce(
+        createQueryBuilderStub([
+          { type: 'created', count: '3' },
+          { type: 'updated', count: '2' },
+        ]),
+      )
+      .mockReturnValueOnce(
+        createQueryBuilderStub([
+          { source: null, count: '1' },
+          { source: 'archive:upsert', count: '4' },
+        ]),
+      );
+    const result = await getTransparency();
+    expect(result.collection).toEqual({
+      totalNotices: 5,
+      byLifecycle: { active: 4, source_deleted: 1 },
+      bySource: { unknown: 1, 'archive:upsert': 4 },
+    });
+    expect(result.changeTracking).toEqual({
+      totalEvents: 5,
+      byType: { created: 3, updated: 2 },
+    });
+    expect(result.noticeSources.map((source) => source.noticeCount)).toEqual([
+      2, 3,
+    ]);
+    expect(result.schedules.map((schedule) => schedule.id)).toEqual([
+      'pal-crawl',
+      'nsm-pending',
+      'isdone-sync',
+    ]);
+    expect(cacheManager.set).toHaveBeenCalledWith(
+      'transparency:stats',
+      result,
+      300_000,
+    );
+  });
+
+  it('returns warm cached payloads without any database aggregation', async () => {
+    const { getTransparency, cacheManager, archiveRepo, changeEventRepo } =
+      buildService();
+    const cached = { noticeSources: [{ id: 'legacy', name: 'cached value' }] };
+    cacheManager.get.mockResolvedValue(cached);
+    expect(await getTransparency()).toBe(cached);
+    expect(archiveRepo.count).not.toHaveBeenCalled();
+    expect(changeEventRepo.createQueryBuilder).not.toHaveBeenCalled();
+    expect(cacheManager.set).not.toHaveBeenCalled();
+  });
+
+  it('releases failed database aggregation so the next request can retry', async () => {
+    const { getTransparency, archiveRepo } = buildService();
+    const failure = new Error('database unavailable');
+    archiveRepo.count.mockRejectedValueOnce(failure);
+    await expect(getTransparency()).rejects.toBe(failure);
+    await expect(getTransparency()).resolves.toHaveProperty('collection');
+    expect(archiveRepo.count).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves cache-write failure and clears the in-flight request', async () => {
+    const { getTransparency, cacheManager, archiveRepo } = buildService();
+    const failure = new Error('cache write unavailable');
+    cacheManager.set.mockRejectedValueOnce(failure);
+    await expect(getTransparency()).rejects.toBe(failure);
+    await expect(getTransparency()).resolves.toHaveProperty('collection');
+    expect(archiveRepo.count).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps private cache and model details out of production but preserves development payloads', async () => {
+    const { getStats, crawlingService } = buildService();
+    const cache = {
+      size: 2,
+      lastUpdated: 'now',
+      maxSize: 10,
+      isInitialized: true,
+      privateValue: 'private',
+    };
+    const metrics = {
+      enabled: true,
+      configured: true,
+      model: 'fixture',
+      privateValue: 'private',
+      summary: {
+        total: 3,
+        success: 2,
+        failed: 1,
+        skipped: 0,
+        successRate: 66,
+        privateValue: 'private',
+      },
+      health: {
+        status: 'healthy',
+        lastCheckedAt: null,
+        lastLatencyMs: 2,
+        availableModelCount: 1,
+        privateValue: 'private',
+      },
+    };
+    crawlingService.getCacheInfo.mockResolvedValue(cache);
+    crawlingService.getOllamaMetrics.mockResolvedValue(metrics);
+    const production = await getStats();
+    expect(production.cache).toEqual({
+      size: 2,
+      lastUpdated: 'now',
+      maxSize: 10,
+      isInitialized: true,
+    });
+    expect(production.ollama).toEqual({
+      enabled: true,
+      configured: true,
+      model: 'fixture',
+      summary: { total: 3, success: 2, failed: 1, skipped: 0, successRate: 66 },
+      health: {
+        status: 'healthy',
+        lastCheckedAt: null,
+        lastLatencyMs: 2,
+        availableModelCount: 1,
+      },
+    });
+    const development = await getStats('development');
+    expect(development.cache).toBe(cache);
+    expect(development.ollama).toBe(metrics);
+  });
+
+  it('keeps missing job expressions empty and describes unknown expressions without inventing intervals', async () => {
+    const { getStats, cronJobsService } = buildService();
+    cronJobsService.getCronJobsStatus.mockReturnValue([
+      { taskName: 'missing', status: 'idle' },
+      { taskName: 'unknown', status: 'idle' },
+    ]);
+    cronJobsService.getCronJobExpression.mockImplementation((name: string) =>
+      name === 'unknown' ? 'invalid-test-expression' : undefined,
+    );
+    const result = await getStats();
+    expect(result.crawlers.cronJobs.map((job) => job.cron)).toEqual([
+      { expression: '', intervalMs: 0, description: '' },
+      {
+        expression: 'invalid-test-expression',
+        intervalMs: 0,
+        description: 'invalid-test-expression',
+      },
+    ]);
+  });
+
+  it('degrades a failed list-health read to unknown without failing the full response', async () => {
+    const { getStats, cacheManager } = buildService();
+    cacheManager.get.mockRejectedValueOnce(new Error('health unavailable'));
+    expect(
+      (await getStats()).crawlers.nsmPendingCrawler.listScan.lastScanAt,
+    ).toBeNull();
+  });
+
+  it('keeps running ahead of degraded and degraded ahead of an older pending failure', async () => {
+    const health = {
+      degraded: true,
+      consecutiveZeroRowScans: 4,
+      lastScanAt: null,
+      lastSuccessfulScanAt: null,
+    };
+    const running = buildService({
+      isPendingProcessing: true,
+      pendingPhaseFailed: true,
+      nsmListScanHealth: health,
+    });
+    expect((await running.getStats()).crawlers.nsmPendingCrawler.status).toBe(
+      'running',
+    );
+    const degraded = buildService({
+      pendingPhaseFailed: true,
+      nsmListScanHealth: health,
+    });
+    const result = (await degraded.getStats()).crawlers.nsmPendingCrawler;
+    expect(result.status).toBe('degraded');
+    expect(result.lastError).toBe('previous pending failure');
   });
 });
 
@@ -368,12 +563,15 @@ describe('RuntimeStatsService NSM source reporting', () => {
       '국민참여입법센터 입법진행현황 크롤러',
     );
 
-    const transparency = (await getTransparency()) as TransparencyPayload;
+    const transparency = await getTransparency();
     const nsmSource = transparency.noticeSources.find(
       (source) => source.id === 'nsm',
     );
     expect(nsmSource?.url).toBe('https://opinion.lawmaking.go.kr');
-    expect(nsmSource?.name).toBe('국민참여입법센터 입법진행현황');
+    expect(nsmSource?.name).toBe(stats.crawlers.nsmPendingCrawler.name);
+    expect(
+      transparency.noticeSources.find((source) => source.id === 'pal')?.name,
+    ).toBe(stats.crawlers.palCrawler.name);
 
     const nsmSchedule = transparency.schedules.find(
       (schedule) => schedule.id === 'nsm-pending',
@@ -392,12 +590,15 @@ describe('RuntimeStatsService NSM source reporting', () => {
     );
     expect(stats.crawlers.nsmPendingCrawler.name).toContain('의안정보시스템');
 
-    const transparency = (await getTransparency()) as TransparencyPayload;
+    const transparency = await getTransparency();
     const nsmSource = transparency.noticeSources.find(
       (source) => source.id === 'nsm',
     );
     expect(nsmSource?.url).toBe('https://likms.assembly.go.kr');
-    expect(nsmSource?.name).toBe('국회 의안정보시스템 계류의안');
+    expect(nsmSource?.name).toBe(stats.crawlers.nsmPendingCrawler.name);
+    expect(
+      transparency.noticeSources.find((source) => source.id === 'pal')?.name,
+    ).toBe(stats.crawlers.palCrawler.name);
 
     const nsmSchedule = transparency.schedules.find(
       (schedule) => schedule.id === 'nsm-pending',
