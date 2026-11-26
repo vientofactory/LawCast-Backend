@@ -1,5 +1,6 @@
 import cronstrue from 'cronstrue/i18n';
-import { describeCron } from './cron-display.util';
+import { APP_CONSTANTS } from '../../config/app.config';
+import { describeCron, getCronSchedule } from './cron-display.util';
 
 describe('cron description memoization', () => {
   afterEach(() => jest.restoreAllMocks());
@@ -24,5 +25,38 @@ describe('cron description memoization', () => {
     const spy = jest.spyOn(cronstrue, 'toString');
     describeCron('eviction-test');
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('cron schedule presentation', () => {
+  it('preserves known intervals and uses the shared description', () => {
+    const expression = APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK;
+    expect(getCronSchedule(expression)).toEqual({
+      expression,
+      intervalMs: 600_000,
+      description: describeCron(expression),
+    });
+  });
+
+  it('returns empty fields for a missing expression', () => {
+    expect(getCronSchedule()).toEqual({
+      expression: '',
+      intervalMs: 0,
+      description: '',
+    });
+    expect(getCronSchedule('')).toEqual(getCronSchedule());
+  });
+
+  it('preserves unknown expressions without inventing an interval', () => {
+    expect(getCronSchedule('invalid-schedule')).toEqual({
+      expression: 'invalid-schedule',
+      intervalMs: 0,
+      description: 'invalid-schedule',
+    });
+    expect(getCronSchedule('3 7 * * *')).toEqual({
+      expression: '3 7 * * *',
+      intervalMs: 0,
+      description: describeCron('3 7 * * *'),
+    });
   });
 });

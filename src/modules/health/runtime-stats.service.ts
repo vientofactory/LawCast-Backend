@@ -3,6 +3,7 @@ import {
   Inject,
   OnModuleInit,
   OnModuleDestroy,
+  Logger,
 } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
@@ -17,7 +18,6 @@ import { ChangeTrackingService } from '../change-tracking/change-tracking.servic
 import { WebPushSubscriptionService } from '../notification/web-push-subscription.service';
 import { APP_CONSTANTS } from '../../config/app.config';
 import {
-  isLikmsNsmSourceEnabled,
   isNsmCrawlerEnabled,
   isPalCrawlerEnabled,
 } from '../../utils/crawler-activation.utils';
@@ -29,94 +29,24 @@ import {
   readNsmListScanHealth,
   type NsmListScanHealth,
 } from '../crawling/utils/nsm-list-scan-health.util';
-import { Logger } from '@nestjs/common';
-import { describeCron } from './cron-display.util';
+import { getCronSchedule } from './cron-display.util';
+import { resolveRuntimeCrawlerSources } from './crawler-source-presentation';
+import type {
+  ArchiveTransparencyTotals,
+  ChangeEventTransparencyTotals,
+  EventLoopDelayStats,
+  TransparencyStats,
+} from './runtime-stats.types';
 import { StatsReadTrace } from './stats-read-trace';
 import { getAiSummaryTransparencyInfo } from '../ollama/ai-summary-prompt.util';
-
-/**
- * Maps known cron expressions to interval (ms) for UI timer calculations.
- */
-const CRON_INTERVAL_MAP: Record<string, number> = {
-  [APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK]: 600_000,
-  [APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK]: 1_200_000,
-  [APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC]: 21_600_000,
-  [APP_CONSTANTS.CRON.EXPRESSIONS.PROPOSAL_REASON_BACKFILL_DRAIN]: 900_000,
-  [APP_CONSTANTS.CRON.EXPRESSIONS.INTEGRITY_RESCAN]: 86_400_000,
-  [APP_CONSTANTS.CRON.EXPRESSIONS.CHANGE_TRACKING_DAILY_AUDIT]: 86_400_000,
-  [APP_CONSTANTS.CRON.EXPRESSIONS.CHANGE_TRACKING_WEEKLY_AUDIT]: 604_800_000,
-  [APP_CONSTANTS.CRON.EXPRESSIONS.WEBHOOK_CLEANUP]: 86_400_000,
-  [APP_CONSTANTS.CRON.EXPRESSIONS.WEB_PUSH_CLEANUP]: 3_600_000,
-  [APP_CONSTANTS.CRON.EXPRESSIONS.QUICK_KEYWORDS_REFRESH]: 3_600_000,
-  [APP_CONSTANTS.CRON.EXPRESSIONS.SQLITE_VACUUM]: 604_800_000,
-};
-
-function resolveCronDisplay(expr: string): {
-  intervalMs: number;
-  description: string;
-} {
-  const description = describeCron(expr);
-
-  return {
-    intervalMs: CRON_INTERVAL_MAP[expr] ?? 0,
-    description,
-  };
-}
-
-/**
- * Presentation metadata for the active NSM-shaped list/detail source.
- *
- * The NSM crawler can read either the public-participation portal
- * (`opinion.lawmaking.go.kr`, `NsmLmSts`) or the National Assembly Bill
- * Information System (`likms.assembly.go.kr`, `LikmsNsmAdapter`), selected by
- * `CRAWLING_NSM_SOURCE`. Resolved on every aggregation rather than at module
- * load, so an operator toggling the source is reported without a restart.
- */
-function resolveNsmSourceInfo(): {
-  source: string;
-  name: string;
-  url: string;
-  description: string;
-  crawlerName: string;
-  scheduleName: string;
-  scheduleDescription: string;
-  transferFlowDescription: string;
-} {
-  if (isLikmsNsmSourceEnabled()) {
-    return {
-      source: 'likms.assembly.go.kr',
-      name: '국회 의안정보시스템 계류의안',
-      url: 'https://likms.assembly.go.kr',
-      description: '국회 의안정보시스템의 계류의안 목록을 수집합니다.',
-      crawlerName: '국회 의안정보시스템 계류의안 크롤러',
-      scheduleName: '국회 의안정보시스템 계류의안 수집',
-      scheduleDescription:
-        '국회 의안정보시스템의 계류의안 목록을 주기적으로 수집합니다.',
-      transferFlowDescription:
-        '국회 의안정보시스템의 계류의안이 국회입법현황으로 이관되면, 크롤러가 이를 자동으로 감지하여 동기화합니다.',
-    };
-  }
-
-  return {
-    source: 'opinion.lawmaking.go.kr',
-    name: '국민참여입법센터 입법진행현황',
-    url: 'https://opinion.lawmaking.go.kr',
-    description: '국민참여입법센터의 입법진행현황(국회입법현황)을 수집합니다.',
-    crawlerName: '국민참여입법센터 입법진행현황 크롤러',
-    scheduleName: '국민참여입법센터 입법진행현황 수집',
-    scheduleDescription:
-      '국민참여입법센터의 입법진행현황(국회입법현황)을 주기적으로 수집합니다.',
-    transferFlowDescription:
-      '국민참여입법센터의 입법진행현황에서 국회입법현황으로 이관된 의안이 있으면, 크롤러가 이를 자동으로 감지하여 동기화합니다.',
-  };
-}
 
 @Injectable()
 export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RuntimeStatsService.name);
-  private eventLoopStats: any = null;
+  private eventLoopStats: EventLoopDelayStats | null = null;
   private intervalId: NodeJS.Timeout | null = null;
   private readonly measurementInterval = 2000;
+  private transparencyInFlight: Promise<TransparencyStats> | null = null;
 
   private static readonly TRANSPARENCY_CACHE_KEY = 'transparency:stats';
   private static readonly TRANSPARENCY_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -342,9 +272,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
    * Includes source breakdowns, lifecycle counts, change event stats,
    * and crawler schedule information.
    */
-  private transparencyInFlight: Promise<Record<string, unknown>> | null = null;
-
-  async getTransparencyStats() {
+  async getTransparencyStats(): Promise<TransparencyStats> {
     if (this.transparencyInFlight) return this.transparencyInFlight;
     const pending = this.readCachedTransparencyStats();
     this.transparencyInFlight = pending;
@@ -356,135 +284,18 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async readCachedTransparencyStats() {
+  private async readCachedTransparencyStats(): Promise<TransparencyStats> {
     // Return cached result if still fresh to avoid repeated DB aggregations.
-    const cached = await this.cacheManager.get<Record<string, unknown>>(
+    const cached = await this.cacheManager.get<TransparencyStats>(
       RuntimeStatsService.TRANSPARENCY_CACHE_KEY,
     );
     if (cached) return cached;
 
-    // Run all independent DB aggregations in parallel to minimize latency.
-    // Three queries target notice_archives, two target notice_change_events.
-    const [archiveAgg, eventAgg] = await Promise.all([
-      // ── Archive aggregation: total, PAL/NSM split, lifecycle breakdown ──
-      (async () => {
-        const [total, lifecycleRows, palCount] = await Promise.all([
-          this.archiveRepo.count(),
-          this.archiveRepo
-            .createQueryBuilder('a')
-            .select('a.lifecycle_status', 'status')
-            .addSelect('COUNT(*)', 'count')
-            .groupBy('a.lifecycle_status')
-            .getRawMany<{ status: string; count: string }>(),
-          this.archiveRepo
-            .createQueryBuilder('a')
-            .where('a.contentId IS NOT NULL')
-            .getCount(),
-        ]);
-        return {
-          total,
-          byLifecycle: Object.fromEntries(
-            lifecycleRows.map((r) => [r.status, Number(r.count)]),
-          ),
-          palCount, // contentId NOT NULL = PAL-registered bills
-          nsmCount: total - palCount, // contentId IS NULL = NSM-originated
-        };
-      })(),
-      // ── Change event aggregation: type + source breakdown ──
-      (async () => {
-        const [typeRows, sourceRows] = await Promise.all([
-          this.changeEventRepo
-            .createQueryBuilder('e')
-            .select('e.event_type', 'type')
-            .addSelect('COUNT(*)', 'count')
-            .groupBy('e.event_type')
-            .getRawMany<{ type: string; count: string }>(),
-          this.changeEventRepo
-            .createQueryBuilder('e')
-            .select('e.source', 'source')
-            .addSelect('COUNT(*)', 'count')
-            .groupBy('e.source')
-            .getRawMany<{ source: string; count: string }>(),
-        ]);
-        return {
-          total: typeRows.reduce((s, r) => s + Number(r.count), 0),
-          byType: Object.fromEntries(
-            typeRows.map((r) => [r.type, Number(r.count)]),
-          ),
-          bySource: Object.fromEntries(
-            sourceRows.map((r) => [r.source ?? 'unknown', Number(r.count)]),
-          ),
-        };
-      })(),
+    const [archiveTotals, eventTotals] = await Promise.all([
+      this.readArchiveTransparencyTotals(),
+      this.readChangeEventTransparencyTotals(),
     ]);
-
-    const palCron = APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK;
-    const nsmCron = APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK;
-    const isDoneCron = APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC;
-    const nsmSource = resolveNsmSourceInfo();
-
-    const result = {
-      noticeSources: [
-        {
-          id: 'pal',
-          name: '국회 입법예고 게시판',
-          url: 'https://pal.assembly.go.kr',
-          description: '국회에서 발의된 법률안과 입법예고 정보를 수집합니다.',
-          noticeCount: archiveAgg.palCount,
-          intervalMs: CRON_INTERVAL_MAP[palCron] ?? 0,
-          intervalLabel: resolveCronDisplay(palCron).description,
-        },
-        {
-          id: 'nsm',
-          name: nsmSource.name,
-          url: nsmSource.url,
-          description: nsmSource.description,
-          noticeCount: archiveAgg.nsmCount,
-          intervalMs: CRON_INTERVAL_MAP[nsmCron] ?? 0,
-          intervalLabel: resolveCronDisplay(nsmCron).description,
-        },
-      ],
-      collection: {
-        totalNotices: archiveAgg.total,
-        byLifecycle: archiveAgg.byLifecycle,
-        bySource: eventAgg.bySource,
-      },
-      changeTracking: {
-        totalEvents: eventAgg.total,
-        byType: eventAgg.byType,
-      },
-      schedules: [
-        {
-          id: 'pal-crawl',
-          name: '국회 입법예고 수집',
-          intervalMs: CRON_INTERVAL_MAP[palCron] ?? 0,
-          intervalLabel: resolveCronDisplay(palCron).description,
-          description:
-            '국회 입법예고 게시판을 주기적으로 확인하여 신규·변경 의안을 감지합니다.',
-        },
-        {
-          id: 'nsm-pending',
-          name: nsmSource.scheduleName,
-          intervalMs: CRON_INTERVAL_MAP[nsmCron] ?? 0,
-          intervalLabel: resolveCronDisplay(nsmCron).description,
-          description: nsmSource.scheduleDescription,
-        },
-        {
-          id: 'isdone-sync',
-          name: '입법예고 종료 확인',
-          intervalMs: CRON_INTERVAL_MAP[isDoneCron] ?? 0,
-          intervalLabel: resolveCronDisplay(isDoneCron).description,
-          description:
-            '입법예고 기간이 종료된 의안의 종료 여부를 동기화합니다.',
-        },
-      ],
-      transferFlow: {
-        description: nsmSource.transferFlowDescription,
-        nsmToPalIndicator:
-          '국회입법현황에서 의안으로 등록된 경우, 크롤러가 자동으로 동기화하여 관리합니다.',
-      },
-      aiSummary: getAiSummaryTransparencyInfo(),
-    } as const;
+    const result = this.buildTransparencyStats(archiveTotals, eventTotals);
 
     await this.cacheManager.set(
       RuntimeStatsService.TRANSPARENCY_CACHE_KEY,
@@ -493,6 +304,111 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
     );
 
     return result;
+  }
+
+  private async readArchiveTransparencyTotals(): Promise<ArchiveTransparencyTotals> {
+    const [total, lifecycleRows, palCount] = await Promise.all([
+      this.archiveRepo.count(),
+      this.archiveRepo
+        .createQueryBuilder('a')
+        .select('a.lifecycle_status', 'status')
+        .addSelect('COUNT(*)', 'count')
+        .groupBy('a.lifecycle_status')
+        .getRawMany<{ status: string; count: string }>(),
+      this.archiveRepo
+        .createQueryBuilder('a')
+        .where('a.contentId IS NOT NULL')
+        .getCount(),
+    ]);
+    return {
+      total,
+      byLifecycle: Object.fromEntries(
+        lifecycleRows.map((row) => [row.status, Number(row.count)]),
+      ),
+      palCount,
+      nsmCount: total - palCount,
+    };
+  }
+
+  private async readChangeEventTransparencyTotals(): Promise<ChangeEventTransparencyTotals> {
+    const [typeRows, sourceRows] = await Promise.all([
+      this.changeEventRepo
+        .createQueryBuilder('e')
+        .select('e.event_type', 'type')
+        .addSelect('COUNT(*)', 'count')
+        .groupBy('e.event_type')
+        .getRawMany<{ type: string; count: string }>(),
+      this.changeEventRepo
+        .createQueryBuilder('e')
+        .select('e.source', 'source')
+        .addSelect('COUNT(*)', 'count')
+        .groupBy('e.source')
+        .getRawMany<{ source: string; count: string }>(),
+    ]);
+    return {
+      total: typeRows.reduce((total, row) => total + Number(row.count), 0),
+      byType: Object.fromEntries(
+        typeRows.map((row) => [row.type, Number(row.count)]),
+      ),
+      bySource: Object.fromEntries(
+        sourceRows.map((row) => [row.source ?? 'unknown', Number(row.count)]),
+      ),
+    };
+  }
+
+  private buildTransparencyStats(
+    archive: ArchiveTransparencyTotals,
+    events: ChangeEventTransparencyTotals,
+  ): TransparencyStats {
+    const { pal, nsm } = resolveRuntimeCrawlerSources();
+    const sources = [pal, nsm];
+    const sourceCounts = { pal: archive.palCount, nsm: archive.nsmCount };
+    const schedules = [
+      pal.schedule,
+      nsm.schedule,
+      {
+        id: 'isdone-sync',
+        name: '입법예고 종료 확인',
+        expression: APP_CONSTANTS.CRON.EXPRESSIONS.IS_DONE_SYNC,
+        description: '입법예고 기간이 종료된 의안의 종료 여부를 동기화합니다.',
+      },
+    ];
+    return {
+      noticeSources: sources.map((source) => {
+        const cron = getCronSchedule(source.schedule.expression);
+        return {
+          id: source.id,
+          name: source.name,
+          url: source.url,
+          description: source.description,
+          noticeCount: sourceCounts[source.id],
+          intervalMs: cron.intervalMs,
+          intervalLabel: cron.description,
+        };
+      }),
+      collection: {
+        totalNotices: archive.total,
+        byLifecycle: archive.byLifecycle,
+        bySource: events.bySource,
+      },
+      changeTracking: { totalEvents: events.total, byType: events.byType },
+      schedules: schedules.map((schedule) => {
+        const cron = getCronSchedule(schedule.expression);
+        return {
+          id: schedule.id,
+          name: schedule.name,
+          intervalMs: cron.intervalMs,
+          intervalLabel: cron.description,
+          description: schedule.description,
+        };
+      }),
+      transferFlow: {
+        description: nsm.transferFlowDescription,
+        nsmToPalIndicator:
+          '국회입법현황에서 의안으로 등록된 경우, 크롤러가 자동으로 동기화하여 관리합니다.',
+      },
+      aiSummary: getAiSummaryTransparencyInfo(),
+    };
   }
 
   /**
@@ -523,8 +439,8 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
 
   private buildCrawlersStatus(
     crawlingService: CrawlingService,
-    archiveSyncService?: ArchiveSyncService,
-    cronJobsService?: CronJobsService,
+    archiveSyncService: ArchiveSyncService,
+    cronJobsService: CronJobsService,
     nsmListScanHealth: NsmListScanHealth | null = null,
   ) {
     const schedulerState = crawlingService.getSchedulerExecutionState();
@@ -535,20 +451,18 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
       (p) => p.name === 'pending sync',
     );
 
-    const palCron = APP_CONSTANTS.CRON.EXPRESSIONS.CRAWLING_CHECK;
-    const nsmCron = APP_CONSTANTS.CRON.EXPRESSIONS.PENDING_CRAWLING_CHECK;
+    const { pal, nsm } = resolveRuntimeCrawlerSources();
 
     // Read the runtime gates on every aggregation (not at module load) so the
     // status page reflects an operator toggling CRAWLING_PAL_ENABLED /
     // CRAWLING_NSM_ENABLED without a server restart.
     const palEnabled = isPalCrawlerEnabled();
     const nsmEnabled = isNsmCrawlerEnabled();
-    const nsmSource = resolveNsmSourceInfo();
 
     return {
       palCrawler: {
-        name: '국회 입법예고 크롤러',
-        source: 'pal.assembly.go.kr',
+        name: pal.name,
+        source: pal.source,
         enabled: palEnabled,
         status: schedulerState.isProcessing
           ? ('running' as const)
@@ -558,14 +472,11 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
         lastRunAt:
           schedulerState.lastPalCronRunAt ?? palPhase?.lastRunAt ?? null,
         lastError: palPhase?.lastError ?? null,
-        cron: {
-          expression: palCron,
-          ...resolveCronDisplay(palCron),
-        },
+        cron: getCronSchedule(pal.schedule.expression),
       },
       nsmPendingCrawler: {
-        name: nsmSource.crawlerName,
-        source: nsmSource.source,
+        name: nsm.name,
+        source: nsm.source,
         enabled: nsmEnabled,
         // `degraded` outranks a stale `failed` phase: a run that completed while
         // reading nothing is the state an operator has to act on first.
@@ -582,10 +493,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
           null,
         lastError: pendingSyncPhase?.lastError ?? null,
         listScan: this.buildNsmListScanStatus(nsmListScanHealth, new Date()),
-        cron: {
-          expression: nsmCron,
-          ...resolveCronDisplay(nsmCron),
-        },
+        cron: getCronSchedule(nsm.schedule.expression),
       },
       archiveSync: {
         isRunning: archiveState.isAnyPhaseRunning,
@@ -605,9 +513,7 @@ export class RuntimeStatsService implements OnModuleInit, OnModuleDestroy {
           status: job.status,
           lastRunAt: job.lastRunAt,
           lastError: job.lastError,
-          cron: expression
-            ? { expression, ...resolveCronDisplay(expression) }
-            : { expression: '', intervalMs: 0, description: '' },
+          cron: getCronSchedule(expression),
         };
       }),
     };
