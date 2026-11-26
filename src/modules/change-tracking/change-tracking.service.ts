@@ -1167,40 +1167,38 @@ export class ChangeTrackingService implements OnModuleDestroy {
     noticeNum: number,
     fieldPath: string,
   ): Promise<string | null> {
-    const row = await this.changeDetailRepository
-      .createQueryBuilder('detail')
-      .innerJoin(NoticeChangeEvent, 'event', 'event.id = detail.event_id')
-      .select('detail.after_value', 'afterValue')
-      .where('event.notice_num = :noticeNum', { noticeNum })
-      .andWhere('detail.field_path = :fieldPath', { fieldPath })
-      .andWhere(
-        "detail.after_value IS NOT NULL AND TRIM(detail.after_value) != ''",
-      )
-      .orderBy('event.event_height', 'DESC')
-      .addOrderBy('detail.id', 'DESC')
-      .limit(1)
-      .getRawOne<{ afterValue: string | null }>();
-
-    const value = row?.afterValue?.trim();
-    return value ? value : null;
+    return this.readLatestFieldValue(noticeNum, fieldPath, true);
   }
 
   async getLatestFieldValue(
     noticeNum: number,
     fieldPath: string,
   ): Promise<string | null> {
-    const row = await this.changeDetailRepository
-      .createQueryBuilder('detail')
-      .innerJoin(NoticeChangeEvent, 'event', 'event.id = detail.event_id')
-      .select('detail.after_value', 'afterValue')
-      .where('event.notice_num = :noticeNum', { noticeNum })
-      .andWhere('detail.field_path = :fieldPath', { fieldPath })
-      .orderBy('event.event_height', 'DESC')
-      .addOrderBy('detail.id', 'DESC')
-      .limit(1)
-      .getRawOne<{ afterValue: string | null }>();
+    return this.readLatestFieldValue(noticeNum, fieldPath, false);
+  }
 
-    const value = row?.afterValue?.trim();
+  private async readLatestFieldValue(
+    noticeNum: number,
+    fieldPath: string,
+    nonEmptyOnly: boolean,
+  ): Promise<string | null> {
+    // SQLite must seek this notice's events before reading matching details.
+    // An ordinary join can instead scan the entire field's global history.
+    const rows: Array<{ afterValue: string | null }> =
+      await this.changeDetailRepository.manager.query(
+        `SELECT detail.after_value AS afterValue
+         FROM notice_change_events event
+         CROSS JOIN notice_change_details detail
+         WHERE event.notice_num = ?
+           AND detail.event_id = event.id
+           AND detail.field_path = ?
+           ${nonEmptyOnly ? "AND detail.after_value IS NOT NULL AND TRIM(detail.after_value) != ''" : ''}
+         ORDER BY event.event_height DESC, detail.id DESC
+         LIMIT 1`,
+        [noticeNum, fieldPath],
+      );
+
+    const value = rows[0]?.afterValue?.trim();
     return value ? value : null;
   }
 
@@ -1220,47 +1218,13 @@ export class ChangeTrackingService implements OnModuleDestroy {
     }
 
     try {
-      const placeholders = uniqueNums.map(() => '?').join(', ');
-      const sql = `
-        SELECT ranked.noticeNum AS noticeNum, ranked.afterValue AS afterValue
-        FROM (
-          SELECT
-            event.notice_num AS noticeNum,
-            detail.after_value AS afterValue,
-            ROW_NUMBER() OVER (
-              PARTITION BY event.notice_num
-              ORDER BY event.event_height DESC, detail.id DESC
-            ) AS rn
-          FROM notice_change_details detail
-          INNER JOIN notice_change_events event
-            ON event.id = detail.event_id
-          WHERE detail.field_path = ?
-            AND event.notice_num IN (${placeholders})
-        ) ranked
-        WHERE ranked.rn = 1
-      `;
-
-      const rows = await this.changeDetailRepository.manager.query(sql, [
-        fieldPath,
-        ...uniqueNums,
-      ]);
-
-      for (const row of rows as Array<{
-        noticeNum: unknown;
-        afterValue: unknown;
-      }>) {
-        const rawNoticeNum = row.noticeNum;
-        const noticeNum =
-          typeof rawNoticeNum === 'number'
-            ? rawNoticeNum
-            : Number.parseInt(String(rawNoticeNum), 10);
-        if (!Number.isFinite(noticeNum)) {
-          continue;
-        }
-
-        const value =
-          typeof row.afterValue === 'string' ? row.afterValue.trim() : '';
-        result.set(noticeNum, value.length > 0 ? value : null);
+      const fieldsByNotice = await this.getLatestFieldValuesForFields(
+        uniqueNums,
+        [fieldPath],
+      );
+      for (const [noticeNum, fields] of fieldsByNotice) {
+        const value = fields.get(fieldPath)?.trim();
+        result.set(noticeNum, value ? value : null);
       }
 
       return result;
@@ -1287,6 +1251,8 @@ export class ChangeTrackingService implements OnModuleDestroy {
       return result;
     }
 
+    // Materialization alone does not fix join order: SQLite can still start
+    // from every detail for a field. CROSS JOIN keeps the bounded events outer.
     const batchSize = 200;
     const fieldPlaceholders = uniqueFields.map(() => '?').join(', ');
 
@@ -1312,9 +1278,9 @@ export class ChangeTrackingService implements OnModuleDestroy {
                      ORDER BY event.event_height DESC, detail.id DESC
                    ) AS rn
             FROM relevant_events event
-            INNER JOIN notice_change_details detail
-              ON detail.event_id = event.id
-            WHERE detail.field_path IN (${fieldPlaceholders})
+            CROSS JOIN notice_change_details detail
+            WHERE detail.event_id = event.id
+              AND detail.field_path IN (${fieldPlaceholders})
           ) ranked
           WHERE ranked.rn = 1
         `,

@@ -17,7 +17,7 @@ import {
   IsNull,
   LessThan,
   MoreThanOrEqual,
-  Not,
+  Raw,
   Or,
   SelectQueryBuilder,
   type FindOptionsWhere,
@@ -2739,10 +2739,8 @@ export class NoticeArchiveService {
     let total: number;
     let rows: NoticeArchive[] = [];
 
-    // Use knownTotal when provided to avoid a redundant COUNT query.
-    if (query.knownTotal !== undefined) {
-      total = query.knownTotal;
-    } else if (query.isDone !== undefined && this.summaryStateRepository) {
+    if (query.isDone !== undefined && this.summaryStateRepository) {
+      // Select this filtered page exactly once, with or without a known count.
       const paged = await this.queryArchiveNoticeNumsByIsDoneFilter({
         isDone: query.isDone,
         search,
@@ -2752,6 +2750,7 @@ export class NoticeArchiveService {
         sortOrder,
         skip,
         take,
+        knownTotal: query.knownTotal,
       });
       total = paged.total;
 
@@ -2768,53 +2767,19 @@ export class NoticeArchiveService {
         );
       }
     } else {
-      total = await nonDoneBaseQb.clone().getCount();
+      total = query.knownTotal ?? (await nonDoneBaseQb.clone().getCount());
+      if (take > 0) {
+        rows = await nonDoneBaseQb
+          .clone()
+          .orderBy('archive.noticeNum', sortOrder === 'asc' ? 'ASC' : 'DESC')
+          .offset(skip)
+          .limit(take)
+          .getMany();
+      }
     }
 
     if (take === 0) {
-      return {
-        items: [],
-        total,
-        search,
-      };
-    }
-
-    if (
-      rows.length === 0 &&
-      query.isDone !== undefined &&
-      this.summaryStateRepository
-    ) {
-      const paged = await this.queryArchiveNoticeNumsByIsDoneFilter({
-        isDone: query.isDone,
-        search,
-        proposer: query.proposer,
-        startDate: query.startDate,
-        endDate: query.endDate,
-        sortOrder,
-        skip,
-        take,
-        knownTotal: total,
-      });
-
-      if (paged.noticeNums.length > 0) {
-        const fetched = await this.archiveRepository.find({
-          where: { noticeNum: In(paged.noticeNums) },
-          select: NOTICE_ITEM_SELECT,
-        });
-        const rank = new Map(
-          paged.noticeNums.map((num, idx) => [num, idx] as const),
-        );
-        rows = fetched.sort(
-          (a, b) => (rank.get(a.noticeNum) ?? 0) - (rank.get(b.noticeNum) ?? 0),
-        );
-      }
-    } else {
-      rows = await nonDoneBaseQb
-        .clone()
-        .orderBy('archive.noticeNum', sortOrder === 'asc' ? 'ASC' : 'DESC')
-        .offset(skip)
-        .limit(take)
-        .getMany();
+      return { items: [], total, search };
     }
 
     if (this.summaryStateRepository && rows.length > 0) {
@@ -3338,7 +3303,7 @@ export class NoticeArchiveService {
           APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
         ),
         screenshotBlob: IsNull(),
-        contentId: Not(IsNull()),
+        contentId: Raw((alias) => `${alias} IS NOT NULL`),
         lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
       },
       order: { noticeNum: 'ASC' },
@@ -3367,7 +3332,7 @@ export class NoticeArchiveService {
     const rows = await this.archiveRepository.find({
       select: { noticeNum: true, contentId: true },
       where: {
-        contentId: Not(IsNull()),
+        contentId: Raw((alias) => `${alias} IS NOT NULL`),
         lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
       },
       order: { noticeNum: 'ASC' },
@@ -3619,7 +3584,7 @@ export class NoticeArchiveService {
             APP_CONSTANTS.ARCHIVE_SYNC.BACKFILL_MIN_NOTICE_NUM,
           ),
           sourceHtml: IsNull(),
-          contentId: Not(IsNull()),
+          contentId: Raw((alias) => `${alias} IS NOT NULL`),
           lifecycleStatus: NOTICE_LIFECYCLE_STATUS.ACTIVE,
         },
         order: { noticeNum: 'DESC' },

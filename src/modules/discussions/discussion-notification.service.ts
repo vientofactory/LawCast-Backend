@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { WebPushNotificationService } from '../notification/web-push-notification.service';
 import { WebPushSubscriptionService } from '../notification/web-push-subscription.service';
 import {
@@ -27,7 +27,13 @@ export class DiscussionNotificationService {
     if (referencedSequences.length === 0) return;
 
     const comments = await this.commentRepository.find({
-      where: { threadId: comment.threadId },
+      where: { threadId: comment.threadId, sequence: In(referencedSequences) },
+      select: {
+        sequence: true,
+        messageType: true,
+        isDeleted: true,
+        authorId: true,
+      },
     });
     const referencedComments = comments.filter(
       (candidate) =>
